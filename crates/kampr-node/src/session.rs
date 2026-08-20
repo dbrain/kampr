@@ -1,4 +1,3 @@
-use crate::caps;
 use crate::manage::{self, ManageOp, Manager};
 use crate::outbox::Outbox;
 use crate::pending;
@@ -18,6 +17,13 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 const SCROLLBACK_POLL: Duration = Duration::from_secs(3);
+
+/// How often a live session re-reads its own device row. The broadcast covers a revocation made
+/// in this process; this covers one made by `kampr setup` in another, and a Tier 0 expiry that
+/// nothing announces at all.
+const DEVICE_RECHECK: Duration = Duration::from_secs(2);
+
+const MAX_PREFS_BYTES: usize = 2048;
 
 pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
     let outbox = Arc::new(Outbox::new(node.config.limits.client_queue));
@@ -47,11 +53,41 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
     session.greet();
     let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
 
-    while let Some(Ok(message)) = stream.next().await {
-        match message {
-            Message::Text(text) => session.dispatch(&text).await,
-            Message::Close(_) => break,
-            _ => {}
+    let mut changes = node.auth.device_changes();
+    let mut recheck = tokio::time::interval(DEVICE_RECHECK);
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    recheck.tick().await;
+
+    loop {
+        tokio::select! {
+            incoming = stream.next() => {
+                let Some(Ok(message)) = incoming else { break };
+                match message {
+                    Message::Text(text) => {
+                        if !session.dispatch(&text).await {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            changed = changes.recv() => {
+                let mine = match changed {
+                    Ok(id) => id == session.device.id,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    // Lagged: something changed and we do not know what, so look.
+                    Err(_) => true,
+                };
+                if mine && !session.refresh().await {
+                    break;
+                }
+            }
+            _ = recheck.tick() => {
+                if !session.refresh().await {
+                    break;
+                }
+            }
         }
         if outbox.is_closed() {
             break;
@@ -109,14 +145,56 @@ impl Session {
         false
     }
 
-    async fn dispatch(&mut self, text: &str) {
+    /// Re-reads this session's device. `false` means the socket must close: the row is gone,
+    /// revoked, or past its expiry. A transient database error is not a revocation, so it leaves
+    /// the session alone and the next tick tries again.
+    async fn refresh(&mut self) -> bool {
+        let device = match self.node.auth.store().device(&self.device.id).await {
+            Ok(device) => device,
+            Err(e) => {
+                debug!(error = %e, "could not re-read the session device");
+                return true;
+            }
+        };
+        match device.filter(|d| d.active(kampr_auth::now())) {
+            Some(device) => {
+                if device.role != self.device.role {
+                    self.device = device;
+                    self.audit(
+                        "session.role_changed",
+                        None,
+                        Some(json!({ "role": self.device.role.as_str() })),
+                    );
+                } else {
+                    self.device = device;
+                }
+                true
+            }
+            None => {
+                self.wire
+                    .error("revoked", "this device is no longer authorised", None);
+                self.audit("session.revoked", None, None);
+                false
+            }
+        }
+    }
+
+    /// `false` closes the socket.
+    async fn dispatch(&mut self, text: &str) -> bool {
         let Ok(value) = serde_json::from_str::<Value>(text) else {
             self.wire.error("bad_request", "not JSON", None);
-            return;
+            return true;
         };
+        let tag = value["t"].as_str().map(str::to_string);
+        // Anything that types into a terminal re-reads the device first. The handshake snapshot
+        // is a cache, and a revoked token or a demoted role has to bite between two frames rather
+        // than at the next connection.
+        if matches!(tag.as_deref(), Some("manage" | "input" | "answer")) && !self.refresh().await {
+            return false;
+        }
         // Unknown `t` values are ignored rather than refused — that is how a v1 client survives a
         // later node, and it has to work in this direction too.
-        match value["t"].as_str() {
+        match tag.as_deref() {
             Some("manage") => self.manage(value).await,
             Some("caps") => self.caps().await,
             Some("prefs") => self.prefs(&value).await,
@@ -130,6 +208,7 @@ impl Session {
                 self.wire.error("bad_request", "message has no `t`", None);
             }
         }
+        true
     }
 
     async fn client_msg(&mut self, msg: ClientMsg) {
@@ -167,6 +246,10 @@ impl Session {
         if let Some(old) = self.panes.remove(pane) {
             old.task.abort();
         }
+        // Watching a pane is reading a terminal, and with `scrollback` it is reading its history
+        // too. For a read-only device it is the *only* thing it can do, so it is the only thing
+        // there is to record.
+        self.audit("watch", Some(pane), Some(json!({ "scrollback": scrollback })));
         let task = tokio::spawn(pump_pane(PaneStreamCtx {
             registry: self.node.registry.clone(),
             herdr: self.node.herdr.clone(),
@@ -183,6 +266,7 @@ impl Session {
         if let Some(handle) = self.panes.remove(pane) {
             handle.task.abort();
             self.wire.outbox().purge_pane(pane);
+            self.audit("unwatch", Some(pane), None);
         }
     }
 
@@ -292,11 +376,10 @@ impl Session {
         if !self.may_write(op.at.as_deref()) {
             return;
         }
-        self.audit(
-            "manage",
-            op.at.as_deref(),
-            Some(json!({ "op": op.op, "label": op.label, "kind": op.kind, "name": op.name })),
-        );
+        // `op` and a label say that something ran. `cwd`, `env`, `args`, `path` and `branch` are
+        // what it ran, where, and against which tree — which is the whole question the log exists
+        // to answer.
+        self.audit("manage", op.at.as_deref(), Some(manage_detail(&op)));
         let manager = Manager {
             herdr: &self.node.herdr,
             node_id: self.node.node_id(),
@@ -325,31 +408,65 @@ impl Session {
     }
 
     async fn caps(&self) {
-        let kinds = caps::agent_kinds(&self.node.herdr).await;
-        let sessions = caps::sessions(&self.node.config.herdr.binary).await;
-        self.wire.send_json(&json!({
-            "t": "caps",
-            "node": self.node.node_id(),
-            "agent_kinds": kinds,
-            "sessions": sessions,
-        }));
+        self.wire.send_json(&self.node.caps().await);
     }
 
     /// Per-pane render preferences, kept per device so a phone and a desktop can disagree about
-    /// zoom on the same pane.
+    /// zoom on the same pane. Read-only devices keep theirs too — refusing them here would cost a
+    /// real feature and fix nothing, because the defect is the unbounded write, not the role.
+    ///
+    /// So both bounds are on the write itself: the pane has to be one this node actually serves,
+    /// and the blob has to fit. Otherwise any device, of any role, fills the disk one arbitrary
+    /// pane id at a time.
     async fn prefs(&self, value: &Value) {
         let store = self.node.auth.store();
-        match (value["pane"].as_str(), value.get("prefs")) {
-            (Some(pane), Some(prefs)) if !prefs.is_null() => {
-                let _ = store
-                    .set_pane_prefs(&self.device.id, pane, prefs, kampr_auth::now())
-                    .await;
+        if let (Some(pane), Some(prefs)) = (value["pane"].as_str(), value.get("prefs"))
+            && !prefs.is_null()
+        {
+            if self.node.herd().pane(pane).is_none() {
+                self.wire
+                    .error("unknown_pane", "no such pane on this node", Some(pane));
+                return;
             }
-            _ => {}
+            if prefs.to_string().len() > MAX_PREFS_BYTES {
+                self.wire.error(
+                    "bad_request",
+                    "preferences for one pane must fit in 2 KiB",
+                    Some(pane),
+                );
+                return;
+            }
+            let _ = store
+                .set_pane_prefs(&self.device.id, pane, prefs, kampr_auth::now())
+                .await;
         }
         let all = store.pane_prefs(&self.device.id).await.unwrap_or(json!({}));
         self.wire.send_json(&json!({ "t": "prefs", "panes": all }));
     }
+}
+
+fn manage_detail(op: &ManageOp) -> Value {
+    let mut detail = json!({ "op": op.op });
+    let fields: [(&str, Value); 12] = [
+        ("node", json!(op.node)),
+        ("label", json!(op.label)),
+        ("cwd", json!(op.cwd)),
+        ("env", op.env.clone().unwrap_or(Value::Null)),
+        ("direction", json!(op.direction)),
+        ("mode", json!(op.mode)),
+        ("kind", json!(op.kind)),
+        ("name", json!(op.name)),
+        ("args", json!(op.args)),
+        ("branch", json!(op.branch)),
+        ("base", json!(op.base)),
+        ("path", json!(op.path)),
+    ];
+    for (key, value) in fields {
+        if !value.is_null() {
+            detail[key] = value;
+        }
+    }
+    detail
 }
 
 fn hello(node: &Node, device: &Device) -> Value {
@@ -381,7 +498,7 @@ fn hello(node: &Node, device: &Device) -> Value {
         "passkeys": tier.passkeys,
         "push": tier.push,
         "installable": tier.installable,
-        "unlocks": tier.unlocks,
+        "unlocks": tier.locked(),
     });
     value["device"] = json!({
         "id": device.id,
@@ -507,16 +624,20 @@ async fn send_history(
     let Ok(Some(mut doc)) = registry.scrollback(local).await else {
         return true;
     };
-    if doc.total_rows == *sent_rows && doc.from_top <= *sent_rows {
+    // `total_rows` is a depth, so the ring ends here; `sent_rows` is the same index, one message
+    // ago.
+    let end = doc.from_top + doc.total_rows;
+    if end == *sent_rows && doc.from_top <= *sent_rows {
         return true;
     }
     // The ring restarted — a gap it could not stitch, or a width change — so the client's copy is
     // no longer adjacent to what the node holds and the whole thing goes again.
     if doc.from_top <= *sent_rows {
         doc.rows.retain(|r| r.row >= *sent_rows);
-        doc.from_top = (*sent_rows).min(doc.total_rows);
+        doc.from_top = (*sent_rows).min(end);
+        doc.total_rows = end - doc.from_top;
     }
-    *sent_rows = doc.total_rows;
+    *sent_rows = end;
     wire.send_scrollback(global, &doc)
 }
 

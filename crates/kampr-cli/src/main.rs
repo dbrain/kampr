@@ -1,5 +1,6 @@
 mod dirs;
 mod init;
+mod pairing;
 mod report;
 mod service;
 mod setup;
@@ -25,6 +26,8 @@ enum Command {
         dirs: Dirs,
         #[arg(long)]
         name: Option<String>,
+        /// `host:port`. Loopback by default; anything else is reachable from the network, and
+        /// anything that pairs there can type into every terminal on this host.
         #[arg(long)]
         bind: Option<String>,
         /// The one URL clients will use. Set this before enrolling a passkey — a passkey is
@@ -112,9 +115,9 @@ async fn main() -> Result<()> {
             } else {
                 kampr_auth::Role::Full
             };
-            let code = local.auth.create_pairing(role).await?;
-            println!("{code}");
-            Ok(())
+            let pairing = pairing::create(&local, role).await?;
+            println!("{}", pairing.code);
+            pairing::arm(&local, &pairing).await
         }
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {
@@ -173,6 +176,7 @@ async fn status(dirs: &Dirs) -> Result<()> {
         local.config.node_name, local.config.node_id
     );
     println!("  url       {url}");
+    println!("{}", report::bind_summary(&local.config));
     println!(
         "  reachable {}",
         if report::reachable(&url).await {

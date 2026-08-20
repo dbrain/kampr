@@ -111,7 +111,7 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    async fn start(tag: &str) -> Option<Self> {
+    async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Option<Self> {
         let session = Session::start(tag).await?;
         session
             .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
@@ -128,6 +128,7 @@ impl Harness {
         config.herdr.socket = session.socket.display().to_string();
         config.auth.audit = true;
         config.limits.client_queue = 32;
+        tweak(&mut config);
         config.save(&config_dir).ok()?;
 
         let origin = config.origin();
@@ -155,8 +156,16 @@ impl Harness {
     }
 
     async fn token(&self, role: Role) -> String {
-        let code = self.node.auth.create_pairing(role).await.unwrap();
-        let body = json!({ "code": code, "device_name": "integration" });
+        let pairing = self
+            .node
+            .auth
+            .create_pairing(role, kampr_auth::Delivery::Console)
+            .await
+            .unwrap();
+        if !pairing.armed {
+            assert!(self.node.auth.arm_pairing(&pairing.code).await.unwrap());
+        }
+        let body = json!({ "code": pairing.code, "device_name": "integration" });
         let response = post(&format!("{}/auth/pair", self.origin), &body).await;
         response["token"].as_str().expect("a token").to_string()
     }
@@ -181,6 +190,48 @@ impl Harness {
 
 async fn post(url: &str, body: &Value) -> Value {
     post_as(url, body, None).await.1
+}
+
+/// `host` and `origin` are what a DNS-rebinding attacker controls: a domain they own, pointed at
+/// this node's address, so the browser sends both as their own.
+async fn post_from(url: &str, body: &Value, host: &str, origin: Option<&str>) -> String {
+    let (real_host, port, path) = split(url);
+    let payload = body.to_string();
+    let origin = origin.map_or(String::new(), |o| format!("Origin: {o}\r\n"));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
+         {origin}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    raw_with_status(&real_host, port, &request).await.0
+}
+
+async fn head_of(url: &str, body: &Value) -> String {
+    let (host, port, path) = split(url);
+    let payload = body.to_string();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = TcpStream::connect((host.as_str(), port)).await.expect("connect");
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.expect("read");
+    let text = String::from_utf8_lossy(&response).to_string();
+    text.split_once("\r\n\r\n")
+        .map_or(text.clone(), |(h, _)| h.to_string())
+}
+
+async fn post_with_cookie(url: &str, token: &str, origin: Option<&str>) -> String {
+    let (host, port, path) = split(url);
+    let origin = origin.map_or(String::new(), |o| format!("Origin: {o}\r\n"));
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nCookie: kampr_session={token}\r\n\
+         {origin}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    raw_with_status(&host, port, &request).await.0
 }
 
 async fn post_as(url: &str, body: &Value, forwarded_for: Option<&str>) -> (String, Value) {
@@ -231,6 +282,19 @@ impl From<Json> for Value {
     }
 }
 
+/// Drains until the peer closes. `true` means the node hung up inside the window.
+async fn closed(socket: &mut Socket, seconds: u64) -> bool {
+    tokio::time::timeout(Duration::from_secs(seconds), async {
+        while let Some(Ok(message)) = socket.next().await {
+            if matches!(message, tungstenite::Message::Close(_)) {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
 async fn recv(socket: &mut Socket, timeout: Duration) -> Option<Value> {
     let message = tokio::time::timeout(timeout, socket.next()).await.ok()??.ok()?;
     match message {
@@ -263,7 +327,10 @@ async fn send(socket: &mut Socket, value: Value) {
 
 macro_rules! harness {
     ($tag:expr) => {
-        match Harness::start($tag).await {
+        harness!($tag, |_| {})
+    };
+    ($tag:expr, $tweak:expr) => {
+        match Harness::start_with($tag, $tweak).await {
             Some(h) => h,
             None => {
                 eprintln!("skipping: no herdr on PATH");
@@ -378,7 +445,7 @@ async fn manage_ops_reshape_the_herd_and_come_back_as_a_patch() {
     assert!(ack["id"].as_str().unwrap().contains(":p"), "{ack}");
 
     let patch = until(&mut socket, "herd.patch", 20).await;
-    assert!(!patch["added"].as_array().unwrap().is_empty(), "{patch}");
+    assert!(!patch["added"]["panes"].as_array().unwrap().is_empty(), "{patch}");
     assert!(h.node.herd().panes.len() > before);
 
     send(
@@ -455,7 +522,7 @@ async fn the_http_surface_refuses_what_it_should() {
     assert!(status.contains("200"), "{status}");
     assert_eq!(body["security"]["tier"], 0);
     assert_eq!(body["security"]["passkeys"], false);
-    assert!(body["security"]["unlocks"].as_str().unwrap().contains("hostname"));
+    assert_eq!(body["security"]["unlocks"][0], "passkeys");
 
     let (status, _) = get(&format!("{}/api/devices", h.origin), None).await;
     assert!(status.contains("401"), "{status}");
@@ -483,8 +550,71 @@ async fn the_http_surface_refuses_what_it_should() {
     );
 }
 
+/// The same-origin gate used to build its allowlist from the request's own `Host`, so a
+/// rebinding attacker satisfied it with two headers they wrote themselves.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_revoked_device_loses_its_socket_and_a_wrong_code_never_gets_one() {
+async fn an_origin_the_attacker_chose_never_satisfies_the_same_origin_gate() {
+    let h = harness!("origin");
+    let pairing = h
+        .node
+        .auth
+        .create_pairing(Role::Full, kampr_auth::Delivery::Authenticated)
+        .await
+        .unwrap();
+    let body = json!({ "code": pairing.code, "device_name": "rebound" });
+
+    let status = post_from(
+        &format!("{}/auth/pair", h.origin),
+        &body,
+        "kampr.rebind.example",
+        Some("http://kampr.rebind.example"),
+    )
+    .await;
+    assert!(
+        status.contains("403"),
+        "Origin == Host is the attacker's own claim, not a same-origin proof: {status}"
+    );
+
+    // And the ordinary path still works, so the gate is a gate rather than a wall.
+    let good = post(&format!("{}/auth/pair", h.origin), &body).await;
+    assert!(good["token"].is_string(), "{good}");
+}
+
+/// A cookie is the one credential a browser attaches on its own, so a state-changing request
+/// carrying one and no `Origin` is the shape CSRF has — the absence must fail closed there. The
+/// same-origin gate is the only CSRF defence on this surface, so it does not get to fail open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cookie_credential_without_an_origin_cannot_change_anything() {
+    let h = harness!("cookie");
+    let token = h.token(Role::Full).await;
+    h.token(Role::Readonly).await;
+    let victim_id = h
+        .node
+        .auth
+        .devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|d| d.role == Role::Readonly)
+        .unwrap()
+        .id;
+
+    let url = format!("{}/api/devices/{victim_id}/revoke", h.origin);
+    assert!(
+        post_with_cookie(&url, &token, None).await.contains("403"),
+        "an ambient credential with no origin must not revoke anything"
+    );
+    assert!(
+        post_with_cookie(&url, &token, Some(&h.origin))
+            .await
+            .contains("200")
+    );
+}
+
+/// Reconnection only. That a *live* socket dies is a different claim, and it has its own test —
+/// this one used to be named as though it covered both.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revoked_token_cannot_reconnect_and_a_wrong_code_never_gets_one() {
     let h = harness!("revoke");
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
@@ -524,6 +654,233 @@ async fn a_revoked_device_loses_its_socket_and_a_wrong_code_never_gets_one() {
             0o600
         );
     }
+}
+
+/// The kill switch has to reach the socket that is already open. Revoking a device and then
+/// checking that a *second* connection is refused proves nothing about the one holding the pane.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_device_hangs_up_the_socket_it_is_already_using() {
+    let h = harness!("revoke-live");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let device = h.node.auth.devices().await.unwrap().pop().unwrap();
+    h.node.auth.revoke(&device.id, &device).await.unwrap();
+
+    assert!(
+        closed(&mut socket, 15).await,
+        "a revoked device kept its live socket"
+    );
+}
+
+/// Same defect from the other two directions: the handshake snapshot of the role, and the
+/// handshake snapshot of the expiry. Both have to be re-read on the live socket.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_demotion_and_an_expiry_both_land_on_the_open_socket() {
+    let h = harness!("demote-live");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    let device = h.node.auth.devices().await.unwrap().pop().unwrap();
+    h.node
+        .auth
+        .set_role(&device.id, Role::Readonly, &device)
+        .await
+        .unwrap();
+    send(&mut socket, json!({ "t": "input", "pane": pane, "text": "x" })).await;
+    assert_eq!(
+        until(&mut socket, "error", 10).await["code"],
+        "not_writer",
+        "a demoted device kept writing against its handshake role"
+    );
+
+    // Straight to the database, so nothing in-process is notified — this is the path a Tier 0
+    // token passing its expiry mid-session takes.
+    h.node
+        .auth
+        .store()
+        .extend_device(&device.id, Some(kampr_auth::now() - 1))
+        .await
+        .unwrap();
+    assert!(
+        closed(&mut socket, 15).await,
+        "an expired device kept its live socket"
+    );
+}
+
+/// `X-Forwarded-For` grows left to right: the client's own value sits at the head and each proxy
+/// appends what it actually saw. Reading the head hands a rotating header a fresh rate-limit
+/// bucket per request — which is exactly what the limiter exists to stop.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forged_forwarded_for_buys_no_fresh_rate_limit_bucket() {
+    let h = harness!("xff", |c: &mut Config| c.server.trust_proxy = true);
+    let mut refused = 0;
+    for n in 0..12u8 {
+        let (status, _) = post_as(
+            &format!("{}/auth/pair", h.origin),
+            &json!({ "code": "ZZZZ-ZZZZ", "device_name": "attacker" }),
+            Some(&format!("10.0.0.{n}, 203.0.113.9")),
+        )
+        .await;
+        if status.contains("429") {
+            refused += 1;
+        }
+    }
+    assert!(
+        refused > 0,
+        "the limiter must key on what the trusted proxy saw, not on what the client claimed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_http_surface_leaks_neither_paths_nor_the_device_inventory() {
+    let h = harness!("leaks");
+    let full = h.token(Role::Full).await;
+    let readonly = h.token(Role::Readonly).await;
+
+    let (status, body) = get(&format!("{}/api/devices", h.origin), Some(&readonly)).await;
+    assert!(
+        status.contains("403"),
+        "a read-only device must not read the device inventory: {status} {body}"
+    );
+    assert!(
+        get(&format!("{}/api/devices", h.origin), Some(&full))
+            .await
+            .0
+            .contains("200")
+    );
+
+    // A token in a response body must never be cached by anything between here and the phone.
+    let pairing = h
+        .node
+        .auth
+        .create_pairing(Role::Full, kampr_auth::Delivery::Authenticated)
+        .await
+        .unwrap();
+    let headers = head_of(
+        &format!("{}/auth/pair", h.origin),
+        &json!({ "code": pairing.code, "device_name": "cached" }),
+    )
+    .await;
+    assert!(
+        headers.to_lowercase().contains("cache-control: no-store"),
+        "{headers}"
+    );
+    assert!(
+        !headers.contains("connect-src 'self' ws:"),
+        "a bare ws: scheme matches any host and is a clean exfiltration channel: {headers}"
+    );
+}
+
+/// A read-only device receives every frame of every pane and is refused every write — but `prefs`
+/// and `caps` were not writes as far as the dispatcher was concerned. One wrote unbounded rows
+/// keyed on an arbitrary pane id; the other shelled out to `herdr session list` per message.
+#[tokio::test(flavor = "multi_thread")]
+async fn prefs_and_caps_are_bounded_rather_than_an_amplifier() {
+    let h = harness!("bounds");
+    let token = h.token(Role::Readonly).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": pane, "prefs": { "zoom": 1.6 } }),
+    )
+    .await;
+    let stored = until(&mut socket, "prefs", 10).await;
+    assert_eq!(stored["panes"][&pane]["zoom"], 1.6, "a viewer keeps its own zoom");
+
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": "01JNOTAPANE/w9:p9", "prefs": { "zoom": 2.0 } }),
+    )
+    .await;
+    let refusal = until(&mut socket, "error", 10).await;
+    assert_eq!(
+        refusal["code"], "unknown_pane",
+        "an arbitrary pane id is a row nobody asked for: {refusal}"
+    );
+
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": pane, "prefs": { "junk": "x".repeat(64 * 1024) } }),
+    )
+    .await;
+    let refusal = until(&mut socket, "error", 10).await;
+    assert_eq!(refusal["code"], "bad_request", "{refusal}");
+
+    // Repeated `caps` must not be one `herdr session list` process per message.
+    let before = h.node.caps_spawns();
+    for _ in 0..8 {
+        send(&mut socket, json!({ "t": "caps" })).await;
+        until(&mut socket, "caps", 10).await;
+    }
+    assert!(
+        h.node.caps_spawns() - before <= 1,
+        "caps shelled out {} times for 8 messages",
+        h.node.caps_spawns() - before
+    );
+}
+
+/// A read-only device that watches every pane exfiltrates every terminal on the host, and used to
+/// leave one `session.opened` line behind. And a `manage` entry that omits `cwd`, `args`, `path`
+/// and `branch` records that something ran, not what.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_audit_records_what_was_read_and_what_actually_ran() {
+    let h = harness!("audit");
+    let pane = h.pane_id();
+
+    let viewer = h.token(Role::Readonly).await;
+    let mut watching = h.connect(&viewer).await;
+    until(&mut watching, "hello", 10).await;
+    send(
+        &mut watching,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut watching, "grid.reset", 15).await;
+    send(&mut watching, json!({ "t": "unwatch", "pane": pane })).await;
+
+    let writer = h.token(Role::Full).await;
+    let mut driving = h.connect(&writer).await;
+    until(&mut driving, "hello", 10).await;
+    send(
+        &mut driving,
+        json!({ "t": "manage", "op": "pane.split", "at": pane, "direction": "right", "cwd": "/tmp" }),
+    )
+    .await;
+    until(&mut driving, "managed", 15).await;
+
+    let text = std::fs::read_to_string(Config::audit_path(h._state.path())).unwrap();
+    let entries: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let of = |action: &str| -> Value {
+        entries
+            .iter()
+            .find(|e| e["action"] == action)
+            .unwrap_or_else(|| panic!("no {action} entry in {text}"))
+            .clone()
+    };
+
+    let watch = of("watch");
+    assert_eq!(watch["pane"], pane.as_str());
+    assert_eq!(watch["role"], "readonly");
+    assert_eq!(
+        watch["detail"]["scrollback"], true,
+        "history is the whole terminal"
+    );
+    assert_eq!(of("unwatch")["pane"], pane.as_str());
+
+    let managed = of("manage");
+    assert_eq!(managed["detail"]["op"], "pane.split");
+    assert_eq!(managed["detail"]["cwd"], "/tmp", "{managed}");
+    assert_eq!(managed["detail"]["direction"], "right", "{managed}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -759,6 +1116,10 @@ async fn the_node_can_terminate_tls_itself() {
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     let body = tls_get(port, "kampr.test", "/api/node").await;
+    assert!(
+        body.to_lowercase().contains("strict-transport-security"),
+        "a node that has TLS should say so: {body}"
+    );
     assert!(body.contains("\"tier\":1"), "{body}");
     assert!(body.contains("\"passkeys\":true"), "{body}");
     assert!(body.contains("tlsnode"), "{body}");

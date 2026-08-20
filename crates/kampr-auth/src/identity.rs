@@ -32,7 +32,7 @@ impl NodeIdentity {
             .try_into()
             .map_err(|_| IdentityError::Malformed(path.display().to_string()))?;
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| IdentityError::Io(dir.display().to_string(), e))?;
+            crate::files::private_dir(dir).map_err(|e| IdentityError::Io(dir.display().to_string(), e))?;
         }
         write_private(path, &hex::encode(bytes))
             .map_err(|e| IdentityError::Io(path.display().to_string(), e))?;

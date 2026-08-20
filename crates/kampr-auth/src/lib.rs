@@ -8,6 +8,7 @@
 //! rest.
 
 pub mod audit;
+pub mod files;
 pub mod identity;
 pub mod passkey;
 pub mod ratelimit;
@@ -16,6 +17,7 @@ pub mod store;
 pub mod tier;
 
 pub use audit::{AuditLog, Entry};
+pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
 pub use passkey::{PasskeyError, Passkeys};
 pub use ratelimit::{Policy as RatePolicy, RateLimiter};
@@ -25,6 +27,7 @@ pub use tier::{Tier, TierError};
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
+use tokio::sync::broadcast;
 use webauthn_rs::prelude::{
     AuthenticationResult, CreationChallengeResponse, Passkey, PublicKeyCredential,
     RegisterPublicKeyCredential, RequestChallengeResponse, Uuid,
@@ -49,6 +52,8 @@ pub enum AuthError {
 #[derive(Debug, Clone, Copy)]
 pub struct Policy {
     pub pairing_ttl: Duration,
+    /// How long an operator's keypress keeps pairing open.
+    pub arming_window: Duration,
     /// How long a Tier 0 bearer token lives. Cleartext access to a machine that can type into
     /// every terminal on it should require a deliberate decision to keep going, so this expires
     /// on purpose. `None` disables the expiry — a choice, never a default.
@@ -62,12 +67,34 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             pairing_ttl: Duration::from_secs(600),
+            arming_window: Duration::from_secs(60),
             tier0_token_ttl: Some(Duration::from_secs(30 * 86_400)),
             challenge_ttl: Duration::from_secs(300),
             pairing_attempts: RatePolicy::new(5.0, 0.05),
             auth_attempts: RatePolicy::new(20.0, 0.5),
         }
     }
+}
+
+/// How a pairing code reaches the person who will type it.
+///
+/// This is the whole of the arming decision: a code printed into a Herdr pane is read by every
+/// read-only device on the node, and a code handed back over an authenticated request is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Console,
+    Authenticated,
+}
+
+/// A freshly minted pairing code, and whether it is redeemable as it stands.
+///
+/// `armed` is false whenever something could already be watching the screen it is printed on:
+/// `kampr setup` runs as a Herdr popup pane and a read-only device receives every frame of every
+/// pane, so once any device is enrolled the code needs a keypress at the console behind it.
+#[derive(Debug, Clone)]
+pub struct Pairing {
+    pub code: String,
+    pub armed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +112,7 @@ pub struct Auth {
     policy: Policy,
     pairing_limiter: RateLimiter,
     auth_limiter: RateLimiter,
+    changes: broadcast::Sender<String>,
 }
 
 impl std::fmt::Debug for Auth {
@@ -110,11 +138,19 @@ impl Auth {
             policy,
             pairing_limiter: RateLimiter::new(policy.pairing_attempts),
             auth_limiter: RateLimiter::new(policy.auth_attempts),
+            changes: broadcast::channel(64).0,
         })
     }
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Device ids whose access just changed. A live session watches this so a revocation reaches
+    /// the socket it is holding; the same session also re-reads the row on a timer, because
+    /// `kampr setup` revokes from a different process and there is no channel between them.
+    pub fn device_changes(&self) -> broadcast::Receiver<String> {
+        self.changes.subscribe()
     }
 
     pub fn tier(&self) -> &Tier {
@@ -142,16 +178,38 @@ impl Auth {
         self.policy.tier0_token_ttl.map(|ttl| now + ttl.as_secs() as i64)
     }
 
-    pub async fn create_pairing(&self, role: Role) -> Result<String, AuthError> {
+    pub async fn create_pairing(&self, role: Role, delivery: Delivery) -> Result<Pairing, AuthError> {
         let now = now();
         self.store.expire_pairings(now).await?;
+        let expires_at = now + self.policy.pairing_ttl.as_secs() as i64;
+        // Before the first device is enrolled nothing can be watching the pane the code prints
+        // into, so the code stands on its own. After that it does not.
+        let armed =
+            delivery == Delivery::Authenticated || !self.store.devices().await?.iter().any(|d| d.active(now));
         let code = self
             .store
-            .create_pairing(role, now, now + self.policy.pairing_ttl.as_secs() as i64)
+            .create_pairing(role, now, expires_at, armed.then_some(expires_at))
             .await?;
-        self.audit
-            .record(&Entry::new("pairing.created").detail(serde_json::json!({ "role": role.as_str() })));
-        Ok(code)
+        self.audit.record(
+            &Entry::new("pairing.created")
+                .detail(serde_json::json!({ "role": role.as_str(), "armed": armed })),
+        );
+        Ok(Pairing { code, armed })
+    }
+
+    /// Opens the redemption window. Called only from a process with a console — the operator's
+    /// keypress is the out-of-band channel a device watching the screen does not have.
+    pub async fn arm_pairing(&self, code: &str) -> Result<bool, AuthError> {
+        let now = now();
+        let until = now + self.policy.arming_window.as_secs() as i64;
+        let done = self.store.arm_pairing(code, now, until).await?;
+        if done {
+            self.audit.record(
+                &Entry::new("pairing.armed")
+                    .detail(serde_json::json!({ "seconds": self.policy.arming_window.as_secs() })),
+            );
+        }
+        Ok(done)
     }
 
     /// A pairing code is short enough to guess if you may guess often, so the limiter is part of
@@ -211,14 +269,20 @@ impl Auth {
 
     pub async fn authenticate(&self, token: &str, peer: &str) -> Result<Device, AuthError> {
         if !self.auth_limiter.check(peer) {
+            self.audit.record(&Entry::new("auth.rate_limited").peer(peer));
             return Err(AuthError::RateLimited);
         }
         let now = now();
-        let device = self
-            .store
-            .device_for_token(token, now)
-            .await?
-            .ok_or(AuthError::Unauthorized)?;
+        let Some(device) = self.store.device_for_token(token, now).await? else {
+            // Without this, walking the token space is the one thing on this surface that leaves
+            // no trace at all.
+            self.audit.record(&Entry::new("auth.rejected").peer(peer));
+            return Err(AuthError::Unauthorized);
+        };
+        // A client reconnecting and polling is not an attacker, and the limiter here exists to
+        // bound *guessing*. Charging it for success eventually locks out the only device that
+        // ever had a valid token.
+        self.auth_limiter.forget(peer);
         self.store.touch_device(&device.id, now).await?;
         Ok(device)
     }
@@ -310,6 +374,7 @@ impl Auth {
             .await?
             .filter(|d| d.active(now))
             .ok_or(AuthError::Unauthorized)?;
+        self.auth_limiter.forget(peer);
         self.refresh_counter(&stored, &result, now).await?;
         // The session token is device-bound exactly as a paired one is; the passkey is how the
         // device proved itself, not a separate kind of session.
@@ -358,6 +423,7 @@ impl Auth {
     pub async fn revoke(&self, id: &str, by: &Device) -> Result<bool, AuthError> {
         let done = self.store.revoke_device(id, now()).await?;
         if done {
+            let _ = self.changes.send(id.to_string());
             self.audit.record(
                 &Entry::new("device.revoked")
                     .device(&by.id, &by.name, by.role.as_str())
@@ -370,6 +436,7 @@ impl Auth {
     pub async fn set_role(&self, id: &str, role: Role, by: &Device) -> Result<bool, AuthError> {
         let done = self.store.set_role(id, role).await?;
         if done {
+            let _ = self.changes.send(id.to_string());
             self.audit.record(
                 &Entry::new("device.role")
                     .device(&by.id, &by.name, by.role.as_str())
@@ -385,6 +452,7 @@ impl Auth {
         let expires_at = self.expiry(now());
         let done = self.store.extend_device(id, expires_at).await?;
         if done {
+            let _ = self.changes.send(id.to_string());
             self.audit.record(
                 &Entry::new("device.renewed")
                     .device(&by.id, &by.name, by.role.as_str())
@@ -403,6 +471,16 @@ fn credential_id(passkey: &Passkey) -> String {
 mod tests {
     use super::*;
 
+    /// Arms as it creates, because that is what an operator at the console does. Tests that care
+    /// about the arming gate itself call [`Auth::create_pairing`] directly.
+    async fn armed_code(a: &Auth, role: Role) -> String {
+        let pairing = a.create_pairing(role, Delivery::Console).await.unwrap();
+        if !pairing.armed {
+            assert!(a.arm_pairing(&pairing.code).await.unwrap());
+        }
+        pairing.code
+    }
+
     async fn auth(origin: &str) -> Auth {
         Auth::new(
             Store::open_memory().await.unwrap(),
@@ -416,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn pairing_mints_a_device_bound_token() {
         let a = auth("http://192.168.1.24:8790").await;
-        let code = a.create_pairing(Role::Full).await.unwrap();
+        let code = armed_code(&a, Role::Full).await;
         let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
         assert_eq!(a.authenticate(&e.token, "1.2.3.4").await.unwrap().id, e.device.id);
     }
@@ -424,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn a_tier_zero_token_expires_and_a_passkey_tier_token_does_not() {
         let zero = auth("http://192.168.1.24:8790").await;
-        let code = zero.create_pairing(Role::Full).await.unwrap();
+        let code = armed_code(&zero, Role::Full).await;
         let e = zero
             .redeem_pairing(&code, "phone", None, "1.2.3.4")
             .await
@@ -435,7 +513,7 @@ mod tests {
         );
 
         let one = auth("https://kampr.example.com").await;
-        let code = one.create_pairing(Role::Full).await.unwrap();
+        let code = armed_code(&one, Role::Full).await;
         let e = one.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
         assert_eq!(e.device.expires_at, None);
     }
@@ -443,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn a_used_code_is_dead_and_a_wrong_one_never_lived() {
         let a = auth("http://192.168.1.24:8790").await;
-        let code = a.create_pairing(Role::Full).await.unwrap();
+        let code = armed_code(&a, Role::Full).await;
         a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
         assert!(matches!(
             a.redeem_pairing(&code, "laptop", None, "1.2.3.4").await,
@@ -453,6 +531,38 @@ mod tests {
             a.redeem_pairing("ZZZZ-ZZZZ", "laptop", None, "5.6.7.8").await,
             Err(AuthError::BadPairingCode)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_keeps_authenticating_successfully_never_locks_itself_out() {
+        let a = auth("http://192.168.1.24:8790").await;
+        let code = armed_code(&a, Role::Full).await;
+        let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
+        for n in 0..60 {
+            assert!(
+                a.authenticate(&e.token, "1.2.3.4").await.is_ok(),
+                "the limiter is for failures; a good token was refused on attempt {n}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn token_probing_is_not_invisible() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let a = Auth::new(
+            Store::open_memory().await.unwrap(),
+            Tier::detect("http://192.168.1.24:8790").unwrap(),
+            AuditLog::open(&path).unwrap(),
+            Policy::default(),
+        )
+        .unwrap();
+        for _ in 0..40 {
+            let _ = a.authenticate("kmp_nope", "9.9.9.9").await;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("auth.rejected"), "{text}");
+        assert!(text.contains("auth.rate_limited"), "{text}");
     }
 
     #[tokio::test]
@@ -480,7 +590,7 @@ mod tests {
     #[tokio::test]
     async fn revocation_ends_the_session_immediately() {
         let a = auth("http://192.168.1.24:8790").await;
-        let code = a.create_pairing(Role::Full).await.unwrap();
+        let code = armed_code(&a, Role::Full).await;
         let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
         assert!(a.revoke(&e.device.id, &e.device).await.unwrap());
         assert!(matches!(
@@ -489,10 +599,51 @@ mod tests {
         ));
     }
 
+    /// A read-only device receives every frame of every pane, and `kampr setup` prints the
+    /// pairing code into a Herdr popup — so the code alone cannot be the whole credential once
+    /// anything is watching. The operator's keypress at the console is the channel a read-only
+    /// device does not have.
+    #[tokio::test]
+    async fn a_code_printed_on_a_watched_screen_is_inert_until_an_operator_arms_it() {
+        let a = auth("http://192.168.1.24:8790").await;
+        let first = a.create_pairing(Role::Full, Delivery::Console).await.unwrap();
+        assert!(first.armed, "nothing is watching before the first device pairs");
+        a.redeem_pairing(&first.code, "kiosk", None, "1.2.3.4")
+            .await
+            .unwrap();
+
+        let second = a.create_pairing(Role::Full, Delivery::Console).await.unwrap();
+        assert!(!second.armed);
+        assert!(
+            matches!(
+                a.redeem_pairing(&second.code, "watcher", None, "5.6.7.8").await,
+                Err(AuthError::BadPairingCode)
+            ),
+            "a device that read the code off the screen must not be able to redeem it"
+        );
+
+        assert!(
+            a.create_pairing(Role::Full, Delivery::Authenticated)
+                .await
+                .unwrap()
+                .armed,
+            "a code handed to an authenticated writer was never on a watched screen"
+        );
+        assert!(a.arm_pairing(&second.code).await.unwrap());
+        assert_eq!(
+            a.redeem_pairing(&second.code, "laptop", None, "1.2.3.4")
+                .await
+                .unwrap()
+                .device
+                .role,
+            Role::Full
+        );
+    }
+
     #[tokio::test]
     async fn a_readonly_pairing_yields_a_readonly_device() {
         let a = auth("http://192.168.1.24:8790").await;
-        let code = a.create_pairing(Role::Readonly).await.unwrap();
+        let code = armed_code(&a, Role::Readonly).await;
         let e = a.redeem_pairing(&code, "kiosk", None, "1.2.3.4").await.unwrap();
         assert_eq!(e.device.role, Role::Readonly);
         assert!(!e.device.role.writes());

@@ -1,3 +1,4 @@
+use crate::files::{chmod, private_dir, touch_private};
 use crate::secret;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -81,6 +82,15 @@ pub enum StoreError {
 
 type Result<T> = std::result::Result<T, StoreError>;
 
+/// Wrong guesses against outstanding codes, after which every outstanding code is dead. The
+/// per-peer limiter slows one attacker down; this is what bounds the total number of guesses a
+/// ~40-bit code ever has to survive, whatever the peer address says.
+pub const PAIRING_ATTEMPT_LIMIT: i64 = 10;
+
+/// Per-pane preferences a device may keep. Nothing prunes rows for panes that no longer exist,
+/// and a device that can name a pane id can otherwise write rows until the disk is full.
+pub const MAX_PANE_PREFS: i64 = 256;
+
 /// Devices, tokens, passkeys and per-pane preferences.
 ///
 /// This never lives in a plugin root: a GitHub-installed plugin root is a managed checkout that
@@ -93,10 +103,13 @@ pub struct Store {
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+            private_dir(dir)?;
         }
-        // `kampr setup` mints a pairing code while the node is serving from the same file, so
-        // WAL and a busy timeout are what stop the two processes colliding.
+        // sqlite creates `-wal` and `-shm` itself at the process umask, and the write-ahead log
+        // holds a pairing digest long before it is checkpointed into the main file. Claiming the
+        // main file before the pool opens and tightening the sidecars after is what keeps all
+        // three off a local unprivileged reader.
+        touch_private(path)?;
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -234,32 +247,72 @@ impl Store {
         Ok(done.rows_affected() > 0)
     }
 
-    pub async fn create_pairing(&self, role: Role, now: i64, expires_at: i64) -> Result<String> {
+    /// `armed_until` is when the code stops being redeemable. `None` means it never starts:
+    /// somebody at the console has to arm it first.
+    pub async fn create_pairing(
+        &self,
+        role: Role,
+        now: i64,
+        expires_at: i64,
+        armed_until: Option<i64>,
+    ) -> Result<String> {
         let code = secret::pairing_code()?;
-        sqlx::query("INSERT INTO pairings (hash, role, created_at, expires_at) VALUES (?, ?, ?, ?)")
-            .bind(secret::digest(&secret::normalise_code(&code)))
-            .bind(role.as_str())
-            .bind(now)
-            .bind(expires_at)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO pairings (hash, role, created_at, expires_at, armed_until)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(secret::pairing_digest(&secret::normalise_code(&code)))
+        .bind(role.as_str())
+        .bind(now)
+        .bind(expires_at)
+        .bind(armed_until)
+        .execute(&self.pool)
+        .await?;
         Ok(code)
+    }
+
+    pub async fn arm_pairing(&self, code: &str, now: i64, until: i64) -> Result<bool> {
+        let done = sqlx::query(
+            "UPDATE pairings SET armed_until = ?
+             WHERE hash = ? AND used_at IS NULL AND expires_at > ? AND attempts < ?",
+        )
+        .bind(until)
+        .bind(secret::pairing_digest(&secret::normalise_code(code)))
+        .bind(now)
+        .bind(PAIRING_ATTEMPT_LIMIT)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
     }
 
     /// Single use: the row is marked spent in the same statement that claims it, so two devices
     /// racing on one code cannot both win.
+    ///
+    /// A miss charges every outstanding code an attempt. That is deliberately blunt — a wrong
+    /// guess matches no row, so there is no other row to charge — and it means an attacker can
+    /// burn a pending code with ten guesses. Burning one costs the operator a re-print; not
+    /// counting at all costs them the code.
     pub async fn claim_pairing(&self, code: &str, now: i64) -> Result<Option<Role>> {
-        let hash = secret::digest(&secret::normalise_code(code));
+        let hash = secret::pairing_digest(&secret::normalise_code(code));
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT role FROM pairings
-             WHERE hash = ? AND used_at IS NULL AND expires_at > ? AND attempts < 10",
+             WHERE hash = ? AND used_at IS NULL AND expires_at > ? AND attempts < ?
+               AND armed_until IS NOT NULL AND armed_until > ?",
         )
         .bind(&hash)
+        .bind(now)
+        .bind(PAIRING_ATTEMPT_LIMIT)
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
+            sqlx::query(
+                "UPDATE pairings SET attempts = attempts + 1 WHERE used_at IS NULL AND expires_at > ?",
+            )
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
             tx.commit().await?;
             return Ok(None);
         };
@@ -367,6 +420,16 @@ impl Store {
         .bind(now)
         .execute(&self.pool)
         .await?;
+        // Pane ids change whenever herdr restarts, so validating the id against the live herd
+        // still leaves a set that only grows. This is the floor under it.
+        sqlx::query(
+            "DELETE FROM pane_prefs WHERE device_id = ?1 AND pane_id NOT IN
+             (SELECT pane_id FROM pane_prefs WHERE device_id = ?1 ORDER BY updated_at DESC LIMIT ?2)",
+        )
+        .bind(device_id)
+        .bind(MAX_PANE_PREFS)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -405,8 +468,15 @@ fn device_from_row(row: sqlx::sqlite::SqliteRow) -> Device {
 
 #[cfg(unix)]
 fn restrict(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    for sidecar in ["", "-wal", "-shm"] {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(sidecar);
+        let candidate = std::path::PathBuf::from(candidate);
+        if candidate.exists() {
+            chmod(&candidate, 0o600)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -470,18 +540,58 @@ mod tests {
     #[tokio::test]
     async fn a_pairing_code_is_single_use_and_time_boxed() {
         let s = store().await;
-        let code = s.create_pairing(Role::Readonly, NOW, NOW + 600).await.unwrap();
+        let code = s
+            .create_pairing(Role::Readonly, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
         assert_eq!(s.claim_pairing(&code, NOW).await.unwrap(), Some(Role::Readonly));
         assert_eq!(s.claim_pairing(&code, NOW).await.unwrap(), None);
 
-        let stale = s.create_pairing(Role::Full, NOW, NOW + 600).await.unwrap();
+        let stale = s
+            .create_pairing(Role::Full, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
         assert_eq!(s.claim_pairing(&stale, NOW + 601).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn an_unarmed_code_is_not_a_credential() {
+        let s = store().await;
+        let code = s.create_pairing(Role::Full, NOW, NOW + 600, None).await.unwrap();
+        assert_eq!(s.claim_pairing(&code, NOW).await.unwrap(), None);
+        assert!(s.arm_pairing(&code, NOW, NOW + 60).await.unwrap());
+        assert_eq!(
+            s.claim_pairing(&code, NOW + 61).await.unwrap(),
+            None,
+            "the window closes"
+        );
+        assert!(!s.arm_pairing("ZZZZ-ZZZZ", NOW, NOW + 60).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_run_of_wrong_guesses_burns_every_outstanding_code() {
+        let s = store().await;
+        let code = s
+            .create_pairing(Role::Full, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
+        for _ in 0..PAIRING_ATTEMPT_LIMIT {
+            assert_eq!(s.claim_pairing("ZZZZ-ZZZZ", NOW).await.unwrap(), None);
+        }
+        assert_eq!(
+            s.claim_pairing(&code, NOW).await.unwrap(),
+            None,
+            "the attempts column is what makes a 40-bit code safe; it has to be written"
+        );
     }
 
     #[tokio::test]
     async fn a_pairing_code_matches_however_it_was_typed() {
         let s = store().await;
-        let code = s.create_pairing(Role::Full, NOW, NOW + 600).await.unwrap();
+        let code = s
+            .create_pairing(Role::Full, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
         let typed = code.replace('-', " ").to_lowercase();
         assert_eq!(s.claim_pairing(&typed, NOW).await.unwrap(), Some(Role::Full));
     }
@@ -507,6 +617,50 @@ mod tests {
         );
         s.revoke_device(&d.id, NOW).await.unwrap();
         assert_eq!(s.credentials("kampr.example.com", NOW).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn the_state_directory_and_every_sidecar_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("state");
+        let path = dir.join("kampr.db");
+        let s = Store::open(&path).await.unwrap();
+        // A pairing digest lives in the write-ahead log long before it reaches the main file.
+        s.create_pairing(Role::Full, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
+
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700, "the state directory");
+        for sidecar in ["kampr.db", "kampr.db-wal", "kampr.db-shm"] {
+            let p = dir.join(sidecar);
+            assert!(p.exists(), "{sidecar} should exist");
+            assert_eq!(mode(&p), 0o600, "{sidecar} carries pairing digests");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_device_cannot_keep_preferences_for_more_panes_than_the_cap() {
+        let s = store().await;
+        let d = s
+            .create_device("phone", Role::Full, NOW, None, None, None)
+            .await
+            .unwrap();
+        for n in 0..(MAX_PANE_PREFS + 20) {
+            s.set_pane_prefs(
+                &d.id,
+                &format!("n/w1:p{n}"),
+                &serde_json::json!({ "zoom": 1 }),
+                NOW + n,
+            )
+            .await
+            .unwrap();
+        }
+        let kept = s.pane_prefs(&d.id).await.unwrap();
+        assert_eq!(kept.as_object().unwrap().len(), MAX_PANE_PREFS as usize);
+        assert!(kept.get("n/w1:p0").is_none(), "the oldest go first");
     }
 
     #[tokio::test]

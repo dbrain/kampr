@@ -10,6 +10,7 @@ repository = "https://github.com/dbrain/kampr"
 
 [workspace.dependencies]
 anyhow = "1"
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
@@ -48,3 +49,11 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "r
 tempfile = "3.27.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 tokio-tungstenite = "0.30.0"
+
+# argon2 in a debug build is ~50x slower than in release, which turns a pairing redemption in the
+# test suite into seconds. Optimising just the KDF keeps the cost honest without that.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

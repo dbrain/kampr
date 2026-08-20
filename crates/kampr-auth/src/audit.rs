@@ -10,10 +10,16 @@ use time::format_description::well_known::Rfc3339;
 ///
 /// Mode 0600 because the detail field carries what was typed — an answer to a permission prompt,
 /// a command, a reply. This file is as sensitive as the terminals it describes.
+/// One previous generation is kept. This is a forensic trail, not an archive: keeping more of it
+/// than the operator has disk for is how the trail stops existing at all.
+pub const DEFAULT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct AuditLog {
     path: PathBuf,
     file: Mutex<Option<File>>,
+    written: Mutex<u64>,
+    max_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,12 +79,18 @@ impl<'a> Entry<'a> {
 
 impl AuditLog {
     pub fn open(path: &Path) -> std::io::Result<Self> {
+        Self::with_max_bytes(path, DEFAULT_MAX_BYTES)
+    }
+
+    pub fn with_max_bytes(path: &Path, max_bytes: u64) -> std::io::Result<Self> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+            crate::files::private_dir(dir)?;
         }
         let log = Self {
             path: path.to_path_buf(),
             file: Mutex::new(None),
+            written: Mutex::new(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)),
+            max_bytes,
         };
         log.with_file(|_| Ok(()))?;
         Ok(log)
@@ -89,6 +101,8 @@ impl AuditLog {
         Self {
             path: PathBuf::new(),
             file: Mutex::new(None),
+            written: Mutex::new(0),
+            max_bytes: DEFAULT_MAX_BYTES,
         }
     }
 
@@ -108,7 +122,27 @@ impl AuditLog {
             f.write_all(b"\n")
         }) {
             tracing::warn!(error = %e, path = %self.path.display(), "audit write failed");
+            return;
         }
+        let mut written = self.written.lock().unwrap();
+        *written += line.len() as u64 + 1;
+        if *written >= self.max_bytes {
+            *written = 0;
+            drop(written);
+            if let Err(e) = self.rotate() {
+                tracing::warn!(error = %e, "audit rotation failed");
+            }
+        }
+    }
+
+    fn rotate(&self) -> std::io::Result<()> {
+        let mut slot = self.file.lock().unwrap();
+        slot.take();
+        let rolled = self.path.with_extension("jsonl.1");
+        std::fs::rename(&self.path, &rolled)?;
+        crate::files::chmod(&rolled, 0o600)?;
+        *slot = Some(open_private(&self.path)?);
+        Ok(())
     }
 
     fn with_file<T>(&self, f: impl FnOnce(&mut File) -> std::io::Result<T>) -> std::io::Result<T> {
@@ -161,6 +195,28 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "the audit log echoes reply text");
+        }
+    }
+
+    #[test]
+    fn the_log_rotates_instead_of_growing_until_the_disk_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = AuditLog::with_max_bytes(&path, 4096).unwrap();
+        for n in 0..4000 {
+            log.record(&Entry::new("input").detail(serde_json::json!({ "n": n })));
+        }
+        let live = std::fs::metadata(&path).unwrap().len();
+        assert!(live <= 4096, "the live log grew to {live}");
+        let rolled = path.with_extension("jsonl.1");
+        assert!(rolled.exists(), "the previous generation is kept");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&rolled).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 

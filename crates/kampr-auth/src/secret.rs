@@ -1,3 +1,4 @@
+use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
@@ -44,8 +45,28 @@ pub fn normalise_code(input: &str) -> String {
         .collect()
 }
 
+/// For a token, and only for a token: 256 bits of system entropy has no preimage worth
+/// searching for, so the cheap hash is the right one.
 pub fn digest(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
+}
+
+/// A pairing code is ~39.6 bits, which an offline attacker with a copy of the database walks
+/// through in minutes against a bare hash. The lookup is by digest, so the salt has to be
+/// constant — the defence is the work factor, and a code that lives ten minutes and dies on
+/// first use never gives a table time to pay for itself.
+const PAIRING_SALT: &[u8] = b"kampr/pairing/v1";
+
+pub fn pairing_digest(normalised_code: &str) -> String {
+    let params = Params::default();
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; 32];
+    match argon.hash_password_into(normalised_code.as_bytes(), PAIRING_SALT, &mut out) {
+        Ok(()) => hex::encode(out),
+        // Only reachable if the parameters are invalid, which they are not; falling back to the
+        // cheap hash would silently reinstate the defect this exists to close.
+        Err(e) => panic!("argon2 parameters are wrong: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +107,23 @@ mod tests {
         ] {
             assert_eq!(normalise_code(&typed), bare);
         }
+    }
+
+    #[test]
+    fn a_pairing_digest_is_stretched_rather_than_a_bare_hash() {
+        // ~39.6 bits of entropy sits in a world-readable-until-now WAL; a bare SHA-256 of it is
+        // an offline brute force with no rate limiter in the way.
+        let code = pairing_code().unwrap();
+        let normalised = normalise_code(&code);
+        assert_ne!(pairing_digest(&normalised), digest(&normalised));
+        assert_eq!(pairing_digest(&normalised), pairing_digest(&normalised));
+        let at = std::time::Instant::now();
+        pairing_digest(&normalised);
+        assert!(
+            at.elapsed() >= std::time::Duration::from_millis(10),
+            "a pairing digest must cost real work, took {:?}",
+            at.elapsed()
+        );
     }
 
     #[test]

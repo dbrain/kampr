@@ -26,10 +26,14 @@ const HERD_POLL: Duration = Duration::from_secs(3);
 pub struct Node {
     pub config: Config,
     pub origin: String,
+    /// Resolved once: the wildcard case asks the routing table which address a phone would find
+    /// this machine on, and that is not a thing to do per request.
+    pub allowed_origins: Vec<String>,
     pub herdr: Herdr,
     pub provider: Arc<HerdrProvider>,
     pub registry: Arc<PaneRegistry>,
     pub auth: Arc<Auth>,
+    caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
     refresher: JoinHandle<()>,
 }
@@ -78,14 +82,26 @@ impl Node {
 
         Ok(Arc::new(Self {
             origin: config.origin(),
+            allowed_origins: config.allowed_origins(),
             config,
             herdr,
             provider,
             registry,
             auth,
+            caps: crate::caps::Caps::default(),
             herd,
             refresher,
         }))
+    }
+
+    pub async fn caps(&self) -> serde_json::Value {
+        self.caps
+            .get(&self.config.node_id, &self.herdr, &self.config.herdr.binary)
+            .await
+    }
+
+    pub fn caps_spawns(&self) -> u64 {
+        self.caps.spawns()
     }
 
     pub fn herd(&self) -> Arc<HerdModel> {

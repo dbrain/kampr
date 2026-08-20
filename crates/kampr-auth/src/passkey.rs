@@ -20,6 +20,11 @@ pub enum PasskeyError {
     Random(#[from] secret::RandomError),
 }
 
+/// Ceremony state a node holds at once. `/auth/webauthn/authenticate/start` is unauthenticated
+/// and parks the whole enrolled-credential list for the challenge TTL, so without a ceiling the
+/// only thing between that and unbounded memory is the per-peer limiter — and peers are cheap.
+pub const MAX_CHALLENGES: usize = 128;
+
 enum Challenge {
     Register(Box<PasskeyRegistration>),
     Authenticate(Box<PasskeyAuthentication>),
@@ -117,8 +122,22 @@ impl Passkeys {
         let now = Instant::now();
         let mut challenges = self.challenges.lock().unwrap();
         challenges.retain(|_, (at, _)| now.duration_since(*at) < self.ttl);
+        while challenges.len() >= MAX_CHALLENGES {
+            let Some(oldest) = challenges
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            challenges.remove(&oldest);
+        }
         challenges.insert(id.clone(), (now, challenge));
         Ok(id)
+    }
+
+    pub fn parked(&self) -> usize {
+        self.challenges.lock().unwrap().len()
     }
 
     fn take(&self, id: &str) -> Option<Challenge> {
@@ -162,6 +181,21 @@ mod tests {
         assert!(!challenge.public_key.challenge.is_empty());
         assert!(pk.take(&id).is_some());
         assert!(pk.take(&id).is_none());
+    }
+
+    #[test]
+    fn parked_ceremony_state_is_capped() {
+        let tier = Tier::detect("https://kampr.example.com").unwrap();
+        let pk = Passkeys::for_tier(&tier, Duration::from_secs(300))
+            .unwrap()
+            .unwrap();
+        for _ in 0..(MAX_CHALLENGES * 2) {
+            pk.start_registration(Uuid::new_v4(), "phone", &[]).unwrap();
+        }
+        assert!(
+            pk.parked() <= MAX_CHALLENGES,
+            "an unauthenticated request must not park state for five minutes without a ceiling"
+        );
     }
 
     #[test]

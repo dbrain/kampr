@@ -79,6 +79,21 @@ impl Tier {
         })
     }
 
+    /// What the wire's `security.unlocks` carries: the capability *names* a hostname and a
+    /// certificate would add. The prose in `unlocks` is the operator's copy, for the CLI; a
+    /// client writes its own from these names.
+    pub fn locked(&self) -> Vec<&'static str> {
+        [
+            ("passkeys", self.passkeys),
+            ("push", self.push),
+            ("installable", self.installable),
+        ]
+        .into_iter()
+        .filter(|(_, available)| !available)
+        .map(|(name, _)| name)
+        .collect()
+    }
+
     /// A deliberate override for a node behind a proxy whose public hostname differs from the
     /// origin clients type. A passkey registered on one RP ID does not work on another, so this
     /// is only ever set from configuration, never inferred.
@@ -154,6 +169,25 @@ mod tests {
         let loopback_ip = Tier::detect("http://127.0.0.1:8790").unwrap();
         assert!(loopback_ip.secure_context, "a loopback IP is a secure context");
         assert!(!loopback_ip.passkeys, "but it is still not a registrable domain");
+    }
+
+    #[test]
+    fn locked_names_what_the_wire_promises_and_nothing_else() {
+        assert_eq!(
+            Tier::detect("http://192.168.1.24:8790").unwrap().locked(),
+            ["passkeys", "push", "installable"]
+        );
+        assert_eq!(
+            Tier::detect("https://192.168.1.24:8790").unwrap().locked(),
+            ["passkeys"],
+            "https on an IP buys everything a secure context buys"
+        );
+        assert!(
+            Tier::detect("https://kampr.home.example.com")
+                .unwrap()
+                .locked()
+                .is_empty()
+        );
     }
 
     #[test]

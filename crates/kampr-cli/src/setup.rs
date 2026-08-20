@@ -1,3 +1,4 @@
+use crate::pairing;
 use crate::report::{self, Local};
 use crate::service;
 use anyhow::Result;
@@ -49,6 +50,7 @@ async fn show(local: &Local) -> Result<()> {
     println!("  node        {}", if up { "running" } else { "not reachable" });
     println!("  service     {}", service::status());
     println!("  url         {url}");
+    println!("{}", report::bind_summary(&local.config));
     if let Some(identity) = &local.identity {
         println!("  identity    {}", identity.fingerprint());
     }
@@ -60,17 +62,17 @@ async fn show(local: &Local) -> Result<()> {
 }
 
 async fn pair(local: &Local, role: Role) -> Result<()> {
-    let code = local.auth.create_pairing(role).await?;
+    let pairing = pairing::create(local, role).await?;
     let url = local.config.origin();
     println!();
     print!("{}", report::qr(&url));
     println!("  {url}");
-    println!("  code   {code}   ({}, one device)", role.as_str());
+    println!("  code   {}   ({}, one device)", pairing.code, role.as_str());
     println!(
         "  valid  {} minutes",
         local.auth.policy().pairing_ttl.as_secs() / 60
     );
-    Ok(())
+    pairing::arm(local, &pairing).await
 }
 
 async fn devices(local: &Local) -> Result<()> {

@@ -26,8 +26,9 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Server {
-    /// Tier 0 is "runs immediately", so the default binds the LAN rather than loopback. The
-    /// pairing code, not the bind address, is what keeps it closed.
+    /// Loopback by default (P3.11). Kampr access is unrestricted code execution on this host, so
+    /// reaching the LAN is a decision the operator makes with `kampr init --bind`, not one the
+    /// default makes for them.
     pub bind: String,
     /// The one URL clients are expected to use. Empty means "work it out from the bind address"
     /// — fine for Tier 0, but a passkey is registered against an origin and a changed origin
@@ -38,6 +39,15 @@ pub struct Server {
     /// anyone who can reach the node directly.
     pub trust_proxy: bool,
     pub tls: Tls,
+}
+
+impl Server {
+    /// Whether this bind is reachable from anywhere but this machine.
+    pub fn exposed(&self) -> bool {
+        self.bind
+            .parse::<SocketAddr>()
+            .is_ok_and(|addr| !addr.ip().is_loopback())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -78,7 +88,7 @@ pub struct Limits {
 impl Default for Server {
     fn default() -> Self {
         Self {
-            bind: format!("0.0.0.0:{DEFAULT_PORT}"),
+            bind: format!("127.0.0.1:{DEFAULT_PORT}"),
             origin: String::new(),
             extra_origins: Vec::new(),
             trust_proxy: false,
@@ -156,7 +166,8 @@ impl Config {
 
     pub fn save(&self, config_dir: &Path) -> Result<PathBuf, ConfigError> {
         let path = Self::path(config_dir);
-        std::fs::create_dir_all(config_dir).map_err(|e| ConfigError::Io(path.clone(), e))?;
+        // The config directory holds `node.key`, so it is as private as the state directory.
+        kampr_auth::private_dir(config_dir).map_err(|e| ConfigError::Io(path.clone(), e))?;
         let text = toml::to_string_pretty(self).map_err(|e| ConfigError::Encode(path.clone(), e))?;
         std::fs::write(&path, text).map_err(|e| ConfigError::Io(path.clone(), e))?;
         Ok(path)
@@ -179,6 +190,37 @@ impl Config {
             Err(_) => ("127.0.0.1".to_string(), DEFAULT_PORT),
         };
         format!("{scheme}://{host}:{port}")
+    }
+
+    /// Every origin a browser may legitimately present.
+    ///
+    /// Derived from the *bind address*, never from the request's own `Host` — reflecting `Host`
+    /// makes `Origin == Host` true for a DNS-rebinding attacker who points a domain at this
+    /// node's address, which satisfies the same-origin gate with the attacker's own header.
+    pub fn allowed_origins(&self) -> Vec<String> {
+        let mut origins = vec![self.origin()];
+        origins.extend(self.server.extra_origins.iter().cloned());
+        let scheme = if self.server.tls.enabled { "https" } else { "http" };
+        if let Ok(addr) = self.bind_addr() {
+            let port = addr.port();
+            let mut hosts = Vec::new();
+            if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+                hosts.extend([
+                    "127.0.0.1".to_string(),
+                    "localhost".to_string(),
+                    "[::1]".to_string(),
+                ]);
+            }
+            if addr.ip().is_unspecified() {
+                hosts.extend(lan_address().map(|ip| ip.to_string()));
+            } else {
+                hosts.push(addr.ip().to_string());
+            }
+            origins.extend(hosts.into_iter().map(|host| format!("{scheme}://{host}:{port}")));
+        }
+        origins.sort();
+        origins.dedup();
+        origins
     }
 
     /// The explicit argument wins, then what `kampr init` recorded, then the XDG default.
@@ -240,11 +282,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nothing_binds_off_loopback_without_being_asked_to() {
+        assert!(
+            Config::bootstrap("x").bind_addr().unwrap().ip().is_loopback(),
+            "P3.11: loopback by default, LAN by explicit opt-in"
+        );
+        assert!(!Server::default().exposed());
+        let mut wide = Config::bootstrap("x");
+        wide.server.bind = format!("0.0.0.0:{DEFAULT_PORT}");
+        assert!(wide.server.exposed());
+        wide.server.bind = format!("192.168.1.24:{DEFAULT_PORT}");
+        assert!(wide.server.exposed());
+    }
+
+    #[test]
     fn a_bootstrap_config_round_trips_through_toml() {
-        let dir = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("config");
+        let dir = dir.as_path();
         let config = Config::bootstrap("comingclean");
-        config.save(dir.path()).unwrap();
-        let loaded = Config::load(dir.path()).unwrap();
+        config.save(dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+                0o700,
+                "node.key lives here"
+            );
+        }
+        let loaded = Config::load(dir).unwrap();
         assert_eq!(loaded.node_id, config.node_id);
         assert_eq!(loaded.node_name, "comingclean");
         assert_eq!(loaded.server.bind, config.server.bind);
@@ -274,7 +341,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(Config::path(dir.path()), "node_id = \"01J\"\nnode_name = \"x\"\n").unwrap();
         let c = Config::load(dir.path()).unwrap();
-        assert_eq!(c.server.bind, format!("0.0.0.0:{DEFAULT_PORT}"));
+        assert_eq!(c.server.bind, format!("127.0.0.1:{DEFAULT_PORT}"));
         assert_eq!(c.herdr.binary, "herdr");
         assert_eq!(c.auth.token_days, 30);
     }
@@ -288,11 +355,31 @@ mod tests {
 
     #[test]
     fn a_wildcard_bind_never_advertises_itself_as_zero() {
-        let c = Config::bootstrap("x");
+        let mut c = Config::bootstrap("x");
+        c.server.bind = format!("0.0.0.0:{DEFAULT_PORT}");
         let origin = c.origin();
         assert!(origin.starts_with("http://"), "{origin}");
         assert!(!origin.contains("0.0.0.0"), "{origin}");
         assert!(origin.ends_with(&format!(":{DEFAULT_PORT}")), "{origin}");
+    }
+
+    #[test]
+    fn the_origin_allowlist_comes_from_the_bind_and_never_from_a_request() {
+        let mut c = Config::bootstrap("x");
+        let loopback = c.allowed_origins();
+        assert!(loopback.contains(&format!("http://127.0.0.1:{DEFAULT_PORT}")));
+        assert!(loopback.contains(&format!("http://localhost:{DEFAULT_PORT}")));
+        assert!(!loopback.iter().any(|o| o.contains("0.0.0.0")));
+
+        c.server.bind = "192.168.1.24:9000".into();
+        c.server.extra_origins = vec!["http://kampr.local:9000".into()];
+        let lan = c.allowed_origins();
+        assert!(lan.contains(&"http://192.168.1.24:9000".to_string()));
+        assert!(lan.contains(&"http://kampr.local:9000".to_string()));
+        assert!(
+            !lan.contains(&"http://127.0.0.1:9000".to_string()),
+            "a specific bind advertises only itself"
+        );
     }
 
     #[test]

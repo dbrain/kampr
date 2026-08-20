@@ -1,3 +1,4 @@
+use crate::pairing;
 use crate::report::{self, Local};
 use anyhow::{Context, Result};
 use kampr_auth::{NodeIdentity, Role};
@@ -37,11 +38,11 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
         .bind_addr()
         .with_context(|| format!("server.bind {:?} is not host:port", config.server.bind))?;
     let path = config.save(dirs_config)?;
-    std::fs::create_dir_all(dirs_state)?;
+    kampr_auth::private_dir(dirs_state)?;
 
     let identity = NodeIdentity::load_or_create(&Config::node_key_path(dirs_config))?;
     let local = Local::open(dirs_config, Some(dirs_state)).await?;
-    let code = local.auth.create_pairing(Role::Full).await?;
+    let pair = pairing::create(&local, Role::Full).await?;
     let url = local.config.origin();
 
     println!("Kampr node {} ({})", local.config.node_name, local.config.node_id);
@@ -50,14 +51,16 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     println!("  identity    {}", identity.fingerprint());
     println!();
     println!("  {url}");
+    println!("{}", report::bind_summary(&local.config));
     println!();
     print!("{}", report::qr(&url));
     println!();
-    println!("  pairing code   {code}");
+    println!("  pairing code   {}", pair.code);
     println!(
         "  valid for      {} minutes, one device",
         local.auth.policy().pairing_ttl.as_secs() / 60
     );
+    pairing::arm(&local, &pair).await?;
     println!();
     println!("{}", report::tier_summary(local.auth.tier()));
     println!();

@@ -23,8 +23,8 @@ impl Supervisor {
 }
 
 pub fn install(binary: &Path, config_dir: &Path, state_dir: &Path, socket: Option<&str>) -> Result<PathBuf> {
-    std::fs::create_dir_all(config_dir)?;
-    std::fs::create_dir_all(state_dir)?;
+    kampr_auth::private_dir(config_dir)?;
+    kampr_auth::private_dir(state_dir)?;
     match Supervisor::detect() {
         Supervisor::Systemd => install_systemd(binary, config_dir, state_dir, socket),
         Supervisor::Launchd => install_launchd(binary, config_dir, state_dir, socket),

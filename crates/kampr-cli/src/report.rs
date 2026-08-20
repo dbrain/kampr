@@ -76,6 +76,25 @@ fn host_port(origin: &str) -> Option<(String, u16)> {
     Some((url.host_str()?.to_string(), port))
 }
 
+/// The bind address is the single biggest thing about a Kampr node, and "0.0.0.0" does not say
+/// what it means to anyone who is not already thinking about it.
+pub fn bind_summary(config: &Config) -> String {
+    if config.server.exposed() {
+        format!(
+            "  bind        {} — reachable from every device on this network.\n                           Anything that pairs here can type into every terminal on this host.",
+            config.server.bind
+        )
+    } else {
+        format!(
+            "  bind        {} — this machine only. A phone on the LAN cannot reach it.\n                           `kampr init --bind 0.0.0.0:{}` opens it to the network.",
+            config.server.bind,
+            config
+                .bind_addr()
+                .map_or(kampr_node::config::DEFAULT_PORT, |a| a.port())
+        )
+    }
+}
+
 pub fn tier_summary(tier: &Tier) -> String {
     let mut lines = vec![format!(
         "  tier {}   {}",
@@ -111,6 +130,19 @@ mod tests {
         let rendered = qr("http://192.168.1.24:8790");
         assert!(rendered.lines().count() > 10);
         assert!(rendered.contains('\u{2588}') || rendered.contains('\u{2580}'));
+    }
+
+    #[test]
+    fn the_bind_summary_says_what_the_address_means() {
+        let mut c = Config::bootstrap("x");
+        let closed = bind_summary(&c);
+        assert!(closed.contains("this machine only"), "{closed}");
+        assert!(closed.contains("--bind"), "{closed}");
+
+        c.server.bind = "0.0.0.0:8790".into();
+        let open = bind_summary(&c);
+        assert!(open.contains("every device on this network"), "{open}");
+        assert!(open.contains("every terminal"), "{open}");
     }
 
     #[test]

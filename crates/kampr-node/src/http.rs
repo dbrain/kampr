@@ -5,15 +5,15 @@ use anyhow::{Context, Result};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, COOKIE, HOST, HeaderMap, HeaderName, ORIGIN,
-    REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, COOKIE, HeaderMap, HeaderName, ORIGIN,
+    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use kampr_auth::{AuthError, Device, Role};
+use kampr_auth::{AuthError, Delivery, Device, Role};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -30,12 +30,16 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// because pane output is the most attacker-influenced surface here — and note a browser ignores
 /// `'unsafe-inline'` entirely once any hash is present, so the two cannot be combined as a
 /// belt-and-braces. If a CMP upgrade changes that rule, the console names the expected hash.
+///
+/// `connect-src 'self'` and nothing else. A bare `ws:` / `wss:` matches *any* host, which hands
+/// anything that gets a script onto this page a clean channel out; CSP3 resolves `'self'` to the
+/// same-origin WebSocket, so the schemes bought nothing.
 const CSP: &str = "default-src 'self'; \
      script-src 'self' 'wasm-unsafe-eval'; \
      style-src 'self' 'sha256-+bHRyQ0Z1/Lb6dgSILtTESBRCIFl8jkBb/dPQA4Pdnw='; \
      img-src 'self' data: blob:; \
      font-src 'self' data:; \
-     connect-src 'self' ws: wss:; \
+     connect-src 'self'; \
      worker-src 'self' blob:; \
      frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'";
 
@@ -46,6 +50,12 @@ pub fn router(node: Arc<Node>) -> Router {
     let secured = |name: HeaderName, value: &'static str| {
         SetResponseHeaderLayer::overriding(name, HeaderValue::from_static(value))
     };
+    let hsts = node
+        .config
+        .server
+        .tls
+        .enabled
+        .then(|| secured(STRICT_TRANSPORT_SECURITY, "max-age=31536000; includeSubDomains"));
     Router::new()
         .route("/ws", get(websocket))
         .route("/healthz", get(|| async { "ok" }))
@@ -65,6 +75,7 @@ pub fn router(node: Arc<Node>) -> Router {
         .layer(secured(X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(secured(X_FRAME_OPTIONS, "DENY"))
         .layer(secured(REFERRER_POLICY, "no-referrer"))
+        .layer(tower::util::option_layer(hsts))
         .with_state(node)
 }
 
@@ -157,6 +168,22 @@ fn auth_rejection(error: AuthError) -> Response {
     }
 }
 
+/// Anything carrying a token or a device list. `no-store` because a shared cache between the
+/// phone and the node must not keep either.
+fn private_json(value: Value) -> Response {
+    (StatusCode::OK, [(CACHE_CONTROL, "no-store")], Json(value)).into_response()
+}
+
+/// A `StoreError` names the database path. The operator gets it in the log; the client gets the
+/// status code.
+fn store_failure(context: &str, error: &dyn std::fmt::Display) -> Response {
+    tracing::error!(%context, error = %error, "device store call failed");
+    refuse(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the device store is unavailable",
+    )
+}
+
 fn refuse(status: StatusCode, message: &str) -> Response {
     (
         status,
@@ -174,9 +201,13 @@ fn refuse(status: StatusCode, message: &str) -> Response {
 fn peer_of(node: &Node, headers: &HeaderMap, connect: Option<&ConnectInfo<SocketAddr>>) -> String {
     if node.config.server.trust_proxy
         && let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
-        && let Some(first) = forwarded.split(',').next()
+        // The list grows left to right and only the last entry was written by the proxy in front
+        // of us; everything to its left is whatever the client chose to send. Reading the head
+        // gives a rotating header a fresh bucket per request.
+        && let Some(nearest) = forwarded.rsplit(',').next()
+        && !nearest.trim().is_empty()
     {
-        return first.trim().to_string();
+        return nearest.trim().to_string();
     }
     connect.map_or_else(|| "unknown".to_string(), |c| c.0.ip().to_string())
 }
@@ -190,6 +221,10 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
     if let Some(token) = subprotocol_token(headers) {
         return Some(token);
     }
+    cookie_token(headers)
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get(COOKIE)
         .and_then(|v| v.to_str().ok())?
@@ -212,31 +247,23 @@ fn subprotocol_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// A browser sends `Origin` on every WebSocket upgrade and every cross-origin write, so requiring
-/// it to match is what stops a page on another origin from driving this node. Its absence means a
-/// non-browser client, which cannot be tricked into making the request in the first place.
+/// it to match a list the *node* owns is what stops a page on another origin from driving it.
+///
+/// The list comes from the bind address and `extra_origins`, never from the request's own `Host`:
+/// a DNS-rebinding attacker who points a domain at this node's address controls both headers, so
+/// reflecting `Host` lets them satisfy the gate with their own claim.
 fn same_origin(node: &Node, headers: &HeaderMap, method: &Method, uri: &Uri) -> bool {
-    let is_upgrade = uri.path() == "/ws";
-    if !is_upgrade && matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+    let guarded = uri.path() == "/ws" || !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+    if !guarded {
         return true;
     }
-    let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok()) else {
-        return true;
-    };
-    allowed_origins(node, headers).iter().any(|a| a == origin)
-}
-
-fn allowed_origins(node: &Node, headers: &HeaderMap) -> Vec<String> {
-    let mut allowed = vec![node.origin.clone()];
-    allowed.extend(node.config.server.extra_origins.iter().cloned());
-    // A Tier 0 node is reached at whatever address the phone typed, and there may be several — a
-    // LAN IP, a `.local` name, loopback. Matching the request's own Host keeps that working
-    // without asking the operator to enumerate them.
-    if let Some(host) = headers.get(HOST).and_then(|v| v.to_str().ok()) {
-        for scheme in ["http", "https"] {
-            allowed.push(format!("{scheme}://{host}"));
-        }
+    match headers.get(ORIGIN).and_then(|v| v.to_str().ok()) {
+        Some(origin) => node.allowed_origins.iter().any(|a| a == origin),
+        // No `Origin` is a non-browser client, which cannot be tricked into making the request —
+        // unless the credential is the session cookie, which a browser attaches by itself. Then
+        // the absence is the attack rather than the absence of one.
+        None => cookie_token(headers).is_none(),
     }
-    allowed
 }
 
 async fn websocket(
@@ -282,7 +309,7 @@ async fn node_info(State(node): State<Arc<Node>>) -> Json<Value> {
             "passkeys": tier.passkeys,
             "push": tier.push,
             "installable": tier.installable,
-            "unlocks": tier.unlocks,
+            "unlocks": tier.locked(),
         },
         "enrolled": enrolled.unwrap_or(0) > 0,
     }))
@@ -314,7 +341,7 @@ async fn redeem_pairing(
         .redeem_pairing(&body.code, name.trim(), agent, &peer)
         .await
     {
-        Ok(e) => Json(json!({ "token": e.token, "device": e.device })).into_response(),
+        Ok(e) => private_json(json!({ "token": e.token, "device": e.device })),
         Err(AuthError::RateLimited) => refuse(StatusCode::TOO_MANY_REQUESTS, "too many attempts"),
         Err(_) => refuse(StatusCode::UNAUTHORIZED, "that pairing code is not valid"),
     }
@@ -334,21 +361,25 @@ async fn create_pairing(
         return response;
     }
     let role = body.map_or(Role::Full, |b| b.0.role);
-    match node.auth.create_pairing(role).await {
-        Ok(code) => Json(json!({
-            "code": code,
+    match node.auth.create_pairing(role, Delivery::Authenticated).await {
+        Ok(pairing) => private_json(json!({
+            "code": pairing.code,
             "role": role,
             "expires_in": node.auth.policy().pairing_ttl.as_secs(),
-        }))
-        .into_response(),
-        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        })),
+        Err(e) => store_failure("create_pairing", &e),
     }
 }
 
-async fn devices(State(node): State<Arc<Node>>, _auth: Authenticated) -> Response {
+/// The inventory names every enrolled device, when it was last seen and what it may do. A
+/// read-only device is one you half-trust; that is not the list to hand it.
+async fn devices(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
+    if let Some(response) = auth.refused() {
+        return response;
+    }
     match node.auth.devices().await {
-        Ok(devices) => Json(json!({ "devices": devices })).into_response(),
-        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Ok(devices) => private_json(json!({ "devices": devices })),
+        Err(e) => store_failure("devices", &e),
     }
 }
 
@@ -361,9 +392,9 @@ async fn revoke_device(
         return response;
     }
     match node.auth.revoke(&id, &auth.device).await {
-        Ok(true) => Json(json!({ "revoked": id })).into_response(),
+        Ok(true) => private_json(json!({ "revoked": id })),
         Ok(false) => refuse(StatusCode::NOT_FOUND, "no such device"),
-        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => store_failure("revoke", &e),
     }
 }
 
@@ -377,9 +408,9 @@ async fn set_role(
         return response;
     }
     match node.auth.set_role(&id, body.role, &auth.device).await {
-        Ok(true) => Json(json!({ "device": id, "role": body.role })).into_response(),
+        Ok(true) => private_json(json!({ "device": id, "role": body.role })),
         Ok(false) => refuse(StatusCode::NOT_FOUND, "no such device"),
-        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => store_failure("set_role", &e),
     }
 }
 
@@ -392,9 +423,9 @@ async fn renew_device(
         return response;
     }
     match node.auth.renew(&id, &auth.device).await {
-        Ok(true) => Json(json!({ "renewed": id })).into_response(),
+        Ok(true) => private_json(json!({ "renewed": id })),
         Ok(false) => refuse(StatusCode::NOT_FOUND, "no such device"),
-        Err(e) => refuse(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => store_failure("renew", &e),
     }
 }
 
@@ -456,7 +487,7 @@ async fn register_finish(
         )
         .await
     {
-        Ok(e) => Json(json!({ "token": e.token, "device": e.device })).into_response(),
+        Ok(e) => private_json(json!({ "token": e.token, "device": e.device })),
         Err(e) => passkey_rejection(e),
     }
 }
@@ -498,7 +529,7 @@ async fn authenticate_finish(
         .finish_passkey_authentication(&body.challenge_id, &credential, &peer)
         .await
     {
-        Ok(e) => Json(json!({ "token": e.token, "device": e.device })).into_response(),
+        Ok(e) => private_json(json!({ "token": e.token, "device": e.device })),
         Err(e) => passkey_rejection(e),
     }
 }
