@@ -268,6 +268,14 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
   stay opaque.
 - **Fill is computed against the paint rectangle**, not the inset one — otherwise the insets
   reintroduce the letterbox they exist to avoid.
+- **Tapping the grid raises the keyboard.** No button summons it: a "show keyboard" control is a
+  workaround for focus not working, not a feature. The tap gesture must lose to drag, so panning the
+  grid does not toggle the keyboard on every flick.
+- **The key row docks flush to the keyboard**, with no space between them — it is an accessory to the
+  keyboard and reads as part of it. Track `visualViewport.height + offsetTop` live through the
+  show/hide animation; laying out against `window.innerHeight` or a fixed inset produces exactly the
+  gap this rule exists to forbid. On Android use the animated `WindowInsets.ime`, not
+  `navigationBars`, which leaves a static gap the height of the nav bar.
 
 
 ## Herd management
