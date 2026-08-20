@@ -10,7 +10,9 @@
 pub mod audit;
 pub mod files;
 pub mod identity;
+pub mod mesh;
 pub mod passkey;
+pub mod push;
 pub mod ratelimit;
 pub mod secret;
 pub mod store;
@@ -19,7 +21,9 @@ pub mod tier;
 pub use audit::{AuditLog, Entry};
 pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
+pub use mesh::{Mesh, MeshNode, MeshRole};
 pub use passkey::{PasskeyError, Passkeys};
+pub use push::{ALL_PANES, PushRule, PushSubscription};
 pub use ratelimit::{Policy as RatePolicy, RateLimiter};
 pub use store::{Credential, Device, Role, Store, StoreError};
 pub use tier::{Tier, TierError};
@@ -39,6 +43,8 @@ pub enum AuthError {
     RateLimited,
     #[error("that pairing code is not valid")]
     BadPairingCode,
+    #[error("that recovery code is not valid")]
+    BadRecoveryCode,
     #[error("this device is not authorised")]
     Unauthorized,
     #[error("no passkey is enrolled for this credential")]
@@ -95,6 +101,14 @@ pub enum Delivery {
 pub struct Pairing {
     pub code: String,
     pub armed: bool,
+}
+
+/// What a redeemed recovery code produced: the device it enrolled, and the code that replaces
+/// it. The replacement is shown once, exactly like the one it replaces.
+#[derive(Debug, Clone)]
+pub struct Recovered {
+    pub enrolment: Enrolment,
+    pub next_code: String,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +279,56 @@ impl Auth {
             .await?;
         let token = self.store.mint_token(&device.id, now, expires_at).await?;
         Ok(Enrolment { device, token })
+    }
+
+    /// The one credential that survives losing every device. Generated once at `kampr init`,
+    /// shown once, and stored only as a stretched digest — so this is also the only place it
+    /// exists in the clear.
+    pub async fn issue_recovery(&self) -> Result<String, AuthError> {
+        let code = self.store.issue_recovery(now()).await?;
+        self.audit.record(&Entry::new("recovery.issued"));
+        Ok(code)
+    }
+
+    pub async fn has_recovery(&self) -> Result<bool, AuthError> {
+        Ok(self.store.has_recovery().await?)
+    }
+
+    /// Redeems the paper code for a full-role device, and immediately mints its replacement.
+    ///
+    /// Shares the pairing limiter deliberately: both are "a human typing a code at this node",
+    /// and one bucket per peer is what bounds the pair of them together.
+    pub async fn redeem_recovery(
+        &self,
+        code: &str,
+        device_name: &str,
+        user_agent: Option<&str>,
+        peer: &str,
+    ) -> Result<Recovered, AuthError> {
+        if !self.pairing_limiter.check(peer) {
+            self.audit.record(&Entry::new("recovery.rate_limited").peer(peer));
+            return Err(AuthError::RateLimited);
+        }
+        let now = now();
+        if !self.store.claim_recovery(code, now).await? {
+            self.audit.record(&Entry::new("recovery.rejected").peer(peer));
+            return Err(AuthError::BadRecoveryCode);
+        }
+        self.pairing_limiter.forget(peer);
+        // Full role, because the credential exists for the case where there is no other way to
+        // grant one — a read-only device could not even pair a replacement.
+        let enrolment = self.enrol(device_name, Role::Full, user_agent, now).await?;
+        let next_code = self.store.issue_recovery(now).await?;
+        self.audit.record(
+            &Entry::new("recovery.redeemed")
+                .device(
+                    &enrolment.device.id,
+                    &enrolment.device.name,
+                    enrolment.device.role.as_str(),
+                )
+                .peer(peer),
+        );
+        Ok(Recovered { enrolment, next_code })
     }
 
     pub async fn authenticate(&self, token: &str, peer: &str) -> Result<Device, AuthError> {
@@ -674,5 +738,96 @@ mod tests {
             a.start_passkey_authentication("1.2.3.4").await,
             Err(AuthError::UnknownCredential)
         ));
+    }
+
+    /// The whole point: every device is gone, and the paper still gets you in.
+    #[tokio::test]
+    async fn a_recovery_code_gets_back_in_after_every_device_is_lost() {
+        let a = auth("http://192.168.1.24:8790").await;
+        let code = a.issue_recovery().await.unwrap();
+
+        let phone = a
+            .redeem_pairing(&armed_code(&a, Role::Full).await, "phone", None, "1.2.3.4")
+            .await
+            .unwrap();
+        a.revoke(&phone.device.id, &phone.device).await.unwrap();
+        assert!(matches!(
+            a.authenticate(&phone.token, "1.2.3.4").await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let recovered = a
+            .redeem_recovery(&code, "console", None, "console")
+            .await
+            .unwrap();
+        assert_eq!(recovered.enrolment.device.role, Role::Full);
+        assert_eq!(
+            a.authenticate(&recovered.enrolment.token, "1.2.3.4")
+                .await
+                .unwrap()
+                .id,
+            recovered.enrolment.device.id
+        );
+
+        assert!(matches!(
+            a.redeem_recovery(&code, "again", None, "console").await,
+            Err(AuthError::BadRecoveryCode)
+        ));
+        assert_ne!(recovered.next_code, code);
+        assert!(a.has_recovery().await.unwrap());
+        assert!(
+            a.redeem_recovery(&recovered.next_code, "console2", None, "console")
+                .await
+                .is_ok(),
+            "the code printed at redemption has to be the live one"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_is_rate_limited_and_audited_like_every_other_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let a = Auth::new(
+            Store::open_memory().await.unwrap(),
+            Tier::detect("http://192.168.1.24:8790").unwrap(),
+            AuditLog::open(&path).unwrap(),
+            Policy::default(),
+        )
+        .unwrap();
+        let code = a.issue_recovery().await.unwrap();
+        let mut refused = 0;
+        for _ in 0..20 {
+            if matches!(
+                a.redeem_recovery("ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ", "attacker", None, "9.9.9.9")
+                    .await,
+                Err(AuthError::RateLimited)
+            ) {
+                refused += 1;
+            }
+        }
+        assert!(refused > 10);
+        let text = std::fs::read_to_string(&path).unwrap();
+        for action in ["recovery.issued", "recovery.rejected", "recovery.rate_limited"] {
+            assert!(text.contains(action), "{action} missing from {text}");
+        }
+        assert!(!text.contains(&code), "the audit log must never carry the code");
+        a.redeem_recovery(&code, "console", None, "console")
+            .await
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("recovery.redeemed"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_node_has_no_recovery_code_until_one_is_issued() {
+        let a = auth("http://192.168.1.24:8790").await;
+        assert!(!a.has_recovery().await.unwrap());
+        assert!(matches!(
+            a.redeem_recovery("ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ", "x", None, "console")
+                .await,
+            Err(AuthError::BadRecoveryCode)
+        ));
+        a.issue_recovery().await.unwrap();
+        assert!(a.has_recovery().await.unwrap());
     }
 }

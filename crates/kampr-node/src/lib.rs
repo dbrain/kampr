@@ -8,13 +8,19 @@
 pub mod assets;
 pub mod caps;
 pub mod config;
+pub mod convo;
 pub mod herd;
 pub mod http;
 pub mod manage;
+pub mod mesh;
 pub mod outbox;
 pub mod pending;
+pub mod push;
+pub mod relay;
 pub mod session;
+pub mod sessions;
 pub mod state;
+pub mod toast;
 pub mod wire;
 
 pub use config::{Config, ConfigError};

@@ -4,7 +4,7 @@ pub mod rpc;
 
 pub use model::{AgentStatus, Pane, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};
-pub use rpc::Herdr;
+pub use rpc::{Herdr, Sub};
 
 use anyhow::Result;
 
@@ -33,6 +33,32 @@ impl Herdr {
             )
             .await?;
         Ok(())
+    }
+
+    /// Reads the last `lines` rows twice: once wrapped at the pane's real width and once as
+    /// logical lines.
+    ///
+    /// Probe #84: both render at the **true PTY width**, which in a headless session is not the
+    /// layout rect, and the difference between them is the only exact measurement of that width
+    /// the socket API offers. `lines` must not exceed the viewport: past it, `recent` harvests a
+    /// recognised agent pane through its own mouse-scroll interface (probe #27's interlock).
+    pub async fn read_wrapped_and_logical(
+        &self,
+        pane_id: &str,
+        lines: u64,
+    ) -> Result<(model::Read, model::Read)> {
+        let read = async |source: &str| -> Result<model::Read> {
+            let r: model::ReadReply = self
+                .call(
+                    "pane.read",
+                    serde_json::json!({
+                        "pane_id": pane_id, "source": source, "lines": lines, "format": "text"
+                    }),
+                )
+                .await?;
+            Ok(r.read)
+        };
+        Ok((read("recent").await?, read("recent_unwrapped").await?))
     }
 
     /// Reads herdr's scrollback ring. Callers must gate this on

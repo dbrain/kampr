@@ -1,0 +1,25 @@
+[package]
+name = "kampr-mesh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+kampr-auth = { path = "../kampr-auth" }
+kampr-core = { path = "../kampr-core" }
+kampr-term = { path = "../kampr-term" }
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

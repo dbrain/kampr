@@ -3,6 +3,7 @@ package dev.kampr.shared.net
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
 import io.ktor.client.HttpClient
@@ -21,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+private const val CAPS_MIN_INTERVAL_MS = 10_000.0
+
 class KamprConnection(
     private val scope: CoroutineScope,
     val store: KamprStore,
@@ -31,6 +34,8 @@ class KamprConnection(
     private val watched = LinkedHashSet<String>()
     private var pingSeq = 0
     private val pingSentAt = HashMap<Int, Double>()
+    private var capsWanted = false
+    private var capsAskedAt = 0.0
 
     var endpoint: Endpoint? = null
         private set
@@ -54,6 +59,10 @@ class KamprConnection(
 
     fun send(msg: ClientMsg) {
         outbox.trySend(msg)
+    }
+
+    fun manage(op: ManageOp) {
+        send(ClientMsg.Manage(op))
     }
 
     fun watch(pane: String, scrollback: Boolean = true, conversation: Boolean = true) {
@@ -91,6 +100,8 @@ class KamprConnection(
             val pump = launch { pump(this@webSocket) }
             val heartbeat = launch { heartbeat() }
             try {
+                capsWanted = false
+                capsAskedAt = 0.0
                 for (pane in watched) outbox.trySend(ClientMsg.Watch(pane))
                 for (frame in incoming) {
                     val text = (frame as? Frame.Text)?.readText() ?: continue
@@ -100,6 +111,16 @@ class KamprConnection(
                         continue
                     }
                     store.accept(msg)
+                    when (msg) {
+                        is ServerMsg.Hello -> {
+                            capsWanted = msg.caps.manage
+                            askCaps()
+                        }
+                        // Agent kinds and named sessions both move when the herd does, and the
+                        // node caches its answer anyway, so a patch is the cue to re-read them.
+                        is ServerMsg.Herd, is ServerMsg.HerdPatch -> askCaps()
+                        else -> Unit
+                    }
                 }
             } finally {
                 heartbeat.cancel()
@@ -107,6 +128,16 @@ class KamprConnection(
                 runCatching { close() }
             }
         }
+    }
+
+    // The node caches `caps` for ten seconds because one half of it costs a process; asking more
+    // often than that only turns a burst of herd patches into a burst of no-ops.
+    private fun askCaps() {
+        if (!capsWanted) return
+        val now = nowMillis()
+        if (capsAskedAt != 0.0 && now - capsAskedAt < CAPS_MIN_INTERVAL_MS) return
+        capsAskedAt = now
+        send(ClientMsg.RequestCaps)
     }
 
     private suspend fun pump(session: DefaultClientWebSocketSession) {

@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.view.TerminalViewState
 
@@ -14,6 +15,7 @@ import dev.kampr.terminal.view.TerminalViewState
 class PaneSession(val paneId: String) {
     val view = TerminalViewState()
     val latches = Latches()
+    val confirm = ConfirmState()
 
     var keyboardOpen by mutableStateOf(false)
         private set

@@ -31,6 +31,8 @@
       --accent-soft: #16203050;
       --blocked: #ff6b6b; --blocked-bg: #2c1b20; --working: #ffc857;
       --idle: #5b6172; --done: #58d68d;
+      --term-bg: #0b0d12; --term-fg: #dde3ee;
+      --ansi-0: #1b1f27; --ansi-1: #f2707a; --ansi-2: #5fd68f; --ansi-3: #e9c46a; --ansi-4: #7fb0ff; --ansi-5: #c79be0; --ansi-6: #5fd2d2; --ansi-7: #c6ccd9; --ansi-8: #7c8496; --ansi-9: #ff8e96; --ansi-10: #86e9ab; --ansi-11: #f7d98c; --ansi-12: #a6c8ff; --ansi-13: #ddb8f0; --ansi-14: #8ce7e7; --ansi-15: #f2f5fa;
     }
 
     [data-theme="phosphor"] {
@@ -46,6 +48,8 @@
       --r-lg: 2px; --r-md: 2px; --r-sm: 2px;
       --card-border: 1px solid var(--line);
       --label-tt: uppercase; --label-ls: 0.16em; --label-w: 700;
+      --term-bg: #050705; --term-fg: #c9d5c7;
+      --ansi-0: #131a13; --ansi-1: #ff5f4a; --ansi-2: #57c46b; --ansi-3: #f5c542; --ansi-4: #58a6b8; --ansi-5: #d98ba0; --ansi-6: #7fe0c8; --ansi-7: #c4cfc2; --ansi-8: #6f7d6d; --ansi-9: #ff8a72; --ansi-10: #7fdc8e; --ansi-11: #ffd968; --ansi-12: #7fc8d8; --ansi-13: #eeadbe; --ansi-14: #a6f0de; --ansi-15: #e9f0e7;
     }
 
     [data-theme="warm"] {
@@ -60,6 +64,8 @@
       --font-mono: 'JetBrains Mono', ui-monospace, monospace;
       --r-lg: 14px; --r-md: 12px; --r-sm: 9px;
       --label-tt: uppercase; --label-ls: 0.13em; --label-w: 600;
+      --term-bg: #15110d; --term-fg: #eee4d5;
+      --ansi-0: #241f1a; --ansi-1: #d9604e; --ansi-2: #7fb069; --ansi-3: #e0a458; --ansi-4: #7a93c4; --ansi-5: #c48aa8; --ansi-6: #79b8b0; --ansi-7: #d8cdbc; --ansi-8: #8a7d6d; --ansi-9: #f07a64; --ansi-10: #97c77f; --ansi-11: #f0bd7c; --ansi-12: #9ab0da; --ansi-13: #dca5c1; --ansi-14: #95d0c8; --ansi-15: #f6efe3;
     }
 
     [data-theme="brutalist"] {
@@ -76,6 +82,96 @@
       --card-border: 2px solid var(--line);
       --chrome-border: 2px solid var(--line);
       --label-tt: uppercase; --label-ls: 0.2em; --label-w: 700;
+      --term-bg: #000000; --term-fg: #ffffff;
+      --ansi-0: #1a1a1a; --ansi-1: #ff2b1f; --ansi-2: #00e05a; --ansi-3: #ffe500; --ansi-4: #4d7cff; --ansi-5: #ff3ddb; --ansi-6: #00e5e5; --ansi-7: #e6e6e6; --ansi-8: #8a8a8a; --ansi-9: #ff6a60; --ansi-10: #5cff9e; --ansi-11: #fff35c; --ansi-12: #8faeff; --ansi-13: #ff8ae8; --ansi-14: #6bffff; --ansi-15: #ffffff;
+    }
+
+    [data-theme="soft"][data-ground="light"] {
+      --bg: #f7f8fb; --bar: #eef1f7; --surface: #ffffff; --surface-2: #e7ebf2;
+      --raise: #e2e7f0; --line: #d8dee9;
+      --text: #12151b; --dim: #565d6d; --mute: #6a7183;
+      --accent: #2560cc; --accent-hi: #17439a; --on-accent: #ffffff;
+      --accent-soft: #a8c4f030;
+      --blocked: #b8281f; --blocked-bg: #fbe4e1; --working: #8a5a00;
+      --idle: #9aa1b2; --done: #0f6b45;
+    }
+
+    @media (prefers-color-scheme: light) {
+      [data-theme="soft"][data-ground="system"] {
+        --bg: #f7f8fb; --bar: #eef1f7; --surface: #ffffff; --surface-2: #e7ebf2;
+      --raise: #e2e7f0; --line: #d8dee9;
+      --text: #12151b; --dim: #565d6d; --mute: #6a7183;
+      --accent: #2560cc; --accent-hi: #17439a; --on-accent: #ffffff;
+      --accent-soft: #a8c4f030;
+      --blocked: #b8281f; --blocked-bg: #fbe4e1; --working: #8a5a00;
+      --idle: #9aa1b2; --done: #0f6b45;
+      }
+    }
+
+    [data-theme="phosphor"][data-ground="light"] {
+      --bg: #f3f5ef; --bar: #eaeee4; --surface: #fbfcf8; --surface-2: #e2e7d9;
+      --raise: #dde3d3; --line: #cdd5c1;
+      --text: #0f150d; --dim: #4d5749; --mute: #68725f;
+      --accent: #7a5400; --accent-hi: #5c3f00; --on-accent: #ffffff;
+      --accent-soft: #f0e6c8;
+      --blocked: #a82015; --blocked-bg: #f8e3e0; --working: #7a5400;
+      --idle: #98a291; --done: #1d5e2a;
+    }
+
+    @media (prefers-color-scheme: light) {
+      [data-theme="phosphor"][data-ground="system"] {
+        --bg: #f3f5ef; --bar: #eaeee4; --surface: #fbfcf8; --surface-2: #e2e7d9;
+      --raise: #dde3d3; --line: #cdd5c1;
+      --text: #0f150d; --dim: #4d5749; --mute: #68725f;
+      --accent: #7a5400; --accent-hi: #5c3f00; --on-accent: #ffffff;
+      --accent-soft: #f0e6c8;
+      --blocked: #a82015; --blocked-bg: #f8e3e0; --working: #7a5400;
+      --idle: #98a291; --done: #1d5e2a;
+      }
+    }
+
+    [data-theme="warm"][data-ground="light"] {
+      --bg: #faf6ef; --bar: #f3ecdf; --surface: #fffdf8; --surface-2: #efe7d8;
+      --raise: #eae0cd; --line: #ded3bf;
+      --text: #1c1610; --dim: #635749; --mute: #7b6f5d;
+      --accent: #8f5210; --accent-hi: #6e3c06; --on-accent: #fffdf8;
+      --accent-soft: #f2e3cb;
+      --blocked: #a83521; --blocked-bg: #f8e2da; --working: #8f5210;
+      --idle: #aa9c86; --done: #3a6127;
+    }
+
+    @media (prefers-color-scheme: light) {
+      [data-theme="warm"][data-ground="system"] {
+        --bg: #faf6ef; --bar: #f3ecdf; --surface: #fffdf8; --surface-2: #efe7d8;
+      --raise: #eae0cd; --line: #ded3bf;
+      --text: #1c1610; --dim: #635749; --mute: #7b6f5d;
+      --accent: #8f5210; --accent-hi: #6e3c06; --on-accent: #fffdf8;
+      --accent-soft: #f2e3cb;
+      --blocked: #a83521; --blocked-bg: #f8e2da; --working: #8f5210;
+      --idle: #aa9c86; --done: #3a6127;
+      }
+    }
+
+    [data-theme="brutalist"][data-ground="light"] {
+      --bg: #ffffff; --bar: #ffffff; --surface: #ffffff; --surface-2: #ffffff;
+      --raise: #ffffff; --line: #000000;
+      --text: #000000; --dim: #4a4a4a; --mute: #5e5e5e;
+      --accent: #cc0a00; --accent-hi: #960700; --on-accent: #ffffff;
+      --accent-soft: #ffffff;
+      --blocked: #cc0a00; --blocked-bg: #ffffff; --working: #000000;
+      --idle: #b5b5b5; --done: #000000;
+    }
+
+    @media (prefers-color-scheme: light) {
+      [data-theme="brutalist"][data-ground="system"] {
+        --bg: #ffffff; --bar: #ffffff; --surface: #ffffff; --surface-2: #ffffff;
+      --raise: #ffffff; --line: #000000;
+      --text: #000000; --dim: #4a4a4a; --mute: #5e5e5e;
+      --accent: #cc0a00; --accent-hi: #960700; --on-accent: #ffffff;
+      --accent-soft: #ffffff;
+      --blocked: #cc0a00; --blocked-bg: #ffffff; --working: #000000;
+      --idle: #b5b5b5; --done: #000000;
+      }
     }
 
     .lbl { text-transform: var(--label-tt); letter-spacing: var(--label-ls); font-weight: var(--label-w); }
@@ -85,9 +181,12 @@
     .keyon { background: var(--accent); color: var(--on-accent); border: var(--card-border);
              border-radius: var(--r-sm); font-family: var(--font-mono); text-align: center;
              padding: 12px 0; font-weight: 600; }
+    /* The terminal font is JetBrains Mono NL under every theme, and so is the dark ground. */
+    .term { background: var(--term-bg); color: var(--term-fg);
+            font-family: 'JetBrains Mono', ui-monospace, monospace; }
 </style>
 </helmet>
-<div data-theme="{{theme}}" style="width: 390px; height: 844px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
+<div data-theme="{{theme}}" data-ground="{{ground}}" style="width: 390px; height: 844px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
   <div style="display: flex; align-items: center; gap: 11px; padding: 14px 16px 11px 16px; background: var(--bar);">
     <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="var(--dim)" stroke-width="1.7"><path d="M10 3 L5 8 L10 13"/></svg>
     <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
@@ -177,10 +276,10 @@
   </div>
 </div>
 </x-dc>
-<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "$preview": {"width": 390, "height": 844}}'>
+<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "ground": {"editor": "enum", "options": ["system", "dark", "light"], "default": "dark", "section": "Theme"}, "$preview": {"width": 390, "height": 844}}'>
 class Component extends DCLogic {
   renderVals() {
-    return { theme: this.props.theme ?? 'soft' };
+    return { theme: this.props.theme ?? 'soft', ground: this.props.ground ?? 'dark' };
   }
 }
 </script>

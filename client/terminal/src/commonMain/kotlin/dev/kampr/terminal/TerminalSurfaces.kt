@@ -10,6 +10,7 @@ import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
 import dev.kampr.terminal.view.TerminalView
@@ -37,7 +38,8 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val io = LocalPaneIo.current
         val session = sessions[pane.id]
-        val sink = remember(pane.id, io, session) { InputSink(pane.id, io, session.latches) }
+        val guard = remember(pane, io, session) { SubmitGuard(pane, io, session.confirm) }
+        val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
         // The terminal insets its scrollable content by whatever the key row actually occupies,
         // including the keyboard it is docked above, so the pinned last row settles clear of it.
         DisposableEffect(session) { onDispose { session.keyRowHeight = 0f } }

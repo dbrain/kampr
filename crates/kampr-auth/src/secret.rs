@@ -8,6 +8,15 @@ use sha2::{Digest, Sha256};
 const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTVWXYZ";
 const CODE_LEN: usize = 8;
 
+/// ~99 bits over the same alphabet, against the pairing code's ~39.6.
+///
+/// A pairing code is safe because it dies in ten minutes, dies on first use, and has a limiter
+/// in front of it. A recovery code has none of that: it is written on paper, it is the only way
+/// back into a host where a full-role device can run anything, and its digest sits in a database
+/// an attacker may one day hold. At 20 characters an offline search is out of reach even against
+/// a bare hash, which is what leaves the argon2 work factor as depth rather than as the defence.
+const RECOVERY_LEN: usize = 20;
+
 #[derive(Debug, thiserror::Error)]
 #[error("the system random source failed: {0}")]
 pub struct RandomError(#[from] getrandom::Error);
@@ -27,12 +36,41 @@ pub fn token() -> Result<String, RandomError> {
 /// A pairing code, printed as `XXXX-XXXX`. ~39 bits, which is *not* enough on its own — the
 /// short TTL, the single use and the rate limiter are what make it safe.
 pub fn pairing_code() -> Result<String, RandomError> {
-    let raw = random_bytes(CODE_LEN)?;
-    let chars: String = raw
-        .iter()
-        .map(|b| CODE_ALPHABET[*b as usize % CODE_ALPHABET.len()] as char)
-        .collect();
-    Ok(format!("{}-{}", &chars[..4], &chars[4..]))
+    Ok(grouped(&code_chars(CODE_LEN)?, 4))
+}
+
+/// A recovery code, printed as five groups of four. Shown once at `kampr init`, redeemed once,
+/// and replaced by a fresh one the moment it is used.
+pub fn recovery_code() -> Result<String, RandomError> {
+    Ok(grouped(&code_chars(RECOVERY_LEN)?, 4))
+}
+
+/// Rejection sampling, not `% 31`: 256 is not a multiple of the alphabet, so the modulo favours
+/// the first eight glyphs. The bias is small, and a credential whose whole defence is its
+/// entropy should not carry any.
+fn code_chars(len: usize) -> Result<String, RandomError> {
+    let limit = 256 - 256 % CODE_ALPHABET.len();
+    let mut out = String::with_capacity(len);
+    while out.len() < len {
+        for byte in random_bytes(len * 2)? {
+            if (byte as usize) < limit {
+                out.push(CODE_ALPHABET[byte as usize % CODE_ALPHABET.len()] as char);
+                if out.len() == len {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn grouped(chars: &str, group: usize) -> String {
+    chars
+        .as_bytes()
+        .chunks(group)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// Uppercases and strips anything that is not in the alphabet, so a code typed with the dash, in
@@ -57,11 +95,22 @@ pub fn digest(secret: &str) -> String {
 /// first use never gives a table time to pay for itself.
 const PAIRING_SALT: &[u8] = b"kampr/pairing/v1";
 
+/// Same scheme, different domain: one table must never answer for both credential classes.
+const RECOVERY_SALT: &[u8] = b"kampr/recovery/v1";
+
 pub fn pairing_digest(normalised_code: &str) -> String {
+    stretch(normalised_code, PAIRING_SALT)
+}
+
+pub fn recovery_digest(normalised_code: &str) -> String {
+    stretch(normalised_code, RECOVERY_SALT)
+}
+
+fn stretch(normalised_code: &str, salt: &[u8]) -> String {
     let params = Params::default();
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut out = [0u8; 32];
-    match argon.hash_password_into(normalised_code.as_bytes(), PAIRING_SALT, &mut out) {
+    match argon.hash_password_into(normalised_code.as_bytes(), salt, &mut out) {
         Ok(()) => hex::encode(out),
         // Only reachable if the parameters are invalid, which they are not; falling back to the
         // cheap hash would silently reinstate the defect this exists to close.
@@ -131,5 +180,49 @@ mod tests {
         assert_eq!(digest("kmp_abc"), digest("kmp_abc"));
         assert_ne!(digest("kmp_abc"), "kmp_abc");
         assert_eq!(digest("kmp_abc").len(), 64);
+    }
+
+    #[test]
+    fn a_recovery_code_is_far_stronger_than_a_pairing_code() {
+        let code = recovery_code().unwrap();
+        let bare = normalise_code(&code);
+        assert_eq!(bare.len(), RECOVERY_LEN);
+        // The pairing code survives on a ten-minute TTL, a single use and a limiter. A recovery
+        // code has none of those, so the entropy has to carry it alone.
+        let bits = |chars: usize| chars as f64 * (CODE_ALPHABET.len() as f64).log2();
+        assert!(bits(RECOVERY_LEN) > 96.0, "{} bits", bits(RECOVERY_LEN));
+        assert!(bits(RECOVERY_LEN) > 2.0 * bits(CODE_LEN));
+        for c in code.chars().filter(|c| *c != '-') {
+            assert!(CODE_ALPHABET.contains(&(c as u8)), "{c} is confusable");
+        }
+        assert_ne!(code, recovery_code().unwrap());
+    }
+
+    #[test]
+    fn a_recovery_digest_is_stretched_and_not_the_pairing_digest_of_the_same_string() {
+        let code = normalise_code(&recovery_code().unwrap());
+        assert_ne!(recovery_digest(&code), digest(&code));
+        // Domain separation: a table built against one credential class must not answer for the
+        // other.
+        assert_ne!(recovery_digest(&code), pairing_digest(&code));
+        assert_eq!(recovery_digest(&code), recovery_digest(&code));
+    }
+
+    #[test]
+    fn code_characters_are_drawn_without_modulo_bias() {
+        // 256 % 31 != 0, so a plain `byte % 31` favours the first eight glyphs. It is a small
+        // bias, and a credential that has to stand on its entropy alone should not carry it.
+        let mut counts = [0usize; 31];
+        for _ in 0..20_000 {
+            for c in normalise_code(&recovery_code().unwrap()).bytes() {
+                counts[CODE_ALPHABET.iter().position(|a| *a == c).unwrap()] += 1;
+            }
+        }
+        let expected = (20_000 * RECOVERY_LEN) as f64 / 31.0;
+        let chi: f64 = counts
+            .iter()
+            .map(|n| (*n as f64 - expected).powi(2) / expected)
+            .sum();
+        assert!(chi < 60.0, "chi-square {chi} over 30 degrees of freedom");
     }
 }

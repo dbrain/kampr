@@ -117,6 +117,112 @@ pub fn status() -> String {
     }
 }
 
+/// What a supervisor knows about the unit: enough for `kampr doctor` to tell "never installed"
+/// from "installed and dead", which are different problems with different fixes.
+#[derive(Debug, Clone)]
+pub struct State {
+    pub installed: bool,
+    pub enabled: String,
+    pub active: String,
+    pub running: bool,
+    pub failed: bool,
+    pub result: String,
+    pub since: String,
+}
+
+pub fn details() -> State {
+    match Supervisor::detect() {
+        Supervisor::Systemd => systemd_state(),
+        Supervisor::Launchd => launchd_state(),
+    }
+}
+
+fn systemd_state() -> State {
+    let output = run_output(
+        "systemctl",
+        &[
+            "--user",
+            "show",
+            UNIT,
+            "--property=LoadState",
+            "--property=UnitFileState",
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=Result",
+            "--property=StateChangeTimestamp",
+        ],
+    )
+    .unwrap_or_default();
+    let field = |key: &str| {
+        output
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let active = field("ActiveState");
+    let result = field("Result");
+    let unit_file = field("UnitFileState");
+    State {
+        // A unit that was written but never reloaded still exists on disk, and `LoadState` alone
+        // would call it missing.
+        installed: field("LoadState") == "loaded" || systemd_unit_path().is_ok_and(|p| p.exists()),
+        enabled: if unit_file.is_empty() {
+            "not enabled".into()
+        } else {
+            unit_file
+        },
+        running: active == "active" || active == "activating",
+        failed: active == "failed" || (!result.is_empty() && result != "success"),
+        active: if active.is_empty() {
+            "unknown".into()
+        } else {
+            active
+        },
+        result: if result.is_empty() {
+            "unknown".into()
+        } else {
+            result
+        },
+        since: {
+            let at = field("StateChangeTimestamp");
+            if at.is_empty() { "unknown".into() } else { at }
+        },
+    }
+}
+
+fn launchd_state() -> State {
+    let installed = launchd_plist_path().is_ok_and(|p| p.exists());
+    let print = run_output("launchctl", &["print", &format!("gui/{}/{LABEL}", uid())]).ok();
+    let running = print.as_ref().is_some_and(|p| p.contains("state = running"));
+    let last_exit = print
+        .as_ref()
+        .and_then(|p| {
+            p.lines()
+                .find_map(|l| l.trim().strip_prefix("last exit code = "))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".into());
+    State {
+        installed,
+        enabled: if installed {
+            "loaded".into()
+        } else {
+            "not loaded".into()
+        },
+        active: if running {
+            "running".into()
+        } else {
+            "stopped".into()
+        },
+        running,
+        failed: !matches!(last_exit.as_str(), "0" | "unknown"),
+        result: last_exit,
+        since: "unknown".into(),
+    }
+}
+
 pub fn start_hint() -> &'static str {
     match Supervisor::detect() {
         Supervisor::Systemd => "systemctl --user start kampr.service",

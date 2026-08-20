@@ -107,13 +107,7 @@ async fn collect(dirs: &Dirs) -> Report {
     let config = match Config::load(&config_dir) {
         Ok(config) => config,
         Err(e) => {
-            return Report::new(
-                None,
-                vec![
-                    Check::fail("config", e.to_string())
-                        .fix("kampr init"),
-                ],
-            );
+            return Report::new(None, vec![Check::fail("config", e.to_string()).fix("kampr init")]);
         }
     };
     let state_dir = config.resolve_state_dir(dirs.state_override());

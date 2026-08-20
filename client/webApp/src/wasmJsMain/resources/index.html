@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Kampr</title>
+    <meta name="theme-color" content="#0E0F13">
+    <!-- iOS reads these rather than the manifest, and Web Push on iOS works ONLY for a Home
+         Screen web app (findings §3.7). Without them Add to Home Screen produces a bookmark
+         that can never be notified. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Kampr">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/kampr-192.png">
     <link rel="stylesheet" href="kampr.css">
 </head>
 <body>

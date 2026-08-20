@@ -22,6 +22,11 @@ clients a cell grid. Clients parse no escape sequences. Consequences that are lo
 `node_id` is a stable ULID chosen at `kampr init`. A pane's global id is `"<node_id>/<pane_id>"`,
 where `pane_id` is Herdr's own (`w3:p2`). Clients treat it as opaque.
 
+One host can run several Herdr servers — a named session is a whole separate server — and each is
+its own node. The configured session keeps the bare ULID; the others are `"<ULID>.<session>"`, so
+`"01J.../w3:p2"` and `"01J....agents/w3:p2"` are two different panes. **Match a node id exactly,
+never by prefix**, and split a global pane id on the first `/`.
+
 ## Server → client
 
 ### `hello` — first message on every connection
@@ -32,7 +37,8 @@ hostname would buy (findings §3.7).
 ```jsonc
 { "t": "hello", "protocol": 1, "node_id": "01J...", "node_name": "comingclean",
   "build": "0.1.0+abc1234", "role": "full",          // "full" | "readonly"
-  "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true },
+  "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
+            "mesh": true },   // this node accepts peer links; see "The mesh"
   "security": {
     "tier": 0,                       // 0 = ip:port, 1 = hostname+cert, 2 = public, 3 = tailscale
     "encrypted": false,              // is this a secure context?
@@ -48,19 +54,40 @@ hostname would buy (findings §3.7).
 ```jsonc
 { "t": "herd",
   "nodes": [ { "id": "01J...", "name": "comingclean", "kind": "local",   // "local"|"peer"
-               "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2" } ],
+               "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2",
+               "build": "0.1.0+abc1234",   // this node's kampr build — see "Version skew"
+               "detail": null } ],   // why it is offline, when it is
   "panes": [ { "id": "01J.../w3:p2", "node_id": "01J...",
+               "workspace_id": "01J.../w3", "tab_id": "01J.../w3:t1",  // node-qualified, usable as `at`
                "workspace": "kampr", "tab": "1", "cwd": "/home/dbrain/dev/kampr",
                "label": null,
                "agent": "claude",                    // null on a shell pane — picks the default view
                "agent_status": "blocked",            // idle|working|blocked|done|unknown
-               "cols": 74, "rows": 30,               // native, from the layout rect
+               "cols": 74, "rows": 30,               // native: the PTY's own size, not the rect
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a journal adapter exists for this harness
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
-`herd.patch` carries the same shapes under `added` / `changed` / `removed_ids`.
+`herd.patch` carries the same shapes under `added` / `changed` / `removed_ids`, **for nodes as
+well as panes**. A herd going away is a node flipping to `online: false`, so a patch that only
+ever carried panes left an outage invisible.
+
+**A node is a herdr server, not a machine.** Every named session on a host is a separate herdr
+server with its own socket (probe #49), so each is its own node: the configured session keeps the
+node's own id, and the rest take `"<node_id>.<session>"`. Pane ids stay unique by construction,
+and a client can tell `default` from `agents` without being told the rule. Ids are opaque — do not
+parse the suffix.
+
+**`online: false` is a real state a client must render, not an error path.** A node serves before
+it can reach its herdr and after that herdr dies, so the first `herd` on a fresh connection may
+carry an offline node and no panes at all. `detail` is the operator-readable reason (an optional
+string, absent when the node is up) so the UI can say *why* the herd is empty rather than showing
+an empty herd. Panes are **not** dropped for an outage — a herdr restart keeps them (probe #70) —
+so a client marks them stale and keeps its cached grids.
+
+When a node comes back the node re-sends the whole `herd`, which is the same recovery the
+"sent after `hello` and on any reconnect" rule already describes.
 
 ### `styles` — append-only style table, per connection
 ```jsonc
@@ -71,6 +98,13 @@ hostname would buy (findings §3.7).
 `fg`/`bg` are `{"k":"d"}` default, `{"k":"i","v":n}` indexed 0–255, or `{"k":"r","v":[r,g,b]}`.
 Boolean attributes are omitted when false: `bold dim italic underline blink reverse strike hidden`.
 Style `0` is always the default pen. Ids are stable for the life of the connection.
+
+**`cols` is the pane's real PTY width, which is not always its layout rect.** In a *headless*
+session — what the plugin and the systemd unit both produce — the PTY does not follow the rect: a
+split halves the rect and leaves the PTY alone (probe #68), and even unsplit the rect is a column
+wider (#69). The node measures the width from `pane.read` rather than trusting the rect (#84/#85)
+and both `herd.panes[].cols` and `grid.reset.cols` carry the measurement. A client renders the
+`cols` it is given and never derives geometry of its own.
 
 ### `grid.reset` — full repaint; drop any prior state for this pane
 ```jsonc
@@ -190,6 +224,10 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 ```
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `rate_limited` ·
 `bad_request` · `unsupported` (the node does not implement that op) · `not_found`.
+
+`herdr_unavailable` and `node_offline` are both emitted for a herd outage: the first names the
+cause on the connection, the second says which node went with it, and an op addressed at a pane on
+a node that is down is refused with `node_offline` rather than left to time out.
 
 `code` is an open string, not a closed enum: a client must handle an unrecognised code by showing
 `message` rather than failing. `revoked` is one such: the node re-reads the device behind a live
@@ -340,6 +378,18 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 { "t": "manage", "op": "session.stop",   "node": "01J...", "name": "agents" }
 ```
 
+`workspace` and `tab` on a pane are **labels for a human**; `workspace_id` and `tab_id` are what a
+`manage` op's `at` takes. A pane id carries its workspace (`w3:p2` → `w3`) but never its tab, so
+without `tab_id` a client cannot address `tab.rename`, `tab.close` or `tab.focus` at all.
+
+A `manage` message may carry an opaque **`rid`**, and the node echoes it verbatim on the
+`managed` ack. It is additive and optional: a browser with one op in flight has no use for it, and
+a hub relaying several clients' ops down one link does. A node that receives no `rid` sends none.
+
+A refused op is acknowledged too: `{"t":"managed","op":…,"ok":false,"code":…,"message":…}`, followed
+by the ordinary `error` frame. A client waiting on an ack must therefore watch `ok`, not just arrival.
+`layout.export` puts the exported tree on its ack as `layout`.
+
 Every `manage` op is acknowledged with `{"t":"managed","op":…,"ok":true,"id":"<new id, when one was created>"}`
 and the resulting structure change arrives as an ordinary `herd.patch`. Clients must not
 optimistically mutate their herd model — wait for the patch, so the node stays authoritative.
@@ -369,6 +419,146 @@ Kampr's own **split view is a different thing entirely**: a client-side mosaic o
 `observe` streams that may come from different sessions on different nodes. The Herdr TUI cannot do
 that, because a TUI client attaches to exactly one server. It needs no protocol support beyond
 watching several panes at once.
+
+
+## The mesh
+
+Additive to v1 in the strictest sense: **the mesh introduces no new client-facing message.** A
+client sees one herd with more nodes in it, and every node in that herd is addressed exactly as a
+local one — `"<node_id>/<pane_id>"` was already the id, so the routing was already in the ids.
+
+### The shape, and why
+
+- **Peers dial outbound to a hub.** Only the hub needs an address, so a laptop behind NAT joins
+  with no port forwarding and an operator points one reverse proxy at one hostname. A peer that
+  cannot be reached inbound is fully usable.
+- **Hub is a role, not a build.** `[mesh] accept = true` (the default) is the entire difference.
+  Any node can hold peers, dial hubs, or both; a hub may itself be a peer of another hub.
+- **The link carries this protocol, backwards.** After the handshake the *hub* is the client: it
+  sends `watch` / `unwatch` / `input` / `answer` / `manage` / `ping` and receives `hello` / `herd` /
+  `styles` / `grid.*` / `scrollback` / `pending` / `managed` / `pong`. The peer serves it with the
+  same session code that serves a browser, so every rule below — the role gate, the bounded queue,
+  the purge policy, the audit line — applies at the mesh hop because it is the same code.
+
+### `GET /mesh` — the peer transport
+
+A WebSocket, subject to no device token and no `Origin` check, because the credential is inside it.
+Mesh authentication is a **mutual ed25519 handshake** and is a separate credential space from
+anything a browser holds: a compromised viewer session has a bearer token, and the mesh handshake
+never asks for one.
+
+```jsonc
+// peer → hub, first message on the socket
+{ "t": "mesh.hello", "protocol": 1, "node_id": "01J...", "node_name": "laptop",
+  "build": "0.1.0+abc1234", "key": "<hex ed25519 public key>", "nonce": "<hex 32 bytes>",
+  "join": "K7QF-9M2X" }        // only on the connection that enrols this node; omitted after
+// hub → peer
+{ "t": "mesh.challenge", "protocol": 1, "node_id": "01J...", "node_name": "front",
+  "build": "0.1.0+abc1234", "key": "<hex>", "nonce": "<hex 32 bytes>" }
+// peer → hub
+{ "t": "mesh.auth", "sig": "<hex ed25519 signature>" }
+// hub → peer, then the v1 stream begins
+{ "t": "mesh.accepted", "sig": "<hex>", "enrolled": false }
+// or, and then the socket closes
+{ "t": "mesh.refused", "code": "unenrolled", "reason": "…" }
+```
+
+Both signatures cover the same transcript, each under its own role label:
+
+```
+peer\n                       (or "hub\n")
+KAMPR-MESH/1
+hub-key=<hex>
+peer-key=<hex>
+hub-nonce=<hex>
+peer-nonce=<hex>
+hub-node=<id>
+peer-node=<id>
+```
+
+Both keys bound in means a signature cannot be replayed at a third node; both nonces bound in means
+it cannot be replayed at the same one; the version bound in means a later protocol cannot be
+negotiated down to this one; and the role label means a signature made as a peer can never be
+presented as a hub's. Refusal codes: `unenrolled` · `revoked` · `bad_signature` · `bad_join_code` ·
+`wrong_hub` · `protocol`.
+
+**Order matters and is deliberate.** The hub verifies the signature *before* it consults enrolment,
+so a stranger learns nothing about whether a key would have been accepted; and it signs only after
+it has decided to accept, so a stranger never collects a hub signature over a transcript it chose.
+The peer checks its pin *before* it signs, so a stranger answering at the hub's address does not
+collect a peer signature either.
+
+**Why not mTLS or Noise.** mTLS is the obvious answer and it does not survive the deployment: a
+reverse proxy terminates TLS, so a client certificate never reaches the node, and the whole point
+is to sit behind one. Noise would add end-to-end confidentiality through that proxy, which is worth
+having when the proxy is on another host — but it needs a second key type alongside the ed25519
+identity that already exists, and TLS to the proxy plus a loopback hop is the documented topology.
+So: TLS supplies confidentiality, ed25519 supplies mutual authentication, and the transcript is a
+signature over a challenge in the same shape as SSH's `publickey` auth. If the proxy hop is ever
+untrusted, Noise_IK under this same handshake is the upgrade, not a redesign.
+
+### Enrolment and revocation
+
+- `kampr mesh invite` on the hub mints a **single-use join code**, short-lived, rate limited, and
+  in a different table from device pairing codes — one enrols a browser, the other enrols a node,
+  and neither is redeemable for the other.
+- `kampr mesh join --hub <url> --code <code> [--fingerprint <fp>]` on the peer. The hub's key is
+  **pinned**; a different node answering at that address afterwards is refused with `wrong_hub`.
+  With `--fingerprint` the pin is confirmed before this node signs anything; without it, it is
+  trust on first sight and the CLI says so.
+- `GET /api/mesh` lists peers and hubs with fingerprint, `online`, `rtt_ms` and build.
+  `POST /api/mesh/{id}/revoke`, or `kampr mesh revoke`, cuts one off — and ends the link that is
+  already open rather than waiting for the next handshake.
+- A hub also gets a **device row** on each peer, so it appears in that peer's device list and is
+  revocable there. No token is ever minted against it, so nothing can present it as a bearer.
+
+### Relay, and backpressure per hop
+
+The hub keeps **one** `watch` per pane per link however many clients are looking at it, and a
+**shadow** of that pane's cell grid — the last state the peer published, not a second emulator.
+There is still exactly one emulator per pane and it runs on the node that owns it.
+
+The shadow is what makes the backpressure rule hold at this hop without a second mechanism:
+
+- **Peer → hub.** The peer's outbox is the ordinary bounded client queue. A hub that falls behind
+  has that pane's queued patches dropped and gets one `grid.reset`. Frames are already coalesced to
+  grid state by Herdr, so a reset costs one full grid (~4 KB) and never a backlog.
+- **Hub → client.** Same rule, same code, and the reset is served **from the shadow** — so a purge
+  costs no round trip to the peer at all, and a second client joining a peer pane renders
+  immediately from memory.
+- **Hub fan-out.** A client that overruns the hub's per-pane channel is caught up with one
+  `grid.reset` from the shadow rather than a queue it can never drain.
+
+Nothing at either hop may purge a `scrollback`: history is append-only, keyed on absolute row
+index, and no later reset repairs a hole in it. `pending` is likewise a fact about the pane rather
+than a repaintable frame. Only `grid.reset` and `grid.patch` are droppable, exactly as on a local
+pane.
+
+Scrollback is stitched at the hub by absolute index. If a peer's ring restarted — a gap it could
+not bridge, or a width change — the hub **discards what it held** and advances `from_top` rather
+than splicing two stretches that are not adjacent, and sets `capped`. That is the same honesty rule
+the node applies locally, applied a second time.
+
+### Version skew and latency
+
+`rtt_ms` on a `kind: "peer"` node is the **mesh link's own measured round trip**, from the hub's
+`ping` to the peer's `pong`, plus that node's own herdr round trip. On a `kind: "local"` node it is
+the herdr socket ping. So a peer on a slow link reads as slow, and a client that renders `rtt_ms`
+shows the number that explains it.
+
+`build` on each node is that node's kampr build. Two nodes in one herd may be running different
+releases; a client can only say so if each node names its own, and this is that field.
+
+### When a peer drops
+
+Its node flips to `online: false` with a `detail` saying so, delivered as an ordinary `herd.patch`.
+**Its panes stay listed** — dropping them empties a node out of the UI at the moment the user most
+needs to see that it exists and is unreachable. A live watcher gets
+`error{code:"node_offline"}` on the pane; a new `watch` on it gets the same. Every other node in
+the herd, including the hub's own, is untouched: a link owns nothing but its own tasks.
+
+Recovery is unattended. The peer reconnects on its own backoff, its node flips back to `online`,
+and clients see a fresh `herd` and a `grid.reset` per pane.
 
 ## Auth
 

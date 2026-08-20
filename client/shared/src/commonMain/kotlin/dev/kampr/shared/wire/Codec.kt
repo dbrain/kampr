@@ -92,6 +92,9 @@ object Wire {
                 op = obj.str("op").orEmpty(),
                 ok = obj.bool("ok") ?: false,
                 id = obj.str("id"),
+                code = obj.str("code"),
+                message = obj.str("message"),
+                layout = obj["layout"] as? JsonObject,
             )
             "caps" -> ServerMsg.NodeCaps(
                 node = obj.str("node").orEmpty(),
@@ -142,8 +145,14 @@ object Wire {
         ClientMsg.Resync -> buildJsonObject { put("t", "resync") }
         is ClientMsg.Ping -> buildJsonObject { put("t", "ping"); put("n", msg.n) }
         is ClientMsg.Manage -> buildJsonObject {
-            put("t", "manage"); put("op", msg.op)
-            msg.fields.forEach { (k, v) -> if (v != null) put(k, v) }
+            put("t", "manage"); put("op", msg.request.op)
+            msg.request.fields().forEach { (k, v) -> put(k, v) }
+        }
+        ClientMsg.RequestCaps -> buildJsonObject { put("t", "caps") }
+        is ClientMsg.Notify -> buildJsonObject {
+            put("t", "notify"); put("title", msg.title)
+            msg.body?.let { put("body", it) }
+            msg.pane?.let { put("pane", it) }
         }
     }
 

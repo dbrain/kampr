@@ -2,13 +2,10 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,8 +31,8 @@ fun ConnectPanel(current: Endpoint, onConnect: (Endpoint) -> Unit, modifier: Mod
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             LabelText("Point Kampr at a node", tokens.type.captionSmall, tokens.color.mute)
-            Field("http://192.168.1.24:8790", address) { address = it }
-            Field("pairing code", code) { code = it }
+            KField("http://192.168.1.24:8790", address) { address = it }
+            KField("pairing code", code) { code = it }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PrimaryAction(
                     "Connect",
@@ -50,28 +47,5 @@ fun ConnectPanel(current: Endpoint, onConnect: (Endpoint) -> Unit, modifier: Mod
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun Field(hint: String, value: TextFieldValue, onChange: (TextFieldValue) -> Unit) {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.sm)
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(tokens.color.surface2, shape)
-            .edge(tokens.card, shape)
-            .padding(horizontal = 11.dp, vertical = 10.dp),
-    ) {
-        if (value.text.isEmpty()) KText(hint, tokens.type.meta, tokens.color.mute)
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            singleLine = true,
-            textStyle = tokens.type.meta.copy(color = tokens.color.text),
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(tokens.color.accent),
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }

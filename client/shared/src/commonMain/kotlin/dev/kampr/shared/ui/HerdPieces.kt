@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.Kampr
@@ -153,6 +154,60 @@ fun StatusBadge(text: String, tone: Color, background: Color) {
     }
 }
 
+// The triage list. "NEEDS YOU" first, above the herd and before anything else on the screen —
+// a blocked agent is the only thing on this surface with a deadline attached to it.
+@Composable
+fun TriageList(
+    items: List<TriageItem>,
+    compact: Boolean,
+    onOpen: (String) -> Unit,
+    onApprove: ((String) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    if (items.isEmpty()) return
+    val tokens = Kampr.tokens
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp)) {
+        if (items.size > 1) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Dot(tokens.color.blocked, 8.dp)
+                LabelText(
+                    "Needs you · ${items.size}",
+                    tokens.type.caption.copy(
+                        fontWeight = tokens.label.weight,
+                        letterSpacing = tokens.label.tracking,
+                    ),
+                    tokens.color.blocked,
+                )
+            }
+        }
+        // Bounded, because a herd that has gone badly wrong must not push the herd itself off the
+        // screen. The rest are still in the list below, with their own blocked dots.
+        for (item in items.take(TRIAGE_SHOWN)) {
+            BlockedNotice(
+                pane = item.pane,
+                question = item.question,
+                compact = compact,
+                label = if (items.size > 1) null else if (compact) "Needs you · 1" else "Needs you",
+                onOpen = { onOpen(item.pane.id) },
+                onApprove = onApprove?.let { approve -> { approve(item.pane.id) } },
+            )
+        }
+        if (items.size > TRIAGE_SHOWN) {
+            KText(
+                "and ${items.size - TRIAGE_SHOWN} more below",
+                tokens.type.micro,
+                tokens.color.mute,
+            )
+        }
+    }
+}
+
+private const val TRIAGE_SHOWN = 3
+
 @Composable
 fun BlockedNotice(
     pane: PaneInfo,
@@ -160,6 +215,7 @@ fun BlockedNotice(
     compact: Boolean,
     onOpen: () -> Unit,
     onApprove: (() -> Unit)?,
+    label: String? = if (compact) "Needs you · 1" else "Needs you",
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(if (compact) tokens.radii.md else tokens.radii.lg)
@@ -171,13 +227,15 @@ fun BlockedNotice(
             .padding(horizontal = if (compact) 13.dp else 16.dp, vertical = if (compact) 11.dp else 14.dp),
         verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!compact) Dot(tokens.color.blocked, 8.dp)
-            LabelText(
-                if (compact) "Needs you · 1" else "Needs you",
-                tokens.type.caption.copy(fontWeight = tokens.label.weight, letterSpacing = tokens.label.tracking),
-                tokens.color.blocked,
-            )
+        if (label != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!compact) Dot(tokens.color.blocked, 8.dp)
+                LabelText(
+                    label,
+                    tokens.type.caption.copy(fontWeight = tokens.label.weight, letterSpacing = tokens.label.tracking),
+                    tokens.color.blocked,
+                )
+            }
         }
         if (compact) {
             KText(paneTitle(pane), tokens.type.bodyStrong, tokens.color.text)

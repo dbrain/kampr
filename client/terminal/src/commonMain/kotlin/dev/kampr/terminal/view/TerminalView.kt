@@ -42,6 +42,7 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.breakpointOf
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.terminal.PaneSession
+import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneTextInput
 import dev.kampr.terminal.render.GridRenderer
@@ -92,7 +93,8 @@ fun TerminalView(
     val renderer = remember(cache) { GridRenderer(cache, ModeSelector()) }
     val styles = remember(palette) { ResolvedStyles(palette) }
     val rows = remember(pane) { SurfaceRows(pane) }
-    val sink = remember(pane.id, io, session) { InputSink(pane.id, io, session.latches) }
+    val guard = remember(pane, io, session) { SubmitGuard(pane, io, session.confirm) }
+    val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
     val logical = remember(rows) { LogicalText(rows) }
     val probe = remember(pane.id) { GridProbe() }
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
@@ -238,8 +240,8 @@ fun TerminalView(
                             cursorRow = pane.cursor.row,
                             cursorOn = cursorOn && pane.cursor.visible,
                             selection = view.selection,
-                            selectionWash = tokens.color.accent.copy(alpha = 0.3f),
-                            linkInk = tokens.color.accentHi,
+                            selectionWash = palette.selectionWash,
+                            linkInk = palette.linkInk,
                         )
                         if (pane.stale) drawRect(tokens.color.bg.copy(alpha = 0.45f), size = size)
                     },
@@ -304,6 +306,26 @@ fun TerminalView(
             )
         }
 
+        session.confirm.held?.let { held ->
+            ConfirmSheet(
+                held = held,
+                onRun = {
+                    sink.confirmed(held.payload)
+                    session.confirm.held = null
+                },
+                onEdit = { session.confirm.held = null },
+                onMute = {
+                    session.confirm.local = false
+                    io.send(ClientMsg.SetPrefs(pane.id, mapOf("confirm" to "off")))
+                    sink.confirmed(held.payload)
+                    session.confirm.held = null
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(bottom = with(density) { session.keyRowHeight.toDp() }),
+            )
+        }
+
         if (view.sheetOpen) {
             ZoomSheet(
                 presets = presets,
@@ -313,9 +335,14 @@ fun TerminalView(
                 visibleRows = (paint.contentHeight / metrics.height).toInt(),
                 remembered = view.remembered,
                 followCursor = view.followCursor,
+                confirmRisky = guard.wanted(),
                 onZoom = { view.setZoom(it, presets) },
                 onRemember = { view.remembered = it },
                 onFollow = { view.followCursor = it },
+                onConfirmRisky = { on ->
+                    session.confirm.local = on
+                    io.send(ClientMsg.SetPrefs(pane.id, mapOf("confirm" to if (on) "on" else "off")))
+                },
                 onDismiss = { view.sheetOpen = false },
                 modifier = Modifier
                     .align(Alignment.BottomStart)

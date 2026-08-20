@@ -11,8 +11,12 @@ import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.defaultEndpoint
 import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.platform.createPrefs
+import dev.kampr.shared.push.PushPlatform
+import dev.kampr.shared.push.createPushPlatform
 import dev.kampr.shared.theme.ThemeId
+import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
+import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.wire.ClientMsg
 import kotlinx.coroutines.CoroutineScope
@@ -34,9 +38,11 @@ sealed interface Screen {
     data object Setup : Screen
     data object Devices : Screen
     data object Appearance : Screen
+    data object Notifications : Screen
 }
 
 private const val KEY_THEME = "theme"
+private const val KEY_MODE = "mode"
 private const val KEY_ENDPOINT = "endpoint"
 private const val KEY_TOKEN = "token"
 
@@ -47,7 +53,15 @@ class AppState(
 ) {
     val connection = KamprConnection(scope, store)
 
+    // The service worker outlives every page and cannot read where the token is kept, so it is
+    // handed over on the way past. Without it a push arrives, warms nothing, and the tap that
+    // follows loads from cold.
+    val push: PushPlatform = createPushPlatform()
+
     var theme: ThemeSpec by mutableStateOf(themeOf(prefs.get(KEY_THEME)))
+        private set
+
+    var themeMode: ThemeMode by mutableStateOf(modeOf(prefs.get(KEY_MODE)))
         private set
 
     var screen: Screen by mutableStateOf(Screen.Herd)
@@ -63,7 +77,9 @@ class AppState(
         }
 
     fun start() {
-        connection.connect(endpoint)
+        val target = endpoint
+        push.prepare(target.token)
+        connection.connect(target)
     }
 
     fun useEndpoint(target: Endpoint) {
@@ -72,6 +88,7 @@ class AppState(
             val resolved = target.copy(token = token)
             prefs.set(KEY_ENDPOINT, resolved.baseUrl)
             prefs.set(KEY_TOKEN, resolved.token)
+            push.prepare(resolved.token)
             connection.connect(resolved)
         }
     }
@@ -88,6 +105,11 @@ class AppState(
     fun selectTheme(id: ThemeId) {
         theme = themeOf(id.key)
         prefs.set(KEY_THEME, id.key)
+    }
+
+    fun selectMode(mode: ThemeMode) {
+        themeMode = mode
+        prefs.set(KEY_MODE, mode.key)
     }
 
     fun go(target: Screen) {

@@ -21,33 +21,71 @@ impl HerdModel {
         self.panes.iter().find(|p| p.id == id)
     }
 
+    pub fn node(&self, id: &str) -> Option<&NodeEntry> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
+
     /// `None` when nothing moved, so a poll that finds no change sends nothing.
+    ///
+    /// Nodes are diffed alongside panes: a herdr going away is a node flipping to
+    /// `online: false`, and a patch that only ever carried panes left that invisible.
     pub fn diff(&self, previous: &Self) -> Option<ServerMsg> {
         let before: HashMap<&str, &PaneEntry> = previous.panes.iter().map(|p| (p.id.as_str(), p)).collect();
-        let mut added = Vec::new();
-        let mut changed = Vec::new();
+        let mut added = HerdDelta::default();
+        let mut changed = HerdDelta::default();
         for pane in &self.panes {
             match before.get(pane.id.as_str()) {
-                None => added.push(pane.clone()),
-                Some(old) if !same(old, pane) => changed.push(pane.clone()),
+                None => added.panes.push(pane.clone()),
+                Some(old) if !same(old, pane) => changed.panes.push(pane.clone()),
                 Some(_) => {}
             }
         }
-        let now: Vec<&str> = self.panes.iter().map(|p| p.id.as_str()).collect();
+        let nodes_before: HashMap<&str, &NodeEntry> =
+            previous.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        for node in &self.nodes {
+            match nodes_before.get(node.id.as_str()) {
+                None => added.nodes.push(node.clone()),
+                Some(old) if !same_node(old, node) => changed.nodes.push(node.clone()),
+                Some(_) => {}
+            }
+        }
+        let panes_now: Vec<&str> = self.panes.iter().map(|p| p.id.as_str()).collect();
+        let nodes_now: Vec<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
         let removed_ids: Vec<String> = previous
             .panes
             .iter()
-            .filter(|p| !now.contains(&p.id.as_str()))
+            .filter(|p| !panes_now.contains(&p.id.as_str()))
             .map(|p| p.id.clone())
+            .chain(
+                previous
+                    .nodes
+                    .iter()
+                    .filter(|n| !nodes_now.contains(&n.id.as_str()))
+                    .map(|n| n.id.clone()),
+            )
             .collect();
         if added.is_empty() && changed.is_empty() && removed_ids.is_empty() {
             return None;
         }
         Some(ServerMsg::HerdPatch {
-            added: HerdDelta::panes(added),
-            changed: HerdDelta::panes(changed),
+            added,
+            changed,
             removed_ids,
         })
+    }
+
+    /// Which nodes changed their reachability between two models, newest state given.
+    pub fn reachability_changes(&self, previous: &Self) -> Vec<(String, bool)> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                previous
+                    .node(&node.id)
+                    .is_none_or(|old| old.online != node.online)
+            })
+            .filter(|node| !(previous.nodes.is_empty() && node.online))
+            .map(|node| (node.id.clone(), node.online))
+            .collect()
     }
 
     /// Carries each pane's previous timestamp forward unless something about it actually moved.
@@ -64,6 +102,14 @@ impl HerdModel {
             };
         }
     }
+}
+
+fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
+    a.name == b.name
+        && a.kind == b.kind
+        && a.online == b.online
+        && a.herdr_version == b.herdr_version
+        && a.detail == b.detail
 }
 
 fn same(a: &PaneEntry, b: &PaneEntry) -> bool {

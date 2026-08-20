@@ -33,7 +33,7 @@ class ArtboardTest {
     fun portraitArtboardRenders() {
         val image = renderArtboard(
             PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
-            File(OUT, "conversation-portrait.png"), mobile(landscape = false),
+            File(OUT, "conversation-portrait.png"), content = mobile(landscape = false),
         )
         assertTrue(image.width == 780 && image.height == 1688, "${image.width}x${image.height}")
     }
@@ -42,7 +42,7 @@ class ArtboardTest {
     fun landscapeArtboardRenders() {
         renderArtboard(
             LANDSCAPE.first, LANDSCAPE.second, SoftTheme, TypeScale.Phone,
-            File(OUT, "conversation-landscape.png"), mobile(landscape = true),
+            File(OUT, "conversation-landscape.png"), content = mobile(landscape = true),
         )
     }
 
@@ -67,7 +67,7 @@ class ArtboardTest {
     fun portraitRendersInASecondTheme() {
         renderArtboard(
             PORTRAIT.first, PORTRAIT.second, PhosphorTheme, TypeScale.Phone,
-            File(OUT, "conversation-portrait-phosphor.png"), mobile(landscape = false),
+            File(OUT, "conversation-portrait-phosphor.png"), content = mobile(landscape = false),
         )
     }
 

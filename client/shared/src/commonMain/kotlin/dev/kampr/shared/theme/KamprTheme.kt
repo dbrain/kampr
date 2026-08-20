@@ -1,6 +1,7 @@
 package dev.kampr.shared.theme
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ class KamprTokens(
     val type: KamprType,
 ) {
     val color: Palette get() = spec.palette
+    val ground: Ground get() = spec.ground
     val radii: Radii get() = spec.radii
     val card: BorderSpec get() = spec.card
     val chrome: BorderSpec get() = spec.chrome
@@ -28,19 +30,42 @@ val LocalTokens: ProvidableCompositionLocal<KamprTokens> = staticCompositionLoca
     error("KamprTheme has not been applied")
 }
 
+// Null means "nobody upstream has decided", which is how an un-wired KamprTheme still follows
+// prefers-color-scheme instead of silently pinning dark. Nested KamprTheme calls — the theme
+// preview cards — inherit it rather than re-asking the system.
+val LocalGround: ProvidableCompositionLocal<Ground?> = staticCompositionLocalOf { null }
+
 object Kampr {
     val tokens: KamprTokens
         @Composable get() = LocalTokens.current
 }
 
 @Composable
-fun KamprTheme(spec: ThemeSpec, scale: TypeScale, content: @Composable () -> Unit) {
-    val fonts = resolveFonts(spec)
+fun groundOf(mode: ThemeMode): Ground = when (mode) {
+    ThemeMode.Dark -> Ground.Dark
+    ThemeMode.Light -> Ground.Light
+    ThemeMode.System -> if (isSystemInDarkTheme()) Ground.Dark else Ground.Light
+}
+
+@Composable
+fun KamprTheme(
+    spec: ThemeSpec,
+    scale: TypeScale,
+    ground: Ground? = null,
+    content: @Composable () -> Unit,
+) {
+    val resolved = ground ?: LocalGround.current ?: groundOf(ThemeMode.System)
+    val grounded = remember(spec, resolved) { spec.on(resolved) }
+    val fonts = resolveFonts(grounded)
     if (fonts == null) {
-        Box(Modifier.fillMaxSize().background(spec.palette.bg))
+        Box(Modifier.fillMaxSize().background(grounded.palette.bg))
         return
     }
-    val type = remember(fonts, spec, scale) { typography(fonts, spec.label, scale) }
-    val tokens = remember(fonts, spec, type) { KamprTokens(spec, fonts, type) }
-    CompositionLocalProvider(LocalTokens provides tokens, content = content)
+    val type = remember(fonts, grounded, scale) { typography(fonts, grounded.label, scale) }
+    val tokens = remember(fonts, grounded, type) { KamprTokens(grounded, fonts, type) }
+    CompositionLocalProvider(
+        LocalTokens provides tokens,
+        LocalGround provides resolved,
+        content = content,
+    )
 }

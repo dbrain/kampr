@@ -267,8 +267,8 @@ private fun BenchBody() {
                         cursorRow = pane.cursor.row,
                         cursorOn = pane.cursor.visible,
                         selection = null,
-                        selectionWash = tokens.color.accent.copy(alpha = 0.3f),
-                        linkInk = tokens.color.accentHi,
+                        selectionWash = palette.selectionWash,
+                        linkInk = palette.linkInk,
                     )
                     stats.record(
                         timing.intervalMs,

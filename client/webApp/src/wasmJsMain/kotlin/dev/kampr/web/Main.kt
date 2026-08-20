@@ -26,7 +26,7 @@ private val surfaces = ConversationSurfaces(TerminalSurfaces())
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     val bench = query("bench") != null
-    val deepLink = DeepLink(query("theme"), query("screen"), query("view"), query("pane"))
+    val deepLink = DeepLink(query("theme"), query("mode"), query("screen"), query("view"), query("pane"))
     ComposeViewport(document.body!!) {
         if (bench) TerminalBenchApp() else KamprApp(surfaces, deepLink)
     }

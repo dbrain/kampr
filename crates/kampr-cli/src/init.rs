@@ -43,6 +43,12 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     kampr_auth::private_dir(dirs_state)?;
 
     let identity = NodeIdentity::load_or_create(&Config::node_key_path(dirs_config))?;
+    // Generated here rather than at first serve, because rotating it invalidates every push
+    // subscription already issued — so it has to exist before anything can subscribe against it.
+    // It is written whatever the tier: the ladder is climbed later, and a node that reaches Tier 1
+    // must not need a re-init to be able to notify.
+    let vapid = kampr_push::Vapid::load_or_create(&Config::vapid_path(dirs_state), &config.push_subject())
+        .context("generating the VAPID key")?;
     let local = Local::open(dirs_config, Some(dirs_state)).await?;
     let pair = pairing::create(&local, Role::Full).await?;
     let url = local.config.origin();
@@ -51,6 +57,7 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     println!("  config      {}", path.display());
     println!("  state       {}", dirs_state.display());
     println!("  identity    {}", identity.fingerprint());
+    println!("  push key    {}", vapid.public_key_b64());
     println!();
     println!("  {url}");
     println!("{}", report::bind_summary(&local.config));

@@ -2,20 +2,65 @@ package dev.kampr.terminal.input
 
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.terminal.guard.SubmitGuard
 
 private const val PASTE_START = "\u001b[200~"
 private const val PASTE_END = "\u001b[201~"
+
+// A paste with no line terminator lands on the input line and is caught at the Enter that follows
+// it; only a paste that carries its own submit can run on arrival, so only that one is inspected
+// here. Guarding both would confirm the same command twice.
+private fun pasteBody(text: String): String? {
+    if (!text.startsWith(PASTE_START)) return null
+    val end = text.indexOf(PASTE_END)
+    val body = if (end < 0) text.substring(PASTE_START.length) else text.substring(PASTE_START.length, end)
+    return body.takeIf { it.contains('\n') || it.contains('\r') }
+}
 
 private const val SHIFTED_UNSHIFTED = "`1234567890-=[]\\;',./"
 private const val SHIFTED_SHIFTED = "~!@#\$%^&*()_+{}|:\"<>?"
 
 // Everything leaves as input.text. b64 exists on the wire for control characters, but every
 // sequence the key row produces is UTF-8-safe, so text is the one path (#9).
-class InputSink(private val paneId: String, private val io: PaneIo, val latches: Latches) {
-    fun raw(text: String) {
+class InputSink(
+    private val paneId: String,
+    private val io: PaneIo,
+    val latches: Latches,
+    private val guard: SubmitGuard? = null,
+) {
+    private fun emit(text: String) {
         if (text.isEmpty()) return
         io.send(ClientMsg.InputText(paneId, text))
     }
+
+    // The submit is the hook, not the keystroke: by the time a whole command has been typed it is
+    // already in the PTY, so the only thing that can still be held back is the Enter that runs it.
+    fun raw(text: String) {
+        if (text.isEmpty()) return
+        if (guard == null) {
+            emit(text)
+            return
+        }
+        guard.clear()
+        val pasted = pasteBody(text)
+        if (pasted != null) {
+            if (!guard.hold(pasted, text, paste = true)) emit(text)
+            return
+        }
+        val submit = text.indexOfFirst { it == '\r' || it == '\n' }
+        if (submit < 0) {
+            emit(text)
+            return
+        }
+        // Anything ahead of the Enter in the same payload is ordinary typing and goes now, but the
+        // pane has not echoed it yet, so it is appended to the line the guard reads.
+        val typed = text.take(submit)
+        emit(typed)
+        val rest = text.substring(submit)
+        if (!guard.hold(guard.commandLine() + typed, rest, paste = false)) emit(rest)
+    }
+
+    fun confirmed(payload: String) = emit(payload)
 
     // Probe #9: pane.send_text writes raw bytes with no bracketed-paste framing of its own, so a
     // multi-line paste would execute line by line in a shell unless Kampr brackets it here.

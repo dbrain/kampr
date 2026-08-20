@@ -1,11 +1,12 @@
 mod record;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
+use crate::discover;
 use crate::error::JournalError;
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
@@ -72,6 +73,30 @@ impl JournalAdapter for CodexAdapter {
             SessionKind::Id => self.find_by_id(&session.value),
             SessionKind::Path => self.root.contain(&session.value),
         }
+    }
+
+    /// A rollout carries its working directory in the `session_meta` record it opens with
+    /// (probe #45), which is the only thing that ties one to a pane.
+    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError> {
+        let rollouts = discover::descend(&self.root.path().join("sessions"), 3)
+            .iter()
+            .flat_map(|d| discover::jsonl_files(d))
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("rollout-"))
+            })
+            .collect();
+        discover::newest_declaring(rollouts, cwd, |record| {
+            if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+                return None;
+            }
+            record
+                .pointer("/payload/cwd")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| discover::not_found(cwd))
     }
 
     fn parser(&self) -> Box<dyn TranscriptParser> {

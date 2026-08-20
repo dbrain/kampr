@@ -7,7 +7,6 @@
 //! a native-geometry change, and 400+ rows of coloured scrollback.
 
 use anyhow::{Context, Result};
-use kampr_core::herdr_provider::connect_with_retry;
 use kampr_core::provider::Input;
 use kampr_core::registry::{PaneRegistry, PaneUpdate, Watcher};
 use kampr_core::wire::{Encoder, ServerMsg};
@@ -26,7 +25,13 @@ async fn main() -> Result<()> {
         .with_env_filter("kampr_core=debug")
         .init();
     let herdr = Herdr::discover()?;
-    let provider = Arc::new(connect_with_retry(herdr, HerdrConfig::default()).await?);
+    let provider = Arc::new(kampr_core::HerdrProvider::spawn(herdr, HerdrConfig::default()));
+    for _ in 0..100 {
+        if provider.health().online {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let node_id = "01LIVE";
 
     let panes = provider.list_panes().await?;

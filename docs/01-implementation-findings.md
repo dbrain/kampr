@@ -411,7 +411,7 @@ But Herdr keeps the ring and hands it over directly:
 
 So **the node holds the scrollback**: backfill from `pane.read recent format=ansi` on watch, run it
 through the same emulator so styling matches the live grid, and extend it as the ring grows.
-Over-asking clamps harmlessly (`lines: 5000` returned 400, `truncated: false`) **[probed]**.
+Over-asking clamps harmlessly (`lines: 5000` returns 1000, `truncated: true` — see #51, which corrected #29) **[probed]**.
 
 **The interlock** — read scrollback only when `max_offset_from_bottom > 0` **and** the pane has no
 detected `agent`. The second condition is Collie's documented hazard: on an idle *recognised agent*
@@ -444,7 +444,7 @@ will be wrong in ways that are hard to notice.
 But you do not have to. §1.10: the transcripts are on disk, in the harness's own format, with the
 original markdown intact. So Kampr ships **two views of the same pane**:
 
-- **Terminal view** — xterm.js on the frame stream. Truthful, live, interactive, exactly what the
+- **Terminal view** — the node's own VT emulation over the frame stream, drawn as a cell grid (§5.5). Truthful, live, interactive, exactly what the
   desk sees. This is where you type.
 - **Conversation view** — parsed from the transcript file, rendered as real markdown: tables as
   tables, code blocks with syntax highlighting and a copy button, diffs as diffs, tool calls
@@ -664,7 +664,7 @@ Two design consequences worth stating:
 ## 5. Recommended architecture for Kampr
 
 ```
-  phone / tablet / desktop browser  (PWA, xterm.js + native nav)
+  phone / tablet / desktop browser  (PWA, Compose Multiplatform, cell-grid renderer)
         │  HTTPS + WSS, passkey-authenticated, device-bound session
         ▼
   ┌─────────────────────────────────────────────────────────┐

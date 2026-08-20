@@ -2,6 +2,7 @@ package dev.kampr.shared.wire
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable(with = ColorSpecSerializer::class)
 sealed interface ColorSpec {
@@ -68,6 +69,10 @@ data class NodeInfo(
 data class PaneInfo(
     val id: String,
     @SerialName("node_id") val nodeId: String,
+    // A pane id carries its workspace but never its tab, so `tab.rename` and `tab.close` are only
+    // addressable because the node sends the ids alongside the human-facing labels.
+    @SerialName("workspace_id") val workspaceId: String? = null,
+    @SerialName("tab_id") val tabId: String? = null,
     val workspace: String? = null,
     val tab: String? = null,
     val cwd: String? = null,
@@ -173,7 +178,14 @@ sealed interface ServerMsg {
         val source: String,
     ) : ServerMsg
 
-    data class Managed(val op: String, val ok: Boolean, val id: String?) : ServerMsg
+    data class Managed(
+        val op: String,
+        val ok: Boolean,
+        val id: String?,
+        val code: String? = null,
+        val message: String? = null,
+        val layout: JsonObject? = null,
+    ) : ServerMsg
 
     data class NodeCaps(
         val node: String,
@@ -192,6 +204,7 @@ sealed interface ServerMsg {
 data class PanePrefs(val values: Map<String, String> = emptyMap()) {
     val zoom: Float? get() = values["zoom"]?.toFloatOrNull()
     val view: String? get() = values["view"]
+    val confirm: Boolean get() = values["confirm"] != "off"
 }
 
 sealed interface ClientMsg {
@@ -219,5 +232,13 @@ sealed interface ClientMsg {
 
     data class Ping(val n: Int) : ClientMsg
 
-    data class Manage(val op: String, val fields: Map<String, String?>) : ClientMsg
+    data class Manage(val request: ManageOp) : ClientMsg
+
+    // A toast on the operator's desktop (probe #50). Fire and forget: the node attributes it to
+    // this device, rate limits it and audits it, and its `notified` reply is not a user's problem.
+    data class Notify(val title: String, val body: String? = null, val pane: String? = null) : ClientMsg
+
+    // Without this `caps.agent_kinds` and `caps.sessions` are dead on both ends: the node only
+    // answers a `caps` it was asked for.
+    data object RequestCaps : ClientMsg
 }

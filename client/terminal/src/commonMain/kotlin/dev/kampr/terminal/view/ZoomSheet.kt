@@ -44,9 +44,11 @@ fun ZoomSheet(
     visibleRows: Int,
     remembered: Boolean,
     followCursor: Boolean,
+    confirmRisky: Boolean,
     onZoom: (Float) -> Unit,
     onRemember: (Boolean) -> Unit,
     onFollow: (Boolean) -> Unit,
+    onConfirmRisky: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -103,6 +105,12 @@ fun ZoomSheet(
                     title = "Follow the cursor",
                     detail = "Pans sideways to keep the caret in view.",
                     onChange = onFollow,
+                )
+                Toggle(
+                    on = confirmRisky,
+                    title = "Check destructive commands",
+                    detail = "Holds Enter on rm -rf, sudo, force-push. Shell panes only.",
+                    onChange = onConfirmRisky,
                 )
                 KText(
                     "Zoom is yours alone. The pane stays ${window.cols} columns for everyone — " +

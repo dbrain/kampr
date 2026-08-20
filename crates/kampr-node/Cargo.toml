@@ -15,6 +15,8 @@ kampr-auth = { path = "../kampr-auth" }
 kampr-core = { path = "../kampr-core" }
 kampr-herdr = { path = "../kampr-herdr" }
 kampr-journal = { path = "../kampr-journal" }
+kampr-push = { path = "../kampr-push" }
+kampr-mesh = { path = "../kampr-mesh" }
 kampr-term = { path = "../kampr-term" }
 mime_guess.workspace = true
 rust-embed.workspace = true
@@ -33,6 +35,7 @@ url.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+getrandom.workspace = true
 rcgen.workspace = true
 tokio-rustls.workspace = true
 tempfile.workspace = true

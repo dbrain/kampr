@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod claude;
 pub mod codex;
+mod discover;
 pub mod error;
 pub mod model;
 pub mod root;

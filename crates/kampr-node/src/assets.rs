@@ -30,10 +30,14 @@ pub fn serve(path: &str) -> Response {
     }
 }
 
+/// Files served behind a stable name whose *contents* change with every release. An immutable
+/// service worker is a worker that never updates — the browser would keep running the old one
+/// against a new node forever — and the same is true of the shell and the manifest.
+const MUTABLE: &[&str] = &["index.html", "sw.js", "manifest.webmanifest"];
+
 fn file_response(path: &str, body: Vec<u8>) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
-    // The shell must not be cached: a node update ships a new bundle behind the same URL.
-    let cache = if path == "index.html" {
+    let cache = if MUTABLE.contains(&path) {
         "no-store"
     } else {
         "public, max-age=31536000, immutable"

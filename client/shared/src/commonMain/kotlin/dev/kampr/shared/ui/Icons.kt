@@ -56,6 +56,22 @@ object KamprIcons {
     )
     val warning = icon(16f, 1.7f, d("M8 2 15 14H1z"), d("M8 6.4v3.1M8 11.4v.5"))
     val tool = icon(16f, 1.6f, Glyph.Frame(1f, 2.5f, 14f, 11f, 2f), d("M4 6.4 6.2 8.2 4 10M8.4 10.4h3.4"))
+    val workspace = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15"))
+    val tab = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15M6.5 2.5v4"))
+    val split = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13"))
+    val branch = icon(
+        18f, 1.7f, Glyph.Round(5f, 4f, 2.2f), Glyph.Round(5f, 14f, 2.2f), Glyph.Round(13f, 9f, 2.2f),
+        d("M5 6.2v5.6M7.2 4h1.6A2.2 2.2 0 0 1 11 6.2v.9"),
+    )
+    val plus = icon(16f, 1.8f, d("M8 2.2v11.6M2.2 8h11.6"))
+    val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
+    val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))
+    val ellipsis = icon(
+        16f, 1.6f,
+        Glyph.Round(3.2f, 8f, 1.1f, filled = true),
+        Glyph.Round(8f, 8f, 1.1f, filled = true),
+        Glyph.Round(12.8f, 8f, 1.1f, filled = true),
+    )
 }
 
 @Composable

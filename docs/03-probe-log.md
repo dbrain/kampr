@@ -1,5 +1,12 @@
 # Probe log
 
+> **Probe numbers are permanent identifiers, not positions.** Code and docs cite them, so renumbering
+> silently repoints a citation at unrelated evidence — which has happened once already: four sites
+> citing #75 for the PTY/rect divergence ended up pointing at an `agent_session` finding after a
+> renumber. Append new rows; never renumber an existing one. If a probe is superseded, strike it
+> through and reference the row that replaced it.
+
+
 Every claim Kampr makes about Herdr, traced to the command that produced it. All against
 **herdr 0.8.2, protocol 20** on 2026-08-20, in throwaway named sessions (`kp2`…`kpspike`), all torn
 down afterwards. Tooling: `research/probe/rpc.py`, `research/probe/ptyclient.py`.

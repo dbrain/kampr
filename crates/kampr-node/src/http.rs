@@ -58,6 +58,7 @@ pub fn router(node: Arc<Node>) -> Router {
         .then(|| secured(STRICT_TRANSPORT_SECURITY, "max-age=31536000; includeSubDomains"));
     Router::new()
         .route("/ws", get(websocket))
+        .route("/mesh", get(mesh_socket))
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/node", get(node_info))
         .route("/api/devices", get(devices))
@@ -65,6 +66,14 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/api/devices/{id}/role", post(set_role))
         .route("/api/devices/{id}/renew", post(renew_device))
         .route("/api/pair", post(create_pairing))
+        .route("/api/mesh", get(mesh_state))
+        .route("/api/mesh/invite", post(create_mesh_invite))
+        .route("/api/mesh/{id}/revoke", post(revoke_mesh_node))
+        .route("/api/warm", get(warm))
+        .route("/api/push", get(push_state))
+        .route("/api/push/subscribe", post(push_subscribe))
+        .route("/api/push/unsubscribe", post(push_unsubscribe))
+        .route("/api/push/rules", post(push_rule))
         .route("/auth/pair", post(redeem_pairing))
         .route("/auth/webauthn/register/start", post(register_start))
         .route("/auth/webauthn/register/finish", post(register_finish))
@@ -287,6 +296,107 @@ async fn websocket(
     upgrade.on_upgrade(move |socket| session::run(socket, node, device, peer))
 }
 
+/// A peer node dialling in. **No device token and no `Origin` check**, deliberately: mesh
+/// authentication is a mutual ed25519 handshake carried inside the socket, and it is a different
+/// credential space from anything a browser holds. A page that opens this socket gets as far as
+/// being asked to sign a challenge with a key it does not have.
+async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: WebSocketUpgrade) -> Response {
+    if !node.config.mesh.accept {
+        return refuse(StatusCode::NOT_FOUND, "this node does not accept mesh links");
+    }
+    upgrade.on_upgrade(move |socket| crate::mesh::accept(socket, node, peer))
+}
+
+/// The herd's own membership list: who may join, who is joined, and how far away they are.
+async fn mesh_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
+    if let Some(response) = auth.refused() {
+        return response;
+    }
+    let mesh = node.auth.store().mesh();
+    let (peers, hubs) = match (
+        mesh.nodes(kampr_auth::MeshRole::Peer).await,
+        mesh.nodes(kampr_auth::MeshRole::Hub).await,
+    ) {
+        (Ok(peers), Ok(hubs)) => (peers, hubs),
+        (Err(e), _) | (_, Err(e)) => return store_failure("mesh", &e),
+    };
+    let live = node.peers.links();
+    let described = |node_row: &kampr_auth::MeshNode| {
+        let link = live.iter().find(|l| l.pubkey == node_row.pubkey);
+        json!({
+            "node_id": node_row.node_id,
+            "name": node_row.name,
+            "fingerprint": node_row.fingerprint(),
+            "url": node_row.url,
+            "created_at": node_row.created_at,
+            "last_seen_at": node_row.last_seen_at,
+            "revoked_at": node_row.revoked_at,
+            "online": link.is_some(),
+            "rtt_ms": link.and_then(|l| l.rtt_ms()),
+            "build": link.map(|l| l.build.clone()),
+        })
+    };
+    let identity = node.identity().ok();
+    private_json(json!({
+        "node_id": node.config.node_id,
+        "fingerprint": identity.map(|i| i.fingerprint()),
+        "accepts": node.config.mesh.accept,
+        "peers": peers.iter().map(described).collect::<Vec<_>>(),
+        "hubs": hubs.iter().map(described).collect::<Vec<_>>(),
+    }))
+}
+
+/// A single-use join code. Separate from a device pairing code on purpose: one enrols a browser,
+/// the other enrols a node, and neither is redeemable for the other.
+async fn create_mesh_invite(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
+    if let Some(response) = auth.refused() {
+        return response;
+    }
+    let now = kampr_auth::now();
+    let ttl = node.auth.policy().pairing_ttl.as_secs() as i64;
+    let mesh = node.auth.store().mesh();
+    let _ = mesh.expire_invites(now).await;
+    let identity = match node.identity() {
+        Ok(identity) => identity,
+        Err(e) => return store_failure("mesh identity", &e),
+    };
+    match mesh.invite(now, now + ttl).await {
+        Ok(code) => private_json(json!({
+            "code": code,
+            "expires_in": ttl,
+            "fingerprint": identity.fingerprint(),
+            "url": node.origin,
+        })),
+        Err(e) => store_failure("mesh invite", &e),
+    }
+}
+
+/// Revocation has to bite on the connection that is already open, not at the next handshake.
+async fn revoke_mesh_node(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = auth.refused() {
+        return response;
+    }
+    match node.auth.store().mesh().revoke(&id, kampr_auth::now()).await {
+        Ok(Some(revoked)) => {
+            node.peers.disconnect(&revoked.pubkey);
+            node.peers.disconnect(&revoked.node_id);
+            node.auth.audit().record(
+                &kampr_auth::Entry::new("mesh.revoked")
+                    .device(&auth.device.id, &auth.device.name, auth.device.role.as_str())
+                    .peer(&auth.peer)
+                    .detail(json!({ "node": revoked.node_id, "fingerprint": revoked.fingerprint() })),
+            );
+            private_json(json!({ "revoked": revoked.node_id }))
+        }
+        Ok(None) => refuse(StatusCode::NOT_FOUND, "no such node in this herd"),
+        Err(e) => store_failure("mesh revoke", &e),
+    }
+}
+
 /// What a client needs before it has a token: the node's name, and what this origin can and
 /// cannot do. Deliberately says nothing about who is enrolled.
 async fn node_info(State(node): State<Arc<Node>>) -> Json<Value> {
@@ -315,6 +425,199 @@ async fn node_info(State(node): State<Arc<Node>>) -> Json<Value> {
     }))
 }
 
+/// What this device may do about notifications, and what it has already asked for.
+///
+/// **`available` is the only thing a client should branch on.** It is false whenever the origin is
+/// not a secure context, whenever the operator turned push off, and whenever no VAPID key could be
+/// loaded — three different reasons a subscribe button must be absent rather than present and
+/// failing at the last step.
+async fn push_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
+    let tier = node.auth.tier();
+    let subscriptions = node
+        .auth
+        .store()
+        .push_subscriptions_for(&auth.device.id)
+        .await
+        .unwrap_or_default();
+    let rules = node
+        .auth
+        .store()
+        .push_rules(&auth.device.id)
+        .await
+        .unwrap_or_default();
+    private_json(json!({
+        "available": node.push.available(),
+        "key": node.push.public_key(),
+        "secure_context": tier.secure_context,
+        "unlocks": tier.locked(),
+        "subscribed": !subscriptions.is_empty(),
+        "endpoints": subscriptions.iter().map(|s| json!({
+            "kind": s.kind, "endpoint": s.endpoint
+        })).collect::<Vec<_>>(),
+        "rules": rules,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct WarmQuery {
+    #[serde(default)]
+    pane: Option<String>,
+}
+
+/// Warm resume, in one request.
+///
+/// The service worker fetches this while a push notification is still being read, so the tap that
+/// follows opens onto data rather than onto a load (findings §3.11). It is the herd plus, when a
+/// pane is named, that pane's outstanding question — a few kilobytes, and the same shapes the
+/// socket sends, so a client seeds its store from it with no second code path.
+///
+/// It is **not** the grid. A full grid is ~4 KB but reproducing the wire's style interning outside
+/// a live connection would be a second encoder, and the socket delivers the real one within a
+/// second of the tap. What this removes is the empty herd and the unanswered question.
+async fn warm(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    axum::extract::Query(query): axum::extract::Query<WarmQuery>,
+) -> Response {
+    let herd = node.herd();
+    let mut body = json!({
+        "t": "herd",
+        "nodes": herd.nodes,
+        "panes": herd.panes,
+        "role": auth.device.role,
+    });
+    if let Some(pane) = query.pane.as_deref()
+        && let Some((session, local)) = node.resolve(pane)
+        && let Some(found) = crate::pending::read(&session.herdr, &local).await
+    {
+        body["pending"] = json!({
+            "t": "pending",
+            "pane": pane,
+            "question": found.question,
+            "options": found.options,
+            "source": "screen",
+        });
+    }
+    // `no-store` from the node; the service worker keeps its own copy deliberately and knows how
+    // stale it is. A shared cache between the phone and the node must not.
+    private_json(body)
+}
+
+#[derive(Debug, Deserialize)]
+struct PushSubscribe {
+    endpoint: String,
+    /// `webpush` from a browser, `unifiedpush` from a distributor. A label for the device list,
+    /// never a branch: UnifiedPush 3.0 is RFC 8291, so both are delivered to identically.
+    #[serde(default)]
+    kind: Option<String>,
+    keys: PushKeys,
+}
+
+#[derive(Debug, Deserialize)]
+struct PushKeys {
+    p256dh: String,
+    auth: String,
+}
+
+/// A read-only device may subscribe. Being told an agent is blocked is *reading*, and it is the
+/// whole point of a device you half-trust with a screen.
+async fn push_subscribe(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    Json(body): Json<PushSubscribe>,
+) -> Response {
+    if !node.push.available() {
+        return refuse(StatusCode::CONFLICT, "this node cannot send notifications");
+    }
+    if !body.endpoint.starts_with("https://") {
+        return refuse(StatusCode::BAD_REQUEST, "a push endpoint must be https");
+    }
+    if body.endpoint.len() > 2048 || body.keys.p256dh.len() > 256 || body.keys.auth.len() > 64 {
+        return refuse(StatusCode::BAD_REQUEST, "push subscription is too large");
+    }
+    let kind = match body.kind.as_deref() {
+        Some("unifiedpush") => "unifiedpush",
+        _ => "webpush",
+    };
+    match node
+        .auth
+        .store()
+        .save_push_subscription(
+            &auth.device.id,
+            kind,
+            &body.endpoint,
+            &body.keys.p256dh,
+            &body.keys.auth,
+            kampr_auth::now(),
+        )
+        .await
+    {
+        Ok(_) => {
+            node.auth.audit().record(
+                &kampr_auth::Entry::new("push.subscribed")
+                    .device(&auth.device.id, &auth.device.name, auth.device.role.as_str())
+                    .peer(&auth.peer)
+                    .detail(json!({ "kind": kind })),
+            );
+            private_json(json!({ "subscribed": true }))
+        }
+        Err(e) => store_failure("push_subscribe", &e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PushUnsubscribe {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    Json(body): Json<PushUnsubscribe>,
+) -> Response {
+    match node
+        .auth
+        .store()
+        .delete_push_subscription(&auth.device.id, &body.endpoint)
+        .await
+    {
+        Ok(removed) => {
+            if removed {
+                node.auth.audit().record(
+                    &kampr_auth::Entry::new("push.unsubscribed")
+                        .device(&auth.device.id, &auth.device.name, auth.device.role.as_str())
+                        .peer(&auth.peer),
+                );
+            }
+            private_json(json!({ "subscribed": false, "removed": removed }))
+        }
+        Err(e) => store_failure("push_unsubscribe", &e),
+    }
+}
+
+/// Snooze and mute, per agent and per device. `pane: "*"` covers every agent on this device.
+async fn push_rule(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    Json(rule): Json<kampr_auth::PushRule>,
+) -> Response {
+    if rule.pane_id != kampr_auth::ALL_PANES && node.herd().pane(&rule.pane_id).is_none() {
+        return refuse(StatusCode::NOT_FOUND, "no such pane on this node");
+    }
+    match node
+        .auth
+        .store()
+        .set_push_rule(&auth.device.id, &rule, kampr_auth::now())
+        .await
+    {
+        Ok(()) => match node.auth.store().push_rules(&auth.device.id).await {
+            Ok(rules) => private_json(json!({ "rules": rules })),
+            Err(e) => store_failure("push_rules", &e),
+        },
+        Err(e) => store_failure("push_rule", &e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct PairRequest {
     code: String,
@@ -341,7 +644,26 @@ async fn redeem_pairing(
         .redeem_pairing(&body.code, name.trim(), agent, &peer)
         .await
     {
-        Ok(e) => private_json(json!({ "token": e.token, "device": e.device })),
+        Ok(e) => {
+            // Probe #50 in the useful direction: the operator watching the console sees that a
+            // device just paired, on the same screen the code was printed on. A pairing that
+            // nobody expected is the one worth noticing, and this is the only channel that
+            // reaches somebody who is not holding the phone.
+            let session = node.primary();
+            let name = e.device.name.clone();
+            let role = e.device.role.as_str();
+            tokio::spawn(async move {
+                crate::toast::Toaster::default()
+                    .show(
+                        &session.herdr,
+                        "pairing",
+                        &format!("{name} paired"),
+                        Some(&format!("{role} access · revoke it with kampr setup")),
+                    )
+                    .await;
+            });
+            private_json(json!({ "token": e.token, "device": e.device }))
+        }
         Err(AuthError::RateLimited) => refuse(StatusCode::TOO_MANY_REQUESTS, "too many attempts"),
         Err(_) => refuse(StatusCode::UNAUTHORIZED, "that pairing code is not valid"),
     }

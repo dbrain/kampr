@@ -31,6 +31,10 @@ interface PaneIo {
     fun send(msg: ClientMsg)
     fun prefs(paneId: String): PanePrefs
 
+    // A surface that guards input has to know what is on the other end of it: a pane running an
+    // agent is being typed *at*, not driven, and `rm -rf` in a prompt box is prose.
+    fun info(paneId: String): PaneInfo? = null
+
     val readOnly: Boolean get() = false
 
     // A surface may need to hand the pane over to the other one — a harness with no journal

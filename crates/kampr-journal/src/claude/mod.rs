@@ -1,11 +1,12 @@
 mod record;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
+use crate::discover;
 use crate::error::JournalError;
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
@@ -45,6 +46,13 @@ impl ClaudeAdapter {
     }
 }
 
+/// Claude names a project directory after its working directory with every `/` replaced by `-`.
+/// It is only a hint here — the transcript's own `cwd` is what decides — so a future change to
+/// the rule costs a slower search rather than a wrong conversation.
+fn slug(cwd: &Path) -> String {
+    cwd.to_string_lossy().trim_end_matches('/').replace('/', "-")
+}
+
 impl JournalAdapter for ClaudeAdapter {
     fn agent(&self) -> &str {
         AGENT
@@ -55,6 +63,22 @@ impl JournalAdapter for ClaudeAdapter {
             SessionKind::Id => self.find_by_id(&session.value),
             SessionKind::Path => self.root.contain(&session.value),
         }
+    }
+
+    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError> {
+        let projects = self.root.path().join("projects");
+        let named = projects.join(slug(cwd));
+        let declared = |record: &Value| record.get("cwd").and_then(Value::as_str).map(str::to_string);
+        if named.is_dir()
+            && let Some(found) = discover::newest_declaring(discover::jsonl_files(&named), cwd, declared)
+        {
+            return Ok(found);
+        }
+        let everything = discover::subdirectories(&projects)
+            .iter()
+            .flat_map(|d| discover::jsonl_files(d))
+            .collect();
+        discover::newest_declaring(everything, cwd, declared).ok_or_else(|| discover::not_found(cwd))
     }
 
     fn parser(&self) -> Box<dyn TranscriptParser> {

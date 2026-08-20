@@ -1,0 +1,60 @@
+{
+  "workspace.create": {
+    "t": "manage", "op": "workspace.create", "node": "01JNODE",
+    "label": "kampr", "cwd": "/home/dbrain/dev/kampr",
+    "env": {"RUST_LOG": "debug", "KAMPR_ENV": "probe"}
+  },
+  "workspace.create.bare": {
+    "t": "manage", "op": "workspace.create", "node": "01JNODE"
+  },
+  "tab.create": {
+    "t": "manage", "op": "tab.create", "at": "01JNODE/w3",
+    "label": "tests", "cwd": "/home/dbrain/dev/kampr"
+  },
+  "pane.split": {
+    "t": "manage", "op": "pane.split", "at": "01JNODE/w3:p2",
+    "direction": "right", "ratio": 0.35
+  },
+  "pane.zoom": {
+    "t": "manage", "op": "pane.zoom", "at": "01JNODE/w3:p2", "mode": "toggle"
+  },
+  "rename": {
+    "t": "manage", "op": "rename", "at": "01JNODE/w3:p2", "label": "build"
+  },
+  "rename.clear": {
+    "t": "manage", "op": "rename", "at": "01JNODE/w3:p2", "label": null
+  },
+  "close": {
+    "t": "manage", "op": "close", "at": "01JNODE/w3:t1"
+  },
+  "focus": {
+    "t": "manage", "op": "focus", "at": "01JNODE/w3"
+  },
+  "agent.start": {
+    "t": "manage", "op": "agent.start", "at": "01JNODE/w3:p2",
+    "kind": "claude", "name": "reviewer", "args": ["--model", "opus"]
+  },
+  "worktree.create": {
+    "t": "manage", "op": "worktree.create", "node": "01JNODE",
+    "branch": "feat/mesh-auth", "base": "main", "cwd": "/home/dbrain/dev/kampr",
+    "label": "mesh-auth"
+  },
+  "worktree.open": {
+    "t": "manage", "op": "worktree.open", "node": "01JNODE",
+    "path": "/home/dbrain/dev/kampr-feat-x"
+  },
+  "layout.export": {
+    "t": "manage", "op": "layout.export", "at": "01JNODE/w3:t1"
+  },
+  "layout.apply": {
+    "t": "manage", "op": "layout.apply", "at": "01JNODE/w3:t1",
+    "layout": {"root": {"type": "split", "direction": "right", "ratio": 0.5,
+                        "children": [{"type": "pane"}, {"type": "pane"}]}}
+  },
+  "session.create": {
+    "t": "manage", "op": "session.create", "node": "01JNODE", "name": "agents"
+  },
+  "session.stop": {
+    "t": "manage", "op": "session.stop", "node": "01JNODE", "name": "agents"
+  }
+}

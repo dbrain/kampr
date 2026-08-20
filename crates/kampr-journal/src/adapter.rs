@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::JournalError;
@@ -40,10 +40,21 @@ impl SessionRef {
 pub trait JournalAdapter: Send + Sync {
     fn agent(&self) -> &str;
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError>;
+    /// The newest transcript that declares `cwd` as its working directory.
+    ///
+    /// Herdr 0.8.2 detects both harnesses by scraping the screen and never populates
+    /// `pane.agent_session`, so this is the resolution path that actually runs. Every candidate is
+    /// verified against the directory it claims, so a wrong guess yields nothing rather than
+    /// somebody else's conversation.
+    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError>;
     fn parser(&self) -> Box<dyn TranscriptParser>;
 
     fn open(&self, session: &SessionRef) -> Result<Box<dyn Journal>, JournalError> {
-        Ok(Box::new(FileJournal::new(self.locate(session)?, self.parser())))
+        Ok(self.open_path(self.locate(session)?))
+    }
+
+    fn open_path(&self, path: PathBuf) -> Box<dyn Journal> {
+        Box::new(FileJournal::new(path, self.parser()))
     }
 }
 
@@ -65,38 +76,44 @@ impl Registry {
         self.adapters.get(agent)
     }
 
-    pub fn has_conversation(&self, pane_agent: Option<&str>, session: Option<&SessionRef>) -> bool {
-        self.select(pane_agent, session).is_some()
+    /// Exactly what the wire document says `has_conversation` means: a journal adapter exists for
+    /// this harness. Deriving it from adapter registration is what keeps it from disagreeing with
+    /// `caps.conversation`, which is [`Self::serves_any`] — a pane can never claim more than the
+    /// node does.
+    pub fn has_conversation(&self, pane_agent: Option<&str>) -> bool {
+        pane_agent.is_some_and(|agent| self.adapters.contains_key(agent))
     }
 
-    /// Herdr keeps reporting the last agent session a pane announced, so a relaunched pane can
-    /// still advertise the harness it used to run (probe #38). A session whose `agent` disagrees
-    /// with the pane's own `agent` is stale and yields no conversation rather than the wrong one.
-    pub fn select(
-        &self,
-        pane_agent: Option<&str>,
-        session: Option<&SessionRef>,
-    ) -> Option<&Arc<dyn JournalAdapter>> {
-        let pane_agent = pane_agent?;
-        let session = session?;
-        if session.agent != pane_agent {
-            return None;
-        }
-        self.adapters.get(pane_agent)
+    pub fn serves_any(&self) -> bool {
+        !self.adapters.is_empty()
     }
 
     /// `Ok(None)` covers every "this pane simply has no conversation" case: no harness, no
-    /// adapter for the harness, or a stale session announcement.
+    /// adapter for the harness, or nothing on disk that either handle resolves to.
+    ///
+    /// An announced session wins when it agrees with the pane's own harness. Herdr keeps
+    /// reporting the last session a pane announced (probe #38), so a session whose `agent`
+    /// disagrees is stale and is dropped in favour of the cwd rather than followed.
     pub fn open(
         &self,
         pane_agent: Option<&str>,
         session: Option<&SessionRef>,
+        cwd: Option<&Path>,
     ) -> Result<Option<Box<dyn Journal>>, JournalError> {
-        let Some(adapter) = self.select(pane_agent, session) else {
+        let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
             return Ok(None);
         };
-        adapter
-            .open(session.expect("select requires a session"))
-            .map(Some)
+        let announced = session
+            .filter(|s| Some(s.agent.as_str()) == pane_agent)
+            .and_then(|s| adapter.locate(s).ok());
+        let path = match announced {
+            Some(path) => path,
+            None => match cwd.map(|cwd| adapter.locate_by_cwd(cwd)) {
+                Some(Ok(path)) => path,
+                Some(Err(JournalError::NotFound(_))) | None => return Ok(None),
+                Some(Err(e)) => return Err(e),
+            },
+        };
+        Ok(Some(adapter.open_path(path)))
     }
 }

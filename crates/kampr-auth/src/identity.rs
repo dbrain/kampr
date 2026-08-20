@@ -1,5 +1,5 @@
 use crate::secret;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -58,14 +58,49 @@ impl NodeIdentity {
 
     /// Short enough to read aloud, long enough to pin.
     pub fn fingerprint(&self) -> String {
-        let digest = Sha256::digest(self.signing.verifying_key().to_bytes());
-        hex::encode(&digest[..8])
-            .as_bytes()
-            .chunks(4)
-            .map(|c| String::from_utf8_lossy(c).to_string())
-            .collect::<Vec<_>>()
-            .join("-")
+        fingerprint_of(&self.public_hex())
     }
+
+    pub fn public_hex(&self) -> String {
+        hex::encode(self.signing.verifying_key().to_bytes())
+    }
+
+    pub fn sign(&self, message: &[u8]) -> String {
+        hex::encode(self.signing.sign(message).to_bytes())
+    }
+}
+
+/// The same fingerprint, for a key this node does not hold the private half of — what an operator
+/// reads off one console and confirms against another.
+pub fn fingerprint_of(public_hex: &str) -> String {
+    let bytes = hex::decode(public_hex.trim()).unwrap_or_else(|_| public_hex.as_bytes().to_vec());
+    let digest = Sha256::digest(&bytes);
+    hex::encode(&digest[..8])
+        .as_bytes()
+        .chunks(4)
+        .map(|c| String::from_utf8_lossy(c).to_string())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Both halves are hex, because both arrive off a JSON wire. A malformed key or signature is a
+/// failed verification, never a panic and never an accepted one.
+pub fn verify(public_hex: &str, message: &[u8], signature_hex: &str) -> bool {
+    let Some(key) = hex::decode(public_hex.trim())
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+        .and_then(|b| VerifyingKey::from_bytes(&b).ok())
+    else {
+        return false;
+    };
+    let Some(signature) = hex::decode(signature_hex.trim())
+        .ok()
+        .and_then(|b| <[u8; 64]>::try_from(b).ok())
+        .map(|b| Signature::from_bytes(&b))
+    else {
+        return false;
+    };
+    key.verify(message, &signature).is_ok()
 }
 
 #[cfg(unix)]
@@ -117,6 +152,33 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn a_signature_verifies_against_the_public_half_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = NodeIdentity::load_or_create(&dir.path().join("a.key")).unwrap();
+        let theirs = NodeIdentity::load_or_create(&dir.path().join("b.key")).unwrap();
+        let signature = mine.sign(b"transcript");
+        assert!(verify(&mine.public_hex(), b"transcript", &signature));
+        assert!(!verify(&theirs.public_hex(), b"transcript", &signature));
+        assert!(!verify(&mine.public_hex(), b"another transcript", &signature));
+    }
+
+    #[test]
+    fn malformed_input_fails_verification_rather_than_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = NodeIdentity::load_or_create(&dir.path().join("a.key")).unwrap();
+        assert!(!verify("not-hex", b"x", &mine.sign(b"x")));
+        assert!(!verify(&mine.public_hex(), b"x", "not-hex"));
+        assert!(!verify("", b"x", ""));
+    }
+
+    #[test]
+    fn a_public_key_fingerprints_the_same_from_either_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = NodeIdentity::load_or_create(&dir.path().join("a.key")).unwrap();
+        assert_eq!(fingerprint_of(&mine.public_hex()), mine.fingerprint());
     }
 
     #[test]

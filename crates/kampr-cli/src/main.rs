@@ -1,6 +1,7 @@
 mod dirs;
 mod doctor;
 mod init;
+mod mesh;
 mod pairing;
 mod recovery;
 mod report;
@@ -84,11 +85,57 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Join hosts into one herd
+    Mesh {
+        #[command(subcommand)]
+        action: MeshAction,
+    },
     /// Install or remove the user service that keeps the node running
     Service {
         action: ServiceAction,
         #[command(flatten)]
         dirs: Dirs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MeshAction {
+    /// Print a single-use join code for another node, and this node's fingerprint
+    Invite {
+        #[command(flatten)]
+        dirs: Dirs,
+    },
+    /// Join a hub. Runs on the node that dials out, which is the one that need not be reachable
+    Join {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// The hub's URL, as `kampr mesh invite` printed it
+        #[arg(long)]
+        hub: String,
+        #[arg(long)]
+        code: String,
+        /// The hub fingerprint to confirm. Without it the key is pinned on trust at first sight
+        #[arg(long)]
+        fingerprint: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Who may connect to this node, and which hubs it dials
+    List {
+        #[command(flatten)]
+        dirs: Dirs,
+    },
+    /// Cut a node off. Takes a name, node id, fingerprint or key
+    Revoke {
+        #[command(flatten)]
+        dirs: Dirs,
+        node: String,
+    },
+    /// Forget a node entirely, so it is not even listed as revoked
+    Forget {
+        #[command(flatten)]
+        dirs: Dirs,
+        node: String,
     },
 }
 
@@ -148,6 +195,35 @@ async fn main() -> Result<()> {
             }
         }
         Command::Doctor { dirs, json } => doctor::run(&dirs, json).await,
+        Command::Mesh { action } => match action {
+            MeshAction::Invite { dirs } => mesh::invite(&dirs.config(), dirs.state_override()).await,
+            MeshAction::Join {
+                dirs,
+                hub,
+                code,
+                fingerprint,
+                name,
+            } => {
+                mesh::join(
+                    &dirs.config(),
+                    dirs.state_override(),
+                    mesh::Join {
+                        hub,
+                        code,
+                        expect: fingerprint,
+                        name,
+                    },
+                )
+                .await
+            }
+            MeshAction::List { dirs } => mesh::list(&dirs.config(), dirs.state_override()).await,
+            MeshAction::Revoke { dirs, node } => {
+                mesh::revoke(&dirs.config(), dirs.state_override(), &node).await
+            }
+            MeshAction::Forget { dirs, node } => {
+                mesh::leave(&dirs.config(), dirs.state_override(), &node).await
+            }
+        },
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {
                 let path = service::install(

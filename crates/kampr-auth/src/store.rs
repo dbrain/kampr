@@ -6,11 +6,14 @@ use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
 
+/// `Readonly` is the default so an unreadable role fails closed. A row whose `role` column has been
+/// corrupted, or written by a newer version that knows a role this build does not, must not read
+/// back as a device that can type into every terminal on the host.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    #[default]
     Full,
+    #[default]
     Readonly,
 }
 
@@ -123,6 +126,10 @@ impl Store {
         sqlx::migrate!("./migrations").run(&pool).await?;
         restrict(path)?;
         Ok(Self { pool })
+    }
+
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     pub async fn open_memory() -> Result<Self> {
@@ -339,6 +346,65 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Mints a recovery code and retires any that came before it, so there is never more than
+    /// one live way back in. Used rows are kept: what a recovery code was spent on is exactly the
+    /// thing an operator wants to be able to look up afterwards.
+    pub async fn issue_recovery(&self, now: i64) -> Result<String> {
+        let code = secret::recovery_code()?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM recovery_codes WHERE used_at IS NULL")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO recovery_codes (hash, created_at) VALUES (?, ?)")
+            .bind(secret::recovery_digest(&secret::normalise_code(&code)))
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(code)
+    }
+
+    /// Single use, claimed and spent in one transaction. A miss is counted and nothing more: a
+    /// limit that killed the code would hand an attacker a permanent lockout for the price of a
+    /// few wrong guesses, and at ~99 bits there is nothing to guess.
+    pub async fn claim_recovery(&self, code: &str, now: i64) -> Result<bool> {
+        let hash = secret::recovery_digest(&secret::normalise_code(code));
+        let mut tx = self.pool.begin().await?;
+        let claimed = sqlx::query("UPDATE recovery_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL")
+            .bind(now)
+            .bind(&hash)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        if !claimed {
+            sqlx::query("UPDATE recovery_codes SET attempts = attempts + 1 WHERE used_at IS NULL")
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(claimed)
+    }
+
+    pub async fn has_recovery(&self) -> Result<bool> {
+        Ok(self.recovery_issued_at().await?.is_some())
+    }
+
+    pub async fn recovery_issued_at(&self) -> Result<Option<i64>> {
+        let row = sqlx::query("SELECT created_at FROM recovery_codes WHERE used_at IS NULL")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get("created_at")))
+    }
+
+    pub async fn recovery_attempts(&self) -> Result<i64> {
+        let row =
+            sqlx::query("SELECT COALESCE(SUM(attempts), 0) AS n FROM recovery_codes WHERE used_at IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.get("n"))
     }
 
     pub async fn save_credential(&self, cred: &Credential, now: i64) -> Result<()> {
@@ -679,5 +745,63 @@ mod tests {
             .unwrap();
         assert_eq!(s.pane_prefs(&a.id).await.unwrap()["n/w1:p1"]["zoom"], 1.5);
         assert_eq!(s.pane_prefs(&b.id).await.unwrap(), serde_json::json!({}));
+    }
+
+    #[tokio::test]
+    async fn a_recovery_code_is_single_use_and_replaces_the_one_before_it() {
+        let s = store().await;
+        assert!(!s.has_recovery().await.unwrap());
+
+        let first = s.issue_recovery(NOW).await.unwrap();
+        assert!(s.has_recovery().await.unwrap());
+        let second = s.issue_recovery(NOW + 1).await.unwrap();
+        assert_ne!(first, second);
+        assert!(
+            !s.claim_recovery(&first, NOW + 2).await.unwrap(),
+            "issuing a new code retires the old one"
+        );
+
+        assert!(s.claim_recovery(&second, NOW + 3).await.unwrap());
+        assert!(!s.claim_recovery(&second, NOW + 4).await.unwrap(), "single use");
+        assert!(!s.has_recovery().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_recovery_code_matches_however_it_was_typed() {
+        let s = store().await;
+        let code = s.issue_recovery(NOW).await.unwrap();
+        let typed = code.replace('-', " ").to_lowercase();
+        assert!(s.claim_recovery(&typed, NOW).await.unwrap());
+    }
+
+    /// Deliberately unlike the pairing code: wrong guesses are counted and shown, never fatal.
+    /// Burning the last way back into a host costs ten wrong guesses if it is fatal, and the
+    /// entropy already puts guessing out of reach.
+    #[tokio::test]
+    async fn wrong_guesses_are_counted_but_never_burn_the_code() {
+        let s = store().await;
+        let code = s.issue_recovery(NOW).await.unwrap();
+        for _ in 0..(PAIRING_ATTEMPT_LIMIT * 5) {
+            assert!(!s.claim_recovery("ZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZ", NOW).await.unwrap());
+        }
+        assert_eq!(s.recovery_attempts().await.unwrap(), PAIRING_ATTEMPT_LIMIT * 5);
+        assert!(
+            s.claim_recovery(&code, NOW).await.unwrap(),
+            "a guessing attacker must not be able to lock the operator out for good"
+        );
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_role_fails_closed() {
+        assert_eq!(Role::default(), Role::Readonly);
+        assert_eq!("nonsense".parse::<Role>().unwrap_or_default(), Role::Readonly);
+        assert_eq!("".parse::<Role>().unwrap_or_default(), Role::Readonly);
+        assert_eq!("FULL".parse::<Role>().unwrap_or_default(), Role::Readonly);
+        assert_eq!("full".parse::<Role>().unwrap(), Role::Full);
     }
 }

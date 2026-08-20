@@ -76,7 +76,7 @@ Prove it before building anything around it.
 - [ ] P2.7 Long-press on a key row button → alternates (e.g. Ctrl long-press → Ctrl-C/D/Z/L/R shortcuts)
 - [ ] P2.8 Native soft keyboard for text so dictation keeps working; visualViewport handling so the row sits on the keyboard, not under it
 - [ ] P2.9 Paste: bracketed paste framing done by us, since `pane.send_text` writes raw bytes with no framing
-- [ ] P2.10 Destructive-command confirm (lift Collie's `destructive.ts` pattern) — but on the *composed line*, not per keystroke
+- [x] P2.10 Destructive-command confirm — hooks **Enter**, not the keystrokes: reads the cursor's logical line off the grid, strips the prompt, and holds the submit. Shell panes only; a paste that carries its own newline is inspected too
 - [ ] P2.11 Scrollback: **not available in the live view** (control-mode only). Agent panes use the Conversation view; shell panes use `pane.read recent` if P0.14 says it is safe
 - [ ] P2.12 **Hidden-input capture** — offscreen contenteditable read via `beforeinput`/`input` and diffed, because Android soft keyboards do not give usable `keydown` (findings §3.9)
 - [ ] P2.13 IME / predictive text: `composition*` handling, `autocapitalize/autocorrect/autocomplete/spellcheck` all off
@@ -119,17 +119,24 @@ ours, and it cannot be one thing — a WebAuthn RP ID must be a domain, so Tier 
 
 Herdr contributes nothing here and blocks nothing (findings §1.8, §3.1).
 
-- [ ] P4.1 Node identity: keypair per node, generated on first run
-- [ ] P4.2 Node-to-node transport: outbound-dialling peers → hub, so NAT'd hosts join without inbound ports
-- [ ] P4.3 Mesh auth **separate from user auth** (mTLS or per-node token); a compromised viewer can't impersonate a node
+- [x] P4.1 Node identity: keypair per node, generated on first run
+- [x] P4.2 Node-to-node transport: outbound-dialling peers → hub, so NAT'd hosts join without inbound ports
+- [x] P4.3 Mesh auth **separate from user auth** (mTLS or per-node token); a compromised viewer can't impersonate a node
 - [ ] P4.4 Node enumerates **all named sessions** on its host (`herdr session list --json`), not just default
-- [ ] P4.5 Merged herd model: stable global ids `node/session/workspace/tab/pane`
-- [ ] P4.6 Frame relay hub→peer with the Phase 1 backpressure rules applied per hop
-- [ ] P4.7 Per-node health, version skew display, and graceful degradation when a node drops
-- [ ] P4.8 Any node can be hub — role is config, not a separate build
-- [ ] P4.9 Per-node latency indicator in the UI (a 200 ms peer should look different from a local pane)
+- [x] P4.5 Merged herd model: stable global ids `node/session/workspace/tab/pane`
+- [x] P4.6 Frame relay hub→peer with the Phase 1 backpressure rules applied per hop
+- [x] P4.7 Per-node health, version skew display, and graceful degradation when a node drops
+- [x] P4.8 Any node can be hub — role is config, not a separate build
+- [~] P4.9 Per-node latency indicator in the UI (a 200 ms peer should look different from a local pane)
 
-**Gate:** two hosts, one hub, panes from both drivable from one phone.
+- [x] P4.10 Enrolment and revocation: single-use join codes, a pinned hub key, a visible peer list
+- [x] P4.11 The deployment written down — one hub behind Nginx Proxy Manager (`docs/07-mesh-deployment.md`)
+
+**Gate:** two hosts, one hub, panes from both drivable from one phone. **Met on one machine**
+(`crates/kampr-node/tests/mesh.rs`: two nodes, two herdr sessions, one hub — a peer pane renders and
+takes input through the hub, the peer dying degrades only its own panes, and it recovers unaided).
+P4.9 is the client half of the latency indicator: the node now ships a measured `rtt_ms` and a
+per-node `build`, and the UI has still to render them.
 
 ---
 
@@ -216,11 +223,12 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [ ] P7.2 Terminal wizard as `placement = "popup"`, `width = "80%"` — first-run setup, session-modal
 - [ ] P7.3 The ladder screen: running-now card (URL, QR, pairing code) plus optional upgrades, each labelled with what it unlocks
 - [ ] P7.3b Copy-paste reverse-proxy snippets for NPM, Caddy and Traefik — NPM with a DNS-01 wildcard is the documented default, since it gives a real cert on a LAN-only hostname with nothing exposed
-- [x] P7.4 Supervision: `packaging/kampr.service` template + `kamprctl.sh` installs and nudges it; launchd branch stubbed
+- [x] P7.4 Supervision: `packaging/kampr.service` template + `kamprctl.sh` installs and nudges it; the launchd branch renders `packaging/dev.kampr.node.plist` and bootstraps it, and only reloads when the plist actually changed — never run on a Mac
 - [x] P7.5 `update` action owns the refresh, since plugin v1 has none
 - [ ] P7.6 Browser first-run wizard mirroring the terminal one, for people who start from the phone
 - [ ] P7.7 `kampr doctor` — checks socket reachability, Herdr version floor, port bind, TLS cert, peer health, and prints what's wrong in one screen
-- [ ] P7.8 Uninstall that actually cleans up: service, units, tokens, state
+- [x] P7.8 Uninstall that actually cleans up: `uninstall` removes service and units and says where the devices still live; `purge` removes those too. `purge` is deliberately not a Herdr action — an action list is one tap away from a phone
+- [x] P7.9 Release workflow: Gradle stages the bundle, `build.rs` refuses to build a binary without it, `cross` builds static musl for linux x86_64/aarch64 and macOS for both arches, `SHA256SUMS` is signed keyless with cosign, and a clean runner installs the artefact and runs it — unexercised until the first tag
 
 **Gate:** a clean machine goes from `herdr plugin install` to a working authenticated phone session with no manual file editing.
 

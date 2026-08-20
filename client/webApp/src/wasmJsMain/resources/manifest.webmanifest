@@ -1,0 +1,20 @@
+{
+  "name": "Kampr",
+  "short_name": "Kampr",
+  "description": "Your herd, from your phone.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0E0F13",
+  "theme_color": "#0E0F13",
+  "icons": [
+    { "src": "/icons/kampr-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/kampr-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/kampr-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Needs you", "url": "/?screen=herd", "description": "The agents waiting on an answer" }
+  ]
+}

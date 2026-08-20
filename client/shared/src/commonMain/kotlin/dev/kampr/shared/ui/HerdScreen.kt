@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.NodeGroup
+import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
@@ -32,10 +33,9 @@ fun HerdPortrait(
     herd: Herd,
     now: Double,
     localRtt: Double?,
-    blocked: PaneInfo?,
-    blockedQuestion: String?,
+    triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
-    onApprove: (() -> Unit)?,
+    onApprove: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -48,9 +48,9 @@ fun HerdPortrait(
             KText("Herd", tokens.type.screenTitle, tokens.color.text)
             NodeCountPill(herd.nodes.count { it.online }, compact = false)
         }
-        if (blocked != null) {
+        if (triage.isNotEmpty()) {
             Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
-                BlockedNotice(blocked, blockedQuestion, compact = false, onOpen = { onOpenPane(blocked.id) }, onApprove = onApprove)
+                TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove)
             }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -79,10 +79,9 @@ fun HerdLandscape(
     herd: Herd,
     now: Double,
     localRtt: Double?,
-    blocked: PaneInfo?,
-    blockedQuestion: String?,
+    triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
-    onApprove: (() -> Unit)?,
+    onApprove: ((String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -96,8 +95,12 @@ fun HerdLandscape(
             KText("Herd", tokens.type.paneTitle, tokens.color.text)
             NodeCountPill(herd.nodes.count { it.online }, compact = true)
             Box(Modifier.weight(1f))
-            if (blocked != null) {
-                StatusBadge("Needs you", tokens.color.blocked, tokens.color.blockedBg)
+            if (triage.isNotEmpty()) {
+                StatusBadge(
+                    if (triage.size > 1) "Needs you · ${triage.size}" else "Needs you",
+                    tokens.color.blocked,
+                    tokens.color.blockedBg,
+                )
             }
         }
         Row(
@@ -106,9 +109,9 @@ fun HerdLandscape(
         ) {
             for (column in columns) {
                 Column(Modifier.weight(1f)) {
-                    if (column === columns.first() && blocked != null) {
+                    if (column === columns.first() && triage.isNotEmpty()) {
                         Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                            BlockedNotice(blocked, blockedQuestion, compact = true, onOpen = { onOpenPane(blocked.id) }, onApprove = null)
+                            TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
                         }
                     }
                     for (group in column) {
@@ -148,8 +151,7 @@ fun HerdSidebar(
     herd: Herd,
     now: Double,
     localRtt: Double?,
-    blocked: PaneInfo?,
-    blockedQuestion: String?,
+    triage: List<TriageItem>,
     activePaneId: String?,
     deviceName: String,
     deviceDetail: String,
@@ -173,9 +175,9 @@ fun HerdSidebar(
             KText("Kampr", tokens.type.screenTitle, tokens.color.text)
             NodeCountPill(herd.nodes.count { it.online }, compact = true)
         }
-        if (blocked != null) {
+        if (triage.isNotEmpty()) {
             Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                BlockedNotice(blocked, blockedQuestion, compact = true, onOpen = { onOpenPane(blocked.id) }, onApprove = null)
+                TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
             }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {

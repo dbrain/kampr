@@ -4,7 +4,7 @@ use kampr_node::Config;
 use kampr_node::caps::{SessionEntry, sessions};
 use kampr_node::sessions::session_name_of;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// The floor the plugin manifest declares. Declared there, enforced here, and kept in step by
@@ -23,15 +23,12 @@ pub async fn checks(config: &Config) -> Vec<Check> {
 
 fn socket_of(config: &Config) -> PathBuf {
     match config.herdr.socket.as_str() {
-        "" => Herdr::discover().map_or_else(
-            |_| PathBuf::from("herdr.sock"),
-            |h| h.socket().to_path_buf(),
-        ),
+        "" => Herdr::discover().map_or_else(|_| PathBuf::from("herdr.sock"), |h| h.socket().to_path_buf()),
         path => PathBuf::from(path),
     }
 }
 
-async fn herdr(socket: &PathBuf) -> (Check, bool) {
+async fn herdr(socket: &Path) -> (Check, bool) {
     let at = socket.display();
     let Some(pong) = ping(socket).await else {
         let detail = if socket.exists() {
@@ -63,11 +60,14 @@ async fn herdr(socket: &PathBuf) -> (Check, bool) {
     )
 }
 
-async fn ping(socket: &PathBuf) -> Option<Value> {
-    tokio::time::timeout(PING_TIMEOUT, Herdr::new(socket).call::<Value>("ping", serde_json::json!({})))
-        .await
-        .ok()?
-        .ok()
+async fn ping(socket: &Path) -> Option<Value> {
+    tokio::time::timeout(
+        PING_TIMEOUT,
+        Herdr::new(socket).call::<Value>("ping", serde_json::json!({})),
+    )
+    .await
+    .ok()?
+    .ok()
 }
 
 /// `None` for anything unparseable, which is treated as "not below the floor": refusing to run
@@ -92,7 +92,7 @@ fn below_floor(version: &str) -> bool {
     }
 }
 
-async fn sessions_check(config: &Config, socket: &PathBuf, reachable: bool) -> Check {
+async fn sessions_check(config: &Config, socket: &Path, reachable: bool) -> Check {
     let primary = session_name_of(socket);
     let found = sessions(&config.herdr.binary).await;
     if found.is_empty() {
@@ -143,7 +143,11 @@ async fn sessions_check(config: &Config, socket: &PathBuf, reachable: bool) -> C
 /// session the config allows — an empty allow-list meaning all of them.
 fn served(config: &Config, primary: &str, found: &[SessionEntry]) -> Vec<String> {
     let allowed = &config.herdr.sessions;
-    let mut names = vec![primary.to_string()];
+    let up = found.iter().any(|s| s.running && s.name == primary);
+    let mut names = vec![match up {
+        true => primary.to_string(),
+        false => format!("{primary} (not running)"),
+    }];
     names.extend(
         found
             .iter()
@@ -169,7 +173,12 @@ mod tests {
         let declared = text
             .lines()
             .find_map(|l| l.strip_prefix("min_herdr_version"))
-            .map(|l| l.trim_start_matches([' ', '=']).trim().trim_matches('"').to_string())
+            .map(|l| {
+                l.trim_start_matches([' ', '='])
+                    .trim()
+                    .trim_matches('"')
+                    .to_string()
+            })
             .expect("herdr-plugin.toml declares min_herdr_version");
         assert_eq!(declared, MIN_HERDR_VERSION);
     }
@@ -192,6 +201,12 @@ mod tests {
             running,
             socket_path: None,
         };
+        let stopped = [entry("agents", true)];
+        assert_eq!(
+            served(&Config::bootstrap("x"), "default", &stopped),
+            ["default (not running)", "agents"],
+            "a primary whose session is gone must not be reported as served"
+        );
         let found = [
             entry("default", true),
             entry("agents", true),

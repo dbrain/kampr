@@ -111,6 +111,20 @@ pub struct Read {
 }
 
 impl Snapshot {
+    /// What a node holds before it has ever reached herdr. The node binds and serves from this
+    /// rather than refusing to start, so an unreachable herd is an empty herd, not an exit.
+    pub fn empty() -> Self {
+        Self {
+            version: String::new(),
+            protocol: 0,
+            workspaces: Vec::new(),
+            tabs: Vec::new(),
+            panes: Vec::new(),
+            layouts: Vec::new(),
+            focused_pane_id: None,
+        }
+    }
+
     pub fn pane(&self, pane_id: &str) -> Option<&Pane> {
         self.panes.iter().find(|p| p.pane_id == pane_id)
     }

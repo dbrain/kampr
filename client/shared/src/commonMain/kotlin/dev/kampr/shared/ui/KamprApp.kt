@@ -36,6 +36,8 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.KamprTheme
 import dev.kampr.shared.theme.ThemeId
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.theme.groundOf
+import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PanePrefs
@@ -45,6 +47,7 @@ import kotlinx.coroutines.launch
 
 data class DeepLink(
     val theme: String? = null,
+    val mode: String? = null,
     val screen: String? = null,
     val view: String? = null,
     val pane: String? = null,
@@ -57,6 +60,7 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
     LaunchedEffect(state) { state.start() }
     LaunchedEffect(deepLink) {
         deepLink?.theme?.let { key -> ThemeId.entries.firstOrNull { it.key == key }?.let(state::selectTheme) }
+        deepLink?.mode?.let { key -> state.selectMode(modeOf(key)) }
     }
 
     var now by remember { mutableStateOf(wallClockMillis()) }
@@ -87,7 +91,7 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val breakpoint = breakpointOf(maxWidth, maxHeight)
         val scale = if (breakpoint == Breakpoint.Desktop) TypeScale.Desk else TypeScale.Phone
-        KamprTheme(state.theme, scale) {
+        KamprTheme(state.theme, scale, groundOf(state.themeMode)) {
             CompositionLocalProvider(LocalPaneIo provides remember(state) { AppPaneIo(state) }) {
                 AppScaffold(
                     state, breakpoint, surfaces, now, setup, devices, connectionStatus, deepLink,
@@ -111,6 +115,7 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
 private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun send(msg: ClientMsg) = state.connection.send(msg)
     override fun prefs(paneId: String) = state.store.prefsFor(paneId)
+    override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
     override fun show(view: PaneView) = state.setPaneView(view)
 }
@@ -134,14 +139,17 @@ private fun AppScaffold(
     val security = hello?.security ?: Security()
     val readOnly = hello?.role == "readonly"
     val failure by state.store.failure.collectAsState()
-    val blocked = herd.panes.firstOrNull { statusOf(it) == AgentStatus.Blocked }
-    val blockedQuestion = blocked?.let { state.store.pane(it.id).pending?.question }
+    // The triage list, at last wired: `KamprStore.blocked()` had no callers, and this is what the
+    // roadmap called the one Collie product idea worth stealing wholesale.
+    val triage = state.store.triage()
+    val blocked = triage.firstOrNull()?.pane
 
     LaunchedEffect(breakpoint, herd.known, deepLink) {
         val target = when (deepLink?.screen) {
             "setup" -> Screen.Setup
             "devices" -> Screen.Devices
             "appearance" -> Screen.Appearance
+            "notifications" -> Screen.Notifications
             "herd" -> Screen.Herd
             else -> null
         }
@@ -176,8 +184,7 @@ private fun AppScaffold(
                         herd = herd,
                         now = now,
                         localRtt = localRtt,
-                        blocked = blocked,
-                        blockedQuestion = blockedQuestion,
+                        triage = triage,
                         activePaneId = (state.screen as? Screen.Pane)?.paneId,
                         deviceName = devices.firstOrNull { it.current }?.name ?: "this device",
                         deviceDetail = hello?.let { "${it.role} access · ${it.build}" } ?: "not connected",
@@ -197,7 +204,8 @@ private fun AppScaffold(
                             )
                             Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
                             Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                            Screen.Appearance -> AppearanceScreen(state.theme.id, 4, state::selectTheme, { state.go(Screen.Herd) })
+                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Herd) }
                             Screen.Herd -> EmptyDetail(connectionStatus)
                         }
                     }
@@ -219,8 +227,9 @@ private fun AppScaffold(
                 )
                 Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
                 Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                Screen.Appearance -> AppearanceScreen(state.theme.id, 2, state::selectTheme, { state.go(Screen.Herd) })
-                Screen.Herd -> HerdLandscape(herd, now, localRtt, blocked, blockedQuestion, state::openPane, null)
+                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
+                Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Herd) }
+                Screen.Herd -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
             }
 
             Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
@@ -239,11 +248,12 @@ private fun AppScaffold(
                         )
                         Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
                         Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, 1, state::selectTheme, { state.go(Screen.Setup) })
+                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                        Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Setup) }
                         Screen.Herd -> HerdPortrait(
-                            herd, now, localRtt, blocked, blockedQuestion,
+                            herd, now, localRtt, triage,
                             state::openPane,
-                            if (readOnly) null else blocked?.let { pane -> { answer(pane.id, "1") } },
+                            if (readOnly) null else { paneId: String -> answer(paneId, "1") },
                         )
                     }
                 }

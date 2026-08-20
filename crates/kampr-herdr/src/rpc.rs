@@ -73,9 +73,20 @@ impl Herdr {
         }
     }
 
-    pub async fn subscribe(&self, types: &[&str]) -> Result<Subscription> {
+    /// **A subscription list is all-or-nothing, twice over.** An entry that omits a required
+    /// `pane_id` is refused before the stream opens (probe #54); an entry naming a pane that has
+    /// since closed is answered with `pane_not_found` and the socket is then closed (probe #76).
+    /// Both take the whole call with them, so a caller re-derives its pane set from a fresh
+    /// snapshot and retries rather than treating either as fatal.
+    pub async fn subscribe(&self, subs: &[Sub]) -> Result<Subscription> {
         let mut stream = UnixStream::connect(&self.socket).await?;
-        let subs: Vec<_> = types.iter().map(|t| serde_json::json!({ "type": t })).collect();
+        let subs: Vec<_> = subs
+            .iter()
+            .map(|s| match &s.pane_id {
+                Some(pane_id) => serde_json::json!({ "type": s.kind, "pane_id": pane_id }),
+                None => serde_json::json!({ "type": s.kind }),
+            })
+            .collect();
         let req = serde_json::json!({
             "id": "kampr-events", "method": "events.subscribe",
             "params": { "subscriptions": subs }
@@ -90,6 +101,27 @@ impl Herdr {
             bail!("events.subscribe rejected: {}", ack.trim());
         }
         Ok(Subscription { reader })
+    }
+}
+
+/// One entry in an `events.subscribe` list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Sub {
+    pub kind: &'static str,
+    /// Required by some event kinds and rejected as a missing field without it.
+    pub pane_id: Option<String>,
+}
+
+impl Sub {
+    pub fn kind(kind: &'static str) -> Self {
+        Self { kind, pane_id: None }
+    }
+
+    pub fn pane(kind: &'static str, pane_id: &str) -> Self {
+        Self {
+            kind,
+            pane_id: Some(pane_id.to_string()),
+        }
     }
 }
 

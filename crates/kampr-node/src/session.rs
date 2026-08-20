@@ -1,14 +1,15 @@
+use crate::convo::{self, ConvoCtx};
 use crate::manage::{self, ManageOp, Manager};
 use crate::outbox::Outbox;
 use crate::pending;
 use crate::state::{BUILD, Node};
 use crate::wire::Wire;
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::WebSocket;
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
 use kampr_auth::{Device, Entry, Role};
 use kampr_core::provider::Input;
-use kampr_core::wire::{ClientMsg, PROTOCOL, ServerMsg};
+use kampr_core::wire::{ClientMsg, PROTOCOL, PendingSource, ServerMsg};
+use kampr_mesh::{Incoming, Outgoing};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,20 +27,38 @@ const DEVICE_RECHECK: Duration = Duration::from_secs(2);
 const MAX_PREFS_BYTES: usize = 2048;
 
 pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
+    let link = crate::mesh::split(socket);
+    let (out, incoming) = link.split();
+    run_on(out, incoming, node, device, peer).await;
+}
+
+/// One client session, over any framed link.
+///
+/// Generic over the transport because a **hub is a client of a peer**: it sends `watch` and
+/// `input` and receives grids, and it does so over a socket the peer dialled outbound. Serving it
+/// with this code rather than a second implementation is what makes the relay free — the
+/// read-only refusal, the device re-read before every write, the audit line, the bounded queue and
+/// its purge rule all apply at the mesh hop because they are the same code.
+pub async fn run_on<O: Outgoing, I: Incoming>(
+    mut out: O,
+    mut incoming: I,
+    node: Arc<Node>,
+    device: Device,
+    peer: String,
+) {
     let outbox = Arc::new(Outbox::new(node.config.limits.client_queue));
     let wire = Arc::new(Wire::new(outbox.clone()));
-    let (mut sink, mut stream) = socket.split();
 
     let writer = tokio::spawn({
         let outbox = outbox.clone();
         async move {
             while let Some(frame) = outbox.next().await {
-                if sink.send(Message::text(frame.json)).await.is_err() {
+                if !out.send(frame.json).await {
                     break;
                 }
             }
             outbox.close();
-            let _ = sink.close().await;
+            out.close().await;
         }
     });
 
@@ -49,6 +68,7 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
         device,
         peer,
         panes: HashMap::new(),
+        toaster: crate::toast::Toaster::default(),
     };
     session.greet();
     let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
@@ -60,16 +80,10 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
 
     loop {
         tokio::select! {
-            incoming = stream.next() => {
-                let Some(Ok(message)) = incoming else { break };
-                match message {
-                    Message::Text(text) => {
-                        if !session.dispatch(&text).await {
-                            break;
-                        }
-                    }
-                    Message::Close(_) => break,
-                    _ => {}
+            text = incoming.recv() => {
+                let Some(text) = text else { break };
+                if !session.dispatch(&text).await {
+                    break;
                 }
             }
             changed = changes.recv() => {
@@ -96,7 +110,7 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
 
     session.audit("session.closed", None, None);
     for handle in session.panes.into_values() {
-        handle.task.abort();
+        handle.stop();
     }
     herd_task.abort();
     outbox.close();
@@ -104,7 +118,18 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
 }
 
 struct PaneHandle {
-    task: JoinHandle<()>,
+    tasks: Vec<JoinHandle<()>>,
+    scrollback: bool,
+    conversation: bool,
+    convo: convo::Open,
+}
+
+impl PaneHandle {
+    fn stop(self) {
+        for task in self.tasks {
+            task.abort();
+        }
+    }
 }
 
 struct Session {
@@ -113,6 +138,7 @@ struct Session {
     device: Device,
     peer: String,
     panes: HashMap<String, PaneHandle>,
+    toaster: crate::toast::Toaster,
 }
 
 impl Session {
@@ -189,7 +215,7 @@ impl Session {
         // Anything that types into a terminal re-reads the device first. The handshake snapshot
         // is a cache, and a revoked token or a demoted role has to bite between two frames rather
         // than at the next connection.
-        if matches!(tag.as_deref(), Some("manage" | "input" | "answer")) && !self.refresh().await {
+        if matches!(tag.as_deref(), Some("manage" | "input" | "answer" | "notify")) && !self.refresh().await {
             return false;
         }
         // Unknown `t` values are ignored rather than refused — that is how a v1 client survives a
@@ -198,6 +224,7 @@ impl Session {
             Some("manage") => self.manage(value).await,
             Some("caps") => self.caps().await,
             Some("prefs") => self.prefs(&value).await,
+            Some("notify") => self.notify(&value).await,
             Some(_) => match serde_json::from_value::<ClientMsg>(value) {
                 Ok(msg) => self.client_msg(msg).await,
                 Err(e) => {
@@ -213,7 +240,11 @@ impl Session {
 
     async fn client_msg(&mut self, msg: ClientMsg) {
         match msg {
-            ClientMsg::Watch { pane, scrollback, .. } => self.watch(&pane, scrollback).await,
+            ClientMsg::Watch {
+                pane,
+                scrollback,
+                conversation,
+            } => self.watch(&pane, scrollback, conversation).await,
             ClientMsg::Unwatch { pane } => self.unwatch(&pane),
             ClientMsg::Input {
                 pane,
@@ -222,10 +253,7 @@ impl Session {
                 keys,
             } => self.input(&pane, text, b64, keys).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
-            ClientMsg::ConvoLoad { .. } => {
-                self.wire
-                    .error("unsupported", "this node serves no conversations yet", None);
-            }
+            ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
                 self.wire.send(&ServerMsg::Pong { n });
@@ -233,38 +261,134 @@ impl Session {
         }
     }
 
-    async fn watch(&mut self, pane: &str, scrollback: bool) {
-        let Some(local) = self.node.local_pane(pane) else {
-            self.wire
-                .error("unknown_pane", "not a pane on this node", Some(pane));
+    async fn watch(&mut self, pane: &str, scrollback: bool, conversation: bool) {
+        let Some((session, local)) = self.node.resolve(pane) else {
+            self.watch_peer(pane, scrollback).await;
             return;
         };
         if self.node.herd().pane(pane).is_none() {
             self.wire.error("unknown_pane", "no such pane", Some(pane));
             return;
         }
+        if !session.online() {
+            self.wire.error(
+                "node_offline",
+                "the herdr serving this pane is not reachable",
+                Some(pane),
+            );
+        }
         if let Some(old) = self.panes.remove(pane) {
-            old.task.abort();
+            old.stop();
         }
         // Watching a pane is reading a terminal, and with `scrollback` it is reading its history
-        // too. For a read-only device it is the *only* thing it can do, so it is the only thing
-        // there is to record.
-        self.audit("watch", Some(pane), Some(json!({ "scrollback": scrollback })));
-        let task = tokio::spawn(pump_pane(PaneStreamCtx {
-            registry: self.node.registry.clone(),
-            herdr: self.node.herdr.clone(),
+        // and with `conversation` its transcript. For a read-only device it is the *only* thing it
+        // can do, so it is the only thing there is to record.
+        self.audit(
+            "watch",
+            Some(pane),
+            Some(json!({ "scrollback": scrollback, "conversation": conversation })),
+        );
+        let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
+            registry: session.registry.clone(),
+            herdr: session.herdr.clone(),
             herd: self.node.subscribe_herd(),
             wire: self.wire.clone(),
             global: pane.to_string(),
-            local,
+            local: local.clone(),
             scrollback,
-        }));
-        self.panes.insert(pane.to_string(), PaneHandle { task });
+        }))];
+        let convo = convo::open();
+        if conversation {
+            let provider = session.provider.clone();
+            tasks.push(tokio::spawn(convo::pump_convo(ConvoCtx {
+                journals: self.node.journals(),
+                herd: self.node.subscribe_herd(),
+                snapshot: Box::new(move |local| convo::announced(&provider, local)),
+                wire: self.wire.clone(),
+                global: pane.to_string(),
+                local,
+                journal: convo.clone(),
+            })));
+        }
+        self.panes.insert(
+            pane.to_string(),
+            PaneHandle {
+                tasks,
+                scrollback,
+                conversation,
+                convo,
+            },
+        );
+    }
+
+    /// A pane on another host. The hub holds one relay per pane however many clients are looking
+    /// at it, so this costs the WAN hop nothing beyond the first watcher.
+    async fn watch_peer(&mut self, pane: &str, scrollback: bool) {
+        if self.node.peers.state(pane) == kampr_mesh::PeerState::Unknown {
+            self.wire.error(
+                "unknown_pane",
+                "no node in this herd serves that pane",
+                Some(pane),
+            );
+            return;
+        }
+        if let Some(old) = self.panes.remove(pane) {
+            old.stop();
+        }
+        self.audit(
+            "watch",
+            Some(pane),
+            Some(json!({ "scrollback": scrollback, "peer": true })),
+        );
+        let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
+            crate::relay::PeerPaneCtx {
+                peers: self.node.peers.clone(),
+                wire: self.wire.clone(),
+                global: pane.to_string(),
+            },
+        ))];
+        self.panes.insert(
+            pane.to_string(),
+            PaneHandle {
+                tasks,
+                scrollback,
+                conversation: false,
+                convo: convo::open(),
+            },
+        );
+    }
+
+    /// Anything addressed at a pane this process does not serve goes to the node that does,
+    /// exactly as the client sent it. The peer's own session decides whether it is allowed and
+    /// answers on its own error channel, so a relayed refusal reads like a local one.
+    fn relay_to_peer(&self, pane: &str, message: Value) {
+        if let Err(e) = self.node.peers.relay(pane, message) {
+            self.wire.error(e.code(), &e.to_string(), Some(pane));
+        }
+    }
+
+    /// Pages backwards through a transcript the pump already has open. A pane that is not watched
+    /// with `conversation` has nothing to page, which is `not_found` rather than `unsupported` —
+    /// the node implements the op.
+    fn convo_load(&self, pane: &str, before: Option<&str>) {
+        let page = self
+            .panes
+            .get(pane)
+            .and_then(|handle| convo::page(&handle.convo, pane, before));
+        match page {
+            Some(page) => {
+                self.wire.send(&page);
+            }
+            None => {
+                self.wire
+                    .error("not_found", "no conversation open for this pane", Some(pane));
+            }
+        }
     }
 
     fn unwatch(&mut self, pane: &str) {
         if let Some(handle) = self.panes.remove(pane) {
-            handle.task.abort();
+            handle.stop();
             self.wire.outbox().purge_pane(pane);
             self.audit("unwatch", Some(pane), None);
         }
@@ -280,9 +404,12 @@ impl Session {
         if !self.may_write(Some(pane)) {
             return;
         }
-        let Some(local) = self.node.local_pane(pane) else {
-            self.wire
-                .error("unknown_pane", "not a pane on this node", Some(pane));
+        let Some((session, local)) = self.node.resolve(pane) else {
+            self.audit("input", Some(pane), Some(json!({ "peer": true })));
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys }),
+            );
             return;
         };
         let supplied = [text.is_some(), b64.is_some(), keys.is_some()]
@@ -324,8 +451,9 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys }),
         };
         self.audit("input", Some(pane), Some(detail));
-        if let Err(e) = self.node.registry.write(&local, input).await {
-            self.wire.error("herdr_unavailable", &e.to_string(), Some(pane));
+        if let Err(e) = session.registry.write(&local, input).await {
+            self.wire
+                .error(offline_code(&session), &e.to_string(), Some(pane));
         }
     }
 
@@ -333,9 +461,11 @@ impl Session {
         if !self.may_write(Some(pane)) {
             return;
         }
-        let Some(local) = self.node.local_pane(pane) else {
-            self.wire
-                .error("unknown_pane", "not a pane on this node", Some(pane));
+        let Some((session, local)) = self.node.resolve(pane) else {
+            self.audit("answer", Some(pane), Some(json!({ "key": key, "peer": true })));
+            // The submit key is per harness and the *owning* node knows which harness this pane
+            // is running, so the answer is relayed as an answer rather than pre-expanded here.
+            self.relay_to_peer(pane, json!({ "t": "answer", "pane": pane, "key": key }));
             return;
         };
         if key.is_empty() || key.chars().count() > 2 {
@@ -346,14 +476,22 @@ impl Session {
             );
             return;
         }
+        // The node decides whether a submit key follows, per harness — the client sends only the
+        // key it was offered.
+        let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
         self.audit("answer", Some(pane), Some(json!({ "key": key })));
-        if let Err(e) = self
-            .node
-            .registry
-            .write(&local, Input::Bytes(key.as_bytes().to_vec()))
-            .await
-        {
-            self.wire.error("herdr_unavailable", &e.to_string(), Some(pane));
+        let mut keystrokes = vec![key.to_string()];
+        keystrokes.extend(submit_key(agent.as_deref()).map(str::to_string));
+        for stroke in keystrokes {
+            if let Err(e) = session
+                .registry
+                .write(&local, Input::Bytes(stroke.into_bytes()))
+                .await
+            {
+                self.wire
+                    .error(offline_code(&session), &e.to_string(), Some(pane));
+                return;
+            }
         }
     }
 
@@ -362,13 +500,22 @@ impl Session {
     /// away.
     async fn resync(&mut self) {
         self.wire.send(&self.node.herd().message());
-        let panes: Vec<String> = self.panes.keys().cloned().collect();
-        for pane in panes {
-            self.watch(&pane, true).await;
+        let watched: Vec<(String, bool, bool)> = self
+            .panes
+            .iter()
+            .map(|(id, h)| (id.clone(), h.scrollback, h.conversation))
+            .collect();
+        for (pane, scrollback, conversation) in watched {
+            self.watch(&pane, scrollback, conversation).await;
         }
     }
 
     async fn manage(&mut self, value: Value) {
+        // `rid` is an opaque correlation token: a caller that sends one gets it back on the
+        // `managed` ack. A browser never needs it; a hub relaying for several clients at once
+        // does, and it is additive to the protocol either way.
+        let rid = value.get("rid").cloned();
+        let raw = value.clone();
         let Ok(op) = serde_json::from_value::<ManageOp>(value) else {
             self.wire.error("bad_request", "unreadable manage op", None);
             return;
@@ -380,14 +527,25 @@ impl Session {
         // what it ran, where, and against which tree — which is the whole question the log exists
         // to answer.
         self.audit("manage", op.at.as_deref(), Some(manage_detail(&op)));
+        // Every session is its own herdr server, so an op is addressed at the session that owns
+        // its target rather than at whichever socket the node happens to have started with.
+        let target = op.at.as_deref().or(op.node.as_deref());
+        let session = match target.and_then(|t| self.node.route(t)) {
+            Some(session) => session,
+            None if target.is_none() => self.node.primary(),
+            None => {
+                self.manage_peer(target.unwrap_or_default(), &op, raw, rid).await;
+                return;
+            }
+        };
         let manager = Manager {
-            herdr: &self.node.herdr,
-            node_id: self.node.node_id(),
+            herdr: &session.herdr,
+            node_id: &session.node_id,
             binary: &self.node.config.herdr.binary,
         };
         match manager.run(&op).await {
             Ok(reply) => {
-                let id = manage::created_id(&reply).map(|id| self.node.global_pane(&id));
+                let id = manage::created_id(&reply).map(|id| session.global_pane(&id));
                 let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
                 if let Some(id) = id {
                     ack["id"] = json!(id);
@@ -395,7 +553,42 @@ impl Session {
                 if op.op == "layout.export" {
                     ack["layout"] = reply["layout"].clone();
                 }
+                if let Some(rid) = rid {
+                    ack["rid"] = rid;
+                }
                 self.wire.send_json(&ack);
+            }
+            Err(e) => {
+                let mut ack = json!({
+                    "t": "managed", "op": op.op, "ok": false,
+                    "code": e.code(), "message": e.to_string()
+                });
+                if let Some(rid) = rid {
+                    ack["rid"] = rid;
+                }
+                self.wire.send_json(&ack);
+                self.wire.error(e.code(), &e.to_string(), op.at.as_deref());
+            }
+        }
+    }
+
+    /// A structural op against a pane on another host. Unlike input this one has an answer, so
+    /// the hub waits for the peer's `managed` and hands it back — with the *caller's* correlation
+    /// token, never the one the hub minted for its own bookkeeping.
+    async fn manage_peer(&self, target: &str, op: &ManageOp, mut raw: Value, rid: Option<Value>) {
+        if let Some(object) = raw.as_object_mut() {
+            object.remove("rid");
+        }
+        let mut reply = match self.node.peers.manage(target, raw).await {
+            Ok(reply) => reply,
+            Err(kampr_mesh::RelayError::Unknown(_)) => {
+                let message = format!("{target} is not on a node this herd serves");
+                self.wire.send_json(&json!({
+                    "t": "managed", "op": op.op, "ok": false,
+                    "code": "unknown_pane", "message": message
+                }));
+                self.wire.error("unknown_pane", &message, op.at.as_deref());
+                return;
             }
             Err(e) => {
                 self.wire.send_json(&json!({
@@ -403,8 +596,50 @@ impl Session {
                     "code": e.code(), "message": e.to_string()
                 }));
                 self.wire.error(e.code(), &e.to_string(), op.at.as_deref());
+                return;
+            }
+        };
+        match rid {
+            Some(rid) => reply["rid"] = rid,
+            None => {
+                if let Some(object) = reply.as_object_mut() {
+                    object.remove("rid");
+                }
             }
         }
+        self.wire.send_json(&reply);
+    }
+
+    /// Probe #50, the reverse direction: a phone raising a toast on the operator's desktop.
+    ///
+    /// Writer-only, because it puts text on someone's screen; attributed to this device by the
+    /// node rather than by the client; and answered honestly when the herdr session is headless
+    /// and there is no desk to show it on (probe #77).
+    async fn notify(&mut self, value: &Value) {
+        let pane = value["pane"].as_str();
+        if !self.may_write(pane) {
+            return;
+        }
+        let Some(title) = value["title"].as_str().map(str::trim).filter(|t| !t.is_empty()) else {
+            self.wire.error("bad_request", "notify needs a title", pane);
+            return;
+        };
+        let session = pane
+            .and_then(|p| self.node.route(p))
+            .unwrap_or_else(|| self.node.primary());
+        self.audit("notify", pane, Some(json!({ "title": title })));
+        let shown = self
+            .toaster
+            .show(&session.herdr, &self.device.name, title, value["body"].as_str())
+            .await;
+        let (ok, reason) = match &shown {
+            crate::toast::Toast::Shown => (true, None),
+            crate::toast::Toast::NoDesk(reason) => (false, Some(reason.as_str())),
+            crate::toast::Toast::TooSoon => (false, Some("rate_limited")),
+            crate::toast::Toast::Refused(reason) => (false, Some(reason.as_str())),
+        };
+        self.wire
+            .send_json(&json!({ "t": "notified", "ok": ok, "reason": reason, "pane": pane }));
     }
 
     async fn caps(&self) {
@@ -480,16 +715,31 @@ fn hello(node: &Node, device: &Device) -> Value {
             Role::Readonly => kampr_core::wire::Role::Readonly,
         },
         caps: kampr_core::wire::Caps {
-            push: false,
+            // Reality, not intent. Push needs a secure context *and* a VAPID key, and a client
+            // that trusts this to hide the control must never see it claimed where it cannot
+            // work — `security.push` says whether the origin allows it, this says whether the
+            // node can actually do it.
+            push: node.push.available(),
             scrollback: true,
-            conversation: false,
+            // Both this and every pane's `has_conversation` are answered from the same adapter
+            // registry, so a pane can never claim a conversation the node cannot serve.
+            conversation: node.journals().serves_any(),
         },
     });
     let mut value = serde_json::to_value(hello).expect("hello serialises");
     // `manage` is not on the v1 `Caps` struct and `security` is not on `hello` at all; both are
     // additive, and unknown fields are ignored by construction.
     value["caps"]["manage"] = json!(true);
+    // A client that knows about the mesh can show a per-node latency and a version skew; one that
+    // does not ignores the field and sees a herd it cannot tell apart, which is still correct.
+    value["caps"]["mesh"] = json!(node.config.mesh.accept);
     let tier = node.auth.tier();
+    // A browser needs the application server key before it may call `pushManager.subscribe`, and
+    // it is a public value — sending it with `hello` saves a round trip on the one path where a
+    // round trip is most likely to be interrupted.
+    if let Some(key) = node.push.public_key() {
+        value["push"] = json!({ "key": key });
+    }
     value["security"] = json!({
         "tier": tier.tier,
         "origin": tier.origin,
@@ -508,6 +758,8 @@ fn hello(node: &Node, device: &Device) -> Value {
     value
 }
 
+/// A herd outage has to be *visible*: without this a client watching a pane through a herdr that
+/// died just froze, with `online` still true and no error at all (probe #70).
 async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
     let mut rx = node.subscribe_herd();
     let mut last = node.herd();
@@ -516,12 +768,40 @@ async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
             return;
         }
         let current = rx.borrow_and_update().clone();
+        for (id, online) in current.reachability_changes(&last) {
+            let sent = if online {
+                // The protocol's own recovery rule: a reconnect re-sends the whole herd, so a
+                // client that gave up on patches lands back on solid ground.
+                wire.send(&current.message())
+            } else {
+                wire.error(
+                    "herdr_unavailable",
+                    &current
+                        .node(&id)
+                        .and_then(|n| n.detail.clone())
+                        .unwrap_or_else(|| format!("{id} is not reachable")),
+                    None,
+                ) && wire.error("node_offline", &format!("{id} is offline"), None)
+            };
+            if !sent {
+                return;
+            }
+        }
         if let Some(patch) = current.diff(&last)
             && !wire.send(&patch)
         {
             return;
         }
         last = current;
+    }
+}
+
+/// A write that failed while the session is down is the herd being unreachable, not a bad pane.
+fn offline_code(session: &crate::sessions::SessionNode) -> &'static str {
+    if session.online() {
+        "herdr_unavailable"
+    } else {
+        "node_offline"
     }
 }
 
@@ -651,16 +931,55 @@ async fn send_pending(
     local: &str,
     blocked: bool,
 ) -> bool {
-    if !blocked {
-        return wire.send_json(&json!({
-            "t": "pending", "pane": global, "question": null, "options": [], "source": "screen"
-        }));
-    }
-    let Some(found) = pending::read(herdr, local).await else {
-        return true;
+    let found = match blocked {
+        true => pending::read(herdr, local).await,
+        false => None,
     };
-    wire.send_json(&json!({
-        "t": "pending", "pane": global,
-        "question": found.question, "options": found.options, "source": "screen"
-    }))
+    if blocked && found.is_none() {
+        return true;
+    }
+    wire.send(&ServerMsg::Pending {
+        pane: global.to_string(),
+        question: found.as_ref().map(|f| f.question.clone()),
+        options: found.map(|f| f.options).unwrap_or_default(),
+        source: PendingSource::Screen,
+    })
+}
+
+/// What the node sends after the answer key, per harness — the wire says the node decides and a
+/// client sends only the key it was offered.
+///
+/// Claude selects on the bare digit: verified live twice on 2.1.237, against its trust prompt and
+/// against a real Bash permission prompt whose own footer reads "Enter to confirm". Codex holds at
+/// "Press enter to confirm" until it gets one (probe #43). A harness nobody has probed gets
+/// nothing rather than a guess.
+const SUBMIT_KEYS: &[(&str, &str)] = &[("codex", "\r")];
+
+fn submit_key(agent: Option<&str>) -> Option<&'static str> {
+    let agent = agent?;
+    SUBMIT_KEYS
+        .iter()
+        .find(|(harness, _)| *harness == agent)
+        .map(|(_, key)| *key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::submit_key;
+
+    #[test]
+    fn only_the_harnesses_that_need_a_submit_key_get_one() {
+        assert_eq!(submit_key(Some("codex")), Some("\r"), "probe #43");
+        assert_eq!(
+            submit_key(Some("claude")),
+            None,
+            "claude selects on the bare digit, verified live against both its dialogs"
+        );
+        assert_eq!(
+            submit_key(Some("gemini")),
+            None,
+            "an unprobed harness gets no guess"
+        );
+        assert_eq!(submit_key(None), None);
+    }
 }

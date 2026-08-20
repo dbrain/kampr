@@ -16,11 +16,13 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.FamilyId
+import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
@@ -106,9 +108,10 @@ private fun family(id: FamilyId): FontFamily {
     }
 }
 
-fun tokensFor(spec: ThemeSpec, scale: TypeScale): KamprTokens {
-    val fonts = KamprFonts(family(spec.ui), family(spec.mono), family(FamilyId.JetBrainsMono))
-    return KamprTokens(spec, fonts, typography(fonts, spec.label, scale))
+fun tokensFor(spec: ThemeSpec, scale: TypeScale, ground: Ground = Ground.Dark): KamprTokens {
+    val grounded = spec.on(ground)
+    val fonts = KamprFonts(family(grounded.ui), family(grounded.mono), family(FamilyId.JetBrainsMono))
+    return KamprTokens(grounded, fonts, typography(fonts, grounded.label, scale))
 }
 
 fun <T> withScene(
@@ -116,6 +119,16 @@ fun <T> withScene(
     height: Dp,
     spec: ThemeSpec,
     scale: TypeScale,
+    content: @Composable () -> Unit,
+    body: (ImageComposeScene) -> T,
+): T = withScene(width, height, spec, scale, Ground.Dark, content, body)
+
+fun <T> withScene(
+    width: Dp,
+    height: Dp,
+    spec: ThemeSpec,
+    scale: TypeScale,
+    ground: Ground,
     content: @Composable () -> Unit,
     body: (ImageComposeScene) -> T,
 ): T {
@@ -126,7 +139,7 @@ fun <T> withScene(
         density = density,
     ) {
         CompositionLocalProvider(
-            LocalTokens provides tokensFor(spec, scale),
+            LocalTokens provides tokensFor(spec, scale, ground),
             LocalPaneIo provides RecordingIo,
         ) {
             Box(Modifier.fillMaxSize()) { content() }
@@ -145,8 +158,9 @@ fun renderArtboard(
     spec: ThemeSpec,
     scale: TypeScale,
     file: File,
+    ground: Ground = Ground.Dark,
     content: @Composable () -> Unit,
-): Image = withScene(width, height, spec, scale, content) { scene ->
+): Image = withScene(width, height, spec, scale, ground, content) { scene ->
     scene.render()
     val image = scene.render()
     file.parentFile.mkdirs()

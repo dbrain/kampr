@@ -1,13 +1,15 @@
 use crate::provider::{AgentStatus, PaneInfo};
 use crate::registry::PaneUpdate;
 use crate::scrollback::ScrollbackDoc;
+use kampr_journal::{Page, Turn};
 use kampr_term::{Cell, CellAttrs, Color, RowDiff};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const PROTOCOL: u32 = 1;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Style {
     pub fg: Color,
     pub bg: Color,
@@ -15,27 +17,27 @@ pub struct Style {
     pub attrs: CellAttrs,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Styles {
     pub from: u32,
     pub styles: Vec<Style>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub s: u32,
     pub x: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowRuns {
     pub row: u32,
     pub runs: Vec<Run>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub col: u16,
     pub row: u16,
@@ -66,35 +68,60 @@ pub struct Hello {
     pub caps: Caps,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Deserialisable because a hub reads one off a peer's own `herd` message and re-publishes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeEntry {
     pub id: String,
     pub name: String,
+    /// `local` for a herdr session this process serves, `peer` for one reached over a mesh link.
     pub kind: String,
     pub online: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr_version: Option<String>,
+    /// The kampr build behind this node. Additive, and the whole of the version-skew story: two
+    /// nodes in one herd may be running different releases, and a client can only say so if each
+    /// node names its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    /// Why a node is offline, in the words the operator would see in the log. Additive: a v1
+    /// client that does not know the field ignores it, and one that does can say *why* the herd
+    /// is empty instead of showing an empty herd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaneEntry {
     pub id: String,
     pub node_id: String,
+    /// Node-qualified, exactly like `id`, so either can be used as a `manage` op's `at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default)]
     pub workspace: Option<String>,
+    #[serde(default)]
     pub tab: Option<String>,
+    #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
     pub agent: Option<String>,
+    #[serde(default)]
     pub agent_status: AgentStatus,
     pub cols: u16,
     pub rows: u16,
+    #[serde(default)]
     pub scrollback_rows: u32,
+    #[serde(default)]
     pub has_conversation: bool,
     /// Node-stamped; herdr's snapshot carries no timestamp, so whoever assembles the herd message
     /// owns this clock.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 
@@ -103,6 +130,8 @@ impl PaneEntry {
         Self {
             id: format!("{node_id}/{}", p.pane_id),
             node_id: node_id.to_string(),
+            workspace_id: p.workspace_id.as_ref().map(|w| format!("{node_id}/{w}")),
+            tab_id: p.tab_id.as_ref().map(|t| format!("{node_id}/{t}")),
             workspace: p.workspace.clone(),
             tab: p.tab.clone(),
             cwd: p.cwd.clone(),
@@ -120,7 +149,8 @@ impl PaneEntry {
 
 /// `herd.patch` carries the same shape as `herd` under `added` and `changed`, so a node going
 /// offline and a pane changing travel the same way.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HerdDelta {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<NodeEntry>,
@@ -139,6 +169,19 @@ impl HerdDelta {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.panes.is_empty()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingOption {
+    pub key: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PendingSource {
+    Transcript,
+    Screen,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,6 +233,26 @@ pub enum ServerMsg {
         complete: bool,
         capped: bool,
     },
+    #[serde(rename = "convo")]
+    Convo {
+        pane: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        more: bool,
+        turns: Vec<Turn>,
+    },
+    /// Turns added *or revised*. A tool turn is replaced by id when its result lands, so a client
+    /// that appends renders every tool twice.
+    #[serde(rename = "convo.turn")]
+    ConvoTurn { pane: String, turns: Vec<Turn> },
+    /// `question: null` is how a prompt clears, so it is serialised as null rather than omitted.
+    #[serde(rename = "pending")]
+    Pending {
+        pane: String,
+        question: Option<String>,
+        options: Vec<PendingOption>,
+        source: PendingSource,
+    },
     #[serde(rename = "error")]
     Error {
         code: ErrorCode,
@@ -198,6 +261,17 @@ pub enum ServerMsg {
     },
     #[serde(rename = "pong")]
     Pong { n: u64 },
+}
+
+impl ServerMsg {
+    pub fn convo(pane: &str, page: Page) -> Self {
+        Self::Convo {
+            pane: pane.to_string(),
+            cursor: page.cursor,
+            more: page.more,
+            turns: page.turns,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

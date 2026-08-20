@@ -13,6 +13,11 @@ pub struct Config {
     /// that answered from the wrong database would report nobody paired.
     #[serde(default)]
     pub state_dir: String,
+    /// Where `node.key` lives. Recorded for the same reason as `state_dir`: the mesh identity is
+    /// generated at `kampr init` into the config directory, and a node started with only a state
+    /// directory would otherwise generate a second one and be a different node to its hub.
+    #[serde(default)]
+    pub config_dir: String,
     #[serde(default)]
     pub server: Server,
     #[serde(default)]
@@ -21,6 +26,27 @@ pub struct Config {
     pub auth: Auth,
     #[serde(default)]
     pub limits: Limits,
+    #[serde(default)]
+    pub journals: Journals,
+    #[serde(default)]
+    pub mesh: Mesh,
+    #[serde(default)]
+    pub push: Push,
+}
+
+/// The hub role, which is configuration rather than a build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Mesh {
+    /// Whether this node accepts inbound peer links at all. Enrolment already decides *who* may
+    /// join; this is the switch that says the door is not there.
+    pub accept: bool,
+}
+
+impl Default for Mesh {
+    fn default() -> Self {
+        Self { accept: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +90,10 @@ pub struct Herdr {
     pub binary: String,
     /// Empty means herdr's own resolution order: `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default.
     pub socket: String,
+    /// Which named herdr sessions this node serves, beyond the one `socket` resolves to. Empty
+    /// means every session running on the host — each one a separate server with its own socket,
+    /// and so a separate node in the herd model.
+    pub sessions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +105,37 @@ pub struct Auth {
     pub token_days: u64,
     pub pairing_ttl_secs: u64,
     pub audit: bool,
+}
+
+/// Notifications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Push {
+    /// The operator's off switch. Push is otherwise available whenever the origin is a secure
+    /// context and a VAPID key exists — it is never inferred from anything else.
+    pub enabled: bool,
+    /// The VAPID `sub` claim: a `mailto:` or `https:` URI naming whoever runs this node. Empty
+    /// derives one from the origin, which is what a self-hoster wants and what a push service
+    /// will accept.
+    pub subject: String,
+}
+
+impl Default for Push {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            subject: String::new(),
+        }
+    }
+}
+
+/// Where the harnesses keep their transcripts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Journals {
+    /// The home directory holding `.claude` and `.codex`. Empty means this process's own `$HOME`;
+    /// set it when the node runs as a service user whose home is not the operator's.
+    pub home: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +163,7 @@ impl Default for Herdr {
         Self {
             binary: "herdr".into(),
             socket: String::new(),
+            sessions: Vec::new(),
         }
     }
 }
@@ -148,10 +210,30 @@ impl Config {
             node_id: ulid::Ulid::generate().to_string(),
             node_name: node_name.to_string(),
             state_dir: String::new(),
+            config_dir: String::new(),
             server: Server::default(),
             herdr: Herdr::default(),
             auth: Auth::default(),
             limits: Limits::default(),
+            journals: Journals::default(),
+            mesh: Mesh::default(),
+            push: Push::default(),
+        }
+    }
+
+    /// The VAPID subject: configured, or derived from the origin.
+    pub fn push_subject(&self) -> String {
+        match self.push.subject.trim() {
+            "" => kampr_push::subject_for(&self.origin()),
+            explicit => explicit.to_string(),
+        }
+    }
+
+    pub fn journal_home(&self) -> PathBuf {
+        if self.journals.home.is_empty() {
+            std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+        } else {
+            PathBuf::from(&self.journals.home)
         }
     }
 
@@ -235,12 +317,27 @@ impl Config {
         state_dir.join("kampr.db")
     }
 
+    /// The VAPID keypair. In the state directory beside the device database, because it is the
+    /// same kind of secret and gets the same 0600.
+    pub fn vapid_path(state_dir: &Path) -> PathBuf {
+        state_dir.join("vapid.pem")
+    }
+
     pub fn audit_path(state_dir: &Path) -> PathBuf {
         state_dir.join("audit.jsonl")
     }
 
     pub fn node_key_path(config_dir: &Path) -> PathBuf {
         config_dir.join("node.key")
+    }
+
+    /// Where this node's own mesh key is, from what `kampr init` recorded or the XDG default.
+    pub fn key_path(&self) -> PathBuf {
+        let dir = match self.config_dir.is_empty() {
+            true => default_config_dir(),
+            false => PathBuf::from(&self.config_dir),
+        };
+        Self::node_key_path(&dir)
     }
 }
 
@@ -328,6 +425,31 @@ mod tests {
             config.resolve_state_dir(Some(Path::new("/elsewhere"))),
             PathBuf::from("/elsewhere")
         );
+    }
+
+    #[test]
+    fn a_node_finds_its_own_key_from_what_init_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::bootstrap("x");
+        config.config_dir = dir.path().display().to_string();
+        assert_eq!(config.key_path(), dir.path().join("node.key"));
+        assert_eq!(
+            Config::bootstrap("x").key_path(),
+            default_config_dir().join("node.key"),
+            "an unrecorded config directory falls back to the XDG default, never to a second key"
+        );
+    }
+
+    #[test]
+    fn the_hub_role_is_configuration_and_is_on_by_default() {
+        assert!(Config::bootstrap("x").mesh.accept);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            Config::path(dir.path()),
+            "node_id = \"01J\"\nnode_name = \"x\"\n[mesh]\naccept = false\n",
+        )
+        .unwrap();
+        assert!(!Config::load(dir.path()).unwrap().mesh.accept);
     }
 
     #[test]

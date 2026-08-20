@@ -50,13 +50,19 @@ class TokenLayerTest {
     }
 
     @Test
-    fun everyThemeDefinesEveryToken() {
-        val root = sourceRoot().resolve("theme/Tokens.kt").readText()
-        for (theme in listOf("SoftTheme", "PhosphorTheme", "WarmTheme", "BrutalistTheme")) {
-            val block = root.substringAfter("val $theme").substringBefore("\nval ")
-            for (token in listOf("bg", "bar", "surface", "raise", "line", "text", "dim", "mute",
-                    "accent", "onAccent", "blocked", "blockedBg", "working", "idle", "done")) {
-                assertTrue(Regex("""\b$token = """).containsMatchIn(block), "$theme is missing $token")
+    fun everyThemeDefinesEveryTokenOnBothGrounds() {
+        val root = sourceRoot().resolve("theme/Themes.kt").readText()
+        val tokens = listOf("bg", "bar", "surface", "surface2", "raise", "line", "text", "dim",
+            "mute", "accent", "accentHi", "onAccent", "accentSoft", "blocked", "blockedBg",
+            "working", "idle", "done")
+        for (family in listOf("SoftFamily", "PhosphorFamily", "WarmFamily", "BrutalistFamily")) {
+            val block = root.substringAfter("val $family").substringBefore("\nval ")
+            val dark = block.substringAfter("dark = Palette(").substringBefore("light = Palette(")
+            val light = block.substringAfter("light = Palette(").substringBefore("radii =")
+            for (token in tokens) {
+                val pattern = Regex("""\b$token = """)
+                assertTrue(pattern.containsMatchIn(dark), "$family dark is missing $token")
+                assertTrue(pattern.containsMatchIn(light), "$family light is missing $token")
             }
         }
     }

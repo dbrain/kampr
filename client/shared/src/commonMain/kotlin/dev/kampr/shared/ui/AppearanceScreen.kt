@@ -22,14 +22,17 @@ import dev.kampr.shared.theme.AllThemes
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.KamprTheme
 import dev.kampr.shared.theme.ThemeId
+import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
 
 @Composable
 fun AppearanceScreen(
     selected: ThemeId,
+    mode: ThemeMode,
     columns: Int,
     onSelect: (ThemeId) -> Unit,
+    onMode: (ThemeMode) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -53,6 +56,7 @@ fun AppearanceScreen(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            GroundPicker(mode, onMode)
             AllThemes.chunked(columns).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     for (spec in row) {
@@ -64,6 +68,35 @@ fun AppearanceScreen(
                 }
             }
             Box(Modifier.height(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun GroundPicker(mode: ThemeMode, onMode: (ThemeMode) -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LabelText("Ground", tokens.type.sectionLabel, tokens.color.mute)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (option in ThemeMode.entries) {
+                val active = option == mode
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .background(if (active) tokens.color.accent else tokens.color.raise, shape)
+                        .edge(tokens.card, shape)
+                        .clickable { onMode(option) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    LabelText(
+                        option.title,
+                        tokens.type.buttonSmall,
+                        if (active) tokens.color.onAccent else tokens.color.text,
+                    )
+                }
+            }
         }
     }
 }

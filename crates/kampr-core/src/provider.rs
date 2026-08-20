@@ -18,6 +18,10 @@ pub enum AgentStatus {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
     pub pane_id: String,
+    /// Herdr's own ids for the two containers. A pane id carries its workspace (`w3:p2`) but not
+    /// its tab, so a client with only the label could never address `tab.rename` or `tab.close`.
+    pub workspace_id: Option<String>,
+    pub tab_id: Option<String>,
     pub workspace: Option<String>,
     pub tab: Option<String>,
     pub cwd: Option<String>,
