@@ -15,7 +15,7 @@ The seven open questions in findings §6. Cheap, and each one can invalidate a P
 - [ ] P0.2 `terminal.closed` reason + latency when a streamed pane exits → decides reconnect UX
 - [ ] P0.3 Does `observe`/`control` accept an agent-name target as well as `wN:pN`?
 - [x] P0.4 **Scrollback answered without `terminal.scroll`** — frames carry end state only; the ring comes from `pane.read recent` (instant, colour-preserving, viewport unmoved) and alt-screen panes have no ring at all
-- [ ] P0.5 Pin the version floor for `observe`/`control` + `--cols/--rows` → sets `min_herdr_version`
+- [x] P0.5 Version floor pinned to **0.8.2** — the only version everything here is verified on. Lower it later with evidence, never with optimism
 - [ ] P0.6 Frame-stream cost: CPU/RSS of N concurrent `observe` children on one host → sizes the mux
 - [ ] P0.7 Behaviour when the *same* pane is observed at two different geometries simultaneously (already seen working; confirm no cross-talk under load)
 - [x] P0.9 **Is a control-mode resize reversible?** Yes — but moot: `control` always claims geometry, so Kampr does not use it
@@ -178,14 +178,14 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 ## Phase 7 — Setup ladder & lifecycle (2–3 days)
 
 - [ ] P7.1 `herdr-plugin.toml`: `[[actions]]` (start/stop/restart/status/url/update/uninstall), `[[panes]]` popup setup, `[[startup]]` nudge, `min_herdr_version` from P0.5
-- [ ] P7.1b `[[build]]` **downloads a prebuilt binary** rather than compiling — no Rust toolchain on the user's machine
-- [ ] P7.1c Standalone route: `install.sh` → `kampr init` → `kampr service install`, with no Herdr plugin involved
+- [x] P7.1b `[[build]]` downloads a prebuilt binary — `packaging/fetch-binary.sh`, os/arch matched
+- [x] P7.1c Standalone route written — `packaging/install.sh`
 - [ ] P7.1d Single-binary packaging: Gradle builds the CMP wasm bundle, `rust-embed` bakes it in
 - [ ] P7.2 Terminal wizard as `placement = "popup"`, `width = "80%"` — first-run setup, session-modal
 - [ ] P7.3 The ladder screen: running-now card (URL, QR, pairing code) plus optional upgrades, each labelled with what it unlocks
 - [ ] P7.3b Copy-paste reverse-proxy snippets for NPM, Caddy and Traefik — NPM with a DNS-01 wildcard is the documented default, since it gives a real cert on a LAN-only hostname with nothing exposed
-- [ ] P7.4 Supervision: generate + install systemd `--user` unit (launchd on macOS); `[[startup]]` hook re-nudges after Herdr restart and live handoff
-- [ ] P7.5 Self-update action — plugin v1 has no `plugin update`, and reinstall restarts nothing (findings §1.9)
+- [x] P7.4 Supervision: `packaging/kampr.service` template + `kamprctl.sh` installs and nudges it; launchd branch stubbed
+- [x] P7.5 `update` action owns the refresh, since plugin v1 has none
 - [ ] P7.6 Browser first-run wizard mirroring the terminal one, for people who start from the phone
 - [ ] P7.7 `kampr doctor` — checks socket reachability, Herdr version floor, port bind, TLS cert, peer health, and prints what's wrong in one screen
 - [ ] P7.8 Uninstall that actually cleans up: service, units, tokens, state
@@ -227,7 +227,7 @@ cannot spawn processes (findings §3.10).
 - [ ] P9.2 ARCHITECTURE.md — the reasoning, in Collie's style, since it's the reason Collie is maintainable
 - [ ] P9.3 ADRs for the four inversions: stream-not-poll, emulator-in-browser, auth-in-bridge, mesh
 - [ ] P9.4 `docs/03-probe-log.md` kept current — every claim about Herdr traceable to a command
-- [ ] P9.5 CI: typecheck, tests, plugin manifest validation
+- [x] P9.5 CI: fmt, clippy (`-D warnings`), tests, Gradle build, shell syntax, manifest validation
 - [ ] P9.6 GitHub topic `herdr-plugin` for marketplace discovery
 - [ ] P9.7 Publish
 

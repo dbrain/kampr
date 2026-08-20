@@ -1,0 +1,19 @@
+[Unit]
+Description=Kampr node
+After=default.target
+# A phone-only operator cannot run `systemctl reset-failed`, so never stop trying.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@BIN@ serve --config-dir @CONFIG_DIR@ --state-dir @STATE_DIR@
+Restart=on-failure
+RestartSec=5
+# The node can type into every terminal in the herd, so deny escalation and give it a private /tmp.
+# ProtectSystem is deliberately unset: the state directory may be anywhere the operator chose.
+NoNewPrivileges=yes
+PrivateTmp=yes
+Environment=HERDR_SOCKET_PATH=@SOCKET@
+
+[Install]
+WantedBy=default.target

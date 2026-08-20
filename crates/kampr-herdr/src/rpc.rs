@@ -25,7 +25,9 @@ pub struct RpcError {
 
 impl Herdr {
     pub fn new(socket: impl AsRef<Path>) -> Self {
-        Self { socket: socket.as_ref().to_path_buf() }
+        Self {
+            socket: socket.as_ref().to_path_buf(),
+        }
     }
 
     /// Resolution order matches herdr's own: `HERDR_SOCKET_PATH`, then `HERDR_SESSION`,
@@ -62,8 +64,8 @@ impl Herdr {
         if line.trim().is_empty() {
             bail!("herdr closed the connection without replying to {method}");
         }
-        let env: Envelope<T> = serde_json::from_str(&line)
-            .with_context(|| format!("decoding reply to {method}: {line}"))?;
+        let env: Envelope<T> =
+            serde_json::from_str(&line).with_context(|| format!("decoding reply to {method}: {line}"))?;
         match (env.result, env.error) {
             (Some(r), _) => Ok(r),
             (None, Some(e)) => Err(e.into()),

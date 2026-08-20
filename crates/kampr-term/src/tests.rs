@@ -2,7 +2,15 @@ use crate::{Color, Emulator};
 
 fn text(t: &Emulator) -> Vec<String> {
     (0..t.grid().rows())
-        .map(|r| t.grid().row(r).iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+        .map(|r| {
+            t.grid()
+                .row(r)
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
         .collect()
 }
 
@@ -48,7 +56,11 @@ fn erase_in_display_and_line() {
 fn wrap_and_scroll_at_the_bottom() {
     let mut t = Emulator::new(4, 2);
     t.feed(b"abcdefgh");
-    assert_eq!(text(&t), ["abcd", "efgh"], "wrap fills the last row without scrolling");
+    assert_eq!(
+        text(&t),
+        ["abcd", "efgh"],
+        "wrap fills the last row without scrolling"
+    );
     t.feed(b"ijkl");
     assert_eq!(text(&t), ["efgh", "ijkl"], "wrapping past the last row scrolls");
 }

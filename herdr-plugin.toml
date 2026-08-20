@@ -1,0 +1,72 @@
+id = "kampr"
+name = "Kampr"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Remote access to your herd from phone, tablet or browser — without reshaping your session"
+platforms = ["linux", "macos"]
+
+# Fetches a prebuilt binary rather than compiling. `herdr plugin install` runs this once, before
+# registering the plugin; a failure here aborts the install. Requiring a Rust toolchain on a user's
+# machine to read a terminal on their phone would be absurd.
+[[build]]
+command = ["sh", "packaging/fetch-binary.sh"]
+platforms = ["linux", "macos"]
+
+# Herdr restores the session before running startup hooks, so this is the earliest point at which
+# the socket is guaranteed live. It is a one-shot nudge, not a supervisor — the service unit does
+# the supervising. It also fires again after a live handoff, which is exactly when the node needs
+# to re-resolve the socket.
+[[startup]]
+command = ["sh", "packaging/kamprctl.sh", "nudge"]
+
+[[panes]]
+id = "setup"
+title = "Kampr setup"
+placement = "popup"
+width = "80%"
+height = 24
+command = ["sh", "packaging/kamprctl.sh", "setup"]
+
+[[actions]]
+id = "url"
+title = "Show Kampr URL"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "url"]
+
+[[actions]]
+id = "status"
+title = "Kampr status"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "status"]
+
+[[actions]]
+id = "start"
+title = "Start Kampr"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "start"]
+
+[[actions]]
+id = "stop"
+title = "Stop Kampr"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "stop"]
+
+[[actions]]
+id = "restart"
+title = "Restart Kampr"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "restart"]
+
+# Plugin v1 has no `plugin update` of its own, and Herdr's refresh is a reinstall that replaces the
+# checkout without restarting anything we started. So updating is ours to own.
+[[actions]]
+id = "update"
+title = "Update Kampr"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "update"]
+
+[[actions]]
+id = "uninstall"
+title = "Uninstall Kampr (remove service)"
+contexts = ["workspace"]
+command = ["sh", "packaging/kamprctl.sh", "uninstall"]

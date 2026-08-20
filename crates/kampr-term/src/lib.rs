@@ -25,7 +25,10 @@ pub struct Emulator {
 
 impl Emulator {
     pub fn new(cols: u16, rows: u16) -> Self {
-        Self { parser: Parser::new(), state: perform::State::new(cols, rows) }
+        Self {
+            parser: Parser::new(),
+            state: perform::State::new(cols, rows),
+        }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -49,7 +52,11 @@ impl Emulator {
     }
 
     pub fn cursor(&self) -> (u16, u16, bool) {
-        (self.state.cursor.col, self.state.cursor.row, self.state.cursor_visible)
+        (
+            self.state.cursor.col,
+            self.state.cursor.row,
+            self.state.cursor_visible,
+        )
     }
 
     /// Rows changed since the last call, cleared as it goes.

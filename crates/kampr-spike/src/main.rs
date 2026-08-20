@@ -18,9 +18,7 @@ async fn main() -> Result<()> {
         Some(id) => snap.pane(id).context("pane not found")?,
         None => snap.panes.first().context("no panes in session")?,
     };
-    let (cols, rows) = snap
-        .geometry(&pane.pane_id)
-        .context("pane has no layout rect")?;
+    let (cols, rows) = snap.geometry(&pane.pane_id).context("pane has no layout rect")?;
     println!(
         "pane {} — native {}x{} — agent {:?} — scrollback safe: {}",
         pane.pane_id,
@@ -84,9 +82,16 @@ async fn main() -> Result<()> {
     }
 
     println!("frames applied: {frames}  ({bytes} bytes)");
-    println!("grid {}x{}  rows matching herdr's own read: {same}/{n}", term.grid().cols(), term.grid().rows());
+    println!(
+        "grid {}x{}  rows matching herdr's own read: {same}/{n}",
+        term.grid().cols(),
+        term.grid().rows()
+    );
     let (cc, cr, cv) = term.cursor();
-    println!("cursor: col {cc} row {cr} visible {cv}   hyperlinks interned: {}", term.grid().links.len());
+    println!(
+        "cursor: col {cc} row {cr} visible {cv}   hyperlinks interned: {}",
+        term.grid().links.len()
+    );
     match first_bad {
         None => println!("\nPERFECT MATCH"),
         Some((i, x, y)) => {

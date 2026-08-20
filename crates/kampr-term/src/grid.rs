@@ -50,7 +50,13 @@ pub struct Cell {
 
 impl Default for Cell {
     fn default() -> Self {
-        Self { ch: ' ', fg: Color::Default, bg: Color::Default, attrs: CellAttrs::default(), link: None }
+        Self {
+            ch: ' ',
+            fg: Color::Default,
+            bg: Color::Default,
+            attrs: CellAttrs::default(),
+            link: None,
+        }
     }
 }
 
@@ -72,7 +78,13 @@ pub struct Grid {
 impl Grid {
     pub fn new(cols: u16, rows: u16) -> Self {
         let n = cols as usize * rows as usize;
-        Self { cols, rows, cells: vec![Cell::default(); n], dirty: vec![true; rows as usize], links: Vec::new() }
+        Self {
+            cols,
+            rows,
+            cells: vec![Cell::default(); n],
+            dirty: vec![true; rows as usize],
+            links: Vec::new(),
+        }
     }
 
     pub fn cols(&self) -> u16 {
@@ -133,7 +145,10 @@ impl Grid {
         let mut out = Vec::new();
         for r in 0..self.rows {
             if std::mem::replace(&mut self.dirty[r as usize], false) {
-                out.push(RowDiff { row: r, cells: self.row(r).to_vec() });
+                out.push(RowDiff {
+                    row: r,
+                    cells: self.row(r).to_vec(),
+                });
             }
         }
         out

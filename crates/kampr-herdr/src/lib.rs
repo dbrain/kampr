@@ -16,14 +16,20 @@ impl Herdr {
 
     pub async fn send_text(&self, pane_id: &str, text: &str) -> Result<()> {
         let _: serde_json::Value = self
-            .call("pane.send_text", serde_json::json!({ "pane_id": pane_id, "text": text }))
+            .call(
+                "pane.send_text",
+                serde_json::json!({ "pane_id": pane_id, "text": text }),
+            )
             .await?;
         Ok(())
     }
 
     pub async fn send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<()> {
         let _: serde_json::Value = self
-            .call("pane.send_keys", serde_json::json!({ "pane_id": pane_id, "keys": keys }))
+            .call(
+                "pane.send_keys",
+                serde_json::json!({ "pane_id": pane_id, "keys": keys }),
+            )
             .await?;
         Ok(())
     }
