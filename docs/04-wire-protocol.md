@@ -268,6 +268,21 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
   stay opaque.
 - **Fill is computed against the paint rectangle**, not the inset one — otherwise the insets
   reintroduce the letterbox they exist to avoid.
+- **Selection is by long-press and drag**, with handles at each end and a floating Copy action —
+  the same idiom as selecting text anywhere else on the phone. Selection is **linear** by default,
+  flowing across intervening rows like a paragraph; block selection is a secondary mode.
+- **Copied text is the logical text, not the painted grid.** Strip each row's trailing padding, and
+  join rows that are a soft wrap of one logical line. A path or URL copied with a newline through the
+  middle of it is worse than not copying at all.
+- **Links are tappable, and the data is already there.** A cell carries `link` into the pane's link
+  table, so an OSC 8 hyperlink is a real harness-declared URI — one that `pane.read` drops and the
+  frame stream preserves (probes #36, #37). Bare URLs in cell text are detected too, but **detected
+  is not declared**: match a strict scheme conservatively, run detection over *logical* lines so a
+  URL wrapped at the grid edge is not missed, and never auto-navigate. Pane output is
+  attacker-influenceable.
+- **Paste must supply its own bracketed-paste framing.** `pane.send_text` writes raw bytes with no
+  framing (probe #9), so a multi-line paste without `ESC[200~` / `ESC[201~` executes line by line in
+  a shell instead of arriving as one block.
 - **Tapping the grid raises the keyboard.** No button summons it: a "show keyboard" control is a
   workaround for focus not working, not a feature. The tap gesture must lose to drag, so panning the
   grid does not toggle the keyboard on every flick.
