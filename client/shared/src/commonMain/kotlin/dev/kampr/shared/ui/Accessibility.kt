@@ -45,7 +45,7 @@ private val FOCUS_RING = 2.dp
 // A keyboard user gets nothing from a control that is reachable but invisible when reached, and
 // nothing here draws a focus state of its own.
 @Composable
-fun Modifier.focusRing(shape: Shape = RectangleShape, tint: Color = Kampr.tokens.color.accentHi): Modifier {
+private fun Modifier.focusRing(shape: Shape = RectangleShape, tint: Color = Kampr.tokens.color.accentHi): Modifier {
     var focused by remember { mutableStateOf(false) }
     return this
         .onFocusChanged { focused = it.isFocused }

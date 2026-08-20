@@ -11,6 +11,11 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import dev.kampr.shared.model.AgentStatus
@@ -24,7 +29,10 @@ import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.theme.typography
+import dev.kampr.shared.ui.Breakpoint
+import dev.kampr.shared.ui.BottomSheet
 import dev.kampr.shared.ui.HerdPortrait
+import dev.kampr.shared.ui.SheetHeader
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.PaneView
@@ -109,6 +117,32 @@ class HerdAccessibilityTest {
         }
         onNodeWithContentDescription("Needs you", substring = true)
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Assertive))
+    }
+
+    // A sheet that can only be dismissed by finding its scrim or its cross is a sheet a keyboard
+    // cannot leave.
+    @Test
+    fun escapeClosesASheet() = runComposeUiTest {
+        var open = true
+        setContent {
+            Themed {
+                if (open) {
+                    BottomSheet(Breakpoint.Portrait, onDismiss = { open = false }) {
+                        SheetHeader("Actions", null, null, { open = false })
+                    }
+                }
+            }
+        }
+        waitForIdle()
+        assertTrue(
+            onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty(),
+            "opening a sheet left focus outside it, so the first Escape would go nowhere",
+        )
+        onNodeWithContentDescription("Close Actions").assertExists().requestFocus()
+        waitForIdle()
+        onNodeWithContentDescription("Close Actions").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+        assertTrue(!open, "Escape did not close the sheet")
     }
 
     @Test

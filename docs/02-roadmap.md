@@ -17,7 +17,7 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 4** | ✅ Mesh: peers dial out to a hub, ed25519 mutual auth, relay with per-hop backpressure. Proven across two nodes on one host. |
 | **Phase 5** | ✅ Conversation view, both halves. Claude and Codex adapters, markdown with real tables, turn revision by id. |
 | **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision, verified install path, `kampr doctor`. |
-| **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. **Accessibility (P6.11) is not started** — zero `semantics`/`contentDescription` in the client. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
+| **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) is done for navigation and shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md); the terminal has no review mode and undersized touch targets remain, both listed in the audit. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
 | **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
 | **Phase 8.5** | ⚠️ **Not started.** Kampr as an Android *provider* — distinct from the Android client, which ships. |
 | **Phase 9** | ⚠️ Release workflow written and never run: no tag has been pushed, so aarch64 cross-compilation and cosign signing are untested. |
@@ -234,7 +234,7 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [ ] P6.8c ANSI palette mapping per theme — the terminal's 16 slots should agree with the chrome
 - [ ] P6.9 Agent-status triage list — the one Collie product idea worth stealing wholesale (NEEDS YOU first)
 - [ ] P6.10 PWA: manifest, service worker, build stamp cache-bust
-- [ ] P6.11 Reduced-motion and screen-reader pass on navigation (the terminal itself is a known hard case)
+- [x] P6.11 Reduced-motion and screen-reader pass on navigation — every control named, status carries a shape as well as a colour, live regions on the things that appear by themselves, and `prefers-reduced-motion` honoured. The terminal grid is [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md): described, with the cursor line spoken and no review mode
 
 **Gate:** the design canvas (`docs/design/`) and the shipped UI agree at all three breakpoints.
 

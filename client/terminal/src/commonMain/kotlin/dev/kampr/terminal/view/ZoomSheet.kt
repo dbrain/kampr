@@ -28,10 +28,9 @@ import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
-import dev.kampr.shared.ui.escapes
+import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.ui.named
-import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.touchable
 import kotlin.math.abs
 
@@ -62,8 +61,7 @@ fun ZoomSheet(
     Column(
         modifier
             .fillMaxWidth()
-            .escapes(onDismiss)
-            .readingOrder(-1f)
+            .modal(onDismiss)
             .padding(horizontal = 12.dp, vertical = 11.dp),
     ) {
         Surface(Modifier.fillMaxWidth(), background = tokens.color.surface, radius = tokens.radii.lg) {

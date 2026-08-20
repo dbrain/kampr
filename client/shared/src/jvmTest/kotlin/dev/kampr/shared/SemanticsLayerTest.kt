@@ -50,6 +50,31 @@ class SemanticsLayerTest {
         )
     }
 
+    // prefers-reduced-motion is not a preference about taste. A vestibular disorder makes a
+    // momentum fling and a blinking caret genuinely unpleasant, and the setting existing is worth
+    // nothing if the next animation added forgets to ask.
+    @Test
+    fun everythingThatMovesAsksWhetherItShould() {
+        val movers = listOf(
+            Regex("animateScrollToItem\\(") to "an animated scroll",
+            Regex("animateScrollBy\\(") to "an animated scroll",
+            Regex("\\bAnimatable\\(") to "an Animatable",
+            Regex("animate\\w*AsState\\(") to "an animated state",
+            Regex("CURSOR_BLINK_MS") to "a blinking caret",
+        )
+        val problems = mutableListOf<String>()
+        for (file in surfaces()) {
+            val text = file.readText()
+            if ("LocalReduceMotion" in text) continue
+            for ((pattern, what) in movers) {
+                if (pattern.containsMatchIn(text)) {
+                    problems += file.name + " drives " + what + " without reading LocalReduceMotion"
+                }
+            }
+        }
+        assertTrue(problems.isEmpty(), problems.joinToString("\n"))
+    }
+
     // A screen with no headings is a screen a reader can only walk one control at a time.
     @Test
     fun everyScreenNamesItself() {

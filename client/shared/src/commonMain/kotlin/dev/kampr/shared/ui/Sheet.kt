@@ -25,10 +25,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.foundation.focusGroup
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
@@ -39,6 +39,10 @@ private val SHEET_MAX_WIDTH = 420.dp
 // than scrolling a phone-shaped column through a letterbox.
 private val SHEET_WIDE_WIDTH = 720.dp
 private const val SCRIM_ALPHA = 0.72f
+
+// The requester is refused until the sheet is placed and the focus owner is live, and how many
+// frames that takes is not something a caller can know.
+private const val FOCUS_FRAMES = 8
 
 // The scrim is the theme's own ground at partial opacity rather than a colour of its own, so it
 // stays right on a black brutalist ground and on a light one.
@@ -62,6 +66,27 @@ fun selectedEdge(): BorderSpec =
 // What holds the reader inside it is not this composable: the screen underneath drops out of the
 // semantics tree while a sheet is up (see `AppScaffold`), which is what a trap buys and this is
 // how Kampr buys it without turning every sheet into a platform dialog.
+// Everything modal wears this: Escape dismisses it, focus moves into it on open, and a reader
+// traverses it before the screen it is covering. The screen behind stops being readable at all —
+// see `behindSheet` in KamprApp — which is what a focus trap buys without a platform dialog.
+@Composable
+fun Modifier.modal(onDismiss: () -> Unit): Modifier {
+    val focus = remember { FocusRequester() }
+    // Late on purpose: the requester is refused until the sheet is placed and the focus owner is
+    // live, and a sheet that never takes focus is one whose Escape goes to the screen behind.
+    LaunchedEffect(focus) {
+        repeat(FOCUS_FRAMES) {
+            withFrameNanos { }
+            if (runCatching { focus.requestFocus() }.getOrDefault(false)) return@LaunchedEffect
+        }
+    }
+    return this
+        .focusRequester(focus)
+        .focusable()
+        .readingOrder(-1f)
+        .escapes(onDismiss)
+}
+
 @Composable
 fun BottomSheet(
     breakpoint: Breakpoint,
@@ -70,9 +95,7 @@ fun BottomSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = Kampr.tokens
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    Box(modifier.fillMaxSize().escapes(onDismiss)) {
+    Box(modifier.fillMaxSize()) {
         Scrim(onDismiss)
         BoxWithConstraints(
             Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center)
@@ -86,10 +109,7 @@ fun BottomSheet(
                     .width(width)
                     .heightIn(max = tall)
                     .background(tokens.color.bar, shape)
-                    .focusRequester(focus)
-                    .focusable()
-                    .focusGroup()
-                    .readingOrder(-1f)
+                    .modal(onDismiss)
                     .edge(tokens.chrome, shape),
                 content = content,
             )
@@ -98,7 +118,7 @@ fun BottomSheet(
 }
 
 // Escape is the one key every sheet and dialog owes a keyboard user, and none of them had it.
-fun Modifier.escapes(onDismiss: () -> Unit): Modifier = onKeyEvent { event ->
+private fun Modifier.escapes(onDismiss: () -> Unit): Modifier = onKeyEvent { event ->
     if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
         onDismiss()
         true

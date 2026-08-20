@@ -17,6 +17,7 @@ import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.named
@@ -56,7 +57,7 @@ fun ToolCard(
                     .fillMaxWidth()
                     .let {
                         if (detail.isEmpty()) it.named("Tool $named, $outcome")
-                        else it.touchable().action(
+                        else it.touchable(LANDSCAPE_TOUCH).action(
                             if (expanded) "Hide the output of $named, $outcome"
                             else "Show the output of $named, $outcome",
                             onToggle,

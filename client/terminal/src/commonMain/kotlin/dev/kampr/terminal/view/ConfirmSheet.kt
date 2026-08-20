@@ -26,9 +26,8 @@ import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
-import dev.kampr.shared.ui.escapes
+import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.gestureAction
-import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.guard.HeldSubmit
 
@@ -48,8 +47,7 @@ fun ConfirmSheet(
     Column(
         modifier
             .fillMaxWidth()
-            .escapes(onEdit)
-            .readingOrder(-1f)
+            .modal(onEdit)
             .announce(
                 "$heading. ${held.reason}. The command is: ${held.command}",
                 urgent = true,

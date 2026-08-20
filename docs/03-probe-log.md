@@ -246,6 +246,14 @@ rows close it.
 | 90 | **`layout.apply` renumbers the tab's panes** | `layout.export` a two-pane tab, `layout.apply` the same tree back unchanged, then `close` a pane id held from before | `pane_not_found: pane w2:p4 not found`. A round-trip that changes nothing structurally still rebuilds the panes under new ids, so any id a client is holding across a `layout.apply` is stale. The `herd.patch` that follows is the only source of the new ones |
 | 91 | **A pane id carries its workspace but never its tab** | `session.snapshot` ids across a workspace with two tabs | `w3:p2` yields `w3` by construction, and nothing yields `w3:t1` — which is why `tab.rename` / `tab.close` / `tab.focus` were unreachable from a client until `herd.panes[].tab_id` was added to the wire |
 
+## What a screen reader is handed (TalkBack on an API 35 emulator, against a live herdr pane)
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 92 | **A key cap driven by `detectTapGestures` is reachable, unnamed and impossible to press** | TalkBack on, linear navigation across the pane screen, then double-tap on two caps | Before: every cap announced as an unlabelled control and a double-tap did nothing — TalkBack's activation dispatches the *semantic* click, which a raw pointer handler never receives. After adding `onClick`/`onLongClick` semantics: double-tapping the caps named "Slash key" and "Hyphen key" put `///---` into the shell, and the cursor-line live region reported it back. This is the defect that made the key row decorative rather than merely unlabelled |
+| 93 | **Reading a viewport aloud is minutes of speech per repaint** | the probed pane at its two widths, against TalkBack's default rate (~200 wpm ≈ 16 chars/s) | 94×40 is 3,760 characters ≈ **4 minutes**; after the desk resized it, 206×40 is 8,240 ≈ **9 minutes**. `revision` increments per `grid.patch` and #56 holds 60 fps, so a live region over grid contents restarts that utterance sixty times a second. The basis of [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md) |
+| 94 | d-pad traversal on the herd follows reading order and skips static text | TalkBack on, `KEYCODE_DPAD_DOWN` from the top of the herd screen | Node count pill → mosaic → the pane card ("Open ~ · bash, No status, /home/dbrain, updated 6m") → bottom navigation. The node header is spoken by linear (swipe) navigation but is not a d-pad stop, because a d-pad walks focusable controls — standard, and worth knowing before reading a traversal trace as a defect |
+
 ## Still open
 
 - Does `pane.read recent` with `lines > viewport_rows` scroll a pane with a *detected agent*?

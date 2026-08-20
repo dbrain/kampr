@@ -66,7 +66,8 @@ Ten of the fifteen are fixed, each with a test that fails first. The rest are op
   tying the constant to the manifest. The *node* still starts against an older herdr without
   complaint.
 - **No protocol-version negotiation.** `hello.protocol` is parsed and never read. One migration, no story for a second.
-- **No accessibility.** Zero `semantics`/`contentDescription` in the whole client; no reduced-motion.
+- ~~**No accessibility.** Zero `semantics`/`contentDescription` in the whole client; no reduced-motion.~~ — **BUILT** (P6.11). Every interactive control routes through `Modifier.action` / `Modifier.gestureAction` and carries a name for the action rather than the glyph; agent status is a shape as well as a colour (`MarkShape`: square, disc, bar, ring) and a word; the triage list, the pending strip, the destructive-command sheet, the stale badge and the offline strip are live regions; `prefers-reduced-motion` is read per platform and gates the cursor blink, the momentum fling and the transcript's animated scroll. `SemanticsLayerTest` fails the build on a bare `clickable` or an animation that does not consult `LocalReduceMotion`. The terminal grid is [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md) — described, cursor line spoken, **no review mode**. Verified with TalkBack against a live pane (probes #92–#94).
+- **Accessibility gaps that remain.** No terminal review mode and no braille (ADR 0010). Terminal selection is sighted-only — the handles are dragged at pixel positions. A sheet is modal by clearing the semantics of the screen behind it, not by a focus trap: Tab can still leave a sheet on desktop, though Escape closes one. Touch targets measured on a 411 dp portrait emulator: the **column indicator is 23 dp tall** (below both floors) and the **Terminal/Conversation segmented control is 36 dp** (meets the landscape rule, under the portrait one). The key row's caps are 42 × 44 dp — 44 dp tall, and 42 wide because eight caps and their gaps do not fit 44 dp each across 411 dp.
 - **Warm resume is per-process only** — nothing is cached across an app restart, so the second open shows an empty grid.
 - **Silent failure on a flaky link**: keystrokes `trySend` into a 64-slot channel and are dropped unsignalled; a failed pair persists the *pairing code* as the token, producing a silent auth-failure loop.
 - **Observability**: registry accessors exist with no endpoint, `/healthz` returns a literal string, no metrics. (`KamprStore.blocked()` now has callers — `triage()` feeds the "Needs you" list on every breakpoint.)
@@ -107,7 +108,7 @@ against the documentation rather than against an iPhone.
 | `kampr doctor` (P7.7) | **Done** — 11 checks, `--json`, non-zero exit on a real failure |
 | Light theme / `prefers-color-scheme` (P6.8b) | **Built** — every theme has both grounds; `KamprTheme` resolves System/Dark/Light |
 | Per-theme ANSI palette (P6.8c) | **Built** — 16 slots per theme on a dark terminal ground ([ADR 0009](./adr/0009-the-terminal-keeps-its-own-ground.md)) |
-| Accessibility (P6.11) | Zero `semantics` / `contentDescription` in the client |
+| Accessibility (P6.11) | **Built** — controls named, status shaped as well as coloured, live regions, reduced motion; terminal grid per [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md), with no review mode |
 | PWA manifest + service worker (P6.10) | Absent — yet `security.installable` is advertised |
 | Kampr split view (P4.5.8/P4.5.9) | The client-side mosaic over several nodes' panes; `manage` itself now has a client |
 | Kampr split view / mosaic (P4.5.8) | Designed, not built |
