@@ -13,9 +13,6 @@ class CellBuffer(cols: Int, rows: Int) {
         private set
     var cursor = CursorPos(0, 0, true)
         private set
-    var generation = 0
-        private set
-
     fun resize(newCols: Int, newRows: Int) {
         if (newCols == cols && newRows == rows) return
         cols = newCols
@@ -23,7 +20,6 @@ class CellBuffer(cols: Int, rows: Int) {
         chars = CharArray(cols * rows) { ' ' }
         styleIds = ShortArray(cols * rows)
         dirty = BooleanArray(rows) { true }
-        generation++
     }
 
     fun markAllDirty() = dirty.fill(true)
@@ -37,7 +33,6 @@ class CellBuffer(cols: Int, rows: Int) {
         for (rd in msg.rowsData) writeRow(rd)
         markAllDirty()
         cursor = msg.cursor
-        generation++
     }
 
     fun apply(msg: GridPatch) {

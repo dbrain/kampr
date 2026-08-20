@@ -18,6 +18,7 @@ use std::time::Duration;
 
 const LINES: usize = 1600;
 const BURST: usize = 4000;
+const PACED: usize = 3000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -157,6 +158,7 @@ async fn main() -> Result<()> {
         doc.capped
     );
     println!("  a single herdr read can never exceed 1000 rows — anything above that is stitched");
+    print_cadence(&registry, &target, "after the paced 1600");
     println!("  markers in the ring: {markers}/{LINES};  rows carrying colour: {coloured}");
     println!("  markers in ring + live grid: {union}/{LINES}");
     println!(
@@ -205,12 +207,59 @@ async fn main() -> Result<()> {
         doc.from_top, after.from_top
     );
     println!("  SB markers still reachable: {survived}/{LINES}");
+    print_cadence(&registry, &target, "right after the burst");
+
+    println!("\n== 4c. a sustained rate a fixed 2 s poll could not have followed ==");
+    let before = registry
+        .scrollback(&target)
+        .await?
+        .context("scrollback was refused")?;
+    registry
+        .write(
+            &target,
+            Input::Bytes(
+                format!(
+                    "for i in $(seq 1 {PACED}); do printf 'PACED-%04d\\n' $i; [ $((i % 300)) -eq 0 ] && sleep 0.3; done\n"
+                )
+                .into_bytes(),
+            ),
+        )
+        .await?;
+    for _ in 0..7 {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        print_cadence(&registry, &target, "mid-stream");
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let paced = registry
+        .scrollback(&target)
+        .await?
+        .context("scrollback was refused")?;
+    let paced_text = rows_text_diffs(&paced.rows);
+    let kept = (1..=PACED)
+        .filter(|i| paced_text.iter().any(|l| l.contains(&format!("PACED-{i:04}"))))
+        .count();
+    println!(
+        "  ring {} rows (from_top {}, total {}, capped {})",
+        paced.rows.len(),
+        paced.from_top,
+        paced.total_rows,
+        paced.capped
+    );
+    println!(
+        "  ring grew {} rows across the stream; from_top {} -> {}",
+        paced.total_rows as i64 - before.total_rows as i64,
+        before.from_top,
+        paced.from_top
+    );
+    println!("  PACED markers reachable: {kept}/{PACED}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    print_cadence(&registry, &target, "after it went quiet");
 
     println!("\n== 5. observer restart ==");
-    let before = observe_children(&target);
+    let children = observe_children(&target);
     kill_observers(&target);
     let restart = wait_for_reset(&mut a, Duration::from_secs(15)).await;
-    println!("  killed {before} observe child(ren)");
+    println!("  killed {children} observe child(ren)");
     match &restart {
         Some(u) => println!("  A got a fresh grid.reset at {:?}", u.geometry()),
         None => println!("  NO RESET — restart supervision failed"),
@@ -301,6 +350,17 @@ where
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
     false
+}
+
+fn print_cadence(registry: &Arc<PaneRegistry>, pane: &str, when: &str) {
+    match registry.history_status(pane) {
+        Some(s) => println!(
+            "  cadence {when}: poll every {:>5} ms, measured {:>8.0} rows/s",
+            s.poll.as_millis(),
+            s.rows_per_sec
+        ),
+        None => println!("  cadence {when}: pane not watched"),
+    }
 }
 
 async fn drain(w: &mut Watcher, budget: Duration) -> Vec<PaneUpdate> {

@@ -4,11 +4,14 @@ use crate::wire::Cursor;
 use anyhow::Result;
 use kampr_term::{Emulator, RowDiff};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
@@ -63,11 +66,99 @@ pub struct RegistryConfig {
     /// How long the very first watcher waits for real geometry, so no client is ever handed the
     /// placeholder grid that exists before the provider's first `Reset`.
     pub first_grid_wait: Duration,
-    /// How often a watched pane's history is re-read. Reads overlap at this cadence, and the
-    /// overlap is the only way a ring grows past herdr's 1000-line cap (probe #51). Slower than
-    /// the pane produces 1000 rows and the stitch breaks.
-    pub scrollback_poll: Duration,
+    pub history: HistoryPolicy,
     pub scrollback_max_rows: usize,
+}
+
+/// How often a watched pane's history is re-read.
+///
+/// Successive reads must overlap or the ring cannot be stitched, and they stop overlapping the
+/// moment more than herdr's 1000-row read cap accumulates between them (probe #51). The gap
+/// threshold is therefore `1000 / rows-per-second`, and the cadence is derived from a *measured*
+/// row rate rather than a guess: the growth of the ring between two reads is exactly the quantity
+/// that matters. Frame content cannot supply it — herdr coalesces a burst to end state, so
+/// `seq 1 20000` arrives as three frames (probe #23/#25) and counting newlines in them would
+/// under-count by three orders of magnitude.
+#[derive(Debug, Clone, Copy)]
+pub struct HistoryPolicy {
+    /// Rows allowed to accumulate between reads. Well under the 1000-row cap, because the rate
+    /// estimate always lags the pane by one interval.
+    pub row_budget: u32,
+    pub fastest: Duration,
+    /// Ceiling while the pane is producing frames at all.
+    pub quiet: Duration,
+    /// A pane producing nothing is not polled on this timer at all — it waits here to be woken
+    /// by a frame, and this is only the backstop.
+    pub idle: Duration,
+}
+
+impl Default for HistoryPolicy {
+    fn default() -> Self {
+        Self {
+            row_budget: 400,
+            fastest: Duration::from_millis(100),
+            quiet: Duration::from_secs(2),
+            idle: Duration::from_secs(30),
+        }
+    }
+}
+
+impl HistoryPolicy {
+    /// `row_budget` rows' worth of time at the estimated rate, bounded at both ends.
+    ///
+    /// Below the `fastest` clamp the pane is producing faster than any cadence can follow and a
+    /// gap is unavoidable; above it, the returned interval admits `row_budget` rows, which is the
+    /// margin against herdr's 1000-row cap.
+    pub fn interval_for_rate(&self, rows_per_sec: f64) -> Duration {
+        if rows_per_sec <= 0.0 {
+            return self.quiet;
+        }
+        Duration::try_from_secs_f64(self.row_budget as f64 / rows_per_sec)
+            .unwrap_or(self.quiet)
+            .clamp(self.fastest, self.quiet)
+    }
+}
+
+/// Smoothed rows-per-second.
+///
+/// Terminal output is bursty — a shell loop emits three hundred rows in ten milliseconds and then
+/// waits — so a single sample is worthless. An unsmoothed estimate reads zero the moment a poll
+/// lands between bursts and drops the cadence back to `quiet` mid-stream, which is exactly how a
+/// gap happens. The average decays instead.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RowRate {
+    average: f64,
+}
+
+impl RowRate {
+    const ALPHA: f64 = 0.4;
+    /// Samples shorter than this measure scheduling noise, not the pane.
+    const FLOOR: f64 = 0.001;
+
+    pub fn observe(&mut self, rows: usize, elapsed: Duration) -> f64 {
+        let seconds = elapsed.as_secs_f64();
+        if seconds < Self::FLOOR {
+            return self.average;
+        }
+        let sample = rows as f64 / seconds;
+        self.average = if self.average == 0.0 {
+            sample
+        } else {
+            Self::ALPHA * sample + (1.0 - Self::ALPHA) * self.average
+        };
+        self.average
+    }
+
+    pub fn get(&self) -> f64 {
+        self.average
+    }
+}
+
+/// What the adaptive poller is currently doing. Diagnostics only; nothing on the wire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HistoryStatus {
+    pub poll: Duration,
+    pub rows_per_sec: f64,
 }
 
 impl Default for RegistryConfig {
@@ -76,7 +167,7 @@ impl Default for RegistryConfig {
             broadcast_capacity: 256,
             reset_flush_after: Duration::from_millis(300),
             first_grid_wait: Duration::from_secs(2),
-            scrollback_poll: Duration::from_secs(2),
+            history: HistoryPolicy::default(),
             scrollback_max_rows: crate::scrollback::DEFAULT_MAX_ROWS,
         }
     }
@@ -89,10 +180,30 @@ struct PaneState {
     ready: bool,
 }
 
+/// Output seen on the pane's frame stream. The poller waits on this rather than on a timer, so a
+/// quiet pane costs one parked task and no socket traffic at all.
+#[derive(Default)]
+struct Activity {
+    frames: AtomicU64,
+    woken: Notify,
+}
+
+impl Activity {
+    fn saw_frame(&self) {
+        self.frames.fetch_add(1, Ordering::Relaxed);
+        self.woken.notify_one();
+    }
+
+    fn count(&self) -> u64 {
+        self.frames.load(Ordering::Relaxed)
+    }
+}
+
 struct PaneEntry {
     pane_id: String,
     state: Arc<Mutex<PaneState>>,
     history: Arc<Mutex<ScrollbackRing>>,
+    status: Arc<Mutex<HistoryStatus>>,
     tx: broadcast::Sender<PaneUpdate>,
     tasks: [JoinHandle<()>; 2],
 }
@@ -162,6 +273,11 @@ impl PaneRegistry {
         }
     }
 
+    /// What cadence the pane's history poller has settled on, and the row rate it measured.
+    pub fn history_status(&self, pane_id: &str) -> Option<HistoryStatus> {
+        self.lookup(pane_id).map(|e| *e.status.lock().unwrap())
+    }
+
     pub fn watcher_count(&self, pane_id: &str) -> usize {
         self.lookup(pane_id).map_or(0, |e| Arc::strong_count(&e) - 1)
     }
@@ -190,24 +306,33 @@ impl PaneRegistry {
         }));
         let (tx, _) = broadcast::channel(self.config.broadcast_capacity);
         let history = Arc::new(Mutex::new(ScrollbackRing::new(self.config.scrollback_max_rows)));
+        let activity = Arc::new(Activity::default());
+        let status = Arc::new(Mutex::new(HistoryStatus {
+            poll: self.config.history.fastest,
+            rows_per_sec: 0.0,
+        }));
         let tasks = [
             tokio::spawn(pump(
                 stream,
                 state.clone(),
                 tx.clone(),
                 self.config.reset_flush_after,
+                activity.clone(),
             )),
             tokio::spawn(accumulate_history(
                 self.provider.clone(),
                 pane_id.to_string(),
                 history.clone(),
-                self.config.scrollback_poll,
+                status.clone(),
+                activity,
+                self.config.history,
             )),
         ];
         let entry = Arc::new(PaneEntry {
             pane_id: pane_id.to_string(),
             state,
             history,
+            status,
             tx,
             tasks,
         });
@@ -314,6 +439,7 @@ async fn pump(
     state: Arc<Mutex<PaneState>>,
     tx: broadcast::Sender<PaneUpdate>,
     flush_after: Duration,
+    activity: Arc<Activity>,
 ) {
     loop {
         let pending = state.lock().unwrap().pending_reset;
@@ -344,6 +470,7 @@ async fn pump(
                 st.pending_reset |= !same_size || !st.ready;
             }
             PaneEvent::Bytes { full, bytes } => {
+                activity.saw_frame();
                 if full {
                     st.term.reset();
                     st.links_sent = 0;
@@ -373,29 +500,98 @@ async fn pump(
     }
 }
 
-/// Grows a pane's ring while it is watched. Each read overlaps the last, and the overlap is what
-/// carries history past a single read's 1000-line ceiling.
+/// Grows a pane's ring while it is watched, at a cadence set by the pane itself.
+///
+/// **The fast path exists to keep [`Ingest::Gap`] rare, and is not an optimisation target.** Two
+/// reads can only be stitched while they overlap, and they stop overlapping once more than
+/// herdr's 1000-row cap accumulates between them. Flattening this back to a fixed interval trades
+/// a few idle socket calls for silently unreachable history on every busy pane — the interval is
+/// derived from the measured row rate precisely so that trade is not made by accident.
 async fn accumulate_history(
     provider: Arc<dyn Provider>,
     pane_id: String,
     ring: Arc<Mutex<ScrollbackRing>>,
-    every: Duration,
+    status: Arc<Mutex<HistoryStatus>>,
+    activity: Arc<Activity>,
+    policy: HistoryPolicy,
 ) {
-    let mut tick = tokio::time::interval(every);
+    let mut previous = Instant::now();
+    let mut seen_frames = activity.count();
+    let mut rate = RowRate::default();
     loop {
-        tick.tick().await;
-        match provider.read_scrollback(&pane_id).await {
+        let outcome = provider.read_scrollback(&pane_id).await;
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(previous);
+        previous = now;
+
+        let frames = activity.count();
+        let producing = frames != seen_frames;
+        seen_frames = frames;
+
+        let mut gapped = false;
+        let added = match outcome {
             Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
+                Ingest::Fresh { rows } => rows,
+                Ingest::Stitched { added } => added,
                 Ingest::Gap { dropped } => {
-                    warn!(pane = %pane_id, dropped, "history outran the poll; ring capped here")
+                    warn!(pane = %pane_id, dropped, "history outran the poll; ring capped here");
+                    gapped = true;
+                    // The overlap failed, so at least a full read cap went past unseen. That is a
+                    // lower bound on the rate, not a measurement of it.
+                    HERDR_READ_CAP
                 }
                 Ingest::Rewrapped { dropped } => {
-                    warn!(pane = %pane_id, dropped, "pane re-wrapped; ring restarted")
+                    warn!(pane = %pane_id, dropped, "pane re-wrapped; ring restarted");
+                    0
                 }
-                _ => {}
             },
-            Ok(None) => {}
-            Err(e) => debug!(pane = %pane_id, error = %e, "scrollback read failed"),
+            // No ring to read: an alt-screen or agent pane, or a pane that has simply not
+            // scrolled yet. The provider answers this from cached state without touching the
+            // socket, so it costs nothing to keep asking at the quiet cadence — and a pane with
+            // no ring *yet* is one frame away from having one.
+            Ok(None) => 0,
+            Err(e) => {
+                debug!(pane = %pane_id, error = %e, "scrollback read failed");
+                0
+            }
+        };
+
+        let rows_per_sec = rate.observe(added, elapsed);
+        let next = if gapped {
+            policy.fastest
+        } else {
+            policy.interval_for_rate(rows_per_sec)
+        };
+        *status.lock().unwrap() = HistoryStatus {
+            poll: next,
+            rows_per_sec,
+        };
+
+        debug!(
+            pane = %pane_id,
+            added,
+            producing,
+            elapsed_ms = elapsed.as_millis(),
+            next_ms = next.as_millis(),
+            "history poll"
+        );
+        // A pane that has gone quiet waits on its own output rather than on a timer, which is
+        // what makes an idle pane free. The interval is only a ceiling: any frame cuts the wait
+        // short, because output starting is the one moment the estimate cannot know about yet.
+        let wait = if added == 0 && !producing && !gapped {
+            policy.idle
+        } else {
+            next
+        };
+        tokio::time::sleep(policy.fastest.min(wait)).await;
+        if let Some(remainder) = wait.checked_sub(policy.fastest).filter(|r| !r.is_zero()) {
+            tokio::select! {
+                _ = tokio::time::sleep(remainder) => {}
+                _ = activity.woken.notified() => {}
+            }
         }
     }
 }
+
+/// Herdr returns at most this many rows per `pane.read recent`, with no offset (probe #51).
+const HERDR_READ_CAP: usize = 1000;

@@ -7,8 +7,6 @@ const val FONT_STRIKE = 8
 
 class StyleTable {
     private var cap = 64
-    var size = 0
-        private set
     var fg = IntArray(cap)
         private set
     var bg = IntArray(cap)
@@ -29,7 +27,6 @@ class StyleTable {
             fontKey = fontKey.copyOf(cap)
         }
         msg.styles.forEachIndexed { i, s -> resolve(msg.from + i, s) }
-        if (need > size) size = need
     }
 
     private fun resolve(id: Int, s: Style) {

@@ -27,8 +27,6 @@ class GridRenderer(private val cache: TextCache) {
     private val sb = StringBuilder(512)
     private val atlas = GlyphAtlas(cache)
 
-    val atlasGlyphs get() = atlas.rasterized
-
     fun invalidate() {
         bitmap = null
         bmpW = 0

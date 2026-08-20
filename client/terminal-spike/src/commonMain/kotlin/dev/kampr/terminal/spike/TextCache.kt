@@ -11,12 +11,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 
-class GridMetrics(
-    val fontSizePx: Float,
-    val cellW: Float,
-    val cellH: Float,
-    val textTop: Float,
-)
+class GridMetrics(val cellW: Float, val cellH: Float)
 
 class TextCache(
     private val measurer: TextMeasurer,
@@ -32,8 +27,6 @@ class TextCache(
         private set
     var runCacheMisses = 0
         private set
-
-    val runCacheSize get() = runs.size
 
     fun ensureSize(sizeSp: TextUnit) {
         if (sizeSp == fontSize) return
@@ -128,13 +121,7 @@ class TextCache(
         )
         val cellW = probe.size.width.toFloat() / PROBE.length
         val lineH = probe.size.height.toFloat()
-        val cellH = lineH
-        return GridMetrics(
-            fontSizePx = 0f,
-            cellW = cellW,
-            cellH = cellH,
-            textTop = 0f,
-        )
+        return GridMetrics(cellW, lineH)
     }
 
     private companion object {

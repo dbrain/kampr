@@ -1,9 +1,47 @@
 import com.android.build.api.variant.AndroidComponentsExtension
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
+}
+
+// CMP 1.11.1's resource plugin emits no Android assets for a
+// com.android.kotlin.multiplatform.library target, so the APK stages them itself.
+abstract class StageComposeResources : DefaultTask() {
+    @get:InputDirectory
+    abstract val source: DirectoryProperty
+
+    @get:Input
+    abstract val resourcePackage: Property<String>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val fs: FileSystemOperations
+
+    @TaskAction
+    fun stage() {
+        fs.sync {
+            from(source)
+            into(outputDir.get().dir("composeResources").dir(resourcePackage.get()))
+        }
+    }
+}
+
+val stageComposeResources = tasks.register<StageComposeResources>("stageComposeResourceAssets") {
+    source.set(file("../src/commonMain/composeResources"))
+    resourcePackage.set("dev.kampr.terminal.spike.res")
+    outputDir.set(layout.buildDirectory.dir("generated/composeResourceAssets"))
+}
+
+extensions.getByType(AndroidComponentsExtension::class.java).onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+        stageComposeResources,
+        StageComposeResources::outputDir,
+    )
 }
 
 android {
@@ -25,25 +63,6 @@ android {
     kotlin {
         jvmToolchain(21)
     }
-
-
-}
-
-// CMP 1.11.1's resource plugin does not emit Android assets for a
-// com.android.kotlin.multiplatform.library target, so the APK ships them itself.
-val composeResourceAssets = tasks.register<Copy>("copyComposeResourceAssets") {
-    from(file("../src/commonMain/composeResources"))
-    into(layout.buildDirectory.dir("generated/composeResourceAssets/composeResources/dev.kampr.terminal.spike.res"))
-}
-
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
-    dependsOn(composeResourceAssets)
-}
-
-extensions.getByType(AndroidComponentsExtension::class.java).onVariants { variant ->
-    val dir = layout.buildDirectory.dir("generated/composeResourceAssets").get().asFile
-    dir.mkdirs()
-    variant.sources.assets?.addStaticSourceDirectory(dir.relativeTo(projectDir).path)
 }
 
 dependencies {

@@ -30,27 +30,18 @@ class GlyphAtlas(private val cache: TextCache) {
     private val tints = HashMap<Int, ColorFilter>()
     private val scratch = CanvasDrawScope()
 
-    var rasterized = 0
-        private set
-
-    var overflowed = false
-        private set
-
     fun invalidate() {
         image = null
         slots.clear()
         pending.clear()
         next = 0
         builtFor = -1f
-        rasterized = 0
-        overflowed = false
     }
 
     fun prepare(density: Density, m: GridMetrics, buf: CellBuffer, st: StyleTable) {
         if (builtFor != m.cellW || image == null) {
             slots.clear()
             next = 0
-            overflowed = false
             cw = ceil(m.cellW).toInt().coerceAtLeast(1)
             ch = ceil(m.cellH).toInt().coerceAtLeast(1)
             val rows = (ATLAS_CAPACITY + ATLAS_COLS - 1) / ATLAS_COLS
@@ -65,17 +56,13 @@ class GlyphAtlas(private val cache: TextCache) {
             if (c == ' ') continue
             val key = c.code * 4 + (st.fontKey[ids[i].toInt()] and (FONT_BOLD or FONT_ITALIC))
             if (slots.containsKey(key)) continue
-            if (next >= ATLAS_CAPACITY) {
-                overflowed = true
-                continue
-            }
+            if (next >= ATLAS_CAPACITY) continue
             slots[key] = next
             pending.add(key)
             next++
         }
         if (pending.isEmpty()) return
         val bmp = image ?: return
-        rasterized += pending.size
         scratch.draw(
             density,
             androidx.compose.ui.unit.LayoutDirection.Ltr,
@@ -118,7 +105,4 @@ class GlyphAtlas(private val cache: TextCache) {
         )
         return true
     }
-
-    val cellW get() = cw
-    val cellH get() = ch
 }

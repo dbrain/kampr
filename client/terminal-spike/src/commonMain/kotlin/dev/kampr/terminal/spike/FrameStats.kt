@@ -15,8 +15,6 @@ class Series(private val capacity: Int) {
         n = 0; head = 0
     }
 
-    val count get() = n
-
     fun sorted(): FloatArray {
         val out = FloatArray(n)
         for (i in 0 until n) out[i] = v[(head - n + i + capacity) % capacity]
@@ -24,12 +22,6 @@ class Series(private val capacity: Int) {
         return out
     }
 
-    fun mean(): Float {
-        if (n == 0) return 0f
-        var s = 0.0
-        for (i in 0 until n) s += v[(head - n + i + capacity) % capacity]
-        return (s / n).toFloat()
-    }
 }
 
 fun FloatArray.pct(p: Double): Float {

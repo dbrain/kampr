@@ -201,9 +201,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
     private var msSinceReset = 0.0
     private var scrollRows = ArrayList<List<Run>>()
 
-    var rowsWrittenLastStep = 0
-        private set
-
     var cursorCol = 0
         private set
     var cursorRow = 0
@@ -222,7 +219,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
 
     fun step(dtMs: Double, nowMs: Double): List<ServerMsg> {
         val out = ArrayList<ServerMsg>(2)
-        rowsWrittenLastStep = 0
         val blink = ((nowMs / 530.0).toInt() % 2) == 0
         when (profile) {
             Profile.IDLE -> {
@@ -247,7 +243,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
                             diffs.add(RowDiff(r, factory.line(cols, seq % 6, seq)))
                             seq++
                         }
-                        rowsWrittenLastStep = diffs.size
                         cursorCol = (cursorCol + 1) % cols
                         cursorRow = rows - 1
                         out.add(GridPatch(diffs, CursorPos(cursorCol, cursorRow, blink)))
@@ -273,7 +268,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
                     }
                     val diffs = ArrayList<RowDiff>(rows)
                     for (r in 0 until rows) diffs.add(RowDiff(r, scrollRows[r]))
-                    rowsWrittenLastStep = rows
                     out.add(GridPatch(diffs, CursorPos(cursorCol, rows - 1, blink)))
                 } else {
                     out.add(GridPatch(emptyList(), CursorPos(cursorCol, rows - 1, blink)))
@@ -284,7 +278,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
                 val diffs = ArrayList<RowDiff>(rows)
                 for (r in 0 until rows) diffs.add(RowDiff(r, factory.worstLine(cols)))
                 seq++
-                rowsWrittenLastStep = rows
                 cursorCol = (cursorCol + 1) % cols
                 out.add(GridPatch(diffs, CursorPos(cursorCol, rows - 1, blink)))
             }
@@ -298,7 +291,6 @@ class Workload(var profile: Profile, var cols: Int, var rows: Int) {
             diffs.add(RowDiff(r, factory.line(cols, seq % 6, seq)))
             seq++
         }
-        rowsWrittenLastStep = rows
         return GridReset(cols, rows, diffs, CursorPos(cursorCol, rows - 1, blink))
     }
 }

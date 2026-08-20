@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
-use kampr_core::registry::{PaneRegistry, PaneUpdate, RegistryConfig, Watcher};
+use kampr_core::registry::{HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, Watcher};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,6 +15,8 @@ struct Scripted {
     topology: watch::Sender<u64>,
     reads: Mutex<std::collections::VecDeque<RawScrollback>>,
     last_read: Mutex<Option<RawScrollback>>,
+    reads_done: AtomicUsize,
+    stall_when_empty: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Scripted {
@@ -26,6 +28,8 @@ impl Default for Scripted {
             topology: watch::channel(0).0,
             reads: Mutex::default(),
             last_read: Mutex::default(),
+            reads_done: AtomicUsize::default(),
+            stall_when_empty: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -65,9 +69,15 @@ impl Provider for Scripted {
     }
 
     async fn read_scrollback(&self, _pane_id: &str) -> Result<Option<RawScrollback>> {
+        self.reads_done.fetch_add(1, Ordering::SeqCst);
         if let Some(next) = self.reads.lock().await.pop_front() {
             *self.last_read.lock().await = Some(next.clone());
             return Ok(Some(next));
+        }
+        if self.stall_when_empty.load(Ordering::SeqCst) {
+            // Freezes the poller after the script runs out, so a test can read the cadence it
+            // settled on rather than the one after it.
+            std::future::pending::<()>().await;
         }
         Ok(self.last_read.lock().await.clone())
     }
@@ -340,6 +350,15 @@ async fn the_registry_forwards_the_providers_topology_signal() {
     assert_eq!(reg.list_panes().await.unwrap()[0].pane_id, "p");
 }
 
+fn brisk() -> HistoryPolicy {
+    HistoryPolicy {
+        row_budget: 4,
+        fastest: Duration::from_millis(20),
+        quiet: Duration::from_millis(40),
+        idle: Duration::from_millis(400),
+    }
+}
+
 fn read(lines: &[String], viewport_rows: u16) -> RawScrollback {
     RawScrollback {
         text: lines.iter().map(|l| format!("{l}\n")).collect(),
@@ -355,7 +374,7 @@ async fn a_watched_pane_stitches_its_history_across_reads() {
     let reg = PaneRegistry::with_config(
         p.clone(),
         RegistryConfig {
-            scrollback_poll: Duration::from_millis(40),
+            history: brisk(),
             ..RegistryConfig::default()
         },
     );
@@ -394,7 +413,7 @@ async fn history_is_torn_down_with_the_last_watcher() {
     let reg = PaneRegistry::with_config(
         p.clone(),
         RegistryConfig {
-            scrollback_poll: Duration::from_millis(40),
+            history: brisk(),
             ..RegistryConfig::default()
         },
     );
@@ -458,4 +477,236 @@ async fn new_hyperlinks_ride_a_patch_as_a_delta_in_arrival_order() {
     let v = serde_json::to_value(enc.encode("n/p", &u).last().unwrap()).unwrap();
     assert_eq!(v["links"], serde_json::json!(["https://two"]));
     assert_eq!(v["rows"][0]["runs"][0]["l"], 1);
+}
+
+#[test]
+fn the_cadence_is_derived_from_the_measured_row_rate() {
+    let policy = HistoryPolicy::default();
+    assert_eq!(policy.interval_for_rate(1000.0), Duration::from_millis(400));
+    assert_eq!(policy.interval_for_rate(2000.0), Duration::from_millis(200));
+    assert_eq!(
+        policy.interval_for_rate(100_000.0),
+        policy.fastest,
+        "past the floor no cadence can follow the pane"
+    );
+    assert_eq!(
+        policy.interval_for_rate(1.0),
+        policy.quiet,
+        "a trickle is not worth chasing"
+    );
+    assert_eq!(policy.interval_for_rate(0.0), policy.quiet);
+}
+
+#[test]
+fn the_cadence_keeps_every_followable_rate_under_herdrs_thousand_row_cap() {
+    let policy = HistoryPolicy::default();
+    for rate in [10.0f64, 100.0, 400.0, 900.0, 1000.0, 2500.0, 4000.0] {
+        let interval = policy.interval_for_rate(rate);
+        if interval == policy.fastest {
+            continue;
+        }
+        let rows_between_reads = rate * interval.as_secs_f64();
+        assert!(
+            rows_between_reads < 1000.0,
+            "{rate} rows/s would put {rows_between_reads} rows between reads"
+        );
+    }
+}
+
+#[test]
+fn one_quiet_sample_between_bursts_does_not_throw_away_the_estimate() {
+    // The failure this exists to prevent: a 100 ms poll lands between two bursts, measures zero,
+    // and relaxes to the quiet cadence — at which point the next burst gaps.
+    let policy = HistoryPolicy::default();
+    let mut rate = RowRate::default();
+    let burst = Duration::from_millis(40);
+    let lull = Duration::from_millis(100);
+
+    rate.observe(300, burst);
+    assert_eq!(policy.interval_for_rate(rate.get()), policy.fastest);
+    let after_lull = rate.observe(0, lull);
+    assert!(
+        after_lull > 0.0,
+        "one empty sample must decay the estimate, not erase it"
+    );
+    assert_eq!(
+        policy.interval_for_rate(after_lull),
+        policy.fastest,
+        "still mid-stream, so still fast"
+    );
+}
+
+#[test]
+fn the_estimate_decays_to_quiet_once_the_pane_really_stops() {
+    let policy = HistoryPolicy::default();
+    let mut rate = RowRate::default();
+    rate.observe(4000, Duration::from_millis(100));
+    let mut last = policy.fastest;
+    for _ in 0..20 {
+        last = policy.interval_for_rate(rate.observe(0, Duration::from_millis(100)));
+    }
+    assert_eq!(
+        last, policy.quiet,
+        "a stopped pane must not be polled fast forever"
+    );
+}
+
+#[test]
+fn a_sample_too_short_to_mean_anything_is_ignored() {
+    let mut rate = RowRate::default();
+    rate.observe(500, Duration::from_millis(100));
+    let steady = rate.get();
+    assert_eq!(rate.observe(0, Duration::from_micros(50)), steady);
+}
+
+fn patient() -> HistoryPolicy {
+    HistoryPolicy {
+        row_budget: 4,
+        fastest: Duration::from_millis(20),
+        quiet: Duration::from_millis(40),
+        idle: Duration::from_secs(600),
+    }
+}
+
+async fn watched(p: Arc<Scripted>, policy: HistoryPolicy) -> (Arc<PaneRegistry>, Watcher) {
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: policy,
+            ..RegistryConfig::default()
+        },
+    );
+    let w = reg.watch("p").await.unwrap();
+    (reg, w)
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_idle_pane_is_not_polled_at_all() {
+    let p = Arc::new(Scripted::default());
+    p.reads.lock().await.push_back(read(&["a".into(), "v".into()], 1));
+    let (_reg, _w) = watched(p.clone(), patient()).await;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let settled = p.reads_done.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        p.reads_done.load(Ordering::SeqCst),
+        settled,
+        "a pane producing nothing must cost no socket traffic"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_frame_wakes_the_parked_poller() {
+    let p = Arc::new(Scripted::default());
+    p.reads.lock().await.push_back(read(&["a".into(), "v".into()], 1));
+    let (_reg, _w) = watched(p.clone(), patient()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let parked = p.reads_done.load(Ordering::SeqCst);
+
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 2 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"out".to_vec(),
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert!(
+        p.reads_done.load(Ordering::SeqCst) > parked,
+        "output is the wake-up, not a timer"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_gap_drops_the_poller_to_its_fastest_cadence() {
+    let p = Arc::new(Scripted::default());
+    p.stall_when_empty.store(true, Ordering::SeqCst);
+    let numbered =
+        |from: usize, to: usize| -> Vec<String> { (from..=to).map(|i| format!("line-{i}")).collect() };
+    {
+        let mut q = p.reads.lock().await;
+        q.push_back(read(&numbered(1, 5), 1));
+        q.push_back(read(&numbered(900, 906), 1));
+    }
+    let (reg, _w) = watched(p.clone(), patient()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let status = reg.history_status("p").expect("watched");
+    assert_eq!(
+        status.poll,
+        patient().fastest,
+        "a gap means read flat out until it stops"
+    );
+    assert!(status.rows_per_sec > 0.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fast_pane_is_polled_faster_than_a_slow_one() {
+    let numbered =
+        |from: usize, to: usize| -> Vec<String> { (from..=to).map(|i| format!("line-{i}")).collect() };
+    let policy = HistoryPolicy {
+        row_budget: 20,
+        fastest: Duration::from_millis(5),
+        quiet: Duration::from_millis(400),
+        idle: Duration::from_secs(600),
+    };
+
+    let slow = Arc::new(Scripted::default());
+    slow.stall_when_empty.store(true, Ordering::SeqCst);
+    {
+        let mut q = slow.reads.lock().await;
+        q.push_back(read(&numbered(1, 3), 1));
+        q.push_back(read(&numbered(1, 5), 1));
+    }
+    let (slow_reg, _sw) = watched(slow.clone(), policy).await;
+
+    let fast = Arc::new(Scripted::default());
+    fast.stall_when_empty.store(true, Ordering::SeqCst);
+    {
+        let mut q = fast.reads.lock().await;
+        q.push_back(read(&numbered(1, 3), 1));
+        q.push_back(read(&numbered(1, 600), 1));
+    }
+    let (fast_reg, _fw) = watched(fast.clone(), policy).await;
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let slow_rate = slow_reg.history_status("p").unwrap().rows_per_sec;
+    let fast_rate = fast_reg.history_status("p").unwrap().rows_per_sec;
+    assert!(
+        fast_rate > slow_rate * 10.0,
+        "measured rates should separate: slow {slow_rate}, fast {fast_rate}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pane_with_no_ring_yet_is_still_read_once_it_starts_producing() {
+    let p = Arc::new(Scripted::default());
+    // Nothing queued: the provider reports no history at all, the way herdr does for a pane that
+    // has not scrolled yet. Treating that like an alt-screen pane and parking would miss the
+    // whole first burst — which is exactly when a ring appears.
+    let (_reg, _w) = watched(p.clone(), patient()).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let parked = p.reads_done.load(Ordering::SeqCst);
+
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 2 }).await.unwrap();
+    for _ in 0..6 {
+        feed.send(PaneEvent::Bytes {
+            full: false,
+            bytes: b"x\r\n".to_vec(),
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+
+    let after = p.reads_done.load(Ordering::SeqCst);
+    assert!(
+        after >= parked + 3,
+        "output must keep the poller looking for a ring, saw {} reads",
+        after - parked
+    );
 }
