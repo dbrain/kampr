@@ -141,8 +141,38 @@ HERDR_SESSION=probe cargo run -p kampr-spike # in another
 > creating a named session is the one management action that shells out rather than calling a method.
 
 
+## Client rendering (Compose Multiplatform)
+
+Raw logs behind every number: `client/terminal-spike/results/`. Each line carries the device string,
+300 measured frames after 90 warm-up, and `draw_p50 / dropped / cache_hit_pct`.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 56 | **A 74×30 cell grid holds 60 fps on wasm and Android** | 26-scenario bench, realistic workload (~40 rows/s of patches, full reset every 2 s, blinking cursor) | wasm **draw 0.6 ms**, Android emulator **1.77 ms**, desktop 0.26 ms — **0 dropped of 300** everywhere. 200×50 also holds: 0.8 / 3.2 / 0.48 ms |
+| 57 | The wasm backend is **real WebGL2**, not a Canvas 2D fallback | runtime DOM probe emitted at the head of every run | `canvas0=webgl2 renderer=ANGLE (Intel, Mesa Intel UHD Graphics)`. `navigator.gpu` exists in Chromium 151 but Skiko does not use it, and CMP 1.11's notes mention no WebGPU path |
+| 58 | **Fill is free; text shaping is the entire cost** | differential measurement, 74×30 draw p50 | backgrounds only **0.0 / 0.04 ms**; shape every run every frame **8.8 / 14.17 ms**; **cached run layouts 0.6 / 1.77 ms**. Recomposition and buffer diffing are both within noise — `drawBehind`-vs-recomposition is not a lever worth engineering |
+| 59 | Run-layout caching is **required**, not an optimisation | same | Shaping every frame is ~53 % of budget on wasm and ~85 % on the Android emulator; at 200×50 it drops 16–35 % of frames. Hit rate in practice: **99.2 %** — terminal output repeats run strings far more than intuition suggests |
+| 60 | **Zoom must layer-scale during the gesture** and re-shape on settle | zoom-redraw vs `graphicsLayer` scenarios | Re-shaping at intermediate zooms collapses hit rate to ~51 %: wasm 11.6 ms / 8.5 % dropped at 200×50, Android 14.09 ms / 2.9 %. Layer scaling is 0.6–3.3 ms, zero drops. Pan alone is free either way |
+| 61 | **A hand-rolled glyph atlas is a negative result on Skia** | rasterise each (glyph, style) into an `ImageBitmap`, blit per cell with `ColorFilter.tint` | Android **2.53 ms — the fastest mode measured**. But JVM desktop **192.8 ms/frame (2.2 fps)** and wasm **`RuntimeError: Aborted()` from Skia every frame**. Rendering was visually correct in all three, so this is the API path, not the idea: `DrawScope.drawImage` is cheap on Android and catastrophic on skiko at ~2 200 calls. **Skia already keeps its own GPU glyph atlas** — reach it from common code with per-glyph `drawText`, do not hand-roll one |
+| 62 | Per-glyph `drawText` is the churn escape hatch | cache-hostile worst case, 74×30 | Holds 60 fps / 0 dropped where cached runs fall to 30 fps / 46–57 % dropped. So: cache runs by default, fall back per-glyph when a frame's hit rate collapses |
+
+> **Android is emulator-only.** x86_64 on a desktop i7 with GPU passthrough, so the CPU-bound shaping
+> cost is optimistic for a mid-range ARM phone. Even allowing a further 3×, 74×30 sits at ~5 ms of a
+> 16.67 ms budget. **Re-measure on a real device before treating the headroom as banked.**
+
+### Integration hazards found on the way
+
+| # | Hazard | Consequence |
+|---|---|---|
+| 63 | **AGP 9 forbids `com.android.application` alongside the KMP plugin** | Shared code must use `com.android.kotlin.multiplatform.library`; the APK needs a separate plain-Android module. `client/` is laid out that way |
+| 64 | **`compose.components.resources` emits no Android assets for a KMP-library target on CMP 1.11.1** | Fonts were prepared for jvm/wasmJs and **silently omitted from the APK** — Android fell back to system sans and rendered a proportional grid, so the first run measured the wrong font. Caught by screenshotting, not by the numbers. Needs a staged-assets task, and it will bite design tokens and icons too |
+| 65 | **Resource fonts load asynchronously and can beat the first cell-metrics probe** | Column pitch computed from a font that is not what gets drawn, with nothing to recompute it. Gate first paint on font resolution |
+| 66 | Ligatures desynchronise the grid | JetBrains Mono's `->`, `!=`, `==` collapse two cells into one glyph inside a shaped run. **Use the no-ligature cut** |
+| 67 | This machine's `GRADLE_HOME` points at a broken install | `./gradlew` fails with `Cannot find module 'gradle-public-api-legacy'` unless invoked as `env -u GRADLE_HOME ./gradlew` |
+
+
 ## Still open
 
 - Does `pane.read recent` scroll a plain shell pane *that has a detected agent*? (#27 covered the
   no-agent case; the interlock assumes the worst for the other.)
-- CMP wasm: 74×30 cell grid at 60 fps on a mid-range Android.
+- **A real mid-range ARM phone.** #56 is emulator-only; the shaping cost is the part that will move.

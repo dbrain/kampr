@@ -24,7 +24,8 @@ The seven open questions in findings §6. Cheap, and each one can invalidate a P
 - [x] P0.13 **`observe` at native size is pixel-exact** — `kampr-spike` matches `pane.read visible` 30/30 rows, cursor included
 - [x] P0.14 **`pane.read recent` on a shell pane is safe** — 0.002 s, viewport unmoved, 256-colour intact
 - [ ] P0.15 **Is a pending tool request in the transcript before approval?** Decides the answer strip's source
-- [ ] P0.16 **CMP wasm spike**: 94×40 cell grid at 60 fps on a mid-range Android — before the client architecture is committed
+- [x] P0.16 **CMP rendering spike: viable.** 74×30 at 60 fps, 0 dropped, on real WebGL2 and on Android. Two conditions attached — see P2.2c/P2.2d
+- [ ] P0.17 Re-measure on a real ARM phone; the emulator flatters the shaping cost
 - [x] P0.8 `docs/03-probe-log.md` written — 41 probes, each traced to its command
 
 **Gate:** `docs/03-probe-log.md` exists and P0.1–P0.5 are answered.
@@ -41,7 +42,9 @@ Prove it before building anything around it.
 - [x] P1.6c **Server-side VT emulation working and verified** — `kampr-term`, 9 tests, exact match against Herdr's grid
 - [x] P1.4b **Wire protocol written** — `docs/04-wire-protocol.md`
 - [ ] P1.2 Rust + axum server, Kotlin/CMP clients; pin the versions in findings §5.5
-- [ ] P1.2b Theme token layer first, not last: every colour, font, radius and border through a CSS custom property, `data-theme` on the root, `soft` shipping and `phosphor` / `warm` / `brutalist` defined alongside it (see `docs/design/build.py`)
+- [ ] P1.2b Android assets need a staged-assets task — `compose.components.resources` silently omits them for a KMP-library target (probe #64), which will hit tokens, fonts and icons
+- [ ] P1.2c Gate first paint on font resolution; use the no-ligature font cut (probes #65, #66)
+- [ ] P1.2d Theme token layer first, not last: every colour, font, radius and border through a CSS custom property, `data-theme` on the root, `soft` shipping and `phosphor` / `warm` / `brutalist` defined alongside it (see `docs/design/build.py`)
 - [ ] P1.3 `herdr-client` adapter module: the **only** file that knows socket method names or CLI argv
 - [ ] P1.3b **Provider seam** — a node talks to `listPanes / streamPane / writePane`, and Herdr is one implementation. Cheap now, expensive later; it is what makes an Android local-PTY node possible at all (findings §3.10)
 - [ ] P1.4 Socket dialer (AF_UNIX now; keep the Windows named-pipe seam Collie documents)
@@ -64,6 +67,8 @@ Prove it before building anything around it.
 
 - [ ] P2.1 Input via `pane.send_text` / `pane.send_keys` only — stateless, no ownership, never touches geometry
 - [ ] P2.2 **Zoom and pan** over the native grid: pinch, momentum pan, column indicator, follow-cursor
+- [ ] P2.2c **Layer-scale during a pinch, re-shape on settle** — re-shaping at intermediate zooms collapses the run cache and drops frames (probe #60)
+- [ ] P2.2d **Two render modes, switched on cache hit rate** — cached run layouts by default, per-glyph `drawText` when a frame's hit rate collapses (probe #59, #62). Do not hand-roll a glyph atlas: it breaks skiko (probe #61)
 - [ ] P2.2b Zoom presets (fit width / readable / close up) and per-pane per-device persistence
 - [ ] P2.3 Keystroke coalescing per animation frame, ordered, with an in-flight cap
 - [ ] P2.5 Raw-escape key table — Esc, Tab, arrows, Home, End, PgUp, PgDn, Del, Ins, F1–F12 — as **bytes**, never as `send_keys` names (findings §1.4)
