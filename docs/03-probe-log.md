@@ -114,6 +114,22 @@ HERDR_SESSION=probe cargo run -p kampr-spike # in another
 > (#43) — an unmatched `custom_tool_call` — but the wire shape is identical either way, so the
 > screen path is the one implementation and `source` is the only thing that differs.
 
+## Herd management (feature parity with the TUI)
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 46 | Structure is fully writable over the socket | `workspace.create`, `tab.create`, `pane.split` right + down, `pane.zoom` on/off, `workspace.rename`, `workspace.close` against a throwaway session | **All succeeded.** Ended at 2 workspaces / 3 tabs / 5 panes, created entirely over the API with no keystrokes |
+| 47 | `layout.export` returns a nestable split tree | export a workspace with two splits | `{root:{type:"split", direction:"right", ratio:0.5, first:{type:"split", direction:"down", …}}}` — and `layout.apply` takes the same shape, so layouts are savable and restorable |
+| 48 | `agent.start` launches a harness into a pane | bogus kind first, then `server.agent_manifests` | Bogus → `unsupported_agent_kind`. The valid set is discoverable at runtime: **20 kinds on this host** (`claude codex gemini grok copilot cursor devin droid amp cline kilo kimi kiro maki hermes opencode pi qwen qodercli agy`) |
+| 49 | Named sessions are enumerable and creatable without a TTY | `herdr session list --json`; `herdr server --session <name>` | Listing gives `{name, running, session_dir, socket_path}` per session. A headless `herdr server --session X` creates one with no client ever attached (also #24) |
+| 50 | A phone can raise a desktop toast | `notification.show {title, body}` | Accepted — useful for "I'm taking this pane" and for pairing confirmations |
+
+> **Named session vs workspace — do not conflate them.** A *named session* is a whole separate Herdr
+> server with its own socket, created by the CLI and absent from the socket API. A *workspace* is the
+> grouping inside one session, and `workspace.create` is an ordinary RPC. Kampr surfaces both, and
+> creating a named session is the one management action that shells out rather than calling a method.
+
+
 ## Still open
 
 - Does `pane.read recent` scroll a plain shell pane *that has a detected agent*? (#27 covered the

@@ -131,9 +131,11 @@ SIZES = {
     "Conversation-Portrait": (390, 844),
     "Pane-Typing":           (390, 470),
     "Zoom-Control":          (390, 844),
+    "New-Sheet":             (390, 844),
     "Setup":                 (390, 844),
     "Pane-Landscape":        (844, 390),
     "Desktop":              (1440, 900),
+    "Desktop-Mosaic":       (1440, 900),
     "Tokens":                (940, 620),
 }
 

@@ -1,0 +1,113 @@
+  <div style="display: flex; align-items: center; gap: 14px; padding: 11px 18px; background: var(--bar); border-bottom: var(--chrome-border);">
+    <span style="font-size: 17px; font-weight: 800; letter-spacing: -0.02em;">Kampr</span>
+    <div style="display: flex; gap: 3px; background: var(--surface); border: var(--card-border); border-radius: var(--r-md); padding: 3px;">
+      <div style="padding: 6px 13px; border-radius: var(--r-sm); font-size: 12px; color: var(--dim); font-weight: 500;">Herd</div>
+      <div style="padding: 6px 13px; border-radius: var(--r-sm); background: var(--raise); font-size: 12px; font-weight: 700;">Mosaic</div>
+    </div>
+    <span style="font-size: 12px; color: var(--mute);">4 panes · 3 nodes · 2 sessions</span>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 7px; background: var(--surface); border: var(--card-border); border-radius: var(--r-md); padding: 7px 13px;">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--accent)" stroke-width="1.9"><path d="M7 2v10M2 7h10"/></svg>
+      <span style="font-size: 12.5px; font-weight: 700; color: var(--accent);">Add pane</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 7px; background: var(--surface); border: var(--card-border); border-radius: var(--r-md); padding: 7px 13px;">
+      <span style="font-size: 12.5px; font-weight: 600; color: var(--dim);">Save layout</span>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line);">
+
+    <div style="background: var(--surface-2); display: flex; flex-direction: column; overflow: hidden; border: 2px solid var(--accent);">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 12px; background: var(--bar);">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 12.5px; font-weight: 700;">kampr · claude</span>
+        <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">comingclean / default · 74×20</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 9.5px; font-weight: 700; color: var(--blocked);">BLOCKED</span>
+      </div>
+      <div style="flex-grow: 1; padding: 9px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text);">
+<span style="color: var(--done);">●</span> Read bridge/server.ts (412 lines)
+
+<span style="color: var(--mute);">╭─ </span><span style="color: var(--accent);">Edit</span><span style="color: var(--mute);"> ───────────────────────────╮</span>
+<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">142</span> <span style="color: var(--done);">+  if (!device.canWrite) {</span>    <span style="color: var(--mute);">│</span>
+<span style="color: var(--mute);">╰──────────────────────────────────╯</span>
+
+Do you want to make this edit?
+<span style="color: var(--accent);">❯ 1.</span> Yes   <span style="color: var(--dim);">2.</span> Always   <span style="color: var(--dim);">3.</span> No<span style="background: var(--text); color: var(--surface-2);"> </span>
+      </div>
+    </div>
+
+    <div style="background: var(--surface-2); display: flex; flex-direction: column; overflow: hidden;">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 12px; background: var(--bar);">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--working)"/></svg>
+        <span style="font-size: 12.5px; font-weight: 700;">kob · codex</span>
+        <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">comingclean / agents · 80×20</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 9.5px; font-weight: 700; color: var(--working);">WORKING</span>
+      </div>
+      <div style="flex-grow: 1; padding: 9px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text);">
+<span style="color: var(--done);">•</span> Ran tests for tinyfiddler/kob
+
+  <span style="color: var(--done);">PASS</span>  src/tuner.test.ts        (28 tests)
+  <span style="color: var(--done);">PASS</span>  src/pitch.test.ts        (14 tests)
+  <span style="color: var(--working);">RUNS</span>  src/waveform.test.ts
+
+  Test files  2 passed, 1 running
+       Tests  42 passed
+
+<span style="color: var(--mute);">esc to interrupt · 1m 12s</span>
+      </div>
+    </div>
+
+    <div style="background: var(--surface-2); display: flex; flex-direction: column; overflow: hidden;">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 12px; background: var(--bar);">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--done)"/></svg>
+        <span style="font-size: 12.5px; font-weight: 700;">sungrow · claude</span>
+        <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">sungrow-pi / default · 38 ms</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 9.5px; font-weight: 700; color: var(--done);">DONE</span>
+      </div>
+      <div style="flex-grow: 1; padding: 9px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text);">
+<span style="color: var(--done);">●</span> Inverter poller is back up.
+
+  Fixed the modbus timeout — the unit
+  drops the connection after 60s idle,
+  so the client now reconnects rather
+  than waiting on a dead socket.
+
+  <span style="color: var(--dim);">3 files changed, 41 insertions(+)</span>
+
+<span style="color: var(--mute);">〉</span><span style="background: var(--text); color: var(--surface-2);"> </span>
+      </div>
+    </div>
+
+    <div style="background: var(--surface-2); display: flex; flex-direction: column; overflow: hidden;">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 8px 12px; background: var(--bar);">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.4" fill="none" stroke="var(--idle)" stroke-width="1.2"/></svg>
+        <span style="font-size: 12.5px; font-weight: 700; color: var(--dim);">houseofdoge · bash</span>
+        <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">nas / default · 6 ms</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 9.5px; font-weight: 700; color: var(--mute);">IDLE</span>
+      </div>
+      <div style="flex-grow: 1; padding: 9px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--dim);">
+<span style="color: var(--mute);">[13:02]</span> docker compose ps
+
+NAME             STATUS
+doge-web         Up 14 days
+doge-db          Up 14 days
+doge-cache       Up 14 days
+
+<span style="color: var(--mute);">[13:44]</span> <span style="background: var(--dim); color: var(--surface-2);"> </span>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 18px; padding: 8px 18px; background: var(--bar); border-top: var(--chrome-border); font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">
+    <span style="color: var(--done);">● hub · comingclean</span>
+    <span>sungrow-pi 38ms</span>
+    <span>nas 6ms</span>
+    <div style="flex-grow: 1;"></div>
+    <span>4 observers · 0 panes reshaped</span>
+    <span>kampr 0.1.0</span>
+  </div>

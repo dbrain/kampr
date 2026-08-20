@@ -580,6 +580,51 @@ reconnect skips the auth handshake, and — as suggested — have the **service 
 a push for a blocked agent fetches the snapshot and that pane's full frame into cache, so the
 notification tap opens onto warm data. Small fetches, well within a push handler's budget.
 
+### 3.12 Herd management — **feature parity with the TUI is achievable**
+
+The design so far assumed Kampr watches and replies. It should also *run* the herd: everything you
+would do at the keyboard, minus the keyboard. Probes #46–#50 say the socket carries almost all of it.
+
+| At the desk | Over the socket |
+|---|---|
+| New workspace | `workspace.create {label, cwd, env, focus}` |
+| New tab | `tab.create {workspace_id, label, cwd, env}` |
+| Split a pane | `pane.split {target_pane_id, direction: right\|down, ratio, cwd}` |
+| Zoom / unzoom | `pane.zoom {pane_id, mode}` |
+| Move, swap, reorder | `pane.move`, `pane.swap`, `tab.move`, `workspace.move`, `workspace.move_block` |
+| Rename anything | `pane.rename` (null clears), `tab.rename`, `workspace.rename` |
+| Close anything | `pane.close`, `tab.close` (closes every pane in it), `workspace.close` |
+| Save / restore a layout | `layout.export` → nestable split tree → `layout.apply`; `layout.set_split_ratio` |
+| Start an agent | `agent.start {kind, name, pane_id, args}` — 20 kinds on this host, discoverable at runtime via `server.agent_manifests` |
+| Git worktree per branch | `worktree.list`, `worktree.create {branch, base, path}`, `worktree.open`, `worktree.remove` |
+| Raise a desktop toast | `notification.show {title, body}` |
+| Install a harness hook | `integration.install {target}` — 17 targets |
+
+**The one gap: creating a *named session*.** Named sessions are separate Herdr servers and the socket
+API has no method for them — the CLI owns it. A node already enumerates them
+(`herdr session list --json` gives name, running state and socket path) and can create one headlessly
+with `herdr server --session <name>` (#49, and #24 confirms it runs with no client ever attached). So
+Kampr supports named sessions; that single action shells out instead of calling a method.
+
+**Split-screening across instances is free, and this is where Kampr beats the TUI.** Each pane is an
+independent `observe` stream, and nothing binds a view to one server. So one Kampr window can show a
+pane from `comingclean`'s default session next to one from its `agents` session next to one from
+`sungrow-pi` — a thing the Herdr TUI cannot do at all, because a TUI client attaches to exactly one
+server. Kampr's split is a *client-side* mosaic over the mesh, not a herdr layout.
+
+**This does not contradict §3.4.** "Kampr never resizes a session" means it never reshapes a pane as a
+side effect of *viewing* it on a small screen. `pane.split` and `workspace.create` are structural
+edits the operator explicitly asked for, exactly as at the desk. The invariant is about
+side effects, not about refusing to act.
+
+Two design consequences worth stating:
+
+- **A split changes pane geometry for everyone**, because it changes the herdr layout. That is
+  expected and correct for an explicit action, but the UI should say what it will do before doing it —
+  the same honesty the zoom control uses, without the modal.
+- **`env` on create is a real capability.** `workspace.create` and `tab.create` take an env map, so
+  "new Claude session in this worktree with these variables" is one call, not a scripted sequence.
+
 ---
 
 ## 4. Hard limits — things to stop asking for
@@ -599,6 +644,7 @@ notification tap opens onto warm data. Small fetches, well within a push handler
 | Markdown structure is unrecoverable from any rendered stream | Both read paths are downstream of a renderer |
 | Alt-screen panes have no scrollback via `pane.read` | Documented by Collie, consistent with our reads; use `terminal.scroll` or the transcript |
 | No cross-host Herdr API | `--remote` is an SSH-hosted TUI client **[docs]** |
+| No `session.create` in the socket API | Named sessions are separate servers; creation shells out to the CLI **[probed]** |
 | No passkeys on an IP address | WebAuthn RP ID must be a registrable domain — HTTPS does not help |
 | No push / service worker / PWA install without a secure context | Plain HTTP on a LAN IP is not one |
 | No iOS Web Push outside a Home Screen web app | WebKit, iOS 16.4+ |

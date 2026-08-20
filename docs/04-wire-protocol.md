@@ -151,6 +151,66 @@ There is **no resize message and there will not be one.** The node cannot reshap
   immediately, marked stale, and swap on the `grid.reset`. No spinner.
 - The node drops a slow client's `grid.patch` queue and sends one `grid.reset` instead of buffering.
 
+## Herd management
+
+Everything you would do at the keyboard. Additive to v1 — a node that does not implement these
+replies `error{code:"unsupported"}`, and a client hides what a node's `hello.caps` does not claim.
+
+`hello.caps` gains `"manage": true` when the node exposes them.
+
+```jsonc
+// Structure. `at` is a pane, tab or workspace id depending on the verb.
+{ "t": "manage", "op": "workspace.create", "node": "01J...", "label": "kampr", "cwd": "~/dev/kampr", "env": {} }
+{ "t": "manage", "op": "tab.create",       "at": "01J.../w3",    "label": "tests", "cwd": "~/dev/kampr" }
+{ "t": "manage", "op": "pane.split",       "at": "01J.../w3:p2", "direction": "right", "ratio": 0.5, "cwd": null }
+{ "t": "manage", "op": "pane.zoom",        "at": "01J.../w3:p2", "mode": "toggle" }
+{ "t": "manage", "op": "rename",           "at": "01J.../w3:p2", "label": "build" }   // null clears, panes only
+{ "t": "manage", "op": "close",            "at": "01J.../w3:p2" }                     // pane | tab | workspace
+{ "t": "manage", "op": "focus",            "at": "01J.../w3:p2" }
+
+// Agents. `kinds` come from the node, not a hardcoded client list — 20 on a typical host.
+{ "t": "manage", "op": "agent.start", "at": "01J.../w3:p2", "kind": "claude", "name": "reviewer", "args": [] }
+
+// Worktrees — Herdr has first-class git support and it maps straight through.
+{ "t": "manage", "op": "worktree.create", "node": "01J...", "cwd": "~/dev/kampr", "branch": "feat/x", "base": "main" }
+{ "t": "manage", "op": "worktree.open",   "node": "01J...", "path": "~/dev/kampr-feat-x" }
+
+// Layouts. `layout` is Herdr's own nestable split tree, opaque to the client.
+{ "t": "manage", "op": "layout.export", "at": "01J.../w3:t1" }
+{ "t": "manage", "op": "layout.apply",  "at": "01J.../w3:t1", "layout": { } }
+
+// Named sessions are separate Herdr servers, so this one shells out on the node rather than
+// calling a socket method. Same shape to the client; only the node knows the difference.
+{ "t": "manage", "op": "session.create", "node": "01J...", "name": "agents" }
+{ "t": "manage", "op": "session.stop",   "node": "01J...", "name": "agents" }
+```
+
+Every `manage` op is acknowledged with `{"t":"managed","op":…,"ok":true,"id":"<new id, when one was created>"}`
+and the resulting structure change arrives as an ordinary `herd.patch`. Clients must not
+optimistically mutate their herd model — wait for the patch, so the node stays authoritative.
+
+`readonly` devices are refused every `manage` op with `not_writer`.
+
+### Capability discovery
+
+```jsonc
+{ "t": "caps", "node": "01J...",
+  "agent_kinds": ["claude", "codex", "gemini", "…"],   // from server.agent_manifests, not hardcoded
+  "sessions": [ { "name": "default", "running": true }, { "name": "agents", "running": false } ] }
+```
+
+### A note on splits
+
+A `pane.split` changes the Herdr layout, so it changes pane geometry **for everyone**. That is
+correct for an explicit action and does not conflict with "Kampr never resizes a pane" — that
+invariant is about side effects of *viewing*, not about refusing to act. Say what it will do before
+doing it.
+
+Kampr's own **split view is a different thing entirely**: a client-side mosaic of independent
+`observe` streams that may come from different sessions on different nodes. The Herdr TUI cannot do
+that, because a TUI client attaches to exactly one server. It needs no protocol support beyond
+watching several panes at once.
+
 ## Auth
 
 The WebSocket carries a device token in `Sec-WebSocket-Protocol` or a `kampr_session` cookie; the

@@ -1,0 +1,10 @@
+{
+  "name": "terminalSpike-test",
+  "version": "0.0.0-unspecified",
+  "main": "terminalSpike-test.mjs",
+  "devDependencies": {},
+  "dependencies": {},
+  "peerDependencies": {},
+  "optionalDependencies": {},
+  "bundledDependencies": []
+}

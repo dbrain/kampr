@@ -24,7 +24,8 @@ impl Herdr {
         Ok(())
     }
 
-    pub async fn send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<()> {
+    pub async fn send_keys<S: AsRef<str> + Sync>(&self, pane_id: &str, keys: &[S]) -> Result<()> {
+        let keys: Vec<&str> = keys.iter().map(AsRef::as_ref).collect();
         let _: serde_json::Value = self
             .call(
                 "pane.send_keys",

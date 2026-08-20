@@ -128,6 +128,29 @@ Herdr contributes nothing here and blocks nothing (findings §1.8, §3.1).
 
 ---
 
+## Phase 4.5 — Herd management: parity with the TUI (3–4 days)
+
+Everything you would do at the keyboard. Probes #46–#50 confirm the socket carries all of it except
+named-session creation, which shells out. Depends on Phase 4's node model for the `node` field.
+
+- [ ] P4.5.1 `manage` op dispatch on the node, with `hello.caps.manage` and per-op `not_writer` gating
+- [ ] P4.5.2 Structure: `workspace.create` / `tab.create` / `pane.split` / `pane.zoom` / rename / close / focus
+- [ ] P4.5.3 `env` and `cwd` on create — "new session in this worktree with these variables" is one call
+- [ ] P4.5.4 `agent.start`, with kinds from `server.agent_manifests` at runtime, **never a hardcoded client list**
+- [ ] P4.5.5 Worktrees: list / create / open / remove — Herdr's git support maps straight through
+- [ ] P4.5.6 Layouts: `layout.export` → store → `layout.apply`; named layouts a user can re-apply
+- [ ] P4.5.7 Named sessions: enumerate via `herdr session list --json`, create via a headless `herdr server --session`, stop and delete. The one management path that shells out
+- [ ] P4.5.8 **Kampr split view** — a client-side mosaic of 2–4 panes that may come from different sessions on different nodes. The TUI cannot do this; it is the clearest place Kampr beats it
+- [ ] P4.5.9 Split view on mobile: one pane at a time with a fast switcher, not a squeezed mosaic
+- [ ] P4.5.10 Structural actions state their effect before acting — a split reshapes the pane for everyone
+- [ ] P4.5.11 Clients never optimistically mutate the herd model; they wait for the `herd.patch`
+- [ ] P4.5.12 `notification.show` — raise a desktop toast from the phone
+
+**Gate:** create a workspace, split it, start a Claude agent in the new pane, and watch two panes from
+two different nodes side by side — all from a phone.
+
+---
+
 ## Phase 5 — Conversation view: real markdown (4–5 days)
 
 Also the **default view for agent panes** (findings §3.8), which is what keeps a 94-column grid off a
@@ -157,7 +180,7 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 ## Phase 6 — Responsive UI, properly (4–5 days)
 
 - [ ] P6.1 Desktop: full-viewport terminal, herd navigator, no wasted chrome
-- [ ] P6.2 Desktop multi-pane: split view of 2–4 panes (each its own stream at its own geometry — findings §1.6 says this is free)
+- [ ] P6.2 Desktop multi-pane layout for the split view built in P4.5.8 — sizing, focus, drag to rearrange
 - [ ] P6.3 Mobile portrait: full-bleed terminal, key row docked to keyboard, nav as a sheet
 - [ ] P6.4 Mobile landscape: maximum terminal, collapsible key row, nav as an overlay
 - [ ] P6.5 **Readability without resizing** — landscape fits natively; Conversation is the agent default; portrait terminal is zoom and pan

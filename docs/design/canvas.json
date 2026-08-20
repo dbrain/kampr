@@ -66,9 +66,25 @@
     },
     {
       "file": "Desktop.dc.html",
-      "title": "Desktop \u00b7 Split view",
+      "title": "Desktop \u00b7 One pane, two views",
       "x": 0,
       "y": 1700,
+      "w": 1440,
+      "h": 900
+    },
+    {
+      "file": "New-Sheet.dc.html",
+      "title": "Portrait \u00b7 New",
+      "x": 2300,
+      "y": 540,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Desktop-Mosaic.dc.html",
+      "title": "Desktop \u00b7 Mosaic across nodes",
+      "x": 0,
+      "y": 2700,
       "w": 1440,
       "h": 900
     }
@@ -115,6 +131,20 @@
       "y": 2640,
       "w": 1440,
       "text": "DESKTOP \u2014 terminal and conversation side by side. Sidebar is the whole mesh grouped by node with real latencies. Status strip reads \"no lease held \u2014 desktop shape untouched\", which is now not a promise about behaviour but a statement of what Kampr structurally cannot do."
+    },
+    {
+      "id": "note-new",
+      "x": 2300,
+      "y": 1420,
+      "w": 390,
+      "text": "NEW \u2014 Kampr runs the herd, it does not just watch it. Probes #46-#50: workspaces, tabs, splits, zoom, rename, close, layouts, git worktrees and agent.start are all ordinary socket calls. The agent kinds are offered by the node from server.agent_manifests \u2014 20 on a typical host \u2014 never a list baked into the app.\n\nOne exception: a NAMED SESSION is a whole separate Herdr server and the socket API has no method for it, so that single action shells out on the node. Same shape to the client."
+    },
+    {
+      "id": "note-mosaic",
+      "x": 0,
+      "y": 3650,
+      "w": 1440,
+      "text": "MOSAIC \u2014 four panes from three machines and two named sessions, side by side. The Herdr TUI structurally cannot do this: a TUI client attaches to exactly one server. Kampr's split is a client-side mosaic of independent observe streams, so it costs no protocol support beyond watching several panes at once.\n\nNote the status strip: \"4 observers \u00b7 0 panes reshaped\". Splitting a pane inside Herdr does change geometry for everyone, and that is fine because you asked for it \u2014 but simply looking at four panes changes nothing anywhere."
     }
   ],
   "launch": {

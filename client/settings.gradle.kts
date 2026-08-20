@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 }
 
 include(":terminal-spike")
+include(":terminal-spike:androidApp")
