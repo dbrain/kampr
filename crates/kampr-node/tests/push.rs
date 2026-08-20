@@ -20,6 +20,7 @@ struct Received {
     path: String,
     authorization: String,
     content_encoding: String,
+    authorizations: usize,
     ttl: String,
     body_len: usize,
 }
@@ -51,6 +52,7 @@ async fn accept(
     service.received.lock().unwrap().push(Received {
         path,
         authorization: header("authorization"),
+        authorizations: headers.get_all("authorization").iter().count(),
         content_encoding: header("content-encoding"),
         ttl: header("ttl"),
         body_len: body.len(),
@@ -103,10 +105,7 @@ fn browser_keys() -> (String, String) {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let dir = tempfile::tempdir().unwrap();
     let key = Vapid::load_or_create(&dir.path().join("k.pem"), "mailto:x@y").unwrap();
-    (
-        key.public_key_b64(),
-        URL_SAFE_NO_PAD.encode(rand_bytes()),
-    )
+    (key.public_key_b64(), URL_SAFE_NO_PAD.encode(rand_bytes()))
 }
 
 fn rand_bytes() -> [u8; 16] {
@@ -129,14 +128,7 @@ async fn enrol(store: &Store, name: &str, endpoint: &str) -> String {
         .unwrap();
     let (p256dh, auth) = browser_keys();
     store
-        .save_push_subscription(
-            &device.id,
-            "webpush",
-            endpoint,
-            &p256dh,
-            &auth,
-            kampr_auth::now(),
-        )
+        .save_push_subscription(&device.id, "webpush", endpoint, &p256dh, &auth, kampr_auth::now())
         .await
         .unwrap();
     device.id
@@ -197,6 +189,11 @@ async fn a_push_carries_a_vapid_authorization_and_an_encrypted_body() {
         one.authorization.starts_with("vapid t=") && one.authorization.contains(", k="),
         "{}",
         one.authorization
+    );
+    assert_eq!(
+        one.authorizations, 1,
+        "the VAPID header rides in web-push's own crypto_headers; adding a second one is a bare \
+         nginx 400 from the edge in front of the push service, with nothing in it that says why"
     );
     assert_eq!(one.content_encoding, "aes128gcm");
     assert!(!one.ttl.is_empty(), "a push service needs a TTL");
@@ -292,11 +289,7 @@ async fn a_gone_endpoint_is_deleted_rather_than_retried_forever() {
     let stub = Stub::start().await;
     let (store, push, _dir) = fixture().await;
     let phone = enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
-    stub.service
-        .gone
-        .lock()
-        .unwrap()
-        .push("/push/phone".to_string());
+    stub.service.gone.lock().unwrap().push("/push/phone".to_string());
 
     assert_eq!(
         push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])

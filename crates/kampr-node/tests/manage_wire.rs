@@ -38,10 +38,7 @@ fn the_four_non_string_fields_survive_the_wire() {
         op("agent.start").args.unwrap(),
         vec!["--model".to_string(), "opus".to_string()]
     );
-    assert_eq!(
-        op("layout.apply").layout.unwrap()["root"]["direction"],
-        "right"
-    );
+    assert_eq!(op("layout.apply").layout.unwrap()["root"]["direction"], "right");
 }
 
 #[test]

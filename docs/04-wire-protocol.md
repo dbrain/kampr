@@ -430,10 +430,15 @@ weaker than `'unsafe-eval'`) and `worker-src 'self' blob:`.
 
 ### Capability discovery
 
+`served` says whether this node is *serving* that session as a node of its own. A session can be
+running and unserved — an operator may restrict the set — and a client must not offer to open a
+pane on a session that will never appear in the herd.
+
 ```jsonc
 { "t": "caps", "node": "01J...",
   "agent_kinds": ["claude", "codex", "gemini", "…"],   // from server.agent_manifests, not hardcoded
-  "sessions": [ { "name": "default", "running": true }, { "name": "agents", "running": false } ] }
+  "sessions": [ { "name": "default", "running": true,  "served": true },
+                { "name": "agents",  "running": false, "served": false } ] }
 ```
 
 ### A note on splits

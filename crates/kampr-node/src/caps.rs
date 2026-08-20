@@ -24,18 +24,31 @@ impl Caps {
         self.spawns.load(Ordering::Relaxed)
     }
 
-    pub async fn get(&self, node_id: &str, herdr: &Herdr, binary: &str) -> Value {
+    /// `served` is the set of session names this node actually reaches. Listing a session the
+    /// node cannot serve is what made this capability a promise nothing kept.
+    pub async fn get(&self, node_id: &str, herdr: &Herdr, binary: &str, served: &[String]) -> Value {
         if let Some((at, value)) = self.cached.lock().unwrap().as_ref()
             && at.elapsed() < CAPS_TTL
         {
             return value.clone();
         }
         self.spawns.fetch_add(1, Ordering::Relaxed);
+        let sessions: Vec<Value> = sessions(binary)
+            .await
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "running": s.running,
+                    "served": served.iter().any(|n| n == &s.name),
+                })
+            })
+            .collect();
         let value = serde_json::json!({
             "t": "caps",
             "node": node_id,
             "agent_kinds": agent_kinds(herdr).await,
-            "sessions": sessions(binary).await,
+            "sessions": sessions,
         });
         *self.cached.lock().unwrap() = Some((Instant::now(), value.clone()));
         value

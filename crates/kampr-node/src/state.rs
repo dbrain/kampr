@@ -108,8 +108,14 @@ impl Node {
 
     pub async fn caps(&self) -> serde_json::Value {
         let primary = self.sessions.primary();
+        let served: Vec<String> = self.sessions.all().iter().map(|s| s.name.clone()).collect();
         self.caps
-            .get(&self.config.node_id, &primary.herdr, &self.config.herdr.binary)
+            .get(
+                &self.config.node_id,
+                &primary.herdr,
+                &self.config.herdr.binary,
+                &served,
+            )
             .await
     }
 

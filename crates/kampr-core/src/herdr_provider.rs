@@ -173,19 +173,10 @@ impl HerdrProvider {
         self.inner.health.subscribe()
     }
 
-    pub fn socket(&self) -> &std::path::Path {
-        self.inner.herdr.socket()
-    }
-
     /// `None` until herdr has answered once — an unknown version rather than a fabricated one.
     pub fn herdr_version(&self) -> Option<String> {
         let version = self.inner.snapshot.borrow().version.clone();
         (!version.is_empty()).then_some(version)
-    }
-
-    /// The width an `observe` stream must use for this pane, and the width its grid really is.
-    pub async fn observe_cols(&self, pane_id: &str, rect: u16) -> u16 {
-        self.inner.observe_cols(pane_id, rect).await
     }
 }
 

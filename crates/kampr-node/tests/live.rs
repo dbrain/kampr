@@ -161,7 +161,7 @@ impl Harness {
         config.herdr.socket = session.socket.display().to_string();
         // Serve only this test's own session. The node discovers every herdr running on the
         // machine by default, and another test's throwaway herd is not this test's herd.
-        config.herdr.sessions = vec![session.name.clone()];
+        config.herdr.sessions = Some(Vec::new());
         config.auth.audit = true;
         config.limits.client_queue = 32;
         tweak(&mut config);
@@ -548,6 +548,21 @@ async fn capability_discovery_comes_from_the_host_not_a_list() {
         .filter_map(|s| s["name"].as_str())
         .collect();
     assert!(sessions.contains(&h._session.name.as_str()), "{sessions:?}");
+
+    // A session this node does not serve must not be advertised as one a client can open a pane
+    // on — that promise is what made the capability a lie.
+    let served: Vec<&str> = caps["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["served"] == true)
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    assert_eq!(
+        served,
+        [h._session.name.as_str()],
+        "this node serves only its own session: {caps}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1312,6 +1327,9 @@ async fn the_port_is_bound_before_herdr_is_needed() {
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("lonely");
     config.herdr.socket = state.path().join("nothing-here.sock").display().to_string();
+    // Only the configured session, which does not exist. Otherwise this node discovers every
+    // other test's throwaway herd and the herd is not empty for reasons that are not the point.
+    config.herdr.sessions = Some(Vec::new());
 
     let started = tokio::time::Instant::now();
     let (node, origin, server) = serve_config(config, &state).await;
@@ -1429,7 +1447,7 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("multinode");
     config.herdr.socket = first.socket.display().to_string();
-    config.herdr.sessions = vec![second.name.clone()];
+    config.herdr.sessions = Some(vec![second.name.clone()]);
     let (node, origin, server) = serve_config(config, &state).await;
 
     let base = node.config.node_id.clone();
@@ -1437,7 +1455,10 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while tokio::time::Instant::now() < deadline {
         let herd = node.herd();
-        if herd.nodes.len() == 2 && herd.panes.iter().any(|p| p.node_id == extra) {
+        if herd.nodes.len() == 2
+            && herd.panes.iter().any(|p| p.node_id == extra)
+            && herd.panes.iter().any(|p| p.node_id == base)
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1447,13 +1468,23 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
     let mut socket = open(&origin, &token).await;
     until(&mut socket, "hello", 10).await;
     let mut herd = until(&mut socket, "herd", 10).await;
-    for _ in 0..30 {
-        if herd["nodes"].as_array().unwrap().len() == 2 {
+    let both = |herd: &Value| {
+        [base.as_str(), extra.as_str()].iter().all(|id| {
+            herd["nodes"]
+                .as_array()
+                .is_some_and(|n| n.iter().any(|n| n["id"] == *id))
+                && herd["panes"]
+                    .as_array()
+                    .is_some_and(|p| p.iter().any(|p| p["node_id"] == *id))
+        })
+    };
+    for _ in 0..60 {
+        if both(&herd) {
             break;
         }
+        tokio::time::sleep(Duration::from_millis(500)).await;
         send(&mut socket, json!({ "t": "resync" })).await;
         herd = until(&mut socket, "herd", 10).await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     let ids: Vec<String> = herd["nodes"]
@@ -1534,19 +1565,15 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
             json!({ "pane_id": local, "text": "clear; printf '%.0s#' $(seq 1 400); echo\n" }),
         )
         .await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let pty = widest_rendered_row(&h._session, &local).await;
-    assert!(pty > 40, "the probe line must have filled the screen, got {pty}");
+    let pty = filled_width(&h._session, &local).await;
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    let before = until(&mut socket, "grid.reset", 20).await;
+    let before = await_grid_at(&mut socket, &pane, pty).await;
     assert_eq!(
         before["cols"].as_u64().unwrap(),
         pty as u64,
-        "unsplit: the grid is the PTY's width"
+        "unsplit: the grid is the PTY's width, not the rect"
     );
-    assert_eq!(longest_hash_run(&before), pty, "and nothing is cropped");
 
     let rect_before = rect_width(&h._session, &local).await;
     h._session
@@ -1568,22 +1595,50 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
     );
 
     // The node must follow the PTY, not the rect it was just handed.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut widths = Vec::new();
+    let after = await_grid_at(&mut socket, &pane, pty).await;
+    assert_eq!(after["cols"].as_u64().unwrap(), pty as u64);
+}
+
+/// Waits for a `grid.reset` on this pane whose grid is `pty` wide and whose probe line is
+/// uncropped. The first reading can miss — a probe that loses its socket call falls back to the
+/// rect and the next poll corrects it — so what is asserted is that the node *arrives* at the
+/// PTY's width, not that it never guesses.
+async fn await_grid_at(socket: &mut Socket, pane: &str, pty: u16) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    let mut seen = Vec::new();
     while tokio::time::Instant::now() < deadline {
-        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+        let Some(message) = recv(socket, Duration::from_secs(3)).await else {
             continue;
         };
-        if message["t"] != "grid.reset" || message["pane"] != pane.as_str() {
+        if message["t"] != "grid.reset" || message["pane"] != pane {
             continue;
         }
-        widths.push(message["cols"].as_u64().unwrap() as u16);
+        seen.push(message["cols"].as_u64().unwrap_or(0));
         if longest_hash_run(&message) == pty {
-            assert_eq!(message["cols"].as_u64().unwrap(), pty as u64);
-            return;
+            return message;
         }
     }
-    panic!("after the split the grid never came back at {pty} columns; saw {widths:?}");
+    panic!("the grid never came back at {pty} columns uncropped; saw widths {seen:?}");
+}
+
+/// Waits for the probe line to reach the screen and returns the width it wrapped at. A wrapped
+/// line is what makes the reading exact, and under load the shell can take seconds to produce it.
+async fn filled_width(session: &Session, pane: &str) -> u16 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut widest = 0;
+    let mut settled = 0;
+    while tokio::time::Instant::now() < deadline {
+        let now = widest_rendered_row(session, pane).await;
+        settled = if now == widest { settled + 1 } else { 0 };
+        widest = widest.max(now);
+        // 400 `#` cannot fit on one row of any plausible pane, so anything this wide has wrapped.
+        // Two agreeing samples, because a read that lands mid-write catches a half-drawn row.
+        if widest > 60 && settled >= 2 {
+            return widest;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("the probe line never settled; widest row was {widest}");
 }
 
 async fn widest_rendered_row(session: &Session, pane: &str) -> u16 {
@@ -1813,4 +1868,387 @@ async fn a_shell_pane_has_no_conversation_to_page() {
     send(&mut socket, json!({ "t": "convo.load", "pane": pane })).await;
     let refusal = until_pane(&mut socket, "error", &pane, 15).await;
     assert_eq!(refusal["code"], "not_found", "{refusal}");
+}
+
+/// One `managed` ack, matched by op: the node serves every session on the machine, so an ack for
+/// somebody else's op is not this op's answer.
+async fn managed(socket: &mut Socket, op: &str, seconds: u64) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "managed" && message["op"] == op {
+            return message;
+        }
+        seen.push(format!("{}/{}", message["t"], message["op"]));
+    }
+    panic!("never saw managed for {op}; saw {seen:?}");
+}
+
+async fn ok(socket: &mut Socket, request: Value, seconds: u64) -> Value {
+    let op = request["op"].as_str().expect("an op").to_string();
+    send(socket, request).await;
+    let ack = managed(socket, &op, seconds).await;
+    assert_eq!(ack["ok"], true, "{op}: {ack}");
+    ack
+}
+
+/// Waits for a `herd.patch` that adds a pane under `workspace`, which is what proves the node —
+/// not the client — put it on screen.
+async fn patch_adding(socket: &mut Socket, workspace: &str, seconds: u64) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] != "herd.patch" {
+            continue;
+        }
+        for pane in message["added"]["panes"].as_array().unwrap_or(&Vec::new()) {
+            if pane["workspace_id"] == workspace {
+                return pane["id"].as_str().expect("a pane id").to_string();
+            }
+        }
+    }
+    panic!("no herd.patch added a pane under {workspace}");
+}
+
+/// Every op the Kotlin client can build, in the JSON it builds, against a real herd. The shapes
+/// come from `tests/fixtures/manage-ops.json`, which `client/shared`'s `ManageWireTest` asserts
+/// the client emits byte for byte — so neither side gets to agree with itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_client_op_lands_on_a_real_herd() {
+    let h = harness!("clientops");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let herd = until(&mut socket, "herd", 10).await;
+
+    // The ids a client addresses its containers by have to be on the wire in the first place.
+    let seed = herd["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["node_id"] == node.as_str())
+        .expect("a pane of this harness's session")
+        .clone();
+    assert!(seed["workspace_id"].as_str().is_some(), "{seed}");
+    assert!(seed["tab_id"].as_str().is_some(), "{seed}");
+
+    let repo = tempfile::tempdir().expect("a repo");
+    let repo_path = repo.path().display().to_string();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec![
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(repo.path())
+                .status()
+                .expect("git")
+                .success()
+        );
+    }
+
+    // workspace.create, with the env map the client's old `Map<String, String?>` could not send.
+    let created = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "workspace.create", "node": node, "label": "kampr-probe",
+                "cwd": repo_path, "env": { "KAMPR_PROBE": "1" } }),
+        20,
+    )
+    .await;
+    let workspace = created["id"].as_str().expect("a workspace id").to_string();
+    let first_pane = patch_adding(&mut socket, &workspace, 25).await;
+
+    // tab.create takes a workspace, and the node derives one from a pane id too.
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "tab.create", "at": workspace, "label": "tests", "cwd": repo_path }),
+        20,
+    )
+    .await;
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "tab.create", "at": first_pane, "label": "derived" }),
+        20,
+    )
+    .await;
+
+    // pane.split, with the float the old type could not send either.
+    let split = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.split", "at": first_pane, "direction": "right", "ratio": 0.35 }),
+        20,
+    )
+    .await;
+    let second_pane = split["id"].as_str().expect("a pane id").to_string();
+    assert_ne!(second_pane, first_pane);
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.zoom", "at": first_pane, "mode": "on" }),
+        15,
+    )
+    .await;
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.zoom", "at": first_pane, "mode": "off" }),
+        15,
+    )
+    .await;
+
+    // Only a pane's label is nullable, and null is what clears it.
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "rename", "at": first_pane, "label": "build" }),
+        15,
+    )
+    .await;
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "rename", "at": first_pane, "label": null }),
+        15,
+    )
+    .await;
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "rename", "at": workspace, "label": "kampr-probe-2" }),
+        15,
+    )
+    .await;
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "rename", "at": workspace, "label": null }),
+    )
+    .await;
+    let refused = managed(&mut socket, "rename", 15).await;
+    assert_eq!(
+        refused["ok"], false,
+        "a workspace has no label to clear: {refused}"
+    );
+    assert_eq!(refused["code"], "bad_request");
+
+    for at in [&first_pane, &workspace] {
+        ok(&mut socket, json!({ "t": "manage", "op": "focus", "at": at }), 15).await;
+    }
+
+    // agent.start, with the array of args the old type could not send.
+    let kinds = {
+        send(&mut socket, json!({ "t": "caps" })).await;
+        let caps = until(&mut socket, "caps", 20).await;
+        caps["agent_kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|k| k.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+    };
+    assert!(kinds.contains(&"claude".to_string()), "{kinds:?}");
+    // A pane herdr has only just created is not yet "an available shell", so this is the one op
+    // that has to wait for the thing it acts on rather than for its own answer.
+    let mut started = json!(null);
+    for _ in 0..20 {
+        send(
+            &mut socket,
+            json!({ "t": "manage", "op": "agent.start", "at": second_pane, "kind": "claude",
+                    "name": "probe", "args": [] }),
+        )
+        .await;
+        started = managed(&mut socket, "agent.start", 30).await;
+        if started["ok"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(started["ok"], true, "{started}");
+    // The agent is real: the node sees the harness on the pane and says so in the herd.
+    let mut agent = None;
+    for _ in 0..40 {
+        agent = h
+            .node
+            .herd()
+            .panes
+            .iter()
+            .find(|p| p.id == second_pane)
+            .and_then(|p| p.agent.clone());
+        if agent.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(agent.as_deref(), Some("claude"), "the herd never saw the agent");
+
+    // worktree.create / worktree.open — Herdr's own git support, straight through.
+    let worktree = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "worktree.create", "node": node, "cwd": repo_path,
+                "branch": "kampr/probe", "base": "main", "label": "probe-tree" }),
+        30,
+    )
+    .await;
+    assert!(worktree["ok"] == true, "{worktree}");
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "worktree.open", "node": node, "path": repo_path,
+                "label": "probe-open" }),
+        30,
+    )
+    .await;
+
+    // A pane can be closed on its own, before the layout round-trip renumbers the tab.
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "close", "at": second_pane }),
+        20,
+    )
+    .await;
+
+    // layout.export round-trips into layout.apply unchanged.
+    let tab = h
+        .node
+        .herd()
+        .panes
+        .iter()
+        .find(|p| p.id == first_pane)
+        .and_then(|p| p.tab_id.clone())
+        .expect("the pane's tab id");
+    let exported = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "layout.export", "at": tab }),
+        20,
+    )
+    .await;
+    assert!(exported["layout"]["root"]["type"].is_string(), "{exported}");
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "layout.apply", "at": tab, "layout": exported["layout"] }),
+        20,
+    )
+    .await;
+
+    // A named session is a whole separate herdr server. Created here, stopped here, gone here.
+    let session = format!("kampr-probe-{}", std::process::id());
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    let session_dir = herdr_home().join("sessions").join(&session);
+    for _ in 0..100 {
+        if session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        session_dir.join("herdr.sock").exists(),
+        "no socket at {session_dir:?}"
+    );
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.stop", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = std::fs::remove_dir_all(&session_dir);
+
+    // Closing the workspace takes its panes with it, and the client hears about it as a patch.
+    let doomed: Vec<String> = h
+        .node
+        .herd()
+        .panes
+        .iter()
+        .filter(|p| p.workspace_id.as_deref() == Some(workspace.as_str()))
+        .map(|p| p.id.clone())
+        .collect();
+    assert!(!doomed.is_empty(), "the probe workspace had no panes to lose");
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "close", "at": workspace }),
+        20,
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    let mut gone = false;
+    while tokio::time::Instant::now() < deadline && !gone {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "herd.patch" {
+            gone = message["removed_ids"]
+                .as_array()
+                .is_some_and(|ids| doomed.iter().any(|d| ids.iter().any(|id| id == &json!(d))));
+        }
+    }
+    assert!(gone, "closing the workspace never arrived as a herd.patch");
+
+    // If the client learns a new op, this test has to have driven it against a real herd before
+    // it counts as working.
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/manage-ops.json")).unwrap();
+    let expected: std::collections::BTreeSet<&str> = fixture
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(|v| v["op"].as_str())
+        .collect();
+    let exercised: std::collections::BTreeSet<&str> = [
+        "workspace.create",
+        "tab.create",
+        "pane.split",
+        "pane.zoom",
+        "rename",
+        "close",
+        "focus",
+        "agent.start",
+        "worktree.create",
+        "worktree.open",
+        "layout.export",
+        "layout.apply",
+        "session.create",
+        "session.stop",
+    ]
+    .into_iter()
+    .collect();
+    assert!(
+        expected.difference(&exercised).next().is_none(),
+        "no live coverage for {:?}",
+        expected.difference(&exercised).collect::<Vec<_>>(),
+    );
+}
+
+/// A read-only device is refused every one of them by the same gate, which is why the client
+/// hides the affordances rather than offering a tap into a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_readonly_device_is_refused_every_manage_op() {
+    let h = harness!("nomanage");
+    let token = h.token(Role::Readonly).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    for op in [
+        json!({ "t": "manage", "op": "workspace.create", "node": h.node.node_id() }),
+        json!({ "t": "manage", "op": "pane.split", "at": pane, "direction": "right", "ratio": 0.5 }),
+        json!({ "t": "manage", "op": "rename", "at": pane, "label": null }),
+        json!({ "t": "manage", "op": "close", "at": pane }),
+    ] {
+        send(&mut socket, op).await;
+        assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
+    }
 }

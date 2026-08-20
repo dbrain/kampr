@@ -56,7 +56,7 @@ Ten of the fifteen are fixed, each with a test that fails first. The rest are op
 ## Incomplete
 
 - ~~**Phase 4 (mesh) is entirely absent.**~~ — **BUILT** — `crates/kampr-mesh`: outbound-dialling peers, a mutual ed25519 handshake over `/mesh` with single-use join codes and a pinned hub key, and a relay that keeps one `watch` per pane per link behind a shadow grid. Proved by `crates/kampr-node/tests/mesh.rs` — two nodes against two herdr sessions on one machine. **What one machine cannot prove: real network latency, a real NAT, and a real reverse proxy.** The client half of the latency indicator (P4.9) is still to draw.
-- **Phase 4.5 has a server and no client.** All 13 `manage` ops are implemented and `caps.manage` is true; `ClientMsg.Manage` is never constructed anywhere in `client/`. `Managed` and `NodeCaps` are decoded and discarded. `Manage.fields` is typed `Map<String,String?>`, which cannot express `ratio`, `env`, `args` or `layout`.
+- ~~**Phase 4.5 has a server and no client.**~~ — **FIXED** — `ClientMsg.Manage` carries a sealed `ManageOp` with one type per op, so `ratio`, `env`, `args` and `layout` are real JSON types; the client asks for `caps` on `hello` and again when the herd changes; `Managed` carries `code`/`message`/`layout`; and the New sheet plus the pane actions reach every op. The mosaic (P4.5.8/P4.5.9) is still missing.
 - **Per-device prefs never restore.** The node replies only to a client `prefs` message and pushes nothing at `hello`; the client only ever writes. And a one-key write replaces the whole blob, so setting the view erases the zoom.
 - **No PWA** (P6.10) — yet `security.installable` is computed and surfaced as "install to home screen", a promise nothing can keep. Phase 8's push design has no foundation.
 - **No notifications** (Phase 8). `caps.push` is hardcoded false; `pane.agent_status_changed` is not subscribed.
@@ -105,7 +105,7 @@ The whole point of a phone client is being *told* an agent is blocked. None of i
 | Per-theme ANSI palette (P6.8c) | **Built** — 16 slots per theme on a dark terminal ground ([ADR 0009](./adr/0009-the-terminal-keeps-its-own-ground.md)) |
 | Accessibility (P6.11) | Zero `semantics` / `contentDescription` in the client |
 | PWA manifest + service worker (P6.10) | Absent — yet `security.installable` is advertised |
-| `manage` client UI (Phase 4.5) | Server complete; `ClientMsg.Manage` is never constructed |
+| Kampr split view (P4.5.8/P4.5.9) | The client-side mosaic over several nodes' panes; `manage` itself now has a client |
 | Kampr split view / mosaic (P4.5.8) | Designed, not built |
 | Kampr on Android as a *provider* (Phase 8.5) | Not started — distinct from the Android *client*, which is in flight |
 | ARCHITECTURE.md, ADRs, threat model (P3.1, P9.2, P9.3) | Not written |
