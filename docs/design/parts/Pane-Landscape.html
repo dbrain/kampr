@@ -1,0 +1,52 @@
+  <div style="display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--bar); border-bottom: var(--chrome-border);">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="var(--dim)" stroke-width="1.7"><path d="M10 3 L5 8 L10 13"/></svg>
+    <span style="font-size: 13.5px; font-weight: 700;">kampr · claude</span>
+    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">comingclean</span>
+    <div style="display: flex; align-items: center; gap: 6px; background: var(--surface); border: var(--card-border); border-radius: 999px; padding: 4px 10px;">
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="var(--done)" stroke-width="1.7"><path d="M2 6.3 4.6 8.8 10 3.4"/></svg>
+      <span style="font-family: var(--font-mono); font-size: 10px; color: var(--dim); font-weight: 600;">94×24 fits — no lease needed</span>
+    </div>
+    <div style="flex-grow: 1;"></div>
+    <div style="background: var(--blocked-bg); border: var(--card-border); color: var(--blocked); font-size: 10.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px;">Blocked</div>
+    <div style="background: var(--surface); border: var(--card-border); color: var(--dim); font-size: 10.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px;">Conversation</div>
+  </div>
+
+  <div style="flex-grow: 1; padding: 10px 14px; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text); background: var(--surface-2);">
+<span style="color: var(--done);">●</span> Read bridge/server.ts (412 lines)
+
+<span style="color: var(--done);">●</span> The write path needs the device check in two places, not one. Adding both.
+
+<span style="color: var(--mute);">╭─ </span><span style="color: var(--accent);">Edit</span><span style="color: var(--mute);"> ──────────────────────────────────────────────────────────────────╮</span>
+<span style="color: var(--mute);">│</span> bridge/server.ts                                                        <span style="color: var(--mute);">│</span>
+<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">142</span> <span style="color: var(--done);">+  if (!device.canWrite) {</span>                                        <span style="color: var(--mute);">│</span>
+<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">143</span> <span style="color: var(--done);">+    return json(403, "read-only")</span>                                <span style="color: var(--mute);">│</span>
+<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">144</span> <span style="color: var(--done);">+  }</span>                                                             <span style="color: var(--mute);">│</span>
+<span style="color: var(--mute);">╰────────────────────────────────────────────────────────────────────────────╯</span>
+
+Do you want to make this edit?
+
+<span style="color: var(--accent);">❯ 1.</span> Yes
+<span style="color: var(--dim);">  2.</span> Yes, and don't ask again
+<span style="color: var(--dim);">  3.</span> No, tell Claude what to do differently<span style="background: var(--text); color: var(--surface-2);"> </span>
+  </div>
+
+  <div style="background: var(--bar); border-top: var(--chrome-border); padding: 7px 8px 9px 8px; display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 5px;">
+    <div class="key" style="font-size: 10px; padding: 9px 0;">esc</div>
+    <div class="key" style="font-size: 10px; padding: 9px 0;">tab</div>
+    <div class="keyon" style="font-size: 10px; padding: 9px 0;">ctrl</div>
+    <div class="key" style="font-size: 10px; padding: 9px 0;">alt</div>
+    <div class="key" style="font-size: 10px; padding: 9px 0;">/</div>
+    <div class="key" style="font-size: 10px; padding: 9px 0;">|</div>
+    <div class="key" style="font-size: 10px; padding: 9px 0;">-</div>
+    <div class="key" style="font-size: 8.5px; padding: 9px 0;">home</div>
+    <div class="key" style="font-size: 8.5px; padding: 9px 0;">end</div>
+    <div class="key" style="font-size: 8.5px; padding: 9px 0;">pgup</div>
+    <div class="key" style="font-size: 8.5px; padding: 9px 0;">pgdn</div>
+    <div class="key" style="font-size: 11px; padding: 9px 0; font-family: var(--font-ui);">←</div>
+    <div class="key" style="font-size: 11px; padding: 9px 0; font-family: var(--font-ui);">↓</div>
+    <div class="key" style="font-size: 11px; padding: 9px 0; font-family: var(--font-ui);">↑</div>
+    <div class="key" style="font-size: 11px; padding: 9px 0; font-family: var(--font-ui);">→</div>
+    <div class="key" style="padding: 9px 0; display: flex; align-items: center; justify-content: center;">
+      <svg width="16" height="12" viewBox="0 0 20 14" fill="none" stroke="var(--text)" stroke-width="1.2"><rect x="0.6" y="0.6" width="18.8" height="12.8" rx="2"/><path d="M4 4h1M7 4h1M10 4h1M13 4h1M16 4h1M4 7h1M7 7h1M10 7h1M13 7h1M16 7h1M6 10h8"/></svg>
+    </div>
+  </div>

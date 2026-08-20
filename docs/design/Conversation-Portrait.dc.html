@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&family=Archivo:wght@500;700;900&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hi); }
+    * { box-sizing: border-box; }
+
+    [data-theme] {
+      --font-ui: 'Manrope', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 18px; --r-md: 13px; --r-sm: 10px;
+      --card-border: 1px solid transparent;
+      --chrome-border: 1px solid var(--line);
+      --label-tt: none; --label-ls: 0em; --label-w: 700;
+    }
+
+    [data-theme="soft"] {
+      --bg: #0e0f13; --bar: #12141a; --surface: #171a21; --surface-2: #090a0d;
+      --raise: #22262f; --line: #1e2129;
+      --text: #e8eaf0; --dim: #8d93a3; --mute: #545a68;
+      --accent: #6ea8fe; --accent-hi: #9cc4ff; --on-accent: #0e0f13;
+      --accent-soft: #16203050;
+      --blocked: #ff6b6b; --blocked-bg: #2c1b20; --working: #ffc857;
+      --idle: #5b6172; --done: #58d68d;
+    }
+
+    [data-theme="phosphor"] {
+      --bg: #0a0b0a; --bar: #0c0e0c; --surface: #101210; --surface-2: #070807;
+      --raise: #171a17; --line: #1d211d;
+      --text: #cdd6cd; --dim: #6b756b; --mute: #4d554d;
+      --accent: #f5c542; --accent-hi: #ffd968; --on-accent: #0a0b0a;
+      --accent-soft: #16130a;
+      --blocked: #ff5f56; --blocked-bg: #150d0c; --working: #f5c542;
+      --idle: #4a534a; --done: #57c46b;
+      --font-ui: 'JetBrains Mono', ui-monospace, monospace;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 2px; --r-md: 2px; --r-sm: 2px;
+      --card-border: 1px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.16em; --label-w: 700;
+    }
+
+    [data-theme="warm"] {
+      --bg: #12100e; --bar: #171412; --surface: #1a1714; --surface-2: #0d0b0a;
+      --raise: #241f1b; --line: #221e1a;
+      --text: #efe7dc; --dim: #8d8175; --mute: #5f574e;
+      --accent: #e0a458; --accent-hi: #f0bd7c; --on-accent: #12100e;
+      --accent-soft: #211a12;
+      --blocked: #e0685a; --blocked-bg: #2a1613; --working: #e0a458;
+      --idle: #4a423a; --done: #7fb069;
+      --font-ui: 'Instrument Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 14px; --r-md: 12px; --r-sm: 9px;
+      --label-tt: uppercase; --label-ls: 0.13em; --label-w: 600;
+    }
+
+    [data-theme="brutalist"] {
+      --bg: #000000; --bar: #000000; --surface: #000000; --surface-2: #000000;
+      --raise: #000000; --line: #ffffff;
+      --text: #ffffff; --dim: #8a8a8a; --mute: #5c5c5c;
+      --accent: #ff2b1f; --accent-hi: #ff6a60; --on-accent: #000000;
+      --accent-soft: #000000;
+      --blocked: #ff2b1f; --blocked-bg: #000000; --working: #ffffff;
+      --idle: #333333; --done: #ffffff;
+      --font-ui: 'Archivo', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 0px; --r-md: 0px; --r-sm: 0px;
+      --card-border: 2px solid var(--line);
+      --chrome-border: 2px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.2em; --label-w: 700;
+    }
+
+    .lbl { text-transform: var(--label-tt); letter-spacing: var(--label-ls); font-weight: var(--label-w); }
+    .card { background: var(--surface); border: var(--card-border); border-radius: var(--r-lg); }
+    .key  { background: var(--raise); border: var(--card-border); border-radius: var(--r-sm);
+            font-family: var(--font-mono); color: var(--text); text-align: center; padding: 12px 0; }
+    .keyon { background: var(--accent); color: var(--on-accent); border: var(--card-border);
+             border-radius: var(--r-sm); font-family: var(--font-mono); text-align: center;
+             padding: 12px 0; font-weight: 600; }
+</style>
+</helmet>
+<div data-theme="{{theme}}" style="width: 390px; height: 844px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
+  <div style="display: flex; align-items: center; gap: 11px; padding: 14px 16px 11px 16px; background: var(--bar);">
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="var(--dim)" stroke-width="1.7"><path d="M10 3 L5 8 L10 13"/></svg>
+    <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+      <span style="font-size: 16px; font-weight: 700;">kampr · claude</span>
+      <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">transcript · 214 turns</span>
+    </div>
+    <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="var(--dim)" stroke-width="1.7"><circle cx="7.6" cy="7.6" r="5.4"/><path d="M11.6 11.6 16 16"/></svg>
+  </div>
+
+  <div style="padding: 0 16px 11px 16px; background: var(--bar);">
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; background: var(--surface); border: var(--card-border); border-radius: var(--r-md); padding: 4px;">
+      <div style="text-align: center; padding: 8px 0; border-radius: var(--r-sm); font-size: 12.5px; font-weight: 500; color: var(--dim);">Terminal</div>
+      <div style="text-align: center; padding: 8px 0; border-radius: var(--r-sm); background: var(--raise); font-size: 12.5px; font-weight: 700;">Conversation</div>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1; overflow: hidden; padding: 4px 16px 0 16px; display: flex; flex-direction: column; gap: 14px;">
+
+    <div style="align-self: flex-end; max-width: 84%; background: var(--raise); border: var(--card-border); border-radius: var(--r-lg); padding: 11px 14px;">
+      <span style="font-size: 13.5px; line-height: 1.5;">which key names does herdr actually reject?</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 11px;">
+      <span style="font-size: 14px; line-height: 1.58; color: var(--text);">Six of them, and they are the ones a phone needs most. I probed the validator directly:</span>
+
+      <div style="display: flex; align-items: center; gap: 9px; background: var(--surface); border: var(--card-border); border-radius: var(--r-md); padding: 9px 12px;">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--dim)" stroke-width="1.6"><rect x="1" y="2.5" width="14" height="11" rx="2"/><path d="M4 6.4 6.2 8.2 4 10M8.4 10.4h3.4"/></svg>
+        <span style="font-family: var(--font-mono); font-size: 11.5px; color: var(--dim); flex-grow: 1;">Bash · probe key grammar</span>
+        <span style="font-size: 11px; color: var(--mute);">48 lines</span>
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="var(--mute)" stroke-width="1.8"><path d="M4.5 2.5 9 7l-4.5 4.5"/></svg>
+      </div>
+
+      <div style="border: var(--card-border); border-color: var(--line); border-radius: var(--r-md); overflow: hidden;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; background: var(--surface); border-bottom: 1px solid var(--line);">
+          <div class="lbl" style="padding: 9px 11px; font-size: 10.5px; color: var(--dim);">Key</div>
+          <div class="lbl" style="padding: 9px 8px; font-size: 10.5px; color: var(--dim);">send_keys</div>
+          <div class="lbl" style="padding: 9px 8px; font-size: 10.5px; color: var(--dim);">we send</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid var(--line);">
+          <div style="padding: 9px 11px; font-family: var(--font-mono); font-size: 11.5px;">PageUp</div>
+          <div style="padding: 9px 8px; font-size: 11.5px; color: var(--blocked);">rejected</div>
+          <div style="padding: 9px 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--done);">ESC[5~</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid var(--line);">
+          <div style="padding: 9px 11px; font-family: var(--font-mono); font-size: 11.5px;">Home</div>
+          <div style="padding: 9px 8px; font-size: 11.5px; color: var(--blocked);">rejected</div>
+          <div style="padding: 9px 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--done);">ESC[H</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; border-bottom: 1px solid var(--line);">
+          <div style="padding: 9px 11px; font-family: var(--font-mono); font-size: 11.5px;">Delete</div>
+          <div style="padding: 9px 8px; font-size: 11.5px; color: var(--blocked);">rejected</div>
+          <div style="padding: 9px 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--done);">ESC[3~</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr;">
+          <div style="padding: 9px 11px; font-family: var(--font-mono); font-size: 11.5px;">F13</div>
+          <div style="padding: 9px 8px; font-size: 11.5px; color: var(--done);">accepted</div>
+          <div style="padding: 9px 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--dim);">F13</div>
+        </div>
+      </div>
+
+      <span style="font-size: 14px; line-height: 1.58; color: var(--text);">It does not matter, because <span style="font-family: var(--font-mono); font-size: 12.5px; background: var(--raise); border-radius: 4px; padding: 1px 5px;">pane.send_text</span> writes raw bytes:</span>
+
+      <div style="background: var(--surface-2); border: var(--card-border); border-radius: var(--r-md); overflow: hidden;">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 7px 11px; border-bottom: 1px solid var(--line);">
+          <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">ts</span>
+          <div style="display: flex; align-items: center; gap: 5px;">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="var(--dim)" stroke-width="1.5"><rect x="4" y="4" width="9" height="9" rx="1.6"/><path d="M10 4V2.6A1.6 1.6 0 0 0 8.4 1H2.6A1.6 1.6 0 0 0 1 2.6v5.8A1.6 1.6 0 0 0 2.6 10H4"/></svg>
+            <span style="font-size: 10.5px; color: var(--dim); font-weight: 600;">Copy</span>
+          </div>
+        </div>
+        <div style="padding: 10px 11px; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; white-space: pre; overflow: hidden;"><span style="color: var(--dim);">send</span>(pane, <span style="color: var(--done);">"\x1b[5~"</span>)  <span style="color: var(--mute);">// PageUp</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="padding: 0 12px 9px 12px;">
+    <div style="background: var(--blocked-bg); border: 1px solid var(--blocked); border-radius: var(--r-md); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 12.5px; font-weight: 700; flex-grow: 1;">Do you want to make this edit?</span>
+      </div>
+      <div style="display: flex; gap: 7px;">
+        <div style="background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 700; padding: 9px 0; border-radius: var(--r-sm); flex-grow: 1; text-align: center;">1 · Yes</div>
+        <div style="background: var(--raise); border: var(--card-border); color: var(--text); font-size: 12.5px; font-weight: 600; padding: 9px 0; border-radius: var(--r-sm); flex-grow: 1; text-align: center;">2 · Always</div>
+        <div style="background: var(--raise); border: var(--card-border); color: var(--text); font-size: 12.5px; font-weight: 600; padding: 9px 0; border-radius: var(--r-sm); flex-grow: 1; text-align: center;">3 · No</div>
+      </div>
+      <span style="font-size: 10.5px; color: var(--mute); line-height: 1.4;">Read from the transcript, answered by keys into the pane. No lease needed.</span>
+    </div>
+  </div>
+
+  <div style="background: var(--bar); border-top: var(--chrome-border); padding: 10px 12px 14px 12px; display: flex; align-items: center; gap: 9px;">
+    <div style="flex-grow: 1; background: var(--surface); border: var(--card-border); border-radius: 999px; padding: 12px 16px; font-size: 13.5px; color: var(--mute);">Reply to claude…</div>
+    <div style="width: 42px; height: 42px; border-radius: 999px; background: var(--accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+      <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="var(--on-accent)" stroke-width="1.9"><path d="M10 16V4M4.8 9.2 10 4l5.2 5.2"/></svg>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "$preview": {"width": 390, "height": 844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'soft' };
+  }
+}
+</script>
+</body>
+</html>

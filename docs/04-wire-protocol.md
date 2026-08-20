@@ -1,0 +1,159 @@
+# Kampr wire protocol v1
+
+The contract between a Kampr node and a client. **Write code against this, not against Herdr** —
+Herdr's frame format stops at the node and never reaches a client.
+
+One WebSocket per client at `/ws`, JSON text frames, every message a tagged object with `t`.
+Unknown `t` values and unknown fields are **ignored, not errors** — that is how v1 clients survive
+v1.1 nodes.
+
+## Why cells, not ANSI
+
+The node runs one VT emulator per pane (`kampr-term`, `alacritty`-free, built on `vte`) and ships
+clients a cell grid. Clients parse no escape sequences. Consequences that are load-bearing:
+
+- One emulator per pane, shared by every viewer, not one per viewer.
+- Selection, find, and OSC 8 hyperlinks are node features over a cell model, not three client
+  reimplementations. Hyperlinks survive here where `pane.read` drops them (probe #36/#37).
+- Zoom and pan are pure rendering. Kampr **never resizes a pane** (probe #17).
+
+## Ids
+
+`node_id` is a stable ULID chosen at `kampr init`. A pane's global id is `"<node_id>/<pane_id>"`,
+where `pane_id` is Herdr's own (`w3:p2`). Clients treat it as opaque.
+
+## Server → client
+
+### `hello` — first message on every connection
+```jsonc
+{ "t": "hello", "protocol": 1, "node_id": "01J...", "node_name": "comingclean",
+  "build": "0.1.0+abc1234", "role": "full",          // "full" | "readonly"
+  "caps": { "push": true, "scrollback": true, "conversation": true } }
+```
+
+### `herd` — the whole model; sent after `hello` and on any reconnect
+```jsonc
+{ "t": "herd",
+  "nodes": [ { "id": "01J...", "name": "comingclean", "kind": "local",   // "local"|"peer"
+               "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2" } ],
+  "panes": [ { "id": "01J.../w3:p2", "node_id": "01J...",
+               "workspace": "kampr", "tab": "1", "cwd": "/home/dbrain/dev/kampr",
+               "label": null,
+               "agent": "claude",                    // null on a shell pane — picks the default view
+               "agent_status": "blocked",            // idle|working|blocked|done|unknown
+               "cols": 74, "rows": 30,               // native, from the layout rect
+               "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
+               "has_conversation": true,             // a journal adapter exists for this harness
+               "updated_at": "2026-08-20T13:44:02Z" } ] }
+```
+
+`herd.patch` carries the same shapes under `added` / `changed` / `removed_ids`.
+
+### `styles` — append-only style table, per connection
+```jsonc
+{ "t": "styles", "from": 12,
+  "styles": [ { "fg": {"k":"r","v":[255,120,0]}, "bg": {"k":"d"},
+                "bold": true, "underline": true } ] }
+```
+`fg`/`bg` are `{"k":"d"}` default, `{"k":"i","v":n}` indexed 0–255, or `{"k":"r","v":[r,g,b]}`.
+Boolean attributes are omitted when false: `bold dim italic underline blink reverse strike hidden`.
+Style `0` is always the default pen. Ids are stable for the life of the connection.
+
+### `grid.reset` — full repaint; drop any prior state for this pane
+```jsonc
+{ "t": "grid.reset", "pane": "01J.../w3:p2", "cols": 74, "rows": 30,
+  "rows_data": [ /* RowDiff */ ],
+  "cursor": { "col": 37, "row": 9, "visible": true },
+  "links": [ "https://herdr.dev" ] }
+```
+
+### `grid.patch` — only the rows that changed
+```jsonc
+{ "t": "grid.patch", "pane": "01J.../w3:p2",
+  "rows": [ { "row": 9, "runs": [ {"s": 0, "x": "❯ 1. "}, {"s": 4, "x": "Yes"} ] } ],
+  "cursor": { "col": 5, "row": 10, "visible": true } }
+```
+
+**RowDiff** is `{ "row": <u16>, "runs": [ Run ] }`; **Run** is `{ "s": <style_id>, "x": "<text>",
+"l": <link_id?> }`. Runs are contiguous from column 0 and cover the full row width; trailing default
+cells may be omitted, and the client pads with blanks. Run-length beats per-cell JSON by ~40× on a
+full frame (~3 KB vs ~130 KB at 74×30).
+
+### `scrollback` — history above the viewport, oldest first
+```jsonc
+{ "t": "scrollback", "pane": "01J.../w3:p2", "from_top": 0,
+  "rows": [ /* RowDiff, row = absolute index from the top of the ring */ ],
+  "total_rows": 171, "complete": true }
+```
+Only sent for panes with `scrollback_rows > 0`. Sourced from `pane.read recent format=ansi` and run
+through the same emulator, so styling matches the live grid. Agent panes never have this — their
+history is the conversation.
+
+### `convo` / `convo.turn` — transcript-derived, agent panes only
+```jsonc
+{ "t": "convo", "pane": "01J.../w3:p2", "cursor": "opaque", "more": true,
+  "turns": [ { "id": "t_812", "role": "assistant", "at": "2026-08-20T13:41:55Z",
+               "blocks": [ { "b": "md", "text": "Six, and they are…\n\n| Key | … |" },
+                           { "b": "tool", "name": "Bash", "summary": "probe key grammar",
+                             "lines": 48, "state": "done" },
+                           { "b": "code", "lang": "ts", "text": "send(pane, \"\\u001b[5~\")" } ] } ] }
+```
+`b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
+it, so tables stay tables.
+
+### `pending` — a prompt is waiting
+```jsonc
+{ "t": "pending", "pane": "01J.../w3:p2", "question": "Do you want to make this edit?",
+  "options": [ { "key": "1", "label": "Yes" }, { "key": "2", "label": "Yes, and don't ask again" } ],
+  "source": "transcript" }              // "transcript" | "screen"
+```
+`source` records where the question came from. If a pending tool request turns out not to reach the
+transcript before approval (probe #40, still open), the node falls back to parsing `pane.read visible`
+and sets `"screen"`. **Clients must not care which.**
+
+### `error`
+```jsonc
+{ "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
+```
+Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `rate_limited` ·
+`bad_request`.
+
+## Client → server
+
+```jsonc
+{ "t": "watch",   "pane": "01J.../w3:p2", "scrollback": true, "conversation": true }
+{ "t": "unwatch", "pane": "01J.../w3:p2" }
+
+// Input. Exactly one of text/b64/keys. text and b64 go to pane.send_text as raw bytes;
+// keys goes to pane.send_keys and is limited to Herdr's grammar (probe #7).
+// Anything Herdr's grammar rejects — Home, End, PageUp, PageDown, Insert, Delete — is sent as
+// its escape sequence through text/b64 instead (probe #8/#9). Clients should prefer text.
+{ "t": "input", "pane": "01J.../w3:p2", "text": "\u001b[5~" }
+{ "t": "input", "pane": "01J.../w3:p2", "b64": "G1s1fg==" }
+{ "t": "input", "pane": "01J.../w3:p2", "keys": ["ctrl+c"] }
+
+{ "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
+{ "t": "convo.load",  "pane": "01J.../w3:p2", "before": "opaque" }
+{ "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
+{ "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
+```
+
+There is **no resize message and there will not be one.** The node cannot reshape a pane.
+
+## Ordering and recovery
+
+- Per pane the node sends exactly one `grid.reset` before any `grid.patch`, and re-sends `grid.reset`
+  after any gap it cannot patch across (observer restart, herdr reconnect, native geometry change).
+- Geometry changes arrive as a fresh `grid.reset` with new `cols`/`rows`. Herdr's own `full:true`
+  frames map to this one-to-one.
+- **Reconnect is cheap by construction**: a full grid is ~3 KB and Herdr coalesces bursts to end
+  state (probe #23/#25), so there is never a backlog. Clients render their cached last grid
+  immediately, marked stale, and swap on the `grid.reset`. No spinner.
+- The node drops a slow client's `grid.patch` queue and sends one `grid.reset` instead of buffering.
+
+## Auth
+
+The WebSocket carries a device token in `Sec-WebSocket-Protocol` or a `kampr_session` cookie; the
+node resolves it to a device and a role before `hello`. `readonly` devices get every server → client
+message and are refused `input` / `answer` with `not_writer`. HTTP endpoints for enrolment
+(`/auth/pair`, `/auth/webauthn/*`) are specified alongside the auth work, not here.

@@ -1,0 +1,123 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "Portrait \u00b7 Herd",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Conversation-Portrait.dc.html",
+      "title": "Portrait \u00b7 Conversation",
+      "x": 460,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Pane-Portrait.dc.html",
+      "title": "Portrait \u00b7 Terminal",
+      "x": 920,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Zoom-Control.dc.html",
+      "title": "Portrait \u00b7 Zoom",
+      "x": 1380,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Setup.dc.html",
+      "title": "Portrait \u00b7 Setup",
+      "x": 1840,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Pane-Typing.dc.html",
+      "title": "Portrait \u00b7 Typing (OSK up)",
+      "x": 2300,
+      "y": 0,
+      "w": 390,
+      "h": 470
+    },
+    {
+      "file": "Pane-Landscape.dc.html",
+      "title": "Landscape \u00b7 Terminal",
+      "x": 0,
+      "y": 960,
+      "w": 844,
+      "h": 390
+    },
+    {
+      "file": "Tokens.dc.html",
+      "title": "Theme tokens",
+      "x": 940,
+      "y": 960,
+      "w": 940,
+      "h": 620
+    },
+    {
+      "file": "Desktop.dc.html",
+      "title": "Desktop \u00b7 Split view",
+      "x": 0,
+      "y": 1700,
+      "w": 1440,
+      "h": 900
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": -580,
+      "y": 0,
+      "w": 500,
+      "text": "KAMPR \u2014 soft native, themeable.\n\nEvery artboard carries a Theme tweak: soft / phosphor / warm / brutalist. Nothing hardcodes a colour, font or radius. Soft native ships; the rest stay one attribute away.\n\nKAMPR NEVER RESIZES A SESSION.\n\nEarlier drafts borrowed the pane's shape to make it fit a phone. That is gone. Probed on 0.8.2: `terminal session control` ALWAYS claims geometry \u2014 there is no flag to decline it, and while it holds, the desktop client's own resize is ignored outright. So Kampr does not use control mode at all.\n\nInstead: `observe` at the pane's native size (which never touches the PTY) for pixels, and the plain JSON API for keystrokes. Both are read-shaped as far as the session is concerned. The pane stays 94x40 for everyone, always.\n\nWhich makes the phone problem a rendering problem, where it belongs: pinch-zoom and pan over the real grid, zoom remembered per pane per device, and a Conversation view that sidesteps the grid entirely for agent panes.\n\nCosts one thing, stated plainly: no `terminal.scroll`, so the live terminal shows the viewport only. Agent panes get their history from the transcript instead, which is better anyway."
+    },
+    {
+      "id": "note-default",
+      "x": 460,
+      "y": -178,
+      "w": 850,
+      "text": "CONVERSATION is the default for agent panes, and reflows natively \u2014 no zooming, no panning. It can answer a pending prompt without touching the terminal stream: question from the transcript, answer as keys.  \u00b7  TERMINAL is the default for shell panes, zoomed to a readable size with a pan indicator under the grid."
+    },
+    {
+      "id": "note-zoom",
+      "x": 1380,
+      "y": -178,
+      "w": 390,
+      "text": "ZOOM \u2014 presets, a minimap of where you are in the 94x40 grid, follow-cursor, and remembered per pane. The footer says the quiet part out loud: this is your view, not the session's shape."
+    },
+    {
+      "id": "note-setup",
+      "x": 1840,
+      "y": -178,
+      "w": 850,
+      "text": "SETUP starts from working, not from configuration.  \u00b7  TYPING is drawn at 390x470 \u2014 the visible area with the on-screen keyboard up. The native OSK owns everything below that edge; the key row docks to it, and characters echo back from the pane as you type. No compose box, no Send button."
+    },
+    {
+      "id": "note-landscape",
+      "x": 0,
+      "y": 1410,
+      "w": 844,
+      "text": "LANDSCAPE \u2014 844 px fits the native 94 columns at 13 px with no zoom and no panning at all. This is why landscape is a first-class layout rather than a rotation fallback: it is the one phone orientation where a desktop-shaped pane simply fits."
+    },
+    {
+      "id": "note-desktop",
+      "x": 0,
+      "y": 2640,
+      "w": 1440,
+      "text": "DESKTOP \u2014 terminal and conversation side by side. Sidebar is the whole mesh grouped by node with real latencies. Status strip reads \"no lease held \u2014 desktop shape untouched\", which is now not a promise about behaviour but a statement of what Kampr structurally cannot do."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

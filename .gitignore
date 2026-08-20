@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+__pycache__/
+/client/build
+/client/.gradle
+/client/local.properties

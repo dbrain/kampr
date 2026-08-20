@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&family=Archivo:wght@500;700;900&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hi); }
+    * { box-sizing: border-box; }
+
+    [data-theme] {
+      --font-ui: 'Manrope', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 18px; --r-md: 13px; --r-sm: 10px;
+      --card-border: 1px solid transparent;
+      --chrome-border: 1px solid var(--line);
+      --label-tt: none; --label-ls: 0em; --label-w: 700;
+    }
+
+    [data-theme="soft"] {
+      --bg: #0e0f13; --bar: #12141a; --surface: #171a21; --surface-2: #090a0d;
+      --raise: #22262f; --line: #1e2129;
+      --text: #e8eaf0; --dim: #8d93a3; --mute: #545a68;
+      --accent: #6ea8fe; --accent-hi: #9cc4ff; --on-accent: #0e0f13;
+      --accent-soft: #16203050;
+      --blocked: #ff6b6b; --blocked-bg: #2c1b20; --working: #ffc857;
+      --idle: #5b6172; --done: #58d68d;
+    }
+
+    [data-theme="phosphor"] {
+      --bg: #0a0b0a; --bar: #0c0e0c; --surface: #101210; --surface-2: #070807;
+      --raise: #171a17; --line: #1d211d;
+      --text: #cdd6cd; --dim: #6b756b; --mute: #4d554d;
+      --accent: #f5c542; --accent-hi: #ffd968; --on-accent: #0a0b0a;
+      --accent-soft: #16130a;
+      --blocked: #ff5f56; --blocked-bg: #150d0c; --working: #f5c542;
+      --idle: #4a534a; --done: #57c46b;
+      --font-ui: 'JetBrains Mono', ui-monospace, monospace;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 2px; --r-md: 2px; --r-sm: 2px;
+      --card-border: 1px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.16em; --label-w: 700;
+    }
+
+    [data-theme="warm"] {
+      --bg: #12100e; --bar: #171412; --surface: #1a1714; --surface-2: #0d0b0a;
+      --raise: #241f1b; --line: #221e1a;
+      --text: #efe7dc; --dim: #8d8175; --mute: #5f574e;
+      --accent: #e0a458; --accent-hi: #f0bd7c; --on-accent: #12100e;
+      --accent-soft: #211a12;
+      --blocked: #e0685a; --blocked-bg: #2a1613; --working: #e0a458;
+      --idle: #4a423a; --done: #7fb069;
+      --font-ui: 'Instrument Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 14px; --r-md: 12px; --r-sm: 9px;
+      --label-tt: uppercase; --label-ls: 0.13em; --label-w: 600;
+    }
+
+    [data-theme="brutalist"] {
+      --bg: #000000; --bar: #000000; --surface: #000000; --surface-2: #000000;
+      --raise: #000000; --line: #ffffff;
+      --text: #ffffff; --dim: #8a8a8a; --mute: #5c5c5c;
+      --accent: #ff2b1f; --accent-hi: #ff6a60; --on-accent: #000000;
+      --accent-soft: #000000;
+      --blocked: #ff2b1f; --blocked-bg: #000000; --working: #ffffff;
+      --idle: #333333; --done: #ffffff;
+      --font-ui: 'Archivo', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 0px; --r-md: 0px; --r-sm: 0px;
+      --card-border: 2px solid var(--line);
+      --chrome-border: 2px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.2em; --label-w: 700;
+    }
+
+    .lbl { text-transform: var(--label-tt); letter-spacing: var(--label-ls); font-weight: var(--label-w); }
+    .card { background: var(--surface); border: var(--card-border); border-radius: var(--r-lg); }
+    .key  { background: var(--raise); border: var(--card-border); border-radius: var(--r-sm);
+            font-family: var(--font-mono); color: var(--text); text-align: center; padding: 12px 0; }
+    .keyon { background: var(--accent); color: var(--on-accent); border: var(--card-border);
+             border-radius: var(--r-sm); font-family: var(--font-mono); text-align: center;
+             padding: 12px 0; font-weight: 600; }
+</style>
+</helmet>
+<div data-theme="{{theme}}" style="width: 390px; height: 844px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
+  <div style="padding: 16px 20px 11px 20px; display: flex; align-items: center; justify-content: space-between;">
+    <span style="font-size: 26px; font-weight: 800; letter-spacing: -0.02em;">Herd</span>
+    <div style="display: flex; align-items: center; gap: 8px; background: var(--surface); border: var(--card-border); border-radius: 999px; padding: 7px 13px;">
+      <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--done)"/></svg>
+      <span style="font-size: 12px; color: var(--dim); font-weight: 500;">3 nodes</span>
+    </div>
+  </div>
+
+  <div style="padding: 0 16px 14px 16px;">
+    <div style="background: var(--blocked-bg); border: 1px solid var(--blocked); border-radius: var(--r-lg); padding: 14px 16px; display: flex; flex-direction: column; gap: 9px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span class="lbl" style="font-size: 12px; color: var(--blocked);">Needs you</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 13px;">
+        <div style="width: 40px; height: 40px; border-radius: var(--r-md); background: var(--raise); border: var(--card-border); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+          <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="var(--blocked)" stroke-width="1.5"><path d="M10 2v16M2 10h16M4.4 4.4l11.2 11.2M15.6 4.4 4.4 15.6"/></svg>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+          <span style="font-size: 16px; font-weight: 700;">kampr · claude</span>
+          <span style="font-size: 12px; color: var(--dim);">Approve edit to server.ts</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 9px;">
+        <div style="background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 700; padding: 10px 0; border-radius: var(--r-md); flex-grow: 1; text-align: center;">Open</div>
+        <div style="background: var(--raise); border: var(--card-border); color: var(--text); font-size: 13px; font-weight: 600; padding: 10px 0; border-radius: var(--r-md); flex-grow: 1; text-align: center;">Approve</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding: 2px 22px 8px 22px; display: flex; align-items: baseline; justify-content: space-between;">
+    <span class="lbl" style="font-size: 13px; color: var(--text);">comingclean</span>
+    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">local · 0.4 ms</span>
+  </div>
+
+  <div style="padding: 0 16px; display: flex; flex-direction: column; gap: 8px;">
+    <div class="card" style="padding: 11px 14px; display: flex; align-items: center; gap: 12px;">
+      <div style="width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raise); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--blocked)" stroke-width="1.5"><path d="M10 2.5v15M2.5 10h15M5 5l10 10M15 5 5 15"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+        <span style="font-size: 15px; font-weight: 600;">kampr · claude</span>
+        <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">~/dev/kampr</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+        <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 11px; color: var(--mute);">now</span>
+      </div>
+    </div>
+    <div class="card" style="padding: 11px 14px; display: flex; align-items: center; gap: 12px;">
+      <div style="width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raise); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--working)" stroke-width="1.5"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+        <span style="font-size: 15px; font-weight: 600;">kob · codex</span>
+        <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">~/dev/tinyfiddler/kob</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+        <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--working)"/></svg>
+        <span style="font-size: 11px; color: var(--mute);">2m</span>
+      </div>
+    </div>
+    <div class="card" style="padding: 11px 14px; display: flex; align-items: center; gap: 12px; opacity: 0.72;">
+      <div style="width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raise); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--idle)" stroke-width="1.5"><rect x="2" y="3.5" width="16" height="13" rx="2"/><path d="M5.5 8 8 10.2 5.5 12.4M10.5 12.6h4"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+        <span style="font-size: 15px; font-weight: 500; color: var(--dim);">kampr · bash</span>
+        <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">~/dev/kampr</span>
+      </div>
+      <span style="font-size: 11px; color: var(--mute);">41m</span>
+    </div>
+  </div>
+
+  <div style="padding: 14px 22px 8px 22px; display: flex; align-items: baseline; justify-content: space-between;">
+    <span class="lbl" style="font-size: 13px; color: var(--text);">sungrow-pi</span>
+    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">tailnet · 38 ms</span>
+  </div>
+  <div style="padding: 0 16px;">
+    <div class="card" style="padding: 11px 14px; display: flex; align-items: center; gap: 12px;">
+      <div style="width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raise); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--done)" stroke-width="1.7"><path d="M4 10.5 8.2 14.5 16 5.5"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+        <span style="font-size: 15px; font-weight: 600;">sungrow · claude</span>
+        <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">~/dev/sungrow</span>
+      </div>
+      <span style="font-size: 11px; color: var(--mute);">12m</span>
+    </div>
+  </div>
+
+  <div style="padding: 14px 22px 8px 22px; display: flex; align-items: baseline; justify-content: space-between;">
+    <span class="lbl" style="font-size: 13px; color: var(--text);">nas</span>
+    <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">tailnet · 6 ms</span>
+  </div>
+  <div style="padding: 0 16px;">
+    <div class="card" style="padding: 11px 14px; display: flex; align-items: center; gap: 12px; opacity: 0.72;">
+      <div style="width: 36px; height: 36px; border-radius: var(--r-md); background: var(--raise); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--idle)" stroke-width="1.5"><rect x="2" y="3.5" width="16" height="13" rx="2"/><path d="M5.5 8 8 10.2 5.5 12.4M10.5 12.6h4"/></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1;">
+        <span style="font-size: 15px; font-weight: 500; color: var(--dim);">houseofdoge · bash</span>
+        <span style="font-family: var(--font-mono); font-size: 10.5px; color: var(--mute);">~/dev/houseofdoge</span>
+      </div>
+      <span style="font-size: 11px; color: var(--mute);">3h</span>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1;"></div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--bar); border-top: var(--chrome-border); padding: 5px 0 10px 0;">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 5px 0;">
+      <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="var(--accent)" stroke-width="1.7"><rect x="2" y="3" width="16" height="5" rx="1.5"/><rect x="2" y="12" width="16" height="5" rx="1.5"/></svg>
+      <span style="font-size: 10.5px; color: var(--accent); font-weight: 700;">Herd</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 5px 0;">
+      <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="var(--mute)" stroke-width="1.7"><rect x="2" y="2.5" width="16" height="15" rx="2.5"/><path d="M5.5 8 8 10.2 5.5 12.4"/></svg>
+      <span style="font-size: 10.5px; color: var(--mute); font-weight: 500;">Pane</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 5px 0;">
+      <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="var(--mute)" stroke-width="1.7"><circle cx="10" cy="4.5" r="2.5"/><circle cx="4.5" cy="15.5" r="2.5"/><circle cx="15.5" cy="15.5" r="2.5"/><path d="M10 7v3.4M8.4 12.4 6.6 13.6M11.6 12.4l1.8 1.2"/></svg>
+      <span style="font-size: 10.5px; color: var(--mute); font-weight: 500;">Nodes</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "$preview": {"width": 390, "height": 844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'soft' };
+  }
+}
+</script>
+</body>
+</html>

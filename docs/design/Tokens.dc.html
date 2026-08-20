@@ -1,0 +1,217 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;500;600&family=Archivo:wght@500;700;900&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hi); }
+    * { box-sizing: border-box; }
+
+    [data-theme] {
+      --font-ui: 'Manrope', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 18px; --r-md: 13px; --r-sm: 10px;
+      --card-border: 1px solid transparent;
+      --chrome-border: 1px solid var(--line);
+      --label-tt: none; --label-ls: 0em; --label-w: 700;
+    }
+
+    [data-theme="soft"] {
+      --bg: #0e0f13; --bar: #12141a; --surface: #171a21; --surface-2: #090a0d;
+      --raise: #22262f; --line: #1e2129;
+      --text: #e8eaf0; --dim: #8d93a3; --mute: #545a68;
+      --accent: #6ea8fe; --accent-hi: #9cc4ff; --on-accent: #0e0f13;
+      --accent-soft: #16203050;
+      --blocked: #ff6b6b; --blocked-bg: #2c1b20; --working: #ffc857;
+      --idle: #5b6172; --done: #58d68d;
+    }
+
+    [data-theme="phosphor"] {
+      --bg: #0a0b0a; --bar: #0c0e0c; --surface: #101210; --surface-2: #070807;
+      --raise: #171a17; --line: #1d211d;
+      --text: #cdd6cd; --dim: #6b756b; --mute: #4d554d;
+      --accent: #f5c542; --accent-hi: #ffd968; --on-accent: #0a0b0a;
+      --accent-soft: #16130a;
+      --blocked: #ff5f56; --blocked-bg: #150d0c; --working: #f5c542;
+      --idle: #4a534a; --done: #57c46b;
+      --font-ui: 'JetBrains Mono', ui-monospace, monospace;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 2px; --r-md: 2px; --r-sm: 2px;
+      --card-border: 1px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.16em; --label-w: 700;
+    }
+
+    [data-theme="warm"] {
+      --bg: #12100e; --bar: #171412; --surface: #1a1714; --surface-2: #0d0b0a;
+      --raise: #241f1b; --line: #221e1a;
+      --text: #efe7dc; --dim: #8d8175; --mute: #5f574e;
+      --accent: #e0a458; --accent-hi: #f0bd7c; --on-accent: #12100e;
+      --accent-soft: #211a12;
+      --blocked: #e0685a; --blocked-bg: #2a1613; --working: #e0a458;
+      --idle: #4a423a; --done: #7fb069;
+      --font-ui: 'Instrument Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      --r-lg: 14px; --r-md: 12px; --r-sm: 9px;
+      --label-tt: uppercase; --label-ls: 0.13em; --label-w: 600;
+    }
+
+    [data-theme="brutalist"] {
+      --bg: #000000; --bar: #000000; --surface: #000000; --surface-2: #000000;
+      --raise: #000000; --line: #ffffff;
+      --text: #ffffff; --dim: #8a8a8a; --mute: #5c5c5c;
+      --accent: #ff2b1f; --accent-hi: #ff6a60; --on-accent: #000000;
+      --accent-soft: #000000;
+      --blocked: #ff2b1f; --blocked-bg: #000000; --working: #ffffff;
+      --idle: #333333; --done: #ffffff;
+      --font-ui: 'Archivo', system-ui, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --r-lg: 0px; --r-md: 0px; --r-sm: 0px;
+      --card-border: 2px solid var(--line);
+      --chrome-border: 2px solid var(--line);
+      --label-tt: uppercase; --label-ls: 0.2em; --label-w: 700;
+    }
+
+    .lbl { text-transform: var(--label-tt); letter-spacing: var(--label-ls); font-weight: var(--label-w); }
+    .card { background: var(--surface); border: var(--card-border); border-radius: var(--r-lg); }
+    .key  { background: var(--raise); border: var(--card-border); border-radius: var(--r-sm);
+            font-family: var(--font-mono); color: var(--text); text-align: center; padding: 12px 0; }
+    .keyon { background: var(--accent); color: var(--on-accent); border: var(--card-border);
+             border-radius: var(--r-sm); font-family: var(--font-mono); text-align: center;
+             padding: 12px 0; font-weight: 600; }
+</style>
+</helmet>
+<div data-theme="{{theme}}" style="width: 940px; height: 620px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
+  <div style="padding: 20px 24px 14px 24px; display: flex; align-items: baseline; gap: 12px;">
+    <span style="font-size: 19px; font-weight: 800; letter-spacing: -0.02em;">One token layer, four skins</span>
+    <span style="font-size: 12.5px; color: var(--dim);">Soft native ships. The rest stay one attribute away.</span>
+  </div>
+
+  <div style="flex-grow: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 0 20px 20px 20px;">
+
+    <div data-theme="soft" style="background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 15px 14px; display: flex; flex-direction: column; gap: 12px; font-family: var(--font-ui); color: var(--text);">
+      <div style="display: flex; flex-direction: column; gap: 3px;">
+        <span style="font-size: 15px; font-weight: 800;">Soft native</span>
+        <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">data-theme="soft"</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px;">
+        <div style="height: 22px; border-radius: 5px; background: var(--surface); border: 1px solid var(--line);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--raise);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--accent);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--blocked);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--working);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--done);"></div>
+      </div>
+      <div class="card" style="padding: 9px 11px; display: flex; align-items: center; gap: 9px;">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 12px; font-weight: 700; flex-grow: 1;">kampr · claude</span>
+        <span style="font-size: 10px; color: var(--mute);">now</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;">
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">esc</div>
+        <div class="keyon" style="font-size: 9.5px; padding: 9px 0;">ctrl</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">alt</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">tab</div>
+      </div>
+      <span style="font-size: 10.5px; color: var(--mute); line-height: 1.4;">Manrope · IBM Plex Mono · 18px radii</span>
+    </div>
+
+    <div data-theme="phosphor" style="background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 15px 14px; display: flex; flex-direction: column; gap: 12px; font-family: var(--font-ui); color: var(--text);">
+      <div style="display: flex; flex-direction: column; gap: 3px;">
+        <span style="font-size: 15px; font-weight: 700;">Phosphor</span>
+        <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">data-theme="phosphor"</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px;">
+        <div style="height: 22px; background: var(--surface); border: 1px solid var(--line);"></div>
+        <div style="height: 22px; background: var(--raise);"></div>
+        <div style="height: 22px; background: var(--accent);"></div>
+        <div style="height: 22px; background: var(--blocked);"></div>
+        <div style="height: 22px; background: var(--working);"></div>
+        <div style="height: 22px; background: var(--done);"></div>
+      </div>
+      <div class="card" style="padding: 9px 11px; display: flex; align-items: center; gap: 9px;">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 12px; font-weight: 700; flex-grow: 1;">kampr · claude</span>
+        <span style="font-size: 10px; color: var(--mute);">now</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;">
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">esc</div>
+        <div class="keyon" style="font-size: 9.5px; padding: 9px 0;">ctrl</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">alt</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">tab</div>
+      </div>
+      <span style="font-size: 10.5px; color: var(--mute); line-height: 1.4;">JetBrains Mono throughout · 2px radii</span>
+    </div>
+
+    <div data-theme="warm" style="background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 15px 14px; display: flex; flex-direction: column; gap: 12px; font-family: var(--font-ui); color: var(--text);">
+      <div style="display: flex; flex-direction: column; gap: 3px;">
+        <span style="font-size: 15px; font-weight: 600;">Warm editorial</span>
+        <span style="font-family: var(--font-mono); font-size: 10px; color: var(--mute);">data-theme="warm"</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px;">
+        <div style="height: 22px; border-radius: 5px; background: var(--surface); border: 1px solid var(--line);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--raise);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--accent);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--blocked);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--working);"></div>
+        <div style="height: 22px; border-radius: 5px; background: var(--done);"></div>
+      </div>
+      <div class="card" style="padding: 9px 11px; display: flex; align-items: center; gap: 9px;">
+        <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="var(--blocked)"/></svg>
+        <span style="font-size: 12px; font-weight: 600; flex-grow: 1;">kampr · claude</span>
+        <span style="font-size: 10px; color: var(--mute);">now</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;">
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">esc</div>
+        <div class="keyon" style="font-size: 9.5px; padding: 9px 0;">ctrl</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">alt</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">tab</div>
+      </div>
+      <span style="font-size: 10.5px; color: var(--mute); line-height: 1.4;">Instrument Sans · JetBrains Mono · 14px radii</span>
+    </div>
+
+    <div data-theme="brutalist" style="background: var(--bg); border: 2px solid var(--line); padding: 15px 14px; display: flex; flex-direction: column; gap: 12px; font-family: var(--font-ui); color: var(--text);">
+      <div style="display: flex; flex-direction: column; gap: 3px;">
+        <span style="font-size: 15px; font-weight: 900; text-transform: uppercase;">Brutalist</span>
+        <span style="font-family: var(--font-mono); font-size: 10px; color: var(--dim);">data-theme="brutalist"</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px;">
+        <div style="height: 22px; background: var(--surface); border: 2px solid var(--line);"></div>
+        <div style="height: 22px; background: var(--dim);"></div>
+        <div style="height: 22px; background: var(--accent);"></div>
+        <div style="height: 22px; background: var(--blocked);"></div>
+        <div style="height: 22px; background: var(--working);"></div>
+        <div style="height: 22px; background: var(--mute);"></div>
+      </div>
+      <div class="card" style="padding: 9px 11px; display: flex; align-items: center; gap: 9px;">
+        <div style="width: 8px; height: 16px; background: var(--accent);"></div>
+        <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; flex-grow: 1;">kampr / claude</span>
+        <span style="font-size: 10px; color: var(--dim);">now</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;">
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">ESC</div>
+        <div class="keyon" style="font-size: 9.5px; padding: 9px 0;">CTRL</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">ALT</div>
+        <div class="key" style="font-size: 9.5px; padding: 9px 0;">TAB</div>
+      </div>
+      <span style="font-size: 10.5px; color: var(--dim); line-height: 1.4;">Archivo · IBM Plex Mono · zero radii</span>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "$preview": {"width": 940, "height": 620}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { theme: this.props.theme ?? 'soft' };
+  }
+}
+</script>
+</body>
+</html>
