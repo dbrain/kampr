@@ -19,6 +19,12 @@ use tracing::debug;
 
 const SCROLLBACK_POLL: Duration = Duration::from_secs(3);
 
+/// How often, and how many times, a blocked pane is re-read for a question its screen had not
+/// finished painting. Bounded so a harness whose dialog Kampr cannot parse costs a handful of
+/// reads rather than one every half second for as long as it sits there.
+const PENDING_RETRY: Duration = Duration::from_millis(500);
+const PENDING_ATTEMPTS: u32 = 12;
+
 /// How often a live session re-reads its own device row. The broadcast covers a revocation made
 /// in this process; this covers one made by `kampr setup` in another, and a Tier 0 expiry that
 /// nothing announces at all.
@@ -865,6 +871,13 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     }
 
     let mut blocked = false;
+    // A pane can be reported blocked before its dialog has finished painting, and the question is
+    // read off the screen (probe #42). Latching on the first read would leave a blocked agent with
+    // no prompt strip at all until its status happened to change again, so an unproductive read is
+    // retried for a short while rather than accepted.
+    let mut asking = 0u32;
+    let mut ask = tokio::time::interval(PENDING_RETRY);
+    ask.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut history = tokio::time::interval(SCROLLBACK_POLL);
     history.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut sent_rows = 0u32;
@@ -889,6 +902,17 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                     return;
                 }
             }
+            _ = ask.tick(), if asking > 0 => {
+                asking -= 1;
+                match send_pending(&herdr, &wire, &global, &local, true).await {
+                    None => return,
+                    Some(published) => {
+                        if published {
+                            asking = 0;
+                        }
+                    }
+                }
+            }
             _ = history.tick(), if scrollback => {
                 if !send_history(&registry, &wire, &global, &local, &mut sent_rows).await {
                     return;
@@ -905,8 +929,14 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 let now_blocked = status == Some(kampr_core::provider::AgentStatus::Blocked);
                 if now_blocked != blocked {
                     blocked = now_blocked;
-                    if !send_pending(&herdr, &wire, &global, &local, blocked).await {
-                        return;
+                    asking = if blocked { PENDING_ATTEMPTS } else { 0 };
+                    match send_pending(&herdr, &wire, &global, &local, blocked).await {
+                        None => return,
+                        Some(published) => {
+                            if published {
+                                asking = 0;
+                            }
+                        }
                     }
                 }
             }
@@ -944,26 +974,30 @@ async fn send_history(
 /// Claude publishes nothing about a pending request until after it is answered (probe #42), so
 /// the question comes off the screen and `source` says so. A cleared prompt is the same message
 /// with no question, which is the only way a client can tell the strip to go away.
+///
+/// `None` means the socket is gone. `Some(published)` says whether a prompt actually went out —
+/// a blocked pane whose screen has no readable dialog yet publishes nothing and is asked again.
 async fn send_pending(
     herdr: &kampr_herdr::Herdr,
     wire: &Wire,
     global: &str,
     local: &str,
     blocked: bool,
-) -> bool {
+) -> Option<bool> {
     let found = match blocked {
         true => pending::read(herdr, local).await,
         false => None,
     };
     if blocked && found.is_none() {
-        return true;
+        return Some(false);
     }
-    wire.send(&ServerMsg::Pending {
+    let sent = wire.send(&ServerMsg::Pending {
         pane: global.to_string(),
         question: found.as_ref().map(|f| f.question.clone()),
         options: found.map(|f| f.options).unwrap_or_default(),
         source: PendingSource::Screen,
-    })
+    });
+    sent.then_some(true)
 }
 
 /// What the node sends after the answer key, per harness — the wire says the node decides and a

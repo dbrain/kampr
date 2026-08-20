@@ -107,9 +107,23 @@ impl Drop for Session {
         })
         .join()
         .ok();
-        std::thread::sleep(Duration::from_millis(300));
+        // A herdr that has been asked to stop still owns its session directory for a moment, and
+        // one removal races it — which is what leaves a throwaway session listed forever. Wait
+        // for the socket to go, then keep removing until the directory stays gone.
+        for _ in 0..50 {
+            if !self.socket.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
         if let Some(dir) = self.socket.parent() {
-            let _ = std::fs::remove_dir_all(dir);
+            for _ in 0..25 {
+                let _ = std::fs::remove_dir_all(dir);
+                std::thread::sleep(Duration::from_millis(200));
+                if !dir.exists() {
+                    break;
+                }
+            }
         }
     }
 }
@@ -2166,8 +2180,22 @@ async fn every_client_op_lands_on_a_real_herd() {
         20,
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let _ = std::fs::remove_dir_all(&session_dir);
+    // Never leave a herdr session behind: wait for the socket to go, then keep removing until the
+    // directory stays gone — a shutting-down herdr writes into it after the socket has vanished.
+    for _ in 0..100 {
+        if !session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for _ in 0..20 {
+        let _ = std::fs::remove_dir_all(&session_dir);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !session_dir.exists() {
+            break;
+        }
+    }
+    assert!(!session_dir.exists(), "left {session_dir:?} behind");
 
     // Closing the workspace takes its panes with it, and the client hears about it as a patch.
     let doomed: Vec<String> = h

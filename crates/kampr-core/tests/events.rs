@@ -48,6 +48,10 @@ impl Session {
 }
 
 impl Drop for Session {
+    /// **Never leave a herdr behind**, including when the machine is loaded enough that
+    /// `server.stop` takes seconds to land. Removing the directory while the server is still
+    /// writing to it leaves the session listed and the process running, so the socket going away
+    /// is what is waited on rather than a fixed sleep.
     fn drop(&mut self) {
         let socket = self.socket.clone();
         std::thread::spawn(move || {
@@ -61,10 +65,20 @@ impl Drop for Session {
         })
         .join()
         .ok();
-        std::thread::sleep(Duration::from_millis(300));
-        if let Some(dir) = self.socket.parent() {
-            let _ = std::fs::remove_dir_all(dir);
+        for _ in 0..50 {
+            if !self.socket.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
+        let Some(dir) = self.socket.parent() else { return };
+        for _ in 0..10 {
+            if std::fs::remove_dir_all(dir).is_ok() && !dir.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        eprintln!("could not remove the throwaway session at {}", dir.display());
     }
 }
 

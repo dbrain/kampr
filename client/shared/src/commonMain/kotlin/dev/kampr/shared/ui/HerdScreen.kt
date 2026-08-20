@@ -48,6 +48,7 @@ fun HerdPortrait(
             KText("Herd", tokens.type.screenTitle, tokens.color.text)
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 NodeCountPill(herd.nodes.count { it.online }, compact = false)
+                MosaicAction()
                 NewAction()
             }
         }
@@ -97,6 +98,7 @@ fun HerdLandscape(
         ) {
             KText("Herd", tokens.type.paneTitle, tokens.color.text)
             NodeCountPill(herd.nodes.count { it.online }, compact = true)
+            MosaicAction(LANDSCAPE_TOUCH)
             NewAction(target = LANDSCAPE_TOUCH)
             Box(Modifier.weight(1f))
             if (triage.isNotEmpty()) {
@@ -179,7 +181,8 @@ fun HerdSidebar(
             KText("Kampr", tokens.type.screenTitle, tokens.color.text)
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 NodeCountPill(herd.nodes.count { it.online }, compact = true)
-                NewAction()
+                MosaicAction(LANDSCAPE_TOUCH)
+                NewAction(target = LANDSCAPE_TOUCH)
             }
         }
         if (triage.isNotEmpty()) {

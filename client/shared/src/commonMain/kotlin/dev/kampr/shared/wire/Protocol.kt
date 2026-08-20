@@ -63,7 +63,16 @@ data class NodeInfo(
     val online: Boolean = true,
     @SerialName("rtt_ms") val rttMs: Double? = null,
     @SerialName("herdr_version") val herdrVersion: String? = null,
-)
+    // Two nodes in one herd may be running different releases, and a client can only say so if
+    // each node names its own; `detail` is why a node is offline, in the node's own words.
+    val build: String? = null,
+    val detail: String? = null,
+) {
+    // A named session is its own herdr server and joins the herd as its own node, named
+    // `<host>/<session>`; the primary session carries the bare host name.
+    val host: String get() = name.substringBefore('/')
+    val session: String get() = name.substringAfter('/', "default")
+}
 
 @Serializable
 data class PaneInfo(

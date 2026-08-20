@@ -53,6 +53,9 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmTest.dependencies {
+            implementation(compose.desktop.currentOs)
+        }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
         }

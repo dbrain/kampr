@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -25,6 +26,7 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.ZoomMode
+import kotlinx.serialization.json.JsonObject
 import dev.kampr.shared.wire.workspaceIdOf
 
 @Composable
@@ -37,10 +39,17 @@ fun PaneActionsSheet(
 ) {
     val tokens = Kampr.tokens
     var refusal by remember { mutableStateOf<String?>(null) }
+    // Herdr's split tree, held exactly as it was handed over: the client never reads inside it,
+    // it just gives the same bytes back to `layout.apply`.
+    var snapshot by remember(pane.tabId) { mutableStateOf<JsonObject?>(null) }
 
     LaunchedEffect(outcome) {
         val ack = outcome ?: return@LaunchedEffect
-        if (!ack.ok) refusal = ack.message ?: ack.code else if (ack.op == "close") onDismiss()
+        when {
+            !ack.ok -> refusal = ack.message ?: ack.code
+            ack.op == "layout.export" -> snapshot = ack.layout
+            ack.op == "close" -> onDismiss()
+        }
     }
 
     fun send(op: ManageOp) {
@@ -63,7 +72,19 @@ fun PaneActionsSheet(
                     onManage = ::send,
                 )
                 pane.tabId?.let { tabId ->
-                    Target("tab", pane.tab ?: tabId.substringAfter('/'), tabId, clearable = false, zoomable = false, onManage = ::send)
+                    Target(
+                        kind = "tab",
+                        name = pane.tab ?: tabId.substringAfter('/'),
+                        at = tabId,
+                        clearable = false,
+                        zoomable = false,
+                        onManage = ::send,
+                    ) {
+                        Chip("snapshot shape", false, { send(ManageOp.LayoutExport(tabId)) })
+                        snapshot?.let { tree ->
+                            Chip("put it back", false, { send(ManageOp.LayoutApply(tabId, tree)) })
+                        }
+                    }
                 }
                 Target(
                     kind = "workspace",
@@ -96,6 +117,7 @@ private fun Target(
     clearable: Boolean,
     zoomable: Boolean,
     onManage: (ManageOp) -> Unit,
+    extra: @Composable (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     var renaming by remember { mutableStateOf(false) }
@@ -107,7 +129,7 @@ private fun Target(
             Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 LabelText(kind, tokens.type.micro, tokens.color.mute, Modifier.weight(1f))
                 KText(name, tokens.type.meta, tokens.color.dim)
             }
@@ -119,12 +141,13 @@ private fun Target(
                 if (zoomable) Chip("zoom", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) })
                 Chip("rename", renaming, { renaming = !renaming })
                 Chip("close", confirming, { confirming = !confirming }, quiet = !confirming)
+                extra?.invoke()
             }
             if (renaming) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     KField("label", label, Modifier.weight(1f)) { label = it }
                     Chip(
@@ -152,7 +175,7 @@ private fun Target(
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     KText(
                         if (kind == "tab") "Closes every pane in it." else "Close $name?",

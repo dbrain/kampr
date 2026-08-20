@@ -58,8 +58,8 @@ Ten of the fifteen are fixed, each with a test that fails first. The rest are op
 - ~~**Phase 4 (mesh) is entirely absent.**~~ — **BUILT** — `crates/kampr-mesh`: outbound-dialling peers, a mutual ed25519 handshake over `/mesh` with single-use join codes and a pinned hub key, and a relay that keeps one `watch` per pane per link behind a shadow grid. Proved by `crates/kampr-node/tests/mesh.rs` — two nodes against two herdr sessions on one machine. **What one machine cannot prove: real network latency, a real NAT, and a real reverse proxy.** The client half of the latency indicator (P4.9) is still to draw.
 - ~~**Phase 4.5 has a server and no client.**~~ — **FIXED** — `ClientMsg.Manage` carries a sealed `ManageOp` with one type per op, so `ratio`, `env`, `args` and `layout` are real JSON types; the client asks for `caps` on `hello` and again when the herd changes; `Managed` carries `code`/`message`/`layout`; and the New sheet plus the pane actions reach every op. The mosaic (P4.5.8/P4.5.9) is still missing.
 - **Per-device prefs never restore.** The node replies only to a client `prefs` message and pushes nothing at `hello`; the client only ever writes. And a one-key write replaces the whole blob, so setting the view erases the zoom.
-- **No PWA** (P6.10) — yet `security.installable` is computed and surfaced as "install to home screen", a promise nothing can keep. Phase 8's push design has no foundation.
-- **No notifications** (Phase 8). `caps.push` is hardcoded false; `pane.agent_status_changed` is not subscribed.
+- **PWA is now half built** (P6.10): a manifest, icons and a service worker ship, which is what Phase 8 needed. There is still no install prompt and no offline shell, so `security.installable` remains a bigger promise than the client keeps.
+- ~~**No notifications** (Phase 8). `caps.push` is hardcoded false; `pane.agent_status_changed` is not subscribed.~~ — **BUILT** — per-pane status subscription with debounced resubscribe (beats the poll by a mean 2.33 s over five live runs, probe #78), VAPID at `kampr init`, subscriptions in the device database, batching, the question in the body, snooze and mute; proved end to end with a real Firefox against Mozilla's push service. `docs/08-notifications.md`
 - **The install path is built but has never run for real.** `.github/workflows/release.yml` now produces the artefacts both scripts fetch, `install.sh` refuses a binary whose `SHA256SUMS` entry is missing or wrong, and a keyless cosign signature is checked when cosign is present. No tag has been pushed, so the workflow itself — cross-compilation, signing, publication — is unexercised.
 - **`min_herdr_version` is enforced by `kampr doctor` and nowhere else.** The floor is read off the live
   socket (`ping` carries `version` and `protocol`) and compared to the manifest's 0.8.2, with a test
@@ -69,7 +69,7 @@ Ten of the fifteen are fixed, each with a test that fails first. The rest are op
 - **No accessibility.** Zero `semantics`/`contentDescription` in the whole client; no reduced-motion.
 - **Warm resume is per-process only** — nothing is cached across an app restart, so the second open shows an empty grid.
 - **Silent failure on a flaky link**: keystrokes `trySend` into a 64-slot channel and are dropped unsignalled; a failed pair persists the *pairing code* as the token, producing a silent auth-failure loop.
-- **Observability**: registry accessors exist with no endpoint, `/healthz` returns a literal string, no metrics. `KamprStore.blocked()` — the triage list the roadmap called the one Collie idea worth stealing — has no callers.
+- **Observability**: registry accessors exist with no endpoint, `/healthz` returns a literal string, no metrics. (`KamprStore.blocked()` now has callers — `triage()` feeds the "Needs you" list on every breakpoint.)
 - **Audit log holes**: nothing on failed auth (token probing is invisible), nothing on `watch`/scrollback (a read-only device exfiltrating every terminal leaves one line), and `manage` omits `cwd`/`env`/`args` — the fields that say what actually ran. No rotation.
 - Missing outright: destructive-command confirm, threat model, ARCHITECTURE.md, ADRs.
 
@@ -85,15 +85,19 @@ UI that trusts `hello.role`.
 
 Checked against code on 2026-08-20, not against roadmap ticks (which are unmaintained).
 
-### Notifications — Phase 8, entirely absent
-The whole point of a phone client is being *told* an agent is blocked. None of it exists.
+### Notifications — Phase 8, **built**
+Every line below was on this list. What replaced it is in `docs/08-notifications.md`; what is still
+open is at the bottom.
 
-- `caps.push` is hardcoded `false` (`session.rs:505`); `web-push` is not in `Cargo.toml`.
-- **`pane.agent_status_changed` is not subscribed** — `herdr_provider.rs:18` documents why (herdr rejects the subscription without a `pane_id`, and one bad entry rejects the whole call, probe #54), so status reaches the herd model only via the 3 s poll. That is the event the entire triage story rests on.
-- No VAPID, no subscription store, no service worker, no deep link from a notification, no batching, no snooze, no per-agent mute.
-- **`notification.show` is unused** (probe #50) — a phone cannot raise a toast on the desktop.
-- `KamprStore.blocked()` — the triage list the roadmap called "the one Collie product idea worth stealing wholesale" — **has no callers**.
-- On Android the native client needs **APNs-free FCM or UnifiedPush**, not Web Push; that fork was identified in §3.11 and never decided.
+- ~~`caps.push` is hardcoded `false`~~ — it now reports reality: secure context **and** a VAPID key **and** `push.enabled`. `security.push` says what the origin allows; `caps.push` says what the node can do.
+- ~~**`pane.agent_status_changed` is not subscribed**~~ — subscribed **per agent pane**, with the list rebuilt whenever the agent-pane set moves and a 500 ms floor between resubscribes. Events poke the poll rather than replacing it, so a missed one costs an interval and never correctness. **Measured: the event beats the 3 s poll by a mean 2.33 s** across five runs against a real `claude` at a real permission prompt (probe #78). A stale `pane_id` turns out to be as fatal as a missing one (probe #76), which is why the retry re-derives from a fresh snapshot.
+- ~~No VAPID, no subscription store, no service worker, no deep link, no batching, no snooze, no per-agent mute~~ — all present. Subscriptions live in the **device** database, so revocation is a `WHERE` clause rather than a cleanup job.
+- ~~**`notification.show` is unused**~~ — wired twice: "Tell the desk" on a pane, and a pairing confirmation on the console the code was printed on. Attributed by the node, rate limited, and honest about `no_foreground_client` on a headless herdr (probe #77).
+- ~~`KamprStore.blocked()` has no callers~~ — `triage()` feeds the "Needs you" list on portrait, landscape and desktop.
+- ~~The Android fork was never decided~~ — **UnifiedPush**, because a distributor endpoint is an RFC 8291 endpoint and the node's sender is therefore unchanged: no Google project, no per-app secret. The server half is done; the client half needs a distributor the user installs, and is documented rather than assumed.
+
+Still open: no physical device has run any of it, and iOS Add-to-Home-Screen detection is written
+against the documentation rather than against an iPhone.
 
 ### Also planned, also absent
 | Item | Status |

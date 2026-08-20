@@ -18,7 +18,7 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 5** | ✅ Conversation view, both halves. Claude and Codex adapters, markdown with real tables, turn revision by id. |
 | **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision, verified install path, `kampr doctor`. |
 | **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. **Accessibility (P6.11) is not started** — zero `semantics`/`contentDescription` in the client. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
-| **Phase 8** | ⚠️ **Not started.** No push, no VAPID, no service worker, no deep link, no snooze. In flight now. |
+| **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
 | **Phase 8.5** | ⚠️ **Not started.** Kampr as an Android *provider* — distinct from the Android client, which ships. |
 | **Phase 9** | ⚠️ Release workflow written and never run: no tag has been pushed, so aarch64 cross-compilation and cosign signing are untested. |
 | **Phase 4.5** | Server complete — all 13 `manage` ops. Client in flight. |
@@ -262,14 +262,14 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 
 ## Phase 8 — Notifications & polish (2–3 days)
 
-- [ ] P8.1 Subscribe `pane.agent_status_changed` per agent pane; resubscribe when the pane set changes
-- [ ] P8.2 Web Push (VAPID) for blocked agents on Tier 1+; batch simultaneous blocks into one notification
-- [ ] P8.2b iOS: Add-to-Home-Screen prompt, since Web Push works nowhere else on iOS
-- [ ] P8.2c UnifiedPush as an alternative Android transport, for self-hosters avoiding FCM
-- [ ] P8.2d Service worker **prefetches on push** — snapshot + that pane's full frame into cache, so the tap opens onto warm data
-- [ ] P8.3 **Put the question in the notification body** — Collie's documented known gap, and we have the transcript to source it from
-- [ ] P8.4 Deep link: notification → that pane, correct view
-- [ ] P8.5 Per-agent snooze / mute
+- [x] P8.1 Subscribe `pane.agent_status_changed` per agent pane; resubscribe when the pane set changes — debounced at 500 ms so a workspace of ten agents is one resubscribe; events poke the poll rather than replacing it
+- [x] P8.2 Web Push (VAPID) for blocked agents on Tier 1+; batch simultaneous blocks into one notification — 900 ms window, split per subscription so a mute removes one agent rather than the batch
+- [x] P8.2b iOS: Add-to-Home-Screen prompt, since Web Push works nowhere else on iOS — detected, prompted, and the `apple-mobile-web-app-*` tags that make the installed app notifiable. **Never run on an iPhone.**
+- [x] P8.2c UnifiedPush as an alternative Android transport, for self-hosters avoiding FCM — **decided and server-complete**: a distributor endpoint is an RFC 8291 endpoint, so the sender is unchanged. The client half needs a distributor the user installs and is documented, not assumed
+- [x] P8.2d Service worker **prefetches on push** — `/api/node` + `/api/warm?pane=`, observed live in the browser's cache within the push handler. Not the grid: that would be a second encoder, and the socket delivers the real one within a second
+- [x] P8.3 **Put the question in the notification body** — delivered live as `body="Do you want to proceed?"`. Sourced from the screen, not the transcript (probe #42)
+- [x] P8.4 Deep link: notification → that pane, correct view — one pane opens Conversation, a batch opens the triage list. The payload carries it; the click itself is untested
+- [x] P8.5 Per-agent snooze / mute — per device, wildcard for the whole herd, snooze expires in the query so nothing sweeps
 - [ ] P8.6 Connection state UI for both loops (browser↔node, node↔herdr, node↔peer)
 - [ ] P8.7 Offline behaviour: last frame frozen and clearly marked stale, not silently wrong
 

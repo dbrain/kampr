@@ -8,8 +8,9 @@ plugins {
 
 // The boot background is painted before wasm loads, so it cannot come from the Compose token
 // layer at runtime — it is extracted from it at build time instead, so the two cannot drift.
+// Both grounds are extracted: with only the dark one a light-ground load flashes black.
 val tokensFile = layout.projectDirectory.file(
-    "../shared/src/commonMain/kotlin/dev/kampr/shared/theme/Tokens.kt"
+    "../shared/src/commonMain/kotlin/dev/kampr/shared/theme/Themes.kt"
 )
 
 val generateBootCss = tasks.register("generateBootCss") {
@@ -19,13 +20,22 @@ val generateBootCss = tasks.register("generateBootCss") {
     outputs.dir(outputDir)
     doLast {
         val text = source.asFile.readText()
-        val soft = text.substringAfter("val SoftTheme").substringBefore("val PhosphorTheme")
-        val hex = Regex("""bg = Color\(0xFF([0-9A-Fa-f]{6})\)""").find(soft)?.groupValues?.get(1)
-            ?: error("SoftTheme bg token not found in ${source.asFile}; boot CSS cannot be generated")
+        val soft = text.substringAfter("val SoftFamily").substringBefore("val PhosphorFamily")
+        val pattern = Regex("""bg = Color\(0xFF([0-9A-Fa-f]{6})\)""")
+        fun ground(name: String): String {
+            val block = soft.substringAfter("$name = Palette(")
+            return pattern.find(block)?.groupValues?.get(1)
+                ?: error("SoftFamily $name bg token not found in ${source.asFile}; boot CSS cannot be generated")
+        }
+        val dark = ground("dark")
+        val light = ground("light")
         outputDir.get().asFile.mkdirs()
         outputDir.get().file("kampr.css").asFile.writeText(
             """
-            html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #$hex; }
+            html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #$dark; }
+            @media (prefers-color-scheme: light) { html, body { background: #$light; } }
+            html[data-ground="dark"], html[data-ground="dark"] body { background: #$dark; }
+            html[data-ground="light"], html[data-ground="light"] body { background: #$light; }
             canvas { outline: none; }
             """.trimIndent() + "\n"
         )
@@ -52,6 +62,7 @@ kotlin {
             implementation(project(":shared"))
             implementation(project(":terminal"))
             implementation(project(":conversation"))
+        implementation(project(":mosaic"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.ui)
             implementation(libs.compose.foundation)

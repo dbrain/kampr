@@ -1,9 +1,11 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
@@ -48,3 +50,13 @@ private object NoPaneIo : PaneIo {
 }
 
 val LocalPaneIo: ProvidableCompositionLocal<PaneIo> = staticCompositionLocalOf { NoPaneIo }
+
+// Chrome floats over the terminal surface rather than sitting above it: the paint fills the
+// whole cell, the scrollable content insets under whatever is drawn on top. A surface guesses
+// the inset from its own size unless something above it knows better — a mosaic cell's header
+// is a third of a screen header's, and a cell full of blank rows is the bug that follows from
+// guessing.
+@Immutable
+data class PaneChrome(val top: Dp)
+
+val LocalPaneChrome: ProvidableCompositionLocal<PaneChrome?> = staticCompositionLocalOf { null }

@@ -212,3 +212,26 @@ fun Segmented(
 fun Gap(width: Dp) {
     Box(Modifier.width(width))
 }
+
+// A glyph in a chip, in a target big enough to hit: the painted chip stays small so a header
+// does not grow around it, and the box that catches the tap is the one the touch rule sizes.
+@Composable
+fun GlyphAction(
+    icon: Icon,
+    tint: Color,
+    target: Dp,
+    modifier: Modifier = Modifier,
+    chip: Dp = 28.dp,
+    onClick: () -> Unit,
+) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.sm)
+    Box(modifier.size(target).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(chip).background(tokens.color.raise, shape).edge(tokens.card, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            IconGlyph(icon, chip * 0.54f, tint)
+        }
+    }
+}

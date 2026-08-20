@@ -392,7 +392,7 @@ mod tests {
             snooze_until: None,
         };
         store.set_push_rule(&id, &muted, NOW).await.unwrap();
-        assert_eq!(store.push_rules(&id).await.unwrap(), [muted.clone()]);
+        assert_eq!(store.push_rules(&id).await.unwrap(), std::slice::from_ref(&muted));
 
         store
             .set_push_rule(

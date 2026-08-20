@@ -1,7 +1,7 @@
 use crate::herd::HerdModel;
 use crate::pending;
 use crate::sessions::Sessions;
-use kampr_auth::{PushRule, Store};
+use kampr_auth::Store;
 use kampr_core::provider::AgentStatus;
 use kampr_push::{Blocked, Outcome, Sender, Vapid};
 use std::collections::{HashMap, HashSet};
@@ -207,9 +207,4 @@ async fn question_for(sessions: &Sessions, global: &str) -> Option<String> {
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
     pending::read(&session.herdr, &local).await.map(|p| p.question)
-}
-
-/// The rules one device keeps, as the wire carries them.
-pub fn rules_json(rules: &[PushRule]) -> serde_json::Value {
-    serde_json::json!({ "rules": rules })
 }

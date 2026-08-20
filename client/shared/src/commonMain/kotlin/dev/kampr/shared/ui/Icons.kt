@@ -58,6 +58,7 @@ object KamprIcons {
     val tool = icon(16f, 1.6f, Glyph.Frame(1f, 2.5f, 14f, 11f, 2f), d("M4 6.4 6.2 8.2 4 10M8.4 10.4h3.4"))
     val workspace = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15"))
     val tab = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15M6.5 2.5v4"))
+    val mosaic = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13M1.5 9h15"))
     val split = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13"))
     val branch = icon(
         18f, 1.7f, Glyph.Round(5f, 4f, 2.2f), Glyph.Round(5f, 14f, 2.2f), Glyph.Round(13f, 9f, 2.2f),

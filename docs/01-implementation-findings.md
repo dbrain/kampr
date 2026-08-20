@@ -811,5 +811,8 @@ above that is an optional rung on §3.7's ladder, offered from the setup screen 
     would have dropped.
 11. **Compose Multiplatform wasm: can it draw a 94×40 cell grid at 60 fps on a mid-range phone?**
     Needs a spike before the client architecture is committed.
-12. **iOS push: native APNs or PWA Web Push?** Decides whether an Apple developer account and a push
-    relay are on the critical path.
+12. ~~**iOS push: native APNs or PWA Web Push?**~~ **Answered: PWA Web Push**, and the same answer
+    settles Android. A Kampr node is already a server the user runs, and UnifiedPush 3.0 carries the
+    same RFC 8291 encryption and VAPID the browser does — so one sender covers a browser, a Home
+    Screen web app and an Android distributor, with no Apple developer account, no Google project
+    and no push relay to host. APNs stays off the critical path. `docs/08-notifications.md`.

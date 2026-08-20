@@ -1,7 +1,5 @@
 use crate::note::Notification;
 use crate::vapid::Vapid;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use kampr_auth::PushSubscription;
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,17 +90,14 @@ impl Sender {
             request = request.header("Urgency", urgency.to_string());
         }
         if let Some(body) = message.payload {
-            // `crypto_headers` is empty for aes128gcm — the salt and the key ride in the body —
-            // but it is applied rather than assumed, so an encoding change does not go silent.
+            // **`crypto_headers` already carries the VAPID `Authorization`** once a signature has
+            // been set. Adding one alongside it sends the header twice, and the edge in front of a
+            // push service answers a bare nginx `400 Bad Request` that says nothing about why.
             for (name, value) in body.crypto_headers {
                 request = request.header(name, value);
             }
             request = request
                 .header("Content-Encoding", body.content_encoding.to_str())
-                .header(
-                    "Authorization",
-                    authorization(&self.vapid, &info).unwrap_or_default(),
-                )
                 .body(body.content);
         }
 
@@ -128,17 +123,6 @@ impl Sender {
             }
         }
     }
-}
-
-/// `vapid t=<jwt>, k=<base64url public key>` — the scheme every push service expects, built here
-/// rather than by the crate because the HTTP half is ours.
-fn authorization(vapid: &Vapid, info: &SubscriptionInfo) -> Option<String> {
-    let signature = vapid.sign(info).ok()?;
-    Some(format!(
-        "vapid t={}, k={}",
-        signature.auth_t,
-        URL_SAFE_NO_PAD.encode(&signature.auth_k)
-    ))
 }
 
 #[cfg(test)]

@@ -70,11 +70,12 @@ impl Notification {
             ),
             n => (
                 format!("{n} agents need you"),
-                panes
-                    .iter()
-                    .map(|p| match &p.question {
-                        Some(q) => format!("{} — {}", p.who(), trim(q)),
-                        None => p.who(),
+                names(&panes)
+                    .into_iter()
+                    .zip(&panes)
+                    .map(|(who, p)| match &p.question {
+                        Some(q) => format!("{who} — {}", trim(q)),
+                        None => who,
                     })
                     .collect::<Vec<_>>()
                     .join(" · "),
@@ -90,6 +91,29 @@ impl Notification {
             panes,
         })
     }
+}
+
+/// Two agents of the same harness in the same workspace render the same name, and a body that
+/// says "claude · kampr — … · claude · kampr — …" names neither. Only the ambiguous ones get the
+/// pane id appended; the rest stay readable.
+fn names(panes: &[Blocked]) -> Vec<String> {
+    let plain: Vec<String> = panes.iter().map(Blocked::who).collect();
+    plain
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let ambiguous = plain.iter().enumerate().any(|(j, other)| j != i && other == name);
+            match ambiguous {
+                true => format!("{name} ({})", short(&panes[i].pane)),
+                false => name.clone(),
+            }
+        })
+        .collect()
+}
+
+/// The herdr-local half of a global pane id — `w3:p2`, not the node ULID in front of it.
+fn short(pane: &str) -> &str {
+    pane.rsplit('/').next().unwrap_or(pane)
 }
 
 /// Cuts at a word boundary, and only when there is one to cut at — a 200-character path with no
@@ -167,6 +191,25 @@ mod tests {
 
     /// The tag is what makes the second notification replace the first. Without it a phone that
     /// was away for an hour shows a column of stale prompts.
+    /// Two claudes in one workspace are two different agents, and a body naming both the same way
+    /// tells you nothing about which is which.
+    #[test]
+    fn identical_names_in_one_batch_are_disambiguated_by_pane() {
+        let note = Notification::batch(vec![
+            blocked("w1:p1", "claude", Some("Proceed?")),
+            blocked("w1:p3", "claude", Some("Proceed?")),
+            blocked("w2:p1", "codex", Some("Patch?")),
+        ])
+        .unwrap();
+        assert!(note.body.contains("(w1:p1)"), "{}", note.body);
+        assert!(note.body.contains("(w1:p3)"), "{}", note.body);
+        assert!(
+            !note.body.contains("codex · kampr ("),
+            "an unambiguous name stays readable: {}",
+            note.body
+        );
+    }
+
     #[test]
     fn every_notification_shares_one_tag() {
         let a = Notification::batch(vec![blocked("w1:p1", "claude", None)]).unwrap();

@@ -35,6 +35,7 @@ enum class Tab { Herd, Pane, Nodes }
 
 sealed interface Screen {
     data object Herd : Screen
+    data object Mosaic : Screen
     data class Pane(val paneId: String, val view: PaneView) : Screen
     data object Setup : Screen
     data object Devices : Screen
@@ -57,7 +58,7 @@ private const val KEY_TOKEN = "token"
 class AppState(
     private val scope: CoroutineScope,
     val store: KamprStore = KamprStore(),
-    private val prefs: Prefs = createPrefs(),
+    val prefs: Prefs = createPrefs(),
 ) {
     val connection = KamprConnection(scope, store)
 
@@ -138,12 +139,16 @@ class AppState(
         connection.manage(op)
     }
 
+    // Watch on arrival, unwatch on departure: an observer that outlives the screen holding it is
+    // exactly the thing the mosaic's observer count would then be lying about.
     fun go(target: Screen) {
         sheet = null
+        val leaving = (screen as? Screen.Pane)?.paneId
         if (target is Screen.Pane) {
             lastPaneId = target.paneId
             connection.watch(target.paneId)
         }
+        if (leaving != null && leaving != (target as? Screen.Pane)?.paneId) connection.unwatch(leaving)
         screen = target
     }
 

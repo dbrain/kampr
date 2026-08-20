@@ -12,6 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -72,7 +73,7 @@ private val CHIP = 28.dp
 @Composable
 private fun GlyphButton(
     icon: Icon,
-    tint: androidx.compose.ui.graphics.Color,
+    tint: Color,
     target: Dp,
     modifier: Modifier,
     onClick: () -> Unit,

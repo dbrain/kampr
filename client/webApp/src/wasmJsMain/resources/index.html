@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Kampr</title>
-    <meta name="theme-color" content="#0E0F13">
+    <meta name="theme-color" content="#0E0F13" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#F7F8FB" media="(prefers-color-scheme: light)">
+    <!-- The saved ground has to reach the boot background before the stylesheet resolves; the
+         Compose token layer only exists once wasm has loaded. Key and values match AppState. -->
+    <script>try{var m=localStorage.getItem("mode");if(m==="dark"||m==="light")document.documentElement.setAttribute("data-ground",m)}catch(e){}</script>
     <!-- iOS reads these rather than the manifest, and Web Push on iOS works ONLY for a Home
          Screen web app (findings §3.7). Without them Add to Home Screen produces a bookmark
          that can never be notified. -->

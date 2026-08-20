@@ -593,8 +593,6 @@ the herd, including the hub's own, is untouched: a link owns nothing but its own
 Recovery is unattended. The peer reconnects on its own backoff, its node flips back to `online`,
 and clients see a fresh `herd` and a `grid.reset` per pane.
 
-
-
 ## Notifications
 
 Additive to v1. Everything here is HTTP rather than socket messages, because a browser hands its

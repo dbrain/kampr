@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
@@ -130,7 +131,7 @@ fun SheetSection(label: String, compact: Boolean = false) {
 @Composable
 fun SheetCard(
     icon: Icon?,
-    iconTint: androidx.compose.ui.graphics.Color?,
+    iconTint: Color?,
     title: String,
     subtitle: String,
     subtitleMono: Boolean = false,

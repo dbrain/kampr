@@ -6,12 +6,14 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.kampr.shared.ui.KamprApp
 import dev.kampr.conversation.ConversationSurfaces
+import dev.kampr.mosaic.MosaicSurfaces
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
 
 // ConversationSurfaces wraps: it renders the transcript and delegates the terminal and the
 // key row to its base, so both halves of the pane are live.
 private val surfaces = ConversationSurfaces(TerminalSurfaces())
+private val mosaic = MosaicSurfaces()
 
 fun main() = application {
     val width = (System.getenv("KAMPR_WIDTH")?.toIntOrNull() ?: 1440).dp
@@ -22,6 +24,6 @@ fun main() = application {
         title = if (bench) "Kampr terminal bench" else "Kampr",
         state = rememberWindowState(width = width, height = height),
     ) {
-        if (bench) TerminalBenchApp() else KamprApp(surfaces)
+        if (bench) TerminalBenchApp() else KamprApp(surfaces, mosaic = mosaic)
     }
 }

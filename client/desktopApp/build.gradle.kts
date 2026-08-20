@@ -12,6 +12,7 @@ dependencies {
     implementation(project(":shared"))
     implementation(project(":terminal"))
     implementation(project(":conversation"))
+    implementation(project(":mosaic"))
     implementation(compose.desktop.currentOs)
     implementation(libs.compose.runtime)
     implementation(libs.compose.ui)

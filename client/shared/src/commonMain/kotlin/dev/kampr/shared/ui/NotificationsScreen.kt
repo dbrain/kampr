@@ -14,6 +14,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.net.ALL_PANES
 import dev.kampr.shared.net.PushApi
@@ -32,13 +36,18 @@ import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.push.PushCapability
 import dev.kampr.shared.push.PushPermission
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 import kotlinx.coroutines.launch
 
 private const val SNOOZE_MINUTES = 60
 
-/// Everything about notifications on this device, and — where they cannot work — what would make
-/// them work instead of a control that fails at the last step.
+// The store, for the few surfaces that need to *observe* rather than send — `PaneIo` is a
+// one-way channel by design and widening it would put a reply flow on every pane surface.
+val LocalKamprStore: ProvidableCompositionLocal<KamprStore?> = staticCompositionLocalOf { null }
+
+// Everything about notifications on this device, and — where they cannot work — what would make
+// them work instead of a control that fails at the last step.
 @Composable
 fun NotificationsScreen(
     state: AppState,
@@ -257,21 +266,32 @@ private fun blocker(capability: PushCapability, server: PushState?): Pair<String
     else -> null
 }
 
-/// "I'm taking this pane" — probe #50 pointed at the one place it is not noise.
-///
-/// A second person may be sitting at the desk this pane belongs to, and the thing worth telling
-/// them is that somebody remote is about to type into it. The node attributes the toast to this
-/// device, so the desk always sees who; a read-only device is refused, so it cannot.
+// "I'm taking this pane" — probe #50 pointed at the one place it is not noise.
+//
+// A second person may be sitting at the desk this pane belongs to, and the thing worth telling
+// them is that somebody remote is about to type into it. The node attributes the toast to this
+// device, so the desk always sees who; a read-only device is refused, so it cannot.
 @Composable
 fun TakingPaneAction(paneId: String, title: String, modifier: Modifier = Modifier) {
     val io = LocalPaneIo.current
-    if (io.readOnly) return
-    var sent by remember(paneId) { mutableStateOf(false) }
+    val store = LocalKamprStore.current
+    if (io.readOnly || store == null) return
+    var asked by remember(paneId) { mutableStateOf(false) }
+    val reply by store.notified.collectAsState()
+    // A headless herdr has no desk to show a toast on and says so (probe #77). Reporting "told"
+    // regardless would be the client inventing an outcome the node explicitly denied.
+    val label = when {
+        !asked -> "Tell the desk"
+        reply == null -> "Telling…"
+        reply?.ok == true -> "Desk told"
+        else -> "No desk"
+    }
     QuietAction(
-        if (sent) "Desk told" else "Tell the desk",
+        label,
         {
-            io.send(dev.kampr.shared.wire.ClientMsg.Notify(paneId, "Taking $title", "from a Kampr device"))
-            sent = true
+            store.clearNotified()
+            asked = true
+            io.send(ClientMsg.Notify("Taking $title", "from a Kampr device", paneId))
         },
         modifier,
     )

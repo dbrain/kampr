@@ -23,6 +23,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val CAPS_MIN_INTERVAL_MS = 10_000.0
+private const val DEFAULT_OWNER = "screen"
 
 class KamprConnection(
     private val scope: CoroutineScope,
@@ -31,7 +32,10 @@ class KamprConnection(
 ) {
     private var loop: Job? = null
     private var outbox = Channel<ClientMsg>(Channel.BUFFERED)
-    private val watched = LinkedHashSet<String>()
+    // A pane can be on screen twice at once — the pane screen and any number of mosaic cells —
+    // and the last viewer to let go is the one that stops the stream. Watching by owner is what
+    // makes "removing a cell unwatches" true without it also unwatching what is still on screen.
+    private val watched = LinkedHashMap<String, MutableSet<String>>()
     private var pingSeq = 0
     private val pingSentAt = HashMap<Int, Double>()
     private var capsWanted = false
@@ -65,13 +69,26 @@ class KamprConnection(
         send(ClientMsg.Manage(op))
     }
 
-    fun watch(pane: String, scrollback: Boolean = true, conversation: Boolean = true) {
-        if (watched.add(pane)) send(ClientMsg.Watch(pane, scrollback, conversation))
+    fun watch(
+        pane: String,
+        owner: String = DEFAULT_OWNER,
+        scrollback: Boolean = true,
+        conversation: Boolean = true,
+    ) {
+        val owners = watched.getOrPut(pane) { LinkedHashSet() }
+        val first = owners.isEmpty()
+        owners += owner
+        if (first) send(ClientMsg.Watch(pane, scrollback, conversation))
     }
 
-    fun unwatch(pane: String) {
-        if (watched.remove(pane)) send(ClientMsg.Unwatch(pane))
+    fun unwatch(pane: String, owner: String = DEFAULT_OWNER) {
+        val owners = watched[pane] ?: return
+        if (!owners.remove(owner) || owners.isNotEmpty()) return
+        watched.remove(pane)
+        send(ClientMsg.Unwatch(pane))
     }
+
+    fun observedPanes(): Set<String> = watched.keys.toSet()
 
     private suspend fun run(target: Endpoint) {
         val client = clientFactory()
@@ -102,7 +119,7 @@ class KamprConnection(
             try {
                 capsWanted = false
                 capsAskedAt = 0.0
-                for (pane in watched) outbox.trySend(ClientMsg.Watch(pane))
+                for (pane in watched.keys) outbox.trySend(ClientMsg.Watch(pane))
                 for (frame in incoming) {
                     val text = (frame as? Frame.Text)?.readText() ?: continue
                     val msg = Wire.decode(text) ?: continue

@@ -37,6 +37,7 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
+import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.breakpointOf
@@ -117,10 +118,13 @@ fun TerminalView(
         val density = LocalDensity.current
         val breakpoint = breakpointOf(maxWidth, maxHeight)
         val chromeBottom = session.keyRowHeight + pendingInsetPx(pane, density)
+        // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
+        // from its own size is what would leave blank rows under the last line.
+        val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
         val paint = PaintRect(
             width = with(density) { maxWidth.toPx() },
             height = with(density) { maxHeight.toPx() },
-            insetTop = with(density) { headerInsetDp(breakpoint).dp.toPx() },
+            insetTop = with(density) { chromeTop.toPx() },
             insetBottom = chromeBottom + with(density) { INDICATOR_HEIGHT_DP.dp.toPx() },
         )
 

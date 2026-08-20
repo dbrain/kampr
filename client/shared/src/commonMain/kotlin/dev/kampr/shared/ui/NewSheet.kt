@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,8 @@ fun NewSheet(
     var branch by remember { mutableStateOf(TextFieldValue()) }
     var base by remember { mutableStateOf(TextFieldValue()) }
     var sessionName by remember { mutableStateOf(TextFieldValue()) }
+    var worktreePath by remember { mutableStateOf(TextFieldValue()) }
+    var existingWorktree by remember { mutableStateOf(false) }
     var agentName by remember { mutableStateOf(TextFieldValue()) }
     val env = remember { mutableStateListOf<Pair<String, String>>() }
     var inFlight by remember { mutableStateOf<String?>(null) }
@@ -114,9 +117,15 @@ fun NewSheet(
         Step.Tab -> "Create tab" to (workspaceId?.let { at ->
             { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd)) }
         })
-        Step.Worktree -> "Create worktree" to (branch.text.trim().ifEmpty { null }?.let { b ->
-            { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
-        })
+        Step.Worktree -> if (existingWorktree) {
+            "Open worktree" to (worktreePath.text.trim().ifEmpty { null }?.let { path ->
+                { run(ManageOp.WorktreeOpen(nodeId, path, trimmedCwd, trimmedLabel)) }
+            })
+        } else {
+            "Create worktree" to (branch.text.trim().ifEmpty { null }?.let { b ->
+                { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
+            })
+        }
         Step.Session -> "Start session" to (sessionName.text.trim().takeIf { SESSION_NAME.matches(it) }?.let { n ->
             { run(ManageOp.SessionCreate(nodeId, n)) }
         })
@@ -156,6 +165,8 @@ fun NewSheet(
                     onRatio = { ratio = it },
                     onKind = { kind = it; pick = Pick.Agent },
                     onMoreKinds = { allKinds = true },
+                    agentName = agentName,
+                    onAgentName = { agentName = it },
                     onNodePicker = onNodePicker,
                 )
                 Step.Workspace -> Fields {
@@ -178,9 +189,19 @@ fun NewSheet(
                     )
                 }
                 Step.Worktree -> Fields {
-                    LabelledField("branch", "feat/mesh-auth", branch) { branch = it }
-                    LabelledField("base", "main", base) { base = it }
-                    LabelledField("repository", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    Segmented(
+                        listOf("New branch", "Existing path"),
+                        if (existingWorktree) 1 else 0,
+                        { existingWorktree = it == 1 },
+                        Modifier.fillMaxWidth(),
+                    )
+                    if (existingWorktree) {
+                        LabelledField("path", "/home/dbrain/dev/kampr-feat-x", worktreePath) { worktreePath = it }
+                    } else {
+                        LabelledField("branch", "feat/mesh-auth", branch) { branch = it }
+                        LabelledField("base", "main", base) { base = it }
+                        LabelledField("repository", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    }
                     LabelledField("label", "mesh-auth", label) { label = it }
                     Note("Herdr's own git support: a worktree for the branch, and a workspace opened on it.")
                 }
@@ -251,13 +272,15 @@ private fun Menu(
     onRatio: (Double) -> Unit,
     onKind: (String) -> Unit,
     onMoreKinds: () -> Unit,
+    agentName: TextFieldValue,
+    onAgentName: (TextFieldValue) -> Unit,
     onNodePicker: () -> Unit,
 ) {
     val compact = breakpoint == Breakpoint.Landscape
     if (breakpoint == Breakpoint.Portrait) {
         Column {
             Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
-            Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, onNodePicker)
+            Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, agentName, onAgentName, onNodePicker)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
@@ -265,7 +288,7 @@ private fun Menu(
                 Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             }
             Column(Modifier.weight(1f)) {
-                Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, onNodePicker)
+                Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, agentName, onAgentName, onNodePicker)
             }
         }
     }
@@ -343,6 +366,8 @@ private fun Elsewhere(
     onStep: (Step) -> Unit,
     onKind: (String) -> Unit,
     onMoreKinds: () -> Unit,
+    agentName: TextFieldValue,
+    onAgentName: (TextFieldValue) -> Unit,
     onNodePicker: () -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -365,6 +390,9 @@ private fun Elsewhere(
                         val rest = kinds.size - shown.size
                         if (rest > 0) Chip("+$rest more", false, onMoreKinds, quiet = true)
                     }
+                }
+                if (pane != null && pick == Pick.Agent) {
+                    KField("name it, or take the harness's own", agentName, onChange = onAgentName)
                 }
                 KText(
                     if (pane == null) "Open a pane first — an agent starts in one."
@@ -424,7 +452,7 @@ private fun SessionList(sessions: List<SessionInfo>, onStop: (String) -> Unit) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Dot(if (session.running) tokens.color.done else tokens.color.idle, 6.dp)
                 KText(session.name, tokens.type.meta, tokens.color.text, Modifier.weight(1f))

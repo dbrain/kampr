@@ -54,7 +54,11 @@ data class DeepLink(
 )
 
 @Composable
-fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = null) {
+fun KamprApp(
+    surfaces: PaneSurfaces = FallbackSurfaces,
+    deepLink: DeepLink? = null,
+    mosaic: MosaicHost = NoMosaic,
+) {
     val scope = rememberCoroutineScope()
     val state = remember { AppState(scope) }
     LaunchedEffect(state) { state.start() }
@@ -95,9 +99,13 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
             CompositionLocalProvider(
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
                 LocalManage provides remember(state) { AppManage(state) },
+                LocalMosaic provides remember(state, mosaic) {
+                    if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null
+                },
+                LocalKamprStore provides state.store,
             ) {
                 AppScaffold(
-                    state, breakpoint, surfaces, now, setup, devices, connectionStatus, deepLink,
+                    state, breakpoint, surfaces, mosaic, now, setup, devices, connectionStatus, deepLink,
                     onRevoke = { id ->
                         scope.launch {
                             val client = createHttpClient()
@@ -128,6 +136,7 @@ private fun AppScaffold(
     state: AppState,
     breakpoint: Breakpoint,
     surfaces: PaneSurfaces,
+    mosaic: MosaicHost,
     now: Double,
     setup: SetupStatus?,
     devices: List<DeviceRecord>,
@@ -180,6 +189,13 @@ private fun AppScaffold(
     }
 
     Box(Modifier.fillMaxSize().background(tokens.color.bg)) {
+        // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
+        // and this screen is about four.
+        if (state.screen is Screen.Mosaic) {
+            mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize())
+            failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+            return@Box
+        }
         when (breakpoint) {
             Breakpoint.Desktop -> Column(Modifier.fillMaxSize()) {
                 Row(Modifier.weight(1f)) {
@@ -209,7 +225,7 @@ private fun AppScaffold(
                             Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
                             Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
                             Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
-                            Screen.Herd -> EmptyDetail(connectionStatus)
+                            Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                         }
                     }
                 }
@@ -232,7 +248,7 @@ private fun AppScaffold(
                 Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
                 Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
                 Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
-                Screen.Herd -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
+                Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
             }
 
             Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
@@ -253,7 +269,7 @@ private fun AppScaffold(
                         Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                        Screen.Herd -> HerdPortrait(
+                        Screen.Herd, Screen.Mosaic -> HerdPortrait(
                             herd, now, localRtt, triage,
                             state::openPane,
                             if (readOnly) null else { paneId: String -> answer(paneId, "1") },
@@ -263,7 +279,7 @@ private fun AppScaffold(
                 BottomNav(
                     when (state.screen) {
                         is Screen.Pane -> Tab.Pane
-                        Screen.Herd -> Tab.Herd
+                        Screen.Herd, Screen.Mosaic -> Tab.Herd
                         else -> Tab.Nodes
                     },
                     state::selectTab,
