@@ -74,6 +74,35 @@ re-sent `hello` or a new `role` message — and the protocol says `hello` is the
 connection, so inventing one unilaterally was the wrong move. Decide it before the client grows any
 UI that trusts `hello.role`.
 
+## Planned and never built — the honest list
+
+Checked against code on 2026-08-20, not against roadmap ticks (which are unmaintained).
+
+### Notifications — Phase 8, entirely absent
+The whole point of a phone client is being *told* an agent is blocked. None of it exists.
+
+- `caps.push` is hardcoded `false` (`session.rs:505`); `web-push` is not in `Cargo.toml`.
+- **`pane.agent_status_changed` is not subscribed** — `herdr_provider.rs:18` documents why (herdr rejects the subscription without a `pane_id`, and one bad entry rejects the whole call, probe #54), so status reaches the herd model only via the 3 s poll. That is the event the entire triage story rests on.
+- No VAPID, no subscription store, no service worker, no deep link from a notification, no batching, no snooze, no per-agent mute.
+- **`notification.show` is unused** (probe #50) — a phone cannot raise a toast on the desktop.
+- `KamprStore.blocked()` — the triage list the roadmap called "the one Collie product idea worth stealing wholesale" — **has no callers**.
+- On Android the native client needs **APNs-free FCM or UnifiedPush**, not Web Push; that fork was identified in §3.11 and never decided.
+
+### Also planned, also absent
+| Item | Status |
+|---|---|
+| Destructive-command confirm (P2.10) | No occurrence of "destructive" anywhere in the tree |
+| Recovery code (P3.5) | Not implemented |
+| `kampr doctor` (P7.7) | Not implemented |
+| Light theme / `prefers-color-scheme` (P6.8b) | All four themes are dark |
+| Per-theme ANSI palette (P6.8c) | One hardcoded 16-slot table shared by every theme |
+| Accessibility (P6.11) | Zero `semantics` / `contentDescription` in the client |
+| PWA manifest + service worker (P6.10) | Absent — yet `security.installable` is advertised |
+| `manage` client UI (Phase 4.5) | Server complete; `ClientMsg.Manage` is never constructed |
+| Kampr split view / mosaic (P4.5.8) | Designed, not built |
+| Kampr on Android as a *provider* (Phase 8.5) | Not started — distinct from the Android *client*, which is in flight |
+| ARCHITECTURE.md, ADRs, threat model (P3.1, P9.2, P9.3) | Not written |
+
 ## Decisions worth revisiting
 
 - **The VT-emulator-in-Rust decision was right; its stated payoff was not collected.** The argument was that selection, find and OSC 8 become node features rather than three client reimplementations. In practice selection, links and soft-wrap-joining are all implemented in the client, and there is no find at all. Either collect the benefit or stop claiming it.
