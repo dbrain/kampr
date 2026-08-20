@@ -108,8 +108,15 @@
     </div>
   </div>
 
-  <div style="flex-grow: 1; margin: 0 10px; background: var(--surface-2); border: var(--card-border); border-radius: var(--r-lg); overflow: hidden; display: flex; flex-direction: column;">
-    <div style="flex-grow: 1; padding: 13px 0 13px 12px; font-family: var(--font-mono); font-size: 14px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text);">
+  <div style="flex-grow: 1; background: var(--surface-2); overflow: hidden; display: flex; flex-direction: column;">
+    <div style="flex-grow: 1; padding: 10px 0 0 12px; font-family: var(--font-mono); font-size: 14px; line-height: 1.5; white-space: pre; overflow: hidden; color: var(--text);">
+<span style="color: var(--mute);">  npm run build</span>
+<span style="color: var(--mute);">  vite v8.1.0 building for productio</span>
+<span style="color: var(--mute);">  ✓ 412 modules transformed.</span>
+<span style="color: var(--mute);">  dist/index.html          0.71 kB</span>
+<span style="color: var(--mute);">  dist/assets/index.js   184.02 kB</span>
+<span style="color: var(--mute);">  ✓ built in 2.41s</span>
+
 <span style="color: var(--done);">●</span> Read bridge/server.ts (412 lin
   found 2 call sites that write to
 
@@ -117,10 +124,7 @@
   two places, not one. Adding both
 
 <span style="color: var(--mute);">╭─ </span><span style="color: var(--accent);">Edit</span><span style="color: var(--mute);"> ──────────────────────────</span>
-<span style="color: var(--mute);">│</span> bridge/server.ts
 <span style="color: var(--mute);">│</span> <span style="color: var(--mute);">142</span> <span style="color: var(--done);">+  if (!device.canWrite) {</span>
-<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">143</span> <span style="color: var(--done);">+    return json(403, "read-o</span>
-<span style="color: var(--mute);">│</span> <span style="color: var(--mute);">144</span> <span style="color: var(--done);">+  }</span>
 <span style="color: var(--mute);">╰───────────────────────────────────</span>
 
 Do you want to make this edit?
@@ -129,11 +133,11 @@ Do you want to make this edit?
 <span style="color: var(--dim);">  2.</span> Yes, and don't ask again
 <span style="color: var(--dim);">  3.</span> No, tell Claude what to do di<span style="background: var(--text); color: var(--surface-2);"> </span>
     </div>
-    <div style="padding: 0 12px 9px 12px; display: flex; align-items: center; gap: 9px;">
+    <div style="padding: 4px 12px 6px 12px; display: flex; align-items: center; gap: 9px; background: var(--surface-2);">
       <div style="flex-grow: 1; height: 3px; border-radius: 999px; background: var(--raise); position: relative;">
         <div style="position: absolute; left: 0; top: 0; width: 46%; height: 3px; border-radius: 999px; background: var(--dim);"></div>
       </div>
-      <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">col 1–43 of 94</span>
+      <span style="font-family: var(--font-mono); font-size: 9.5px; color: var(--mute);">col 1–43 of 94 · 1553 rows back</span>
     </div>
   </div>
 

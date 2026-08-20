@@ -392,6 +392,11 @@ That turns the small-screen problem into a rendering problem, which is where it 
 | **Conversation** (agent panes, the default) | reflows natively — no grid involved at all |
 | **Portrait terminal** | pinch-zoom and pan over the real grid, zoom remembered per pane per device, follow-cursor keeps the caret in view |
 
+The terminal surface **always fills the viewport**. Scrollback and the live grid are one continuous
+scroll, so the space above a short grid carries history rather than nothing, and the default zoom
+fills at least one axis instead of fitting inside both. A pane with no ring pans horizontally instead.
+No client-side row cap: the node's ring bound is a memory limit and is configurable.
+
 **Scrollback — the answer is better than "no `terminal.scroll`" suggested.** Frames cannot supply it:
 `seq 1 200` on a 30-row pane put only 29 distinct lines across the *entire* frame stream — the final
 viewport. Lines 1–171 were never transmitted **[probed]**. A frame-fed emulator therefore cannot

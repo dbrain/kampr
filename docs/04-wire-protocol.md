@@ -196,6 +196,25 @@ There is **no resize message and there will not be one.** The node cannot reshap
   immediately, marked stale, and swap on the `grid.reset`. No spinner.
 - The node drops a slow client's `grid.patch` queue and sends one `grid.reset` instead of buffering.
 
+## The terminal surface always fills the viewport
+
+A client must never letterbox a pane. Blank space below the last row is a bug, not a layout.
+
+- **Scrollback and the live grid are one continuous surface**, not two panels. History scrolls up out
+  of the top; the live viewport sits at the bottom and stays pinned there unless the user scrolls
+  away. There is no divider and no separate scrollback mode.
+- **Default zoom fills at least one axis.** Compute `max(fit-width, fit-height)` and pan the other,
+  rather than `min(...)`, which is what produces letterboxing. A user may zoom further out, but the
+  default never leaves a margin.
+- **When a pane has no ring** (alt-screen, so `scrollback_rows == 0`) there is nothing above the grid
+  to fill with, so fill-height wins and the surface pans horizontally. Those panes default to the
+  conversation view anyway, which scrolls naturally.
+- **No fixed row budget in the UI.** The node's ring bound is a memory limit, not a display one, and
+  it is configurable — a client must not impose its own cap on top.
+- Full bleed on every breakpoint: the terminal reaches the edges, with chrome floating over it rather
+  than insetting it.
+
+
 ## Herd management
 
 Everything you would do at the keyboard. Additive to v1 — a node that does not implement these

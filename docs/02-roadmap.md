@@ -192,6 +192,10 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [ ] P6.5b Landscape is a first-class layout, not a rotation fallback — 844 px fits the native 94 columns at 13 px with no zoom at all
 - [ ] P6.6 Font size / zoom control with column count shown live
 - [ ] P6.7 Safe-area insets, notches, `visualViewport`, and no body scroll — ever
+- [ ] P6.7b **Terminal is full-bleed on every breakpoint** — chrome floats over it, never insets it
+- [ ] P6.7c **Scrollback and the live grid are one continuous surface**; blank space below the last row is a bug
+- [ ] P6.7d Default zoom fills at least one axis (`max(fit-width, fit-height)`), never letterboxes
+- [ ] P6.7e Make the node's ring bound configurable and generous; no client-side row cap
 - [ ] P6.8 Ship the four themes as a user setting (soft default); confirm every screen holds at each
 - [ ] P6.8b Light-ground variant, honouring `prefers-color-scheme` — note Herdr answers no OSC 10/11 background query, so harness output is authored dark (Collie ADR 0002), which a light theme has to reckon with
 - [ ] P6.8c ANSI palette mapping per theme — the terminal's 16 slots should agree with the chrome

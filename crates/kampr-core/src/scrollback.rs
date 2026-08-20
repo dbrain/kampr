@@ -1,9 +1,11 @@
 use crate::provider::RawScrollback;
 use kampr_term::{Emulator, RowDiff};
 
-/// Four times herdr's own 1000-line read cap: deep enough for stitching to be worth doing, and
-/// bounded because the ring is rendered into a cell grid in one piece.
-pub const DEFAULT_MAX_ROWS: usize = 4000;
+/// A memory bound, not a display one. Clients must not impose a row cap of their own: a terminal
+/// surface fills the viewport and scrolls as far back as the node actually holds. At roughly 200
+/// bytes of raw ANSI per row this is ~4 MB for a pane that has genuinely produced this much, and
+/// most panes never approach it.
+pub const DEFAULT_MAX_ROWS: usize = 20_000;
 
 #[derive(Debug, Clone)]
 pub struct ScrollbackDoc {
