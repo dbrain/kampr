@@ -50,6 +50,8 @@ kotlin {
         named("wasmJsMain") { resources.srcDir(generateBootCss) }
         wasmJsMain.dependencies {
             implementation(project(":shared"))
+            implementation(project(":terminal"))
+            implementation(project(":conversation"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.ui)
             implementation(libs.compose.foundation)

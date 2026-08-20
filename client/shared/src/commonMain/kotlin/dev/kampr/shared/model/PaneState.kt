@@ -106,11 +106,16 @@ class PaneState(val id: String, val styles: StyleTable) {
         revision++
     }
 
+    // A page is a slice of the transcript running backwards from where the client already is, so
+    // it prepends. Transcript order is the node's, not the client's: a resumed session stamps
+    // later records with earlier times, and sorting on `at` would shuffle a real conversation.
     fun applyConvo(msg: ServerMsg.Convo) {
-        val existing = turns.associateBy { it.id }
-        val merged = (msg.turns + turns).distinctBy { it.id }.sortedBy { it.at ?: "" }
-        turns.clear()
-        turns.addAll(merged.map { existing[it.id] ?: it })
+        val older = mutableListOf<Turn>()
+        for (turn in msg.turns) {
+            val at = turns.indexOfFirst { it.id == turn.id }
+            if (at >= 0) turns[at] = turn else older += turn
+        }
+        turns.addAll(0, older)
         convoCursor = msg.cursor
         convoMore = msg.more
         revision++

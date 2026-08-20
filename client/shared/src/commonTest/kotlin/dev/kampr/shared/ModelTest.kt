@@ -167,4 +167,70 @@ class ModelTest {
         assertEquals(1493, scrollback.fromTop)
         assertEquals("npm run build", scrollback.row(1493)?.runs?.first()?.x)
     }
+    // The Claude transcript in crates/kampr-journal/tests/fixtures carries a resumed session, so
+    // its last record is stamped three weeks BEFORE the ones above it. Transcript order is the
+    // only order a client may show; sorting on `at` reorders a real conversation.
+    @Test
+    fun convoKeepsTheNodesTurnOrderEvenWhenTimestampsGoBackwards() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
+                   {"id":"t1","role":"user","at":"2026-08-17T03:47:14Z","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t2","role":"assistant","at":"2026-08-17T03:48:40Z","blocks":[{"b":"md","text":"b"}]},
+                   {"id":"t3","role":"assistant","at":"2026-07-30T00:52:59Z","blocks":[{"b":"md","text":"c"}]}]}"""
+            )!!
+        )
+        assertEquals(listOf("t1", "t2", "t3"), store.pane("p").turns.map { it.id })
+    }
+
+    @Test
+    fun convoLoadPrependsTheOlderPageAndAdvancesTheCursor() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t3","more":true,"turns":[
+                   {"id":"t3","role":"user","blocks":[{"b":"md","text":"c"}]},
+                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
+            )!!
+        )
+        val pane = store.pane("p")
+        assertEquals(listOf("t1", "t2", "t3", "t4"), pane.turns.map { it.id })
+        assertEquals("t1", pane.convoCursor)
+        assertFalse(pane.convoMore)
+    }
+
+    // kampr-journal revises a tool turn in place when its result lands, so a `convo.turn` that
+    // repeats an id is a replacement. Appending it instead duplicates every tool call.
+    @Test
+    fun convoTurnRevisesARunningToolInPlaceRatherThanAppending() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"assistant","blocks":[
+                     {"b":"tool","name":"Edit","summary":"surface.rs","state":"running"}]}]}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode(
+                """{"t":"convo.turn","pane":"p","turns":[
+                   {"id":"t1","role":"assistant","blocks":[
+                     {"b":"tool","name":"Edit","summary":"surface.rs","lines":3,"state":"done"},
+                     {"b":"diff","path":"surface.rs","text":"@@ -1,1 +1,1 @@\n-a\n+b\n"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"done"}]}]}"""
+            )!!
+        )
+        val turns = store.pane("p").turns
+        assertEquals(listOf("t1", "t2"), turns.map { it.id })
+        assertEquals("done", (turns[0].blocks[0] as dev.kampr.shared.wire.Block.Tool).state)
+        assertEquals(2, turns[0].blocks.size)
+    }
 }

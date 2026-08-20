@@ -286,6 +286,11 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
 - **Tapping the grid raises the keyboard.** No button summons it: a "show keyboard" control is a
   workaround for focus not working, not a feature. The tap gesture must lose to drag, so panning the
   grid does not toggle the keyboard on every flick.
+- **Touch targets are 44 dp in portrait and 36 dp in landscape.** The 44 dp guideline assumes a
+  one-handed reach; a landscape key row is a two-thumb precision posture at the screen edges, and
+  44 dp there costs a quarter of a 390 dp-tall screen. The second landscape row is also collapsible,
+  with the state remembered — a user who wants maximum terminal can drop the symbols row without
+  losing the inverted T.
 - **The key row docks flush to the keyboard**, with no space between them — it is an accessory to the
   keyboard and reads as part of it. Track `visualViewport.height + offsetTop` live through the
   show/hide animation; laying out against `window.innerHeight` or a fixed inset produces exactly the

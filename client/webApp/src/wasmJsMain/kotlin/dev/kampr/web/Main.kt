@@ -4,6 +4,9 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
 import dev.kampr.shared.ui.DeepLink
 import dev.kampr.shared.ui.KamprApp
+import dev.kampr.conversation.ConversationSurfaces
+import dev.kampr.terminal.TerminalSurfaces
+import dev.kampr.terminal.bench.TerminalBenchApp
 import kotlinx.browser.document
 import kotlinx.browser.window
 
@@ -16,10 +19,15 @@ private fun query(name: String): String? {
         ?.get(1)
 }
 
+// ConversationSurfaces wraps: it renders the transcript and delegates the terminal and the
+// key row to its base, so both halves of the pane are live.
+private val surfaces = ConversationSurfaces(TerminalSurfaces())
+
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
+    val bench = query("bench") != null
     val deepLink = DeepLink(query("theme"), query("screen"), query("view"), query("pane"))
     ComposeViewport(document.body!!) {
-        KamprApp(deepLink = deepLink)
+        if (bench) TerminalBenchApp() else KamprApp(surfaces, deepLink)
     }
 }

@@ -16,6 +16,8 @@ dependencyResolutionManagement {
 }
 
 include(":shared")
+include(":terminal")
+include(":conversation")
 include(":androidApp")
 include(":desktopApp")
 include(":webApp")

@@ -67,6 +67,8 @@ android {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":terminal"))
+    implementation(project(":conversation"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.runtime)
     implementation(libs.compose.ui)

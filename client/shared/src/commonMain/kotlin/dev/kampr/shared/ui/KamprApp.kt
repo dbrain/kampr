@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,6 +38,7 @@ import dev.kampr.shared.theme.ThemeId
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Security
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -86,22 +88,31 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
         val breakpoint = breakpointOf(maxWidth, maxHeight)
         val scale = if (breakpoint == Breakpoint.Desktop) TypeScale.Desk else TypeScale.Phone
         KamprTheme(state.theme, scale) {
-            AppScaffold(
-                state, breakpoint, surfaces, now, setup, devices, connectionStatus, deepLink,
-                onRevoke = { id ->
-                    scope.launch {
-                        val client = createHttpClient()
-                        try {
-                            AuthApi(client, state.endpoint).revoke(id)
-                        } finally {
-                            client.close()
+            CompositionLocalProvider(LocalPaneIo provides remember(state) { AppPaneIo(state) }) {
+                AppScaffold(
+                    state, breakpoint, surfaces, now, setup, devices, connectionStatus, deepLink,
+                    onRevoke = { id ->
+                        scope.launch {
+                            val client = createHttpClient()
+                            try {
+                                AuthApi(client, state.endpoint).revoke(id)
+                            } finally {
+                                client.close()
+                            }
+                            deviceRefresh++
                         }
-                        deviceRefresh++
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
     }
+}
+
+private class AppPaneIo(private val state: AppState) : PaneIo {
+    override fun send(msg: ClientMsg) = state.connection.send(msg)
+    override fun prefs(paneId: String) = state.store.prefsFor(paneId)
+    override val readOnly: Boolean get() = state.store.readOnly
+    override fun show(view: PaneView) = state.setPaneView(view)
 }
 
 @Composable

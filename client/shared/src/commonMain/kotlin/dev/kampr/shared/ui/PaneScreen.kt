@@ -105,29 +105,19 @@ fun PaneScreenMobile(
                         { onView(if (it == 1) PaneView.Conversation else PaneView.Terminal) },
                         Modifier.weight(1f),
                     )
-                    ZoomChip()
+                    surfaces.Zoom(pane, Modifier)
                 }
             }
         }
 
-        Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
-            if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
-            surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
+        // The conversation surface renders its own prompt strip and reply box, so the terminal
+        // chrome stands down rather than stacking a second one underneath it.
+        if (view != PaneView.Conversation) {
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+                if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
+                surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
+            }
         }
-    }
-}
-
-@Composable
-private fun ZoomChip() {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
-    Row(
-        Modifier.background(tokens.color.surface, shape).edge(tokens.card, shape).padding(horizontal = 10.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        IconGlyph(KamprIcons.zoom, 12.dp, tokens.color.dim)
-        KText("fit", tokens.type.key, tokens.color.dim)
     }
 }
 
@@ -232,7 +222,7 @@ fun PaneScreenDesktop(
             )
         }
 
-        if (!readOnly) {
+        if (!readOnly && view == PaneView.Terminal) {
             pane.pending?.let {
                 Box(Modifier.align(Alignment.BottomStart).fillMaxWidth()) { PendingBar(it, onAnswer) }
             }

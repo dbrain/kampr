@@ -10,6 +10,8 @@ kotlin {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":terminal"))
+    implementation(project(":conversation"))
     implementation(compose.desktop.currentOs)
     implementation(libs.compose.runtime)
     implementation(libs.compose.ui)
