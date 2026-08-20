@@ -1,4 +1,5 @@
 use crate::pairing;
+use crate::recovery;
 use crate::report::{self, Local};
 use crate::service;
 use anyhow::Result;
@@ -28,6 +29,7 @@ pub async fn run(config_dir: &Path, state_dir: Option<&Path>) -> Result<()> {
         println!("  1  pair a device            2  pair a read-only device");
         println!("  3  list devices             4  revoke a device");
         println!("  5  install the service      6  refresh");
+        println!("  7  new recovery code");
         println!("  q  quit");
         let choice = prompt("  > ")?;
         match choice.trim() {
@@ -37,6 +39,7 @@ pub async fn run(config_dir: &Path, state_dir: Option<&Path>) -> Result<()> {
             "4" => revoke(&local).await?,
             "5" => install(config_dir, &local.state_dir)?,
             "6" => show(&local).await?,
+            "7" => new_recovery_code(&local).await?,
             "q" | "" => return Ok(()),
             other => println!("  ? {other}"),
         }
@@ -58,7 +61,30 @@ async fn show(local: &Local) -> Result<()> {
     let devices = local.auth.devices().await?;
     let active = devices.iter().filter(|d| d.active(kampr_auth::now())).count();
     println!("  devices     {active} paired");
+    println!(
+        "  recovery    {}",
+        match local.auth.has_recovery().await? {
+            true => "a code is live",
+            false => "none — option 7 issues one",
+        }
+    );
     Ok(())
+}
+
+/// Retiring a working code is not something to do by mistyping a menu number.
+async fn new_recovery_code(local: &Local) -> Result<()> {
+    if local.auth.has_recovery().await? {
+        println!();
+        println!("  A recovery code is already live. A new one retires it, and the paper record");
+        println!("  you already made stops working.");
+        if !prompt("  type yes to replace it: ")?
+            .trim()
+            .eq_ignore_ascii_case("yes")
+        {
+            return Ok(());
+        }
+    }
+    recovery::issue(local).await
 }
 
 async fn pair(local: &Local, role: Role) -> Result<()> {

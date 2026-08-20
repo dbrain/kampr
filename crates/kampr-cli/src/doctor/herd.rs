@@ -121,7 +121,8 @@ async fn sessions_check(config: &Config, socket: &Path, reachable: bool) -> Chec
         .herdr
         .sessions
         .iter()
-        .filter(|name| !found.iter().any(|s| &&s.name == name && s.running))
+        .flatten()
+        .filter(|name| !found.iter().any(|s| &s.name == *name && s.running))
         .collect();
     if missing.is_empty() {
         return Check::new("sessions", Status::Ok, detail);
@@ -140,9 +141,9 @@ async fn sessions_check(config: &Config, socket: &Path, reachable: bool) -> Chec
 }
 
 /// Mirrors what the node itself serves: the session its socket points at, plus every running
-/// session the config allows — an empty allow-list meaning all of them.
+/// session the config allows — no list at all meaning all of them, an empty list meaning none.
 fn served(config: &Config, primary: &str, found: &[SessionEntry]) -> Vec<String> {
-    let allowed = &config.herdr.sessions;
+    let allowed = config.herdr.sessions.as_deref();
     let up = found.iter().any(|s| s.running && s.name == primary);
     let mut names = vec![match up {
         true => primary.to_string(),
@@ -152,7 +153,7 @@ fn served(config: &Config, primary: &str, found: &[SessionEntry]) -> Vec<String>
         found
             .iter()
             .filter(|s| s.running && s.name != primary)
-            .filter(|s| allowed.is_empty() || allowed.iter().any(|a| a == &s.name))
+            .filter(|s| allowed.is_none_or(|names| names.iter().any(|a| a == &s.name)))
             .map(|s| s.name.clone()),
     );
     names
@@ -213,12 +214,23 @@ mod tests {
             entry("stopped", false),
         ];
         let mut config = Config::bootstrap("x");
+        assert_eq!(
+            served(&config, "default", &found),
+            ["default", "agents"],
+            "no list at all serves every running session"
+        );
+
+        config.herdr.sessions = Some(Vec::new());
+        assert_eq!(
+            served(&config, "default", &found),
+            ["default"],
+            "an empty list serves only the configured session"
+        );
+
+        config.herdr.sessions = Some(vec!["agents".into()]);
         assert_eq!(served(&config, "default", &found), ["default", "agents"]);
 
-        config.herdr.sessions = vec!["agents".into()];
-        assert_eq!(served(&config, "default", &found), ["default", "agents"]);
-
-        config.herdr.sessions = vec!["nothing".into()];
+        config.herdr.sessions = Some(vec!["nothing".into()]);
         assert_eq!(served(&config, "default", &found), ["default"]);
     }
 }

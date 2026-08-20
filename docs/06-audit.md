@@ -61,14 +61,17 @@ Ten of the fifteen are fixed, each with a test that fails first. The rest are op
 - **No PWA** (P6.10) — yet `security.installable` is computed and surfaced as "install to home screen", a promise nothing can keep. Phase 8's push design has no foundation.
 - **No notifications** (Phase 8). `caps.push` is hardcoded false; `pane.agent_status_changed` is not subscribed.
 - **The install path is built but has never run for real.** `.github/workflows/release.yml` now produces the artefacts both scripts fetch, `install.sh` refuses a binary whose `SHA256SUMS` entry is missing or wrong, and a keyless cosign signature is checked when cosign is present. No tag has been pushed, so the workflow itself — cross-compilation, signing, publication — is unexercised.
-- **No `min_herdr_version` enforcement** anywhere, despite the manifest declaring a 0.8.2 floor.
+- **`min_herdr_version` is enforced by `kampr doctor` and nowhere else.** The floor is read off the live
+  socket (`ping` carries `version` and `protocol`) and compared to the manifest's 0.8.2, with a test
+  tying the constant to the manifest. The *node* still starts against an older herdr without
+  complaint.
 - **No protocol-version negotiation.** `hello.protocol` is parsed and never read. One migration, no story for a second.
 - **No accessibility.** Zero `semantics`/`contentDescription` in the whole client; no reduced-motion.
 - **Warm resume is per-process only** — nothing is cached across an app restart, so the second open shows an empty grid.
 - **Silent failure on a flaky link**: keystrokes `trySend` into a 64-slot channel and are dropped unsignalled; a failed pair persists the *pairing code* as the token, producing a silent auth-failure loop.
 - **Observability**: registry accessors exist with no endpoint, `/healthz` returns a literal string, no metrics. `KamprStore.blocked()` — the triage list the roadmap called the one Collie idea worth stealing — has no callers.
 - **Audit log holes**: nothing on failed auth (token probing is invisible), nothing on `watch`/scrollback (a read-only device exfiltrating every terminal leaves one line), and `manage` omits `cwd`/`env`/`args` — the fields that say what actually ran. No rotation.
-- Missing outright: `kampr doctor`, recovery code, destructive-command confirm, threat model, ARCHITECTURE.md, ADRs.
+- Missing outright: destructive-command confirm, threat model, ARCHITECTURE.md, ADRs.
 
 ## One wire gap the security pass opened, deliberately
 
@@ -96,10 +99,10 @@ The whole point of a phone client is being *told* an agent is blocked. None of i
 | Item | Status |
 |---|---|
 | Destructive-command confirm (P2.10) | No occurrence of "destructive" anywhere in the tree |
-| Recovery code (P3.5) | Not implemented |
-| `kampr doctor` (P7.7) | Not implemented |
-| Light theme / `prefers-color-scheme` (P6.8b) | All four themes are dark |
-| Per-theme ANSI palette (P6.8c) | One hardcoded 16-slot table shared by every theme |
+| Recovery code (P3.5) | **Done** — `kampr recover`, generated at `kampr init`, ~99 bits, single use, reissued on redemption |
+| `kampr doctor` (P7.7) | **Done** — 11 checks, `--json`, non-zero exit on a real failure |
+| Light theme / `prefers-color-scheme` (P6.8b) | **Built** — every theme has both grounds; `KamprTheme` resolves System/Dark/Light |
+| Per-theme ANSI palette (P6.8c) | **Built** — 16 slots per theme on a dark terminal ground ([ADR 0009](./adr/0009-the-terminal-keeps-its-own-ground.md)) |
 | Accessibility (P6.11) | Zero `semantics` / `contentDescription` in the client |
 | PWA manifest + service worker (P6.10) | Absent — yet `security.installable` is advertised |
 | `manage` client UI (Phase 4.5) | Server complete; `ClientMsg.Manage` is never constructed |

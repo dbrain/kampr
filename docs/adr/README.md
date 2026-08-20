@@ -76,3 +76,4 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0006](./0006-auth-is-in-the-node.md) | Auth is in the node, and the origin dictates the ladder | Accepted |
 | [0007](./0007-peers-dial-outbound-to-a-hub.md) | Peers dial outbound to a hub | Accepted |
 | [0008](./0008-two-render-modes-not-a-glyph-atlas.md) | Two render modes, and never a hand-rolled glyph atlas | Accepted |
+| [0009](./0009-the-terminal-keeps-its-own-ground.md) | The terminal keeps its own dark ground, and only its 16 slots are themed | Accepted |

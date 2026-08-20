@@ -100,7 +100,7 @@ ours, and it cannot be one thing — a WebAuthn RP ID must be a domain, so Tier 
 - [ ] P3.3b Configurable RP ID / canonical origin, with a clear warning when it changes (passkeys are origin-bound)
 - [ ] P3.3c Capability detection — hide passkey and notification affordances where they cannot work, and say what a hostname would unlock
 - [ ] P3.4 Device enrolment → long-lived revocable per-device token; device list UI with kill switch
-- [ ] P3.5 Recovery code, generated once, shown once
+- [x] P3.5 Recovery code, generated once, shown once — ~99 bits, argon2id digest, single use, redemption enrols a full device and mints the replacement; `kampr recover`
 - [ ] P3.6 Roles: `full` vs `read-only` per device
 - [ ] P3.7 Rate limiting + lockout on auth endpoints
 - [ ] P3.8 Audit log (JSONL, 0600) of every write action, per device (Collie's `audit.ts` shape)
@@ -226,7 +226,7 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [x] P7.4 Supervision: `packaging/kampr.service` template + `kamprctl.sh` installs and nudges it; the launchd branch renders `packaging/dev.kampr.node.plist` and bootstraps it, and only reloads when the plist actually changed — never run on a Mac
 - [x] P7.5 `update` action owns the refresh, since plugin v1 has none
 - [ ] P7.6 Browser first-run wizard mirroring the terminal one, for people who start from the phone
-- [ ] P7.7 `kampr doctor` — checks socket reachability, Herdr version floor, port bind, TLS cert, peer health, and prints what's wrong in one screen
+- [x] P7.7 `kampr doctor` — herdr socket and version floor, sessions, bind and tier, TLS or proxy, file modes, client bundle, service state, devices and recovery; `--json`, non-zero exit on a real failure. Peer health is not covered while the mesh is in flight
 - [x] P7.8 Uninstall that actually cleans up: `uninstall` removes service and units and says where the devices still live; `purge` removes those too. `purge` is deliberately not a Herdr action — an action list is one tap away from a phone
 - [x] P7.9 Release workflow: Gradle stages the bundle, `build.rs` refuses to build a binary without it, `cross` builds static musl for linux x86_64/aarch64 and macOS for both arches, `SHA256SUMS` is signed keyless with cosign, and a clean runner installs the artefact and runs it — unexercised until the first tag
 
