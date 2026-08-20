@@ -266,8 +266,9 @@ int style TextAppearance_Compat_Notification_Info 0x7f090003
 int style TextAppearance_Compat_Notification_Line2 0x7f090004
 int style TextAppearance_Compat_Notification_Time 0x7f090005
 int style TextAppearance_Compat_Notification_Title 0x7f090006
-int style Widget_Compat_NotificationActionContainer 0x7f090007
-int style Widget_Compat_NotificationActionText 0x7f090008
+int style Theme_KamprSpike 0x7f090007
+int style Widget_Compat_NotificationActionContainer 0x7f090008
+int style Widget_Compat_NotificationActionText 0x7f090009
 int[] styleable ActivityFilter { 0x7f010000, 0x7f010001 }
 int styleable ActivityFilter_activityAction 0
 int styleable ActivityFilter_activityName 1

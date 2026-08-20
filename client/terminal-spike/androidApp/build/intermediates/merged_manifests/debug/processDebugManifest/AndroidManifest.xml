@@ -19,7 +19,8 @@
         android:debuggable="true"
         android:extractNativeLibs="false"
         android:hardwareAccelerated="true"
-        android:label="Kampr Spike" >
+        android:label="Kampr Spike"
+        android:theme="@style/Theme.KamprSpike" >
         <activity
             android:name="dev.kampr.terminal.spike.app.MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"

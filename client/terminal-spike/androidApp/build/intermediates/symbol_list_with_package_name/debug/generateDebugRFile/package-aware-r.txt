@@ -1,1 +1,2 @@
 dev.kampr.terminal.spike.app
+style Theme_KamprSpike

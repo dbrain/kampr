@@ -280,5 +280,7 @@ cannot spawn processes (findings §3.10).
 - [ ] U5 `Home`/`End`/`PageUp`/`PageDown`/`Insert`/`Delete` in the `send_keys` grammar
 - [ ] U6 A protocol version for the terminal stream contract, independent of the socket protocol
 - [ ] U7 Expose attached-client count / geometry in `session.snapshot`, so a bridge can say whether anyone is at the desk
+- [ ] U8b An event on native geometry change — today a bridge must poll to notice the desk resizing (#52)
+- [ ] U8c An offset parameter on `pane.read recent`, so deep scrollback is reachable at all (#51)
 - [ ] U8 A read-only *input* mode for `terminal session control`, or `terminal.scroll` on an observer — so a bridge can scroll without claiming the PTY
 - [ ] U9 `observe` following native geometry automatically, instead of defaulting to 120×40

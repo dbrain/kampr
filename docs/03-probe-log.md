@@ -58,7 +58,7 @@ Add to this file rather than re-deriving. A claim without a row here is a guess.
 | 26 | Herdr holds the ring | `pane.get` after | `max_offset_from_bottom: 171` |
 | 27 | `pane.read recent` on a **shell** pane is instant and safe | `lines=400` | **0.002 s**, 401 lines, all 200 markers, viewport **unmoved** |
 | 28 | ANSI scrollback keeps colour | `recent format=ansi`, 400 × 256-colour lines | 0.001 s, 11.7 KB, 400/400 markers, 1200 SGR runs, viewport unmoved |
-| 29 | Over-asking clamps harmlessly | `lines=5000` | Returns 400, `truncated:false`, viewport unmoved |
+| 29 | ~~Over-asking clamps harmlessly~~ **CORRECTED by #51** | `lines=5000` against a 400-row ring | Returned 400, `truncated:false`. That only held because the ring was shallower than herdr's cap — see #51 |
 | 30 | **Alt screen has no ring** | `ESC[?1049h`, then read | `max_offset_from_bottom: 0`; `recent` degrades to the viewport, instantly, unmoved. Exiting alt screen restores the ring |
 
 > **Interlock.** Read scrollback only when `max_offset_from_bottom > 0` **and** the pane has no
@@ -113,6 +113,17 @@ HERDR_SESSION=probe cargo run -p kampr-spike # in another
 > `pane.read visible` and sets `source: "screen"` (#42). Codex could be read from the transcript
 > (#43) — an unmatched `custom_tool_call` — but the wire shape is identical either way, so the
 > screen path is the one implementation and `source` is the only thing that differs.
+
+## Corrections and event behaviour
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 51 | **`pane.read recent` caps at 1000 lines, and deeper history is unreachable** | 1400-line ring (`max_offset_from_bottom: 1371`), asked for 400 / 1200 / 5000 | 400 → 400 rows, 1200 → **1000**, 5000 → **1000**, all `truncated: true`. `pane.read` has no offset parameter, so there is **no way to page further back**. Corrects #29 |
+| 52 | **No event fires when the attached client resizes** | subscribed `layout.updated`, `pane.updated`, `pane.moved`, `workspace.updated`, `tab.focused`, `pane.focused`; resized the desk client three times, verifying the pane rect moved 74 → 94 → 54 → 114 columns each time | **Zero events, all six types, all three resizes.** Control: a `pane.split` fired `layout_updated` *and* `pane_updated`. So `layout.updated` covers structural change only — **native geometry change from the desk is detectable only by polling** |
+| 53 | Only the first frame of an `observe` stream is `full: true` | 19 frames over 12 s of shell activity | 1 full. Mapping `full` → `grid.reset` costs nothing |
+| 54 | A subscription list is all-or-nothing | include `pane.scroll_changed` without a `pane_id` | One invalid entry rejects the whole `events.subscribe` call, not just that entry |
+| 55 | Herdr's `truncated` means "there was more than you asked for" | #51 | Not "we hit the cap" — a short read can also be truncated |
+
 
 ## Herd management (feature parity with the TUI)
 

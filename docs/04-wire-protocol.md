@@ -44,7 +44,7 @@ where `pane_id` is Herdr's own (`w3:p2`). Clients treat it as opaque.
                "cols": 74, "rows": 30,               // native, from the layout rect
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a journal adapter exists for this harness
-               "updated_at": "2026-08-20T13:44:02Z" } ] }
+               "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
 `herd.patch` carries the same shapes under `added` / `changed` / `removed_ids`.
@@ -71,23 +71,41 @@ Style `0` is always the default pen. Ids are stable for the life of the connecti
 ```jsonc
 { "t": "grid.patch", "pane": "01J.../w3:p2",
   "rows": [ { "row": 9, "runs": [ {"s": 0, "x": "❯ 1. "}, {"s": 4, "x": "Yes"} ] } ],
-  "cursor": { "col": 5, "row": 10, "visible": true } }
+  "cursor": { "col": 5, "row": 10, "visible": true },
+  "links": [ "https://herdr.dev" ] }        // delta only, appended to the pane's table
 ```
 
-**RowDiff** is `{ "row": <u16>, "runs": [ Run ] }`; **Run** is `{ "s": <style_id>, "x": "<text>",
+**RowDiff** is `{ "row": <u32>, "runs": [ Run ] }`; **Run** is `{ "s": <style_id>, "x": "<text>",
 "l": <link_id?> }`. Runs are contiguous from column 0 and cover the full row width; trailing default
-cells may be omitted, and the client pads with blanks. Run-length beats per-cell JSON by ~40× on a
-full frame (~3 KB vs ~130 KB at 74×30).
+cells may be omitted, and the client pads with blanks.
+
+`row` is `u32`, not `u16`: on `grid.*` it is a viewport row, but on `scrollback` it is an absolute
+ring index, and a deep ring overflows 16 bits.
+
+**`links` is a delta, and it may appear on `grid.patch`.** A hyperlink can first be seen mid-stream,
+so a client that only reads `links` from `grid.reset` will render link ids it was never given.
+Append each message's `links` to the pane's table in arrival order; ids are indices into it.
+
+Measured compression against per-cell JSON: **61×** at 124×50 with 49 distinct pens (4,205 vs
+257,985 bytes) and **44×** at 74×30 with light colour (1,769 vs 78,471). The ratio holds; the
+absolute size scales with how much colour is on screen.
 
 ### `scrollback` — history above the viewport, oldest first
 ```jsonc
 { "t": "scrollback", "pane": "01J.../w3:p2", "from_top": 0,
-  "rows": [ /* RowDiff, row = absolute index from the top of the ring */ ],
-  "total_rows": 171, "complete": true }
+  "rows": [ /* RowDiff, row = absolute index from the top of the node's ring */ ],
+  "total_rows": 171, "complete": true, "capped": false }
 ```
 Only sent for panes with `scrollback_rows > 0`. Sourced from `pane.read recent format=ansi` and run
 through the same emulator, so styling matches the live grid. Agent panes never have this — their
 history is the conversation.
+
+**There is no `scrollback.load`, deliberately.** Herdr caps a scrollback read at **1000 lines** and
+`pane.read` has no offset parameter (probe #51), so a client cannot page further back and neither can
+the node — asking again just returns the same newest 1000. What the node *can* do is accumulate: while
+it is watching, successive reads overlap, so it stitches them into a ring that grows past the cap.
+History that scrolled away before the node started watching is unreachable, and `capped: true` says
+so rather than pretending the top of the ring is the top of history.
 
 ### `convo` / `convo.turn` — transcript-derived, agent panes only
 ```jsonc
@@ -124,12 +142,17 @@ Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` �
 { "t": "watch",   "pane": "01J.../w3:p2", "scrollback": true, "conversation": true }
 { "t": "unwatch", "pane": "01J.../w3:p2" }
 
-// Input. Exactly one of text/b64/keys. text and b64 go to pane.send_text as raw bytes;
+// Input. Exactly one of text/b64/keys. text and b64 go to pane.send_text;
+// `pane.send_text` takes a JSON string, so bytes that are not valid UTF-8 have no
+// representation on the wire to Herdr. b64 is a convenience for control characters,
+// NOT a raw-byte escape hatch: invalid UTF-8 is rejected with bad_request rather than
+// mangled. Every escape sequence Herdr's key grammar rejects is UTF-8-safe, so nothing
+// the key row needs is lost.
 // keys goes to pane.send_keys and is limited to Herdr's grammar (probe #7).
 // Anything Herdr's grammar rejects — Home, End, PageUp, PageDown, Insert, Delete — is sent as
 // its escape sequence through text/b64 instead (probe #8/#9). Clients should prefer text.
 { "t": "input", "pane": "01J.../w3:p2", "text": "\u001b[5~" }
-{ "t": "input", "pane": "01J.../w3:p2", "b64": "G1s1fg==" }
+{ "t": "input", "pane": "01J.../w3:p2", "b64": "G1s1fg==" }   // must decode to valid UTF-8
 { "t": "input", "pane": "01J.../w3:p2", "keys": ["ctrl+c"] }
 
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
@@ -145,7 +168,11 @@ There is **no resize message and there will not be one.** The node cannot reshap
 - Per pane the node sends exactly one `grid.reset` before any `grid.patch`, and re-sends `grid.reset`
   after any gap it cannot patch across (observer restart, herdr reconnect, native geometry change).
 - Geometry changes arrive as a fresh `grid.reset` with new `cols`/`rows`. Herdr's own `full:true`
-  frames map to this one-to-one.
+  frames map to this one-to-one, and cost nothing: only the first frame of a stream is `full`
+  (probe #53).
+- **The node polls to notice a desk resize.** No Herdr event fires when the attached client resizes —
+  verified across six event types and three confirmed geometry changes (probe #52). `layout.updated`
+  covers structural change only. Clients see the same `grid.reset` either way.
 - **Reconnect is cheap by construction**: a full grid is ~3 KB and Herdr coalesces bursts to end
   state (probe #23/#25), so there is never a backlog. Clients render their cached last grid
   immediately, marked stale, and swap on the `grid.reset`. No spinner.

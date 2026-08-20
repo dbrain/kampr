@@ -98,6 +98,19 @@ class TextCache(
     private var metricsCache: GridMetrics? = null
     private var metricsSize: TextUnit = 0.sp
 
+    fun revalidate(sizeSp: TextUnit): Boolean {
+        val prev = metricsCache
+        val m = metrics(sizeSp)
+        metricsCache = m
+        metricsSize = sizeSp
+        if (prev != null && kotlin.math.abs(prev.cellW - m.cellW) < 0.01f) return false
+        styles.fill(null)
+        glyphs.fill(null)
+        wideGlyphs.clear()
+        runs.clear()
+        return true
+    }
+
     fun metricsFor(sizeSp: TextUnit): GridMetrics {
         val c = metricsCache
         if (c != null && metricsSize == sizeSp) return c

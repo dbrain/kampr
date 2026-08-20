@@ -95,6 +95,8 @@ MERGED from [androidx.startup:startup-runtime:1.1.1] /home/dbrain/.gradle/caches
 		ADDED from /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/main/AndroidManifest.xml:3:18-45
 	android:hardwareAccelerated
 		ADDED from /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/main/AndroidManifest.xml:3:46-80
+	android:theme
+		ADDED from /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/main/AndroidManifest.xml:3:81-120
 activity#dev.kampr.terminal.spike.app.MainActivity
 ADDED from /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/main/AndroidManifest.xml:4:9-10:20
 	android:exported

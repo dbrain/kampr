@@ -636,6 +636,8 @@ Two design consequences worth stating:
 | No input channel that declines geometry | `control` always claims the PTY, even with no size flags **[probed]** — so Kampr uses `observe` + JSON-RPC input, and gives up `terminal.scroll` |
 | No scrollback from the frame stream | Frames carry end state only — 29 of 200 lines **[probed]**. The ring comes from `pane.read recent` instead |
 | No scrollback ring on alt-screen panes | `max_offset_from_bottom` is 0 **[probed]** — the transcript is their history |
+| **Scrollback reads cap at 1000 lines with no way to page further** | `pane.read` has no offset parameter **[probed #51]**. A node that watches continuously accumulates beyond the cap by stitching overlapping reads; history that scrolled past before it started watching is gone |
+| **No event when the desk resizes a pane** | Six event types, three verified resizes, zero events **[probed #52]** — geometry change is poll-only |
 | `pane.read` drops OSC 8; frames keep it | Verified both ways **[probed]** — the frame path is strictly richer |
 | No way to tell whether a desktop client is attached | Not in `ping`, `session.snapshot`, or `herdr status` **[probed]** — now moot, since nothing is ever borrowed |
 | Concurrent clients fight over geometry, last writer wins | 100×30 + 60×20 → 18 rows; then 200×50 → 50 rows **[probed]** |

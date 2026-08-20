@@ -42,7 +42,6 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.time.TimeSource
 import org.jetbrains.compose.resources.Font
-import org.jetbrains.compose.resources.preloadFont
 
 private const val BUDGET_MS = 1000f / 60f
 
@@ -53,20 +52,12 @@ private class FrameTiming {
 
 @Composable
 fun TerminalSpikeApp() {
-    val regular by preloadFont(Res.font.jetbrainsmononl_regular)
-    val bold by preloadFont(Res.font.jetbrainsmononl_bold, FontWeight.Bold, FontStyle.Normal)
-    val italic by preloadFont(Res.font.jetbrainsmononl_italic, FontWeight.Normal, FontStyle.Italic)
-    val boldItalic by preloadFont(Res.font.jetbrainsmononl_bolditalic, FontWeight.Bold, FontStyle.Italic)
-    val loaded = regular != null && bold != null && italic != null && boldItalic != null
-    if (!loaded) {
-        Box(Modifier.fillMaxSize().background(Color(Palette.DEFAULT_BG)))
-        return
-    }
-    TerminalSpikeBench(FontFamily(regular!!, bold!!, italic!!, boldItalic!!))
-}
-
-@Composable
-private fun TerminalSpikeBench(family: FontFamily) {
+    val family = FontFamily(
+        Font(Res.font.jetbrainsmononl_regular, FontWeight.Normal, FontStyle.Normal),
+        Font(Res.font.jetbrainsmononl_bold, FontWeight.Bold, FontStyle.Normal),
+        Font(Res.font.jetbrainsmononl_italic, FontWeight.Normal, FontStyle.Italic),
+        Font(Res.font.jetbrainsmononl_bolditalic, FontWeight.Bold, FontStyle.Italic),
+    )
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val cache = remember(family) { TextCache(measurer, family) }
     val renderer = remember(cache) { GridRenderer(cache) }
@@ -91,7 +82,7 @@ private fun TerminalSpikeBench(family: FontFamily) {
     val fit = remember(cache) { FitState() }
 
     LaunchedEffect(family) {
-        applyScenario(scenario, buffer, workload, renderer)
+        applyScenario(scenario, buffer, workload, renderer, fit)
         var lastNanos = 0L
         var lastHud = 0.0
         var elapsedMs = 0.0
@@ -139,7 +130,7 @@ private fun TerminalSpikeBench(family: FontFamily) {
                     zoom.floatValue = 1f
                     panX.floatValue = 0f
                     panY.floatValue = 0f
-                    applyScenario(next, buffer, workload, renderer)
+                    applyScenario(next, buffer, workload, renderer, fit)
                 }
                 if (runner.finished && !done) done = true
             }
@@ -179,11 +170,13 @@ private fun applyScenario(
     buffer: CellBuffer,
     workload: Workload,
     renderer: GridRenderer,
+    fit: FitState,
 ) {
     buffer.resize(s.cols, s.rows)
     buffer.markAllDirty()
     workload.reconfigure(s.profile, s.cols, s.rows)
     renderer.invalidate()
+    fit.recheck()
 }
 
 @Composable
@@ -230,6 +223,7 @@ private fun GridSurface(
         tick.intValue
         val start = TimeSource.Monotonic.markNow()
 
+        fit.revalidate(cache)
         val base = fit.fontSizeSp(cache, buffer.cols, buffer.rows, size.width, size.height)
         val sizeSp = if (layerZoom) base else base * zoom.floatValue
         val metrics = cache.metricsFor(sizeSp)
@@ -247,6 +241,18 @@ private fun GridSurface(
 private class FitState {
     private var key = 0L
     private var value = 12f
+    private var pending = 0
+    private var lastSize: TextUnit = 0.sp
+
+    fun recheck() {
+        pending = 60
+    }
+
+    fun revalidate(cache: TextCache) {
+        if (pending <= 0) return
+        pending--
+        if (lastSize.value > 0f && cache.revalidate(lastSize)) key = 0L
+    }
 
     fun fontSizeSp(cache: TextCache, cols: Int, rows: Int, wPx: Float, hPx: Float): TextUnit {
         val k = (cols.toLong() shl 40) xor (rows.toLong() shl 24) xor
@@ -259,6 +265,7 @@ private class FitState {
             value = (ref * minOf(sw, sh)).coerceIn(3f, 40f)
             key = k
         }
+        lastSize = value.sp
         return value.sp
     }
 }
