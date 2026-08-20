@@ -40,9 +40,6 @@ kotlin {
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
         }
-        jvmTest.dependencies {
-            implementation(compose.desktop.currentOs)
-        }
         wasmJsMain.dependencies {
             implementation(libs.kotlinx.browser)
         }

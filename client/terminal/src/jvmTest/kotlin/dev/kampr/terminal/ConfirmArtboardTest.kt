@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.platform.Font
@@ -50,6 +51,7 @@ private object ArtboardIo : PaneIo {
     override fun info(paneId: String) = PaneInfo(
         id = PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
         cwd = "~/dev/kampr", agent = null, agentStatus = "idle", cols = 62, rows = 24,
+        scrollbackRows = 900,
     )
 }
 
@@ -117,8 +119,28 @@ private fun shellPane(): PaneState {
             links = emptyList(),
         ),
     )
+    // A shell pane with a ring fills width and pans, which is the geometry an operator actually
+    // reads a command line at; fill-height is for alt-screen panes with nothing above the grid.
+    pane.applyScrollback(
+        ServerMsg.Scrollback(
+            pane = PANE,
+            fromTop = 0,
+            rows = (0 until 60).map { RowDiff(it, listOf(Run(0, HISTORY[it % HISTORY.size]))) },
+            totalRows = 60,
+            complete = false,
+            capped = true,
+        ),
+    )
     return pane
 }
+
+private val HISTORY = listOf(
+    "   Compiling kampr-core v0.1.0 (crates/kampr-core)",
+    "   Compiling kampr-node v0.1.0 (crates/kampr-node)",
+    "    Finished `dev` profile [unoptimized] in 11.2s",
+    "     Running `target/debug/kampr serve`",
+    "",
+)
 
 private class ArtboardSurfaces(private val session: PaneSession) : PaneSurfaces {
     @Composable
@@ -131,7 +153,10 @@ private class ArtboardSurfaces(private val session: PaneSession) : PaneSurfaces 
     @Composable
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val sink = InputSink(pane.id, ArtboardIo, session.latches)
-        PaneKeyRow(session, sink, compact, enabled = true, modifier = modifier)
+        PaneKeyRow(
+            session, sink, compact, enabled = true,
+            modifier = modifier.onSizeChanged { session.keyRowHeight = it.height.toFloat() },
+        )
     }
 }
 

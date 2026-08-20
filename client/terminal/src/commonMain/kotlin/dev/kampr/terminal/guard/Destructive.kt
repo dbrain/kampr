@@ -237,7 +237,7 @@ private fun inspect(segment: String): Destructive? {
             if (target != null) "deletes everything under $target, recursively"
             else "deletes ${targets.firstOrNull() ?: "whatever is piped in"} and everything under it"
         }
-        name.startsWith("mkfs") -> "formats a filesystem — every byte on it goes"
+        name.startsWith("mkfs") && acts -> "formats a filesystem — every byte on it goes"
         name == "dd" && rest.any { !it.quoted && it.text.startsWith("of=") } ->
             "writes raw blocks straight over ${rest.first { it.text.startsWith("of=") }.text.removePrefix("of=")}"
         name == "shred" && acts -> "overwrites the file so it cannot be recovered"
@@ -245,7 +245,7 @@ private fun inspect(segment: String): Destructive? {
         name == "chmod" && rest.flag('R', "recursive") &&
             targets.any { it == "777" || it == "666" || it.endsWith("+rwx") || it.endsWith("o+w") } ->
             "makes a whole tree world-writable"
-        name == "git" -> gitReason(words)
+        name == "git" -> gitReason(argv)
         name == "docker" || name == "podman" ->
             if (argv.has("prune")) "prunes docker state — stopped containers, unused volumes and images" else null
         name == "kubectl" && argv.has("delete") && rest.none { it.text.startsWith("--dry-run") } ->
@@ -285,7 +285,7 @@ private fun gitReason(words: List<Word>): String? {
 // worst a false positive on that candidate; losing the command costs the feature.
 private const val MARKERS = "$#%>❯➜»▶λ✗✓±→"
 
-fun commandCandidates(line: String): List<String> {
+private fun commandCandidates(line: String): List<String> {
     val out = mutableListOf<String>()
     line.trim().takeIf { it.isNotEmpty() }?.let { out += it }
     var quote = ' '

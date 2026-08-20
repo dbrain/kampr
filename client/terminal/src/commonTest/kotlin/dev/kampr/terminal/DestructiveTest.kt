@@ -79,6 +79,7 @@ private val SAFE = listOf(
     "brew cleanup --prune=all",
     "nix-collect-garbage -d",
     "> log.txt",
+    "mkfs.ext4 --help",
     "",
     "   ",
 )
@@ -103,6 +104,7 @@ private val DANGEROUS = listOf(
     "echo comingclean > /etc/hostname",
     "git push --force origin main",
     "git push -f",
+    "sudo git push --force",
     "git reset --hard HEAD~3",
     "git clean -fd",
     "git clean -fdx",

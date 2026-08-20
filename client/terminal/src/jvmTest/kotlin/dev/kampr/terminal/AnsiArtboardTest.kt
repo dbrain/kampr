@@ -17,6 +17,24 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.kampr.shared.theme.FamilyId
+import dev.kampr.shared.theme.Ground
+import dev.kampr.shared.theme.KamprFonts
+import dev.kampr.shared.theme.KamprTokens
+import dev.kampr.shared.theme.LocalGround
+import dev.kampr.shared.theme.LocalTokens
+import dev.kampr.shared.theme.ThemeSpec
+import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.theme.on
+import dev.kampr.shared.theme.typography
+import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.ui.PaneScreenMobile
+import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.theme.AllThemes
@@ -117,6 +135,46 @@ private fun terminalFamily(): FontFamily {
     )
 }
 
+
+private object NoIo : PaneIo {
+    override fun send(msg: ClientMsg) = Unit
+    override fun prefs(paneId: String): PanePrefs = PanePrefs()
+}
+
+private fun uiFamily(id: FamilyId): FontFamily {
+    val dir = File("../shared/src/commonMain/composeResources/font")
+    fun face(name: String, weight: FontWeight) = Font(name, File(dir, "$name.ttf").readBytes(), weight)
+    return when (id) {
+        FamilyId.Manrope -> FontFamily(
+            face("manrope_400", FontWeight.W400), face("manrope_500", FontWeight.W500),
+            face("manrope_600", FontWeight.W600), face("manrope_700", FontWeight.W700),
+            face("manrope_800", FontWeight.W800),
+        )
+        FamilyId.IbmPlexMono -> FontFamily(
+            face("ibmplexmono_400", FontWeight.W400), face("ibmplexmono_500", FontWeight.W500),
+            face("ibmplexmono_600", FontWeight.W600),
+        )
+        FamilyId.JetBrainsMono -> FontFamily(
+            face("jetbrainsmono_400", FontWeight.W400), face("jetbrainsmono_500", FontWeight.W500),
+            face("jetbrainsmono_700", FontWeight.W700),
+        )
+        FamilyId.InstrumentSans -> FontFamily(
+            face("instrumentsans_400", FontWeight.W400), face("instrumentsans_500", FontWeight.W500),
+            face("instrumentsans_600", FontWeight.W600),
+        )
+        FamilyId.Archivo -> FontFamily(
+            face("archivo_500", FontWeight.W500), face("archivo_700", FontWeight.W700),
+            face("archivo_900", FontWeight.W900),
+        )
+    }
+}
+
+private fun artboardTokens(spec: ThemeSpec, ground: Ground, terminal: FontFamily): KamprTokens {
+    val grounded = spec.on(ground)
+    val fonts = KamprFonts(uiFamily(grounded.ui), uiFamily(grounded.mono), terminal)
+    return KamprTokens(grounded, fonts, typography(fonts, grounded.label, TypeScale.Phone))
+}
+
 class AnsiArtboardTest {
     // ADR 0009: the terminal keeps a dark ground under both app grounds, so this sheet is the
     // proof — the same pane, once per theme, and the light column must be identical to the dark.
@@ -172,6 +230,63 @@ class AnsiArtboardTest {
             assertTrue(image.width > 0)
         } finally {
             scene.close()
+        }
+    }
+
+    // The light-ground proof: the same pane, chrome in light, terminal dark inside it. If the
+    // seam ever reads as breakage rather than as a device, this is the artboard that shows it.
+    @Test
+    fun paneScreenHoldsADarkTerminalUnderALightGround() {
+        val state = pane()
+        val info = PaneInfo(
+            id = state.id, nodeId = "01JNODE", workspace = "kampr", tab = "1",
+            cwd = "/home/dbrain/dev/kampr", agent = "claude", agentStatus = "blocked",
+            cols = 78, rows = 20, scrollbackRows = 412,
+        )
+        val family = terminalFamily()
+        val density = Density(2f)
+        val width = 390.dp
+        val height = 844.dp
+        for (ground in Ground.entries) {
+            val scene = ImageComposeScene(
+                width = with(density) { (width * AllThemes.size).roundToPx() },
+                height = with(density) { height.roundToPx() },
+                density = density,
+            ) {
+                CompositionLocalProvider(LocalPaneIo provides NoIo, LocalGround provides ground) {
+                    Row(Modifier.fillMaxSize()) {
+                        for (spec in AllThemes) {
+                            CompositionLocalProvider(
+                                LocalTokens provides artboardTokens(spec, ground, family),
+                            ) {
+                                Box(Modifier.width(width).height(height)) {
+                                    PaneScreenMobile(
+                                        pane = state,
+                                        info = info,
+                                        view = PaneView.Terminal,
+                                        surfaces = TerminalSurfaces(),
+                                        landscape = false,
+                                        readOnly = false,
+                                        onBack = {},
+                                        onView = {},
+                                        onAnswer = {},
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            try {
+                repeat(3) { scene.render() }
+                val image = scene.render()
+                OUT.mkdirs()
+                File(OUT, "pane-terminal-${ground.name.lowercase()}.png")
+                    .writeBytes(requireNotNull(image.encodeToData()).bytes)
+                assertTrue(image.width > 0)
+            } finally {
+                scene.close()
+            }
         }
     }
 }
