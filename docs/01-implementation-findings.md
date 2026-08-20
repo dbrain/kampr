@@ -687,7 +687,7 @@ Deliberate inversions of Collie:
 | Collie | Kampr |
 |---|---|
 | Poll `session.snapshot`; browser polls too | Poll snapshot for *structure*; **stream frames** for *content*; push to the browser over WS |
-| No terminal emulator, `StyledLine[]` | **xterm.js on the real frame stream**, cursor and all |
+| No terminal emulator, `StyledLine[]` | **VT emulation in the node**, cell grid to the client (§5.5) |
 | Explicit Send button, no live keys | **Live keys** by default, with a Send-a-block affordance kept for dictation |
 | Front door *is* the auth | **Auth is in the bridge**; the front door is just TLS |
 | One host | **Mesh of nodes**, hub role |
@@ -707,14 +707,14 @@ names), the audit log, the destructive-command confirm, the PWA build-stamp cach
 |---|---|---|
 | `axum` | 0.8.9 | HTTP + WebSocket |
 | `tokio` | 1.53.1 | runtime, `tokio::process` for the observe children |
-| `tower-http` | 0.7.0 | CORS, compression, static serving |
+| `tower-http` | 0.7.0 | headers and tracing |
 | `rustls` | 0.23.43 | own-TLS mode |
 | `webauthn-rs` | 0.5.5 | passkeys (Tier 1+) |
 | `vte` | 0.15.0 | VT parsing — `crates/kampr-term` is built on it and verified against Herdr's own grid |
 | `sqlx` | 0.9.0 | devices, tokens, per-pane prefs |
-| `web-push` | 0.11.0 | VAPID push |
-| `quinn` | 0.11.11 | optional QUIC for mesh links |
-| `argon2` | 0.5.3 | Tier-0 pairing secrets |
+| `web-push` | 0.11.0 | VAPID push — *not yet added; Phase 8* |
+| `quinn` | 0.11.11 | QUIC for mesh links — *not yet added; Phase 4* |
+
 
 **Clients: Kotlin Multiplatform + Compose Multiplatform.** Kotlin **2.4.10**, CMP **1.11.1** (1.12.0-rc01
 in flight), Ktor client **3.5.2** — checked against Maven Central metadata the same day. One codebase

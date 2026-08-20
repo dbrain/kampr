@@ -9,3 +9,7 @@ __pycache__/
 /client/local.properties
 /client/kotlin-js-store
 /client/.kotlin
+
+# Staged client bundle, baked in by rust-embed
+/crates/kampr-node/dist/*
+!/crates/kampr-node/dist/.gitkeep

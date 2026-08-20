@@ -59,3 +59,14 @@ kotlin {
         }
     }
 }
+
+// The single-binary join: rust-embed bakes `crates/kampr-node/dist/` into the node, and this is
+// what puts the wasm bundle there. Sync, not Copy — a stale hashed .wasm left behind would be
+// served forever under its old name.
+val stageNodeBundle = tasks.register<Sync>("stageNodeBundle") {
+    from(tasks.named("wasmJsBrowserDistribution"))
+    into(rootProject.layout.projectDirectory.dir("../crates/kampr-node/dist"))
+    preserve { include(".gitkeep") }
+}
+
+tasks.named("build") { dependsOn(stageNodeBundle) }
