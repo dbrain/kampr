@@ -98,6 +98,10 @@ pub struct Subscription {
 }
 
 impl Subscription {
+    /// **Not cancel-safe.** This is a `read_line`, so dropping the future mid-line — a
+    /// `tokio::time::timeout` or a `select!` branch that loses — discards the bytes already read and
+    /// silently corrupts the stream. Drive it from a dedicated task feeding a channel, never
+    /// directly inside a `select!`.
     pub async fn next(&mut self) -> Result<Option<serde_json::Value>> {
         let mut line = String::new();
         if self.reader.read_line(&mut line).await? == 0 {
