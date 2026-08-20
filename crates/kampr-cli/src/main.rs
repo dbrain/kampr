@@ -1,6 +1,8 @@
 mod dirs;
+mod doctor;
 mod init;
 mod pairing;
+mod recovery;
 mod report;
 mod service;
 mod setup;
@@ -64,6 +66,24 @@ enum Command {
         #[arg(long)]
         readonly: bool,
     },
+    /// Get back in with the recovery code, when no paired device is left
+    Recover {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// Issue a fresh code and retire the current one. For a paper record that was lost, or a
+        /// node that predates recovery codes.
+        #[arg(long)]
+        new: bool,
+        #[arg(long, default_value = "recovered")]
+        name: String,
+    },
+    /// Check everything that has to be true for this node to work, and say what is not
+    Doctor {
+        #[command(flatten)]
+        dirs: Dirs,
+        #[arg(long)]
+        json: bool,
+    },
     /// Install or remove the user service that keeps the node running
     Service {
         action: ServiceAction,
@@ -119,6 +139,15 @@ async fn main() -> Result<()> {
             println!("{}", pairing.code);
             pairing::arm(&local, &pairing).await
         }
+        Command::Recover { dirs, new, name } => {
+            let local = Local::open(&dirs.config(), dirs.state_override()).await?;
+            if new {
+                recovery::issue(&local).await
+            } else {
+                recovery::redeem(&local, &name).await
+            }
+        }
+        Command::Doctor { dirs, json } => doctor::run(&dirs, json).await,
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {
                 let path = service::install(
@@ -128,7 +157,7 @@ async fn main() -> Result<()> {
                     std::env::var("HERDR_SOCKET_PATH").ok().as_deref(),
                 )?;
                 println!("installed {}", path.display());
-                println!("start it with: systemctl --user start kampr.service");
+                println!("start it with: {}", service::start_hint());
                 Ok(())
             }
             ServiceAction::Uninstall => {

@@ -85,11 +85,14 @@ fn install_launchd(
 ) -> Result<PathBuf> {
     let path = launchd_plist_path()?;
     std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
+    // launchd expands nothing, and an empty HERDR_SOCKET_PATH is worse than an absent one:
+    // `Herdr::discover` takes the variable at face value and dials a socket named "".
+    let default_socket = default_socket_path()?;
     let plist = LAUNCHD_PLIST
         .replace("@BIN@", &binary.display().to_string())
         .replace("@CONFIG_DIR@", &config_dir.display().to_string())
         .replace("@STATE_DIR@", &state_dir.display().to_string())
-        .replace("@SOCKET@", socket.unwrap_or(""));
+        .replace("@SOCKET@", socket.unwrap_or(&default_socket));
     std::fs::write(&path, plist).with_context(|| format!("writing {}", path.display()))?;
     quiet("launchctl", &["bootout", &format!("gui/{}/{LABEL}", uid())]);
     run(
@@ -112,6 +115,18 @@ pub fn status() -> String {
             .map(|_| "active".to_string())
             .unwrap_or_else(|_| "inactive".into()),
     }
+}
+
+pub fn start_hint() -> &'static str {
+    match Supervisor::detect() {
+        Supervisor::Systemd => "systemctl --user start kampr.service",
+        Supervisor::Launchd => "launchctl kickstart gui/$(id -u)/dev.kampr.node",
+    }
+}
+
+fn default_socket_path() -> Result<String> {
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    Ok(format!("{home}/.config/herdr/herdr.sock"))
 }
 
 fn systemd_unit_path() -> Result<PathBuf> {
@@ -235,10 +250,24 @@ mod tests {
     /// drift apart — they supervise the same process.
     #[test]
     fn the_embedded_unit_matches_the_packaged_template() {
-        let packaged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/kampr.service");
-        let Ok(packaged) = std::fs::read_to_string(packaged) else {
+        let Some(packaged) = packaged("kampr.service") else {
             return;
         };
         assert_eq!(packaged.trim(), SYSTEMD_UNIT.trim());
+    }
+
+    #[test]
+    fn the_embedded_plist_matches_the_packaged_template() {
+        let Some(packaged) = packaged("dev.kampr.node.plist") else {
+            return;
+        };
+        assert_eq!(packaged.trim(), LAUNCHD_PLIST.trim());
+    }
+
+    fn packaged(name: &str) -> Option<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging")
+            .join(name);
+        std::fs::read_to_string(path).ok()
     }
 }

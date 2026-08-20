@@ -9,12 +9,21 @@ license.workspace = true
 name = "kampr"
 path = "src/main.rs"
 
+[features]
+# Release-only. webauthn-rs pulls in openssl; a downloaded binary must not depend on finding a
+# matching libssl on the host, so release builds compile it in.
+vendored-tls = ["dep:openssl-sys"]
+
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 clap.workspace = true
 kampr-auth = { path = "../kampr-auth" }
+kampr-herdr = { path = "../kampr-herdr" }
 kampr-node = { path = "../kampr-node" }
+openssl-sys = { workspace = true, optional = true }
 qrcode.workspace = true
+serde.workspace = true
 time.workspace = true
 url.workspace = true
 serde_json.workspace = true
@@ -23,4 +32,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 tempfile.workspace = true

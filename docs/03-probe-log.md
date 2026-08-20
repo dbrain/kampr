@@ -178,19 +178,55 @@ headless `herdr server --session kamprtest`. Everything below was seen live, not
 
 | # | Claim | How | Result |
 |---|---|---|---|
-| 68 | **In a headless session the PTY does not follow the layout rect**, and `observe --cols <rect>` then crops the pane | created a workspace (rect 94×40), split it (rects 47/47), ran `stty size` in the left pane through Kampr | `40 93`. The PTY stayed 93 columns while the rect said 47, so the node observed at 47 and the remote view lost the right half of every row. Nothing in the socket API reports a pane's true PTY width — `pane.get` carries `viewport_rows` and no columns — so a node cannot detect the divergence |
-| 69 | The rect is one column wider than the PTY even before a split | same session, single pane | rect `width: 94`, `stty size` → `93`. `observe` pads the missing column rather than cropping, so it is cosmetic where #68 is not |
-| 70 | **A herdr server restart keeps its workspaces and panes** | `herdr server stop` under a live watcher, restarted 8 s later | Both panes came back (fresh shells, same ids). The node reconnected on its own and re-emitted `grid.reset`; no client action was needed. But **nothing told the client herdr was gone** — no `herdr_unavailable`, and `herd.nodes[].online` stayed `true` for the whole outage |
+| 68 | **In a headless session the PTY does not follow the layout rect**, and `observe --cols <rect>` then crops the pane | created a workspace (rect 94×40), split it (rects 47/47), ran `stty size` in the left pane through Kampr | `40 93`. The PTY stayed 93 columns while the rect said 47, so the node observed at 47 and the remote view lost the right half of every row. Nothing in the socket API reports a pane's true PTY width — `pane.get` carries `viewport_rows` and no columns — so a node cannot detect the divergence. **The last sentence is wrong — corrected by #84/#85**, which measure the PTY width directly from `pane.read` |
+| 69 | The rect is one column wider than the PTY even before a split | same session, single pane | rect `width: 94`, `stty size` → `93`. `observe` pads the missing column rather than cropping, so it is cosmetic where #68 is not. Fixed by the same measurement (#85): the node now streams at 93 |
+| 70 | **A herdr server restart keeps its workspaces and panes** | `herdr server stop` under a live watcher, restarted 8 s later | Both panes came back (fresh shells, same ids). The node reconnected on its own and re-emitted `grid.reset`; no client action was needed. But **nothing told the client herdr was gone** — no `herdr_unavailable`, and `herd.nodes[].online` stayed `true` for the whole outage. **Fixed** — the outage flips `online`, emits `herdr_unavailable` and `node_offline`, and re-sends the whole `herd` on recovery |
 | 71 | The documented scrollback gap-discard fires in ordinary use | `seq 1 40000` in a watched pane, 3 s poll | First `scrollback` 962 rows `capped:true`; the next read shared no overlap, so the ring restarted and `from_top` advanced to 963. A single verbose command is enough to lose history — #51's cap is not a corner case |
 | 72 | Claude answers both its trust prompt and a tool-permission prompt on the **bare digit** | answered `1` from the Kampr UI to "Is this a project you trust?" and to a real `Bash` permission prompt | Both took effect with no submit key, including the dialog whose footer reads "Enter to confirm". Confirms #43 for Claude against two real dialogs |
 | 73 | Herdr's own `observe` children outlive a node that is killed | `SIGTERM` to `kampr serve` with a pane watched | `herdr terminal session observe` survives, reparented to init, still streaming into a closed pipe. `kill_on_drop` cannot help — a signal skips the destructor |
 | 74 | Backpressure never engaged against a stalled client | paused the client's TCP socket for 10 s while 3 000 lines were produced | 254 `grid.patch` against 255 for an unstalled client, and the 256-frame queue never overflowed — herdr's coalescing keeps the frame rate an order of magnitude below the bound |
 
+## Transcripts, live
+
+Against `claude` 2.1.237 in a headless `herdr server --session kamprconvo`, driven over the socket.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 75 | **Herdr never populates `pane.agent_session` for a detected harness** | ran a real `claude` in a headless session, then `session.snapshot` and `pane.get` across four turns | `agent: "claude"` throughout, `agent_session: null` throughout. The remote detection manifest (`~/.local/state/herdr/agent-detection/remote/claude.toml`) is **screen-scraping rules only** — regexes over the OSC title and the bottom lines. `pane.report_agent_session` exists as an RPC and nothing calls it. **So a node cannot reach a transcript through the session announcement; the pane's `cwd` is the only handle it gets**, and `agent_session` is a path that has to exist without ever firing |
+| 76 | A Claude project directory is its cwd with every `/` replaced by `-` | compared 14 real project directories under `~/.claude/projects` against the `cwd` their records declare | Exact substitution, case preserved, `.`/`_` untouched: `/tmp/claude-1000/-home-dbrain/x` → `-tmp-claude-1000--home-dbrain-x`. Useful as a *hint* only — the transcript's own `cwd` is what proves a match, so the rule changing costs a slower search rather than the wrong conversation |
+| 77 | Claude's trust prompt renders its docs link as an OSC 8 label | `pane.read visible strip_ansi` while held at the prompt | The line reads `Security guide` — no URL. It is the nearest non-empty line above the options, four non-blank lines below the real question, which is exactly what a "nearest line above" rule publishes. Reconfirms #36 from the other direction: the label survives, the URI does not |
+| 78 | Answering on the **bare digit** still holds on 2.1.237 | answered `1` to the trust prompt and to a real `Bash` permission prompt, both through `pane.send_text` | Both took effect with no submit key, including the Bash dialog whose footer reads `Esc to cancel · Tab to amend`. Reconfirms #72 |
+| 79 | **A CR in the same write as the text does not submit Claude's prompt box** | one `input {text: "…\r"}` through Kampr | The text landed in the box and stayed there. The same text followed by a *separate* `Enter` submitted immediately. Claude coalesces a burst into a paste, so a client must send the newline as its own message — the same reason `answer` sends a harness's submit key as a second write |
+
+## Plugin install path (real herdr 0.8.2, isolated `XDG_CONFIG_HOME`)
+
+A throwaway herdr home and session, a plugin root holding only `herdr-plugin.toml` and `packaging/`,
+and a stub `kampr` served from a `file://` release. Nothing touched the operator's own herdr.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 80 | `herdr plugin link <dir>` registers a local plugin with no fetch and no `[[build]]` run | linked a plugin root whose `bin/` was populated by hand | All 7 `[[actions]]`, the `[[panes]]` popup and the `[[startup]]` hook registered. `plugin_root` is the linked directory itself, so `$0`-relative path resolution in the scripts is correct. This is the way to test action wiring without a release |
+| 81 | Herdr injects `HERDR_PLUGIN_CONFIG_DIR` per plugin, under its own home | invoked the `url` and `status` actions and read `herdr plugin log list` | `/…/herdr/plugins/config/kampr`, distinct from the plugin root — the value `kamprctl.sh` passes to `--config-dir`. Both actions exited 0 and their stdout came back in the log |
+| 82 | **A plugin action's exit code is the script's, and a failed `systemctl` inside one fails the action** | `status` on a host with no `kampr.service` | `systemctl --user status` exits non-zero, which took the whole action with it until `svc status` was made best-effort. `stop` and `uninstall` had the same shape — a stop of a unit that was never installed is the *normal* uninstall case |
+| 83 | A herdr socket path over ~100 bytes is unusable | ran the isolated server under the agent scratchpad (`/tmp/claude-1000/-home-dbrain-dev-kampr/<uuid>/…`) | `local socket name length exceeds capacity of sun_path of sockaddr_un`. `sun_path` is 108 bytes, and `<home>/herdr/sessions/<name>/herdr.sock` eats the rest. Any test harness that relocates `XDG_CONFIG_HOME` must keep it short |
+
+## The PTY's real width (headless `herdr server --session kampr-probe-w1/w2/w3`)
+
+#68 concluded that a node cannot detect the rect/PTY divergence. That is wrong, and these four
+rows close it.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 84 | **`pane.read` renders at the true PTY width, not the rect** | printed 400 `#` into a headless pane, read `visible`, then split and read again | Unsplit: rect 94, longest rendered row 93. After the split: rect 47, longest rendered row **still 93**, with `stty size` confirming `40 93` both times. The rect is fiction in a headless session and the reads are not — so the width **is** observable, and #68's "a node cannot detect the divergence" is disproved |
+| 85 | **`recent` against `recent_unwrapped` gives the width exactly, not as a bound** | the same pane, `lines: 40`, both sources | `recent` → row lengths `[5, 68, 93, 93, 93, 93, 28, 34]`; `recent_unwrapped` → `[5, 68, 400, 34]`. A logical line longer than the widest physical row proves a soft wrap, and a soft wrap happens at exactly the PTY width. Without a wrap the reads are identical and the widest row is only a **floor** — herdr trims each row's trailing blanks, so a screen holding a 44-column prompt reads 44 |
+| 86 | `recent` at `lines == viewport_rows` is safe on a *detected agent* pane | `pane.report_agent` on a pane holding `seq 1 500`, then both reads at `lines: 40` against `viewport_rows: 40` | 18 ms each, `offset_from_bottom` and `max_offset_from_bottom` unchanged at `0`/`463`. #27's harvest hazard is `lines > viewport_rows`; the equality case is the viewport and does not move the operator's screen. This is what lets the exact measurement apply to agent panes too |
+| 87 | **`observe` at more than the PTY width pads; at less it crops** | observed the same split pane at `--cols 47`, `94` and `200` | `#` run lengths `47` / `93` / `93`. The reported `width` in the frame record just echoes the request, so it carries no information — but over-observing is lossless and reflows nothing, which is what makes "never narrower than the measured width" a safe rule |
+
 ## Still open
 
-- Does `pane.read recent` scroll a plain shell pane *that has a detected agent*? (#27 covered the
-  no-agent case; the interlock assumes the worst for the other.)
+- Does `pane.read recent` with `lines > viewport_rows` scroll a pane with a *detected agent*?
+  (#27 covered the no-agent case; #86 covers the equality case. The interlock still assumes the
+  worst above the viewport.)
 - **A real mid-range ARM phone.** #56 is emulator-only; the shaping cost is the part that will move.
-- **The headless PTY/rect divergence (#68).** Either herdr resizes a pane's PTY only when a client
-  is attached, or it never resizes on split at all; the difference decides whether a node should
-  observe at the rect or at the widest frame it has seen.
+- Why herdr's headless rect is one column wider than the PTY it created (#69). It no longer
+  matters — #85 measures the PTY directly — but nothing explains the reserved column.

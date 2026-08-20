@@ -21,6 +21,7 @@ futures-util = "0.3.34"
 getrandom = "0.4.3"
 hex = "0.4.3"
 mime_guess = "2.0.5"
+openssl-sys = { version = "0.9.117", features = ["vendored"] }
 qrcode = { version = "0.14.1", default-features = false }
 rust-embed = "8.12.0"
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -39,16 +40,26 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "3.0.0"
 url = "2.5.8"
+web-push = { version = "0.11.0", default-features = false }
 webauthn-rs = "0.5.5"
+# The ES256 keypair generator. Already in the tree as web-push's own JWT signer, so pinning the
+# same major keeps one copy rather than two.
+jwt-simple = { version = "0.12.11", default-features = false, features = ["pure-rust"] }
 
 # dev
 # `ring` rather than the default aws-lc, so the tree carries one crypto backend and it is
 # the one rustls is configured with.
 rcgen = { version = "0.14.9", default-features = false, features = ["ring", "pem"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset"] }
 tempfile = "3.27.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
-tokio-tungstenite = "0.30.0"
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
+
+# Release artefacts are downloaded, not built, so size and start-up cost more than build time.
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
 
 # argon2 in a debug build is ~50x slower than in release, which turns a pairing redemption in the
 # test suite into seconds. Optimising just the KDF keeps the cost honest without that.

@@ -1,0 +1,249 @@
+name: release
+
+# Tag-triggered only. The install scripts pin cosign's certificate identity to
+# `release.yml@refs/tags/…`, so a signature produced from any other ref would (correctly) fail to
+# verify. `workflow_dispatch` therefore builds and smoke-tests, but never signs or publishes.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: client bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew :webApp:stageNodeBundle
+        working-directory: client
+      - name: the staged bundle is real
+        run: |
+          test -s crates/kampr-node/dist/index.html
+          ls crates/kampr-node/dist/*.wasm >/dev/null
+      - uses: actions/upload-artifact@v7
+        with:
+          name: client-bundle
+          path: crates/kampr-node/dist
+          include-hidden-files: true
+          retention-days: 1
+
+  # Every binary is built from the artefact the bundle job produced, and KAMPR_REQUIRE_BUNDLE makes
+  # `crates/kampr-node/build.rs` fail the build if that download did not land. A release binary
+  # serving the placeholder page is therefore not a thing that can happen.
+  build:
+    name: ${{ matrix.target }}
+    needs: bundle
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            cross: false
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: client-bundle
+          path: crates/kampr-node/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: build
+        env:
+          KAMPR_REQUIRE_BUNDLE: '1'
+          # macOS 11 is the oldest release aarch64 can target at all, so it is the floor for both
+          # Mac architectures. Linux has no floor: those targets are static musl.
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          builder=cargo
+          if [ "${{ matrix.cross }}" = "true" ]; then builder=cross; fi
+          "$builder" build --release --locked -p kampr-cli \
+            --features vendored-tls --target ${{ matrix.target }}
+      - name: package
+        run: |
+          set -eu
+          asset="kampr-${{ matrix.target }}.tar.gz"
+          mkdir -p dist
+          tar -czf "dist/$asset" -C "target/${{ matrix.target }}/release" kampr
+          if command -v sha256sum >/dev/null; then
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          else
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+          cat "dist/$asset.sha256"
+      # KAMPR_REQUIRE_BUNDLE reaches the cross container through Cross.toml's passthrough list, and
+      # a passthrough that silently stopped working would disarm the guard. This checks the shipped
+      # bytes instead of trusting the environment: rust-embed keeps the file names in the binary.
+      - name: the artefact really embeds the client bundle
+        run: |
+          set -eu
+          tar -xzf "dist/kampr-${{ matrix.target }}.tar.gz" -C "$RUNNER_TEMP"
+          grep -qa "kamprWeb.js" "$RUNNER_TEMP/kampr"
+      - name: a linux artefact is static, so it has no glibc floor to get wrong
+        if: contains(matrix.target, 'linux')
+        run: |
+          set -eu
+          file "$RUNNER_TEMP/kampr"
+          # rustc emits static-pie for musl, which `file` names differently from a plain static link.
+          file "$RUNNER_TEMP/kampr" | grep -Eq "statically linked|static-pie linked"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kampr-${{ matrix.target }}
+          path: dist/*
+          retention-days: 7
+
+  # An install path nobody exercises is an install path that is broken. This runs the real
+  # install.sh, against the real artefact, on a runner that has never seen this repo's toolchain.
+  smoke:
+    name: install the artefact on a clean runner
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: kampr-x86_64-unknown-linux-musl
+          path: rel
+      - name: build a local release directory
+        run: |
+          set -eu
+          cd rel && cat ./*.sha256 > SHA256SUMS && rm -f ./*.sha256
+      - name: install
+        run: |
+          set -eu
+          KAMPR_BASE_URL="file://$PWD/rel" KAMPR_PREFIX="$HOME/.local/bin" \
+            sh packaging/install.sh | tee out.txt
+          grep -q "checksum verified: yes" out.txt
+          grep -q "signature verified: skipped — this release publishes no signature" out.txt
+      - name: it runs
+        run: |
+          "$HOME/.local/bin/kampr" --version
+          "$HOME/.local/bin/kampr" --help > /dev/null
+      - name: a tampered checksum is refused
+        run: |
+          set -eu
+          sed -i 's/^[0-9a-f]/z/' rel/SHA256SUMS
+          if KAMPR_BASE_URL="file://$PWD/rel" KAMPR_PREFIX="$RUNNER_TEMP/bad" \
+               sh packaging/install.sh > bad.txt 2>&1; then
+            echo "::error::install.sh accepted a tampered SHA256SUMS"; cat bad.txt; exit 1
+          fi
+          grep -q "checksum mismatch" bad.txt
+
+  publish:
+    needs: [build, smoke]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: kampr-*
+          merge-multiple: true
+          path: dist
+      - name: collect checksums
+        run: |
+          set -eu
+          cd dist
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          rm -f ./*.sha256
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+      - uses: sigstore/cosign-installer@v4
+      # Keyless: the signing identity is this workflow at this tag, attested by GitHub's OIDC and
+      # logged in Rekor. There is no private key to store, rotate or leak — which for a project
+      # with no key-management story is the only signing scheme that stays honest.
+      - name: sign the checksum file
+        run: |
+          cosign sign-blob --yes \
+            --bundle dist/SHA256SUMS.cosign.bundle \
+            dist/SHA256SUMS
+      - name: the signature verifies exactly as a user's install.sh will check it
+        run: |
+          cosign verify-blob \
+            --bundle dist/SHA256SUMS.cosign.bundle \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/release\.yml@refs/tags/" \
+            dist/SHA256SUMS
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cp packaging/install.sh dist/install.sh
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          ```sh
+          curl -fsSL https://github.com/OWNER_REPO/releases/download/TAG/install.sh | sh
+          ```
+
+          Linux binaries are statically linked against musl — no glibc floor, so an old Raspberry Pi
+          is fine. macOS binaries need 11.0 or newer. Windows is not supported: the node reaches
+          Herdr over a Unix domain socket and supervises itself with systemd or launchd.
+
+          `SHA256SUMS` is verified by the installer. `SHA256SUMS.cosign.bundle` is a keyless
+          [cosign](https://docs.sigstore.dev/cosign/installation) signature over it; install cosign
+          first and the installer checks that too.
+          NOTES
+          sed -i -e "s|OWNER_REPO|${{ github.repository }}|g" -e "s|TAG|${{ github.ref_name }}|g" notes.md
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file notes.md \
+            dist/*
+
+  # The published release, installed the way a user installs it, on machines that hold no build
+  # state. This is the only step that proves the whole path — download, checksum, signature, run.
+  verify-published:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: sigstore/cosign-installer@v4
+      - name: curl | sh, as documented
+        env:
+          KAMPR_VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh" \
+            | sh | tee out.txt
+          grep -q "checksum verified: yes" out.txt
+          grep -q "signature verified: yes" out.txt
+          "$HOME/.local/bin/kampr" --version

@@ -1,4 +1,5 @@
 use crate::pairing;
+use crate::recovery;
 use crate::report::{self, Local};
 use anyhow::{Context, Result};
 use kampr_auth::{NodeIdentity, Role};
@@ -34,6 +35,7 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
         config.server.origin = origin;
     }
     config.state_dir = dirs_state.display().to_string();
+    config.config_dir = dirs_config.display().to_string();
     config
         .bind_addr()
         .with_context(|| format!("server.bind {:?} is not host:port", config.server.bind))?;
@@ -63,6 +65,11 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     pairing::arm(&local, &pair).await?;
     println!();
     println!("{}", report::tier_summary(local.auth.tier()));
+    // Once, at the first init that has none. Re-running init must not silently retire the paper
+    // record the operator already made.
+    if !local.auth.has_recovery().await? {
+        recovery::print_new_code(&local.auth.issue_recovery().await?);
+    }
     println!();
     println!("Next:  kampr service install   keeps it running across reboots");
     Ok(())

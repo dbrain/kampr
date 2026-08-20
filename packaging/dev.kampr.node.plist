@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.kampr.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@BIN@</string><string>serve</string>
+    <string>--config-dir</string><string>@CONFIG_DIR@</string>
+    <string>--state-dir</string><string>@STATE_DIR@</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+</dict>
+</plist>
