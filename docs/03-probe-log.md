@@ -84,7 +84,7 @@ Add to this file rather than re-deriving. A claim without a row here is a guess.
 | 37 | **Frames keep OSC 8** | spike interned links from the frame stream | 1 hyperlink recovered — the frame path is strictly richer than `pane.read` |
 | 38 | Shell panes carry no `agent` key | `pane.list` | Agent-vs-shell discriminator confirmed |
 | 39 | Claude transcripts hold raw markdown | parse `~/.claude/projects/**/*.jsonl` | 676 assistant records, literal markdown |
-| 40 | Every `tool_use` in a finished session has a `tool_result` | same | 300/300 — proves nothing about whether a *pending* request is flushed before approval. **Still open** |
+| 40 | Every `tool_use` in a finished session has a `tool_result` | same | 300/300 — proves nothing about whether a *pending* request is flushed before approval. **Resolved by #42/#43** |
 
 ## End-to-end
 
@@ -99,9 +99,23 @@ herdr --session probe                        # in one terminal
 HERDR_SESSION=probe cargo run -p kampr-spike # in another
 ```
 
+## Transcripts
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 42 | **Claude does NOT write a pending tool request to the transcript before approval** | `claude --permission-mode default` in a scratch dir under a pty, prompted to run `touch marker.txt`, then held at the permission prompt while polling `~/.claude/projects/<slug>/<uuid>.jsonl` | The transcript froze at **15 680 bytes with the user record only** for **4 m 20 s** of prompt time — zero `tool_use` blocks. 19 s after answering `1` it jumped to 20 469 bytes carrying **both** the `tool_use` and its `tool_result`. Repeated with an automated driver: same result. Claude Code 2.1.237 |
+| 43 | **Codex DOES write a pending tool request to the rollout before approval** | `codex -a untrusted -s read-only` under a pty, held 54 s at "Press enter to confirm", polling the newest `~/.codex/sessions/**/rollout-*.jsonl` each second | `custom_tool_call` present **6.2 s in, with the prompt still on screen** and `custom_tool_call_output` absent. The output only appeared 1 s after the keypress, and reported `Wall time 54.8 seconds`. **An unmatched tool call is therefore Codex's pending signal.** codex-cli 0.147.0 |
+| 44 | `~/.claude/sessions/<pid>.json` flags the block but not the question | read it while #42 was held | `"status":"waiting","waitingFor":"permission prompt"` — a cheap *detector*, but it carries no question text and no options, so the wording still has to come from the screen |
+| 45 | Codex rollout schema | parsed 5 real rollouts, cli 0.131.0 → 0.147.0, 13 k records | Envelope `{timestamp, type, ordinal?, payload}`. `type` is `session_meta` \| `turn_context` \| `world_state` \| `response_item` \| `event_msg` \| `compacted`. **Only `response_item` carries the conversation**; `event_msg` (`agent_message`, `item_completed`) duplicates it for the TUI, one-for-one. Payload types: `message` (role `user`\|`assistant`\|`developer`, `content[].type` `input_text`\|`output_text`, assistant carries `phase` `commentary`\|`final_answer`), `function_call`/`function_call_output` (`exec_command`, `write_stdin`, `update_plan`, `view_image`; `arguments` is a JSON **string**), `custom_tool_call`/`custom_tool_call_output` (`apply_patch`, and `exec` in 0.147 code mode carrying JavaScript), `web_search_call`, `reasoning`. **`reasoning` is always `encrypted_content` with an empty summary — there is no plaintext thinking to render.** Outputs are a string in ≤0.131 and an array of content items in 0.147. `compacted.replacement_history` rewrites model context, not display history |
+
+> **Consequence for `pending`.** Claude is the harness Kampr targets first and it does not publish
+> the question until it has already been answered, so the node sources `pending` from
+> `pane.read visible` and sets `source: "screen"` (#42). Codex could be read from the transcript
+> (#43) — an unmatched `custom_tool_call` — but the wire shape is identical either way, so the
+> screen path is the one implementation and `source` is the only thing that differs.
+
 ## Still open
 
 - Does `pane.read recent` scroll a plain shell pane *that has a detected agent*? (#27 covered the
   no-agent case; the interlock assumes the worst for the other.)
-- Is a pending tool request in the transcript before approval? (#40)
 - CMP wasm: 74×30 cell grid at 60 fps on a mid-range Android.
