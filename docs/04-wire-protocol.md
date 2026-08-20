@@ -160,6 +160,17 @@ which happened.
 `b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
 it, so tables stay tables.
 
+A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
+its result lands: match by turn id and replace, never append, or every tool renders twice.
+
+**A `diff` block is not one dialect.** Claude sends a unified diff rebuilt from `structuredPatch`;
+Codex sends its `*** Begin Patch` envelope verbatim. Both share `+`/`-` line prefixes, so one
+classifier covers them, but a renderer must not assume unified-diff headers are present.
+
+**Turn order is the node's order.** Do not sort by `at`: a resumed session carries records whose
+timestamps predate the ones above them, and sorting shuffles the conversation. Replace by id, keep
+the given order.
+
 ### `pending` — a prompt is waiting
 ```jsonc
 { "t": "pending", "pane": "01J.../w3:p2", "question": "Do you want to make this edit?",
