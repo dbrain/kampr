@@ -168,11 +168,11 @@ impl Sessions {
     }
 
     fn wanted(&self, found: &[SessionEntry]) -> Vec<SessionEntry> {
-        let allowed = &self.config.herdr.sessions;
+        let allowed = self.config.herdr.sessions.as_deref();
         found
             .iter()
             .filter(|s| s.running && s.name != self.primary.name)
-            .filter(|s| allowed.is_empty() || allowed.iter().any(|a| a == &s.name))
+            .filter(|s| allowed.is_none_or(|names| names.iter().any(|a| a == &s.name)))
             .cloned()
             .collect()
     }

@@ -47,8 +47,20 @@ hostname would buy (findings §3.7).
     "push": false,                   // needs a secure context
     "installable": false,            // PWA install / Add to Home Screen
     "unlocks": ["passkeys", "push", "installable"]   // what a hostname would buy
-  } }
+  },
+  "push": { "key": "BMd9…" } }   // present only when caps.push; the VAPID applicationServerKey
 ```
+
+**`caps.push` and `security.push` are different questions and a client needs both.**
+`security.push` says whether the *origin* permits push at all — a secure context, which plain HTTP
+on a LAN IP is not. `caps.push` says whether this *node* can actually send one: secure context
+**and** a VAPID key **and** `push.enabled` in its config. Hide the affordance on either, and use
+`security.unlocks` for the copy that says what a hostname would buy.
+
+`push.key` is the application server key a browser needs before it may call
+`pushManager.subscribe`. It is public, and it rides on `hello` to save a round trip on the one
+path most likely to be interrupted. `GET /api/push` carries the same value for clients that want
+it without a socket.
 
 ### `herd` — the whole model; sent after `hello` and on any reconnect
 ```jsonc
@@ -218,6 +230,14 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
 
+### `notified` — the answer to a `notify`
+```jsonc
+{ "t": "notified", "ok": false, "reason": "no_foreground_client", "pane": "01J.../w3:p2" }
+```
+`ok: false` is the common case, not an error: a *headless* herdr session — what the plugin and the
+systemd unit both produce — has no attached client to show a toast to, and says so (probe #77).
+A client that reports "told the desk" without checking is reporting something that did not happen.
+
 ### `error`
 ```jsonc
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
@@ -265,6 +285,14 @@ is already open rather than at the next handshake. `revoked` is followed by a cl
 // 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the role,
 // so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
 // preferences per device and drops the least recently updated first.
+
+// A toast on the *operator's desktop* (probe #50). `title` is required; `pane` picks which herdr
+// session shows it and defaults to the node's own. The node prefixes this device's name — an
+// unattributed toast on somebody's screen is a phishing surface, and a client is exactly as
+// attacker-influenceable as pane output — strips control characters, rate limits to one per five
+// seconds per connection, and audits it. `readonly` devices are refused with not_writer.
+{ "t": "notify", "pane": "01J.../w3:p2", "title": "Taking this pane", "body": "from the phone" }
+//   -> { "t": "notified", "ok": true, "reason": null, "pane": "01J.../w3:p2" }
 
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
@@ -559,6 +587,81 @@ the herd, including the hub's own, is untouched: a link owns nothing but its own
 
 Recovery is unattended. The peer reconnects on its own backoff, its node flips back to `online`,
 and clients see a fresh `herd` and a `grid.reset` per pane.
+
+
+
+## Notifications
+
+Additive to v1. Everything here is HTTP rather than socket messages, because a browser hands its
+push subscription to the page as JSON and a service worker — which has no socket — has to be able
+to re-register one on its own (`pushsubscriptionchange`).
+
+A client shows nothing at all unless `hello.caps.push` is true. See `docs/08-notifications.md`.
+
+```jsonc
+// What this device may do, and what it has already asked for.
+GET  /api/push
+//   -> { "available": true, "key": "BMd9…", "secure_context": true, "unlocks": ["passkeys"],
+//        "subscribed": false,
+//        "endpoints": [ { "kind": "webpush", "endpoint": "https://…" } ],
+//        "rules": [ { "pane_id": "01J.../w3:p2", "muted": true, "snooze_until": null } ] }
+
+// The browser's own PushSubscription.toJSON(), plus a `kind`. `kind` is "webpush" from a browser
+// and "unifiedpush" from an Android distributor — a label for the device list, never a branch:
+// UnifiedPush 3.0 is RFC 8291, so both are delivered to identically.
+POST /api/push/subscribe
+//   { "endpoint": "https://…", "kind": "webpush", "keys": { "p256dh": "…", "auth": "…" } }
+//   -> { "subscribed": true }
+// The endpoint must be https and is upserted on the endpoint, not the device: a browser that
+// re-subscribes gets the same endpoint back, and a stale row under another device would
+// double-send. A device keeps at most 8.
+
+POST /api/push/unsubscribe
+//   { "endpoint": "https://…" }   -> { "subscribed": false, "removed": true }
+
+// Snooze and mute, per agent and per device. `pane_id: "*"` covers every agent on this device.
+// A rule that neither mutes nor snoozes deletes the row rather than storing a no-op.
+POST /api/push/rules
+//   { "pane_id": "01J.../w3:p2", "muted": false, "snooze_until": 1793000000 }
+//   -> { "rules": [ … ] }
+
+// Warm resume. The service worker fetches this while the notification is still being read, so
+// the tap that follows opens onto data rather than a load.
+GET  /api/warm?pane=01J.../w3:p2
+//   -> { "t": "herd", "nodes": [ … ], "panes": [ … ], "role": "full",
+//        "pending": { "t": "pending", "pane": "…", "question": "…", "options": [ … ] } }
+```
+
+**A `readonly` device may subscribe.** Being told an agent is blocked is *reading*, and it is the
+whole point of a device you half-trust with a screen.
+
+**A revoked device stops being woken immediately**, because `push_targets` is a join against live
+devices in the same database — revocation is a `WHERE` clause, not a cleanup job.
+
+### The push payload
+
+What a service worker receives, after the browser has decrypted it. Versioned, because a service
+worker outlives the page that registered it and may be older than the node sending to it.
+
+```jsonc
+{ "v": 1,
+  "title": "claude · kampr needs you",
+  "body": "Do you want to make this edit?",   // THE QUESTION, not just which agent
+  "tag": "kampr.blocked",                     // one tag: the newest replaces, never stacks
+  "count": 1,
+  "pane": "01J.../w3:p2",                     // null on a batch — a tap opens the triage list
+  "panes": [ { "pane": "01J.../w3:p2", "node": "01J...", "agent": "claude",
+               "label": "kampr", "question": "Do you want to make this edit?" } ] }
+```
+
+**Simultaneous blocks are one notification.** A 900 ms window opens at the first block; everything
+inside it lands in one payload, split per subscription so a device that muted one of three agents
+sees the other two rather than the whole batch or nothing.
+
+**The body carries the question because the node already has it.** It is extracted for the
+`pending` message off the screen (probe #42), so a notification that only named the agent would be
+withholding what the node holds. On Android the OS may hold the app long enough that a tap arrives
+before the socket is up, which is exactly when a body that says something useful earns its keep.
 
 ## Auth
 

@@ -156,7 +156,10 @@ async fn a_peers_nodes_join_the_herd_marked_as_peers() {
 
     let herd = peers.herd();
     assert_eq!(herd.nodes[0].id, "01JA");
-    assert_eq!(herd.nodes[0].kind, "peer", "a local node to itself is a peer to us");
+    assert_eq!(
+        herd.nodes[0].kind, "peer",
+        "a local node to itself is a peer to us"
+    );
     assert!(herd.nodes[0].online);
     assert_eq!(herd.nodes[0].build.as_deref(), Some("0.1.0"));
     assert_eq!(herd.panes[0].id, "01JA/w1:p1");
@@ -171,7 +174,7 @@ async fn a_pane_is_watched_once_upstream_however_many_clients_look_at_it() {
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
 
-    let mut first = peers.watch("01JA/w1:p1").expect("a live peer");
+    let mut first = peers.watch("01JA/w1:p1", false).expect("a live peer");
     let request = peer.request_but_ping().await;
     assert_eq!(request["t"], "watch");
     assert_eq!(request["pane"], "01JA/w1:p1");
@@ -181,7 +184,7 @@ async fn a_pane_is_watched_once_upstream_however_many_clients_look_at_it() {
 
     // A second client joins the same pane: no second request, and it renders at once from the
     // hub's shadow rather than waiting for the peer to repaint.
-    let mut second = peers.watch("01JA/w1:p1").expect("a live peer");
+    let mut second = peers.watch("01JA/w1:p1", false).expect("a live peer");
     let initial = second.initial();
     assert_eq!(initial.len(), 1);
     let RemoteEvent::Update(update) = &initial[0] else {
@@ -211,7 +214,10 @@ async fn input_for_a_peer_pane_is_relayed_as_the_client_sent_it() {
     settle(&peers, |h| !h.panes.is_empty()).await;
 
     peers
-        .relay("01JA/w1:p1", json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }))
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }),
+        )
         .expect("a live peer");
     let request = peer.request_but_ping().await;
     assert_eq!(request["t"], "input");
@@ -221,7 +227,7 @@ async fn input_for_a_peer_pane_is_relayed_as_the_client_sent_it() {
 #[tokio::test]
 async fn a_pane_on_a_node_nobody_serves_is_unknown_rather_than_offline() {
     let peers = peers();
-    let error = peers.watch("01JZ/w1:p1").expect_err("nobody serves it");
+    let error = peers.watch("01JZ/w1:p1", false).expect_err("nobody serves it");
     assert_eq!(error.code(), "unknown_pane");
 }
 
@@ -234,8 +240,8 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
     workshop.send(herd("01JB", &["w1:p1"])).await;
     settle(&peers, |h| h.panes.len() == 2).await;
 
-    let mut watching_laptop = peers.watch("01JA/w1:p1").expect("live");
-    let mut watching_workshop = peers.watch("01JB/w1:p1").expect("live");
+    let mut watching_laptop = peers.watch("01JA/w1:p1", false).expect("live");
+    let mut watching_workshop = peers.watch("01JB/w1:p1", false).expect("live");
     laptop.request_but_ping().await;
     workshop.request_but_ping().await;
     laptop.send(reset("01JA/w1:p1", "gone")).await;
@@ -251,7 +257,13 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
     let herd = peers.herd();
     let laptop_node = herd.nodes.iter().find(|n| n.id == "01JA").expect("still listed");
     assert!(!laptop_node.online);
-    assert!(laptop_node.detail.as_deref().unwrap_or_default().contains("laptop"));
+    assert!(
+        laptop_node
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("laptop")
+    );
     assert!(laptop_node.rtt_ms.is_none());
     assert!(
         herd.panes.iter().any(|p| p.id == "01JA/w1:p1"),
@@ -268,7 +280,10 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
         None => {}
         other => panic!("expected an offline error, got {other:?}"),
     }
-    assert_eq!(peers.watch("01JA/w1:p1").unwrap_err().code(), "node_offline");
+    assert_eq!(
+        peers.watch("01JA/w1:p1", false).unwrap_err().code(),
+        "node_offline"
+    );
 
     // The other peer never noticed.
     assert_eq!(peers.state("01JB/w1:p1"), PeerState::Live);
@@ -292,7 +307,7 @@ async fn a_peer_that_comes_back_is_online_again_with_no_help() {
     let herd = peers.herd();
     assert_eq!(herd.nodes.len(), 1, "one node, not one per connection");
     assert_eq!(herd.panes.len(), 1);
-    assert!(peers.watch("01JA/w1:p1").is_ok());
+    assert!(peers.watch("01JA/w1:p1", false).is_ok());
 }
 
 #[tokio::test]
@@ -301,7 +316,7 @@ async fn history_is_stitched_by_index_and_a_joiner_gets_all_of_it() {
     let mut peer = join(&peers, KEY, "01JA", "laptop");
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
-    let mut first = peers.watch("01JA/w1:p1").expect("live");
+    let mut first = peers.watch("01JA/w1:p1", false).expect("live");
     peer.request_but_ping().await;
     peer.send(reset("01JA/w1:p1", "live")).await;
 
@@ -321,10 +336,9 @@ async fn history_is_stitched_by_index_and_a_joiner_gets_all_of_it() {
 
     let mut delivered = Vec::new();
     while delivered.len() < 2 {
-        if let Some(RemoteEvent::Scrollback(doc)) =
-            tokio::time::timeout(Duration::from_secs(2), first.recv())
-                .await
-                .expect("the watcher went quiet")
+        if let Some(RemoteEvent::Scrollback(doc)) = tokio::time::timeout(Duration::from_secs(2), first.recv())
+            .await
+            .expect("the watcher went quiet")
         {
             delivered.push(doc);
         }
@@ -334,7 +348,7 @@ async fn history_is_stitched_by_index_and_a_joiner_gets_all_of_it() {
     assert_eq!(delivered[1].from_top, 2, "a delta, not the whole ring again");
     assert_eq!(delivered[1].total_rows, 1);
 
-    let mut joiner = peers.watch("01JA/w1:p1").expect("live");
+    let mut joiner = peers.watch("01JA/w1:p1", false).expect("live");
     let history = joiner
         .initial()
         .into_iter()

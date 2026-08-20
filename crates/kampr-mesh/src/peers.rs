@@ -175,8 +175,9 @@ impl Peers {
             .map(|r| r.detail.clone())
     }
 
-    pub fn watch(&self, pane: &str) -> Result<RemoteWatcher, RelayError> {
-        self.resolve(pane)?.watch(pane, self.config.pane_fanout)
+    pub fn watch(&self, pane: &str, conversation: bool) -> Result<RemoteWatcher, RelayError> {
+        self.resolve(pane)?
+            .watch(pane, conversation, self.config.pane_fanout)
     }
 
     /// Keystrokes and answers: fire and forget, exactly as they are locally. The peer's own
@@ -238,7 +239,11 @@ impl Peers {
             closed: Arc::new(tokio::sync::Notify::new()),
         });
         self.links.lock().unwrap().push(link.clone());
-        self.remembered.lock().unwrap().remove(&link.pubkey);
+        // Forget the old record by key *and* by node id: a node that regenerated its identity is
+        // a new row here, and leaving the previous one would list it twice, once offline forever.
+        self.remembered.lock().unwrap().retain(|key, remembered| {
+            *key != link.pubkey && !remembered.nodes.iter().any(|n| n.id == link.node_id)
+        });
         info!(node = %link.node_id, name = %link.name, "peer joined the herd");
         self.publish();
 
@@ -326,7 +331,14 @@ impl Peers {
             "pending" | "convo" | "convo.turn" => link.passthrough(&message),
             "error" => link.error(&message),
             "managed" => link.managed(message),
-            "pong" => link.pong(&message),
+            // A fresh round trip is a change to the herd like any other: it is what a client
+            // renders to say how far away a node is.
+            "pong" => {
+                let measured = link.pong(&message);
+                if measured {
+                    self.publish();
+                }
+            }
             // `hello` carries nothing the handshake did not already establish, and an unknown `t`
             // is ignored rather than refused — the same forward-compatibility rule as everywhere.
             _ => {}
@@ -474,7 +486,12 @@ impl PeerLink {
         }
     }
 
-    fn watch(self: &Arc<Self>, pane: &str, fanout: usize) -> Result<RemoteWatcher, RelayError> {
+    fn watch(
+        self: &Arc<Self>,
+        pane: &str,
+        conversation: bool,
+        fanout: usize,
+    ) -> Result<RemoteWatcher, RelayError> {
         let mut panes = self.panes.lock().unwrap();
         if let Some(existing) = panes.get(pane).and_then(Weak::upgrade) {
             return Ok(RemoteWatcher::attach(existing));
@@ -489,7 +506,9 @@ impl PeerLink {
         });
         panes.insert(pane.to_string(), Arc::downgrade(&remote));
         drop(panes);
-        self.request(json!({ "t": "watch", "pane": pane, "scrollback": true }))?;
+        self.request(json!({
+            "t": "watch", "pane": pane, "scrollback": true, "conversation": conversation
+        }))?;
         Ok(RemoteWatcher::attach(remote))
     }
 
@@ -574,11 +593,17 @@ impl PeerLink {
         }
     }
 
-    fn pong(&self, message: &Value) {
-        let Some(n) = message["n"].as_u64() else { return };
+    fn pong(&self, message: &Value) -> bool {
+        let Some(n) = message["n"].as_u64() else {
+            return false;
+        };
         let mut state = self.state.lock().unwrap();
-        if let Some(sent) = state.pings.remove(&n) {
-            state.rtt_ms = Some(sent.elapsed().as_secs_f64() * 1000.0);
+        match state.pings.remove(&n) {
+            Some(sent) => {
+                state.rtt_ms = Some(sent.elapsed().as_secs_f64() * 1000.0);
+                true
+            }
+            None => false,
         }
     }
 }

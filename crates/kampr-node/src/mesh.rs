@@ -16,6 +16,32 @@ use tracing::{info, warn};
 /// takes effect without a restart — and a `kampr mesh leave` drops the link.
 const HUB_POLL: Duration = Duration::from_secs(10);
 
+/// Aborts a task when this guard is dropped, including when the task holding it is itself
+/// cancelled.
+///
+/// `tokio::spawn` **detaches**: dropping a `JoinHandle` leaves the task running. For anything
+/// holding one half of a socket that means the connection outlives the session that owns it, and
+/// the far end never sees it close.
+pub struct AbortOnDrop(pub tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// A task that stops when its handle is dropped.
+///
+/// A bare `JoinHandle` **detaches** on drop, which for an outbound mesh link means the socket
+/// outlives the node that opened it — a stopped node still serving its panes to a hub.
+struct Supervised(JoinHandle<()>);
+
+impl Drop for Supervised {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub struct WsOut(SplitSink<WebSocket, Message>);
 
 pub struct WsIn(SplitStream<WebSocket>);
@@ -101,7 +127,7 @@ pub async fn accept(socket: WebSocket, node: Arc<Node>, peer: String) {
 /// Held as a [`Weak`] because this task lives *in* the node it dials for. A strong reference here
 /// would be a cycle that keeps the node — and every emulator under it — alive forever.
 pub async fn dial_hubs(node: Weak<Node>) {
-    let mut running: HashMap<String, JoinHandle<()>> = HashMap::new();
+    let mut running: HashMap<String, Supervised> = HashMap::new();
     let mut poll = tokio::time::interval(HUB_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -130,11 +156,10 @@ pub async fn dial_hubs(node: Weak<Node>) {
             })
             .collect();
 
-        running.retain(|key, task| {
+        running.retain(|key, _| {
             let keep = wanted.contains_key(key);
             if !keep {
                 info!(hub = %key, "no longer enrolled with this hub; dropping the link");
-                task.abort();
             }
             keep
         });
@@ -156,7 +181,7 @@ pub async fn dial_hubs(node: Weak<Node>) {
             let weak = weak.clone();
             running.insert(
                 key,
-                tokio::spawn(async move {
+                Supervised(tokio::spawn(async move {
                     kampr_mesh::supervise(hub, identity, presence, DialPolicy::default(), {
                         move |hub, out, incoming| {
                             let weak = weak.clone();
@@ -168,7 +193,7 @@ pub async fn dial_hubs(node: Weak<Node>) {
                         }
                     })
                     .await;
-                }),
+                })),
             );
         }
     }

@@ -61,6 +61,10 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
             out.close().await;
         }
     });
+    // The writer owns the sending half of the socket, so it has to die with this session — and a
+    // session can be *cancelled* rather than returning, which is what happens when a node stops
+    // while a mesh link is up. Without this the socket stays open and the far end never notices.
+    let _writer_guard = crate::mesh::AbortOnDrop(writer.abort_handle());
 
     let mut session = Session {
         node: node.clone(),
@@ -72,6 +76,7 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
     };
     session.greet();
     let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
+    let _herd_guard = crate::mesh::AbortOnDrop(herd_task.abort_handle());
 
     let mut changes = node.auth.device_changes();
     let mut recheck = tokio::time::interval(DEVICE_RECHECK);
@@ -125,10 +130,18 @@ struct PaneHandle {
 }
 
 impl PaneHandle {
-    fn stop(self) {
-        for task in self.tasks {
+    fn stop(&self) {
+        for task in &self.tasks {
             task.abort();
         }
+    }
+}
+
+/// Same reason as the writer guard: a session that is cancelled rather than closed must not leave
+/// pane pumps running against a socket nobody is reading.
+impl Drop for PaneHandle {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -263,7 +276,7 @@ impl Session {
 
     async fn watch(&mut self, pane: &str, scrollback: bool, conversation: bool) {
         let Some((session, local)) = self.node.resolve(pane) else {
-            self.watch_peer(pane, scrollback).await;
+            self.watch_peer(pane, scrollback, conversation).await;
             return;
         };
         if self.node.herd().pane(pane).is_none() {
@@ -323,7 +336,7 @@ impl Session {
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
     /// at it, so this costs the WAN hop nothing beyond the first watcher.
-    async fn watch_peer(&mut self, pane: &str, scrollback: bool) {
+    async fn watch_peer(&mut self, pane: &str, scrollback: bool, conversation: bool) {
         if self.node.peers.state(pane) == kampr_mesh::PeerState::Unknown {
             self.wire.error(
                 "unknown_pane",
@@ -338,13 +351,14 @@ impl Session {
         self.audit(
             "watch",
             Some(pane),
-            Some(json!({ "scrollback": scrollback, "peer": true })),
+            Some(json!({ "scrollback": scrollback, "conversation": conversation, "peer": true })),
         );
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
             crate::relay::PeerPaneCtx {
                 peers: self.node.peers.clone(),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
+                conversation,
             },
         ))];
         self.panes.insert(
@@ -352,7 +366,7 @@ impl Session {
             PaneHandle {
                 tasks,
                 scrollback,
-                conversation: false,
+                conversation,
                 convo: convo::open(),
             },
         );
@@ -371,6 +385,12 @@ impl Session {
     /// with `conversation` has nothing to page, which is `not_found` rather than `unsupported` —
     /// the node implements the op.
     fn convo_load(&self, pane: &str, before: Option<&str>) {
+        // A transcript lives on the host that runs the harness, so paging one is a question for
+        // the node that owns the pane rather than for the hub relaying it.
+        if self.node.resolve(pane).is_none() {
+            self.relay_to_peer(pane, json!({ "t": "convo.load", "pane": pane, "before": before }));
+            return;
+        }
         let page = self
             .panes
             .get(pane)

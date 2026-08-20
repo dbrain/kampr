@@ -267,6 +267,22 @@ pub async fn greet<O: Outgoing, I: Incoming>(
     join: Option<&str>,
     expect: Option<&str>,
 ) -> Result<HubIdentity, HandshakeError> {
+    let outcome = attempt(link, identity, me, join, expect).await;
+    // A peer that refuses the hub hangs up rather than leaving a half-finished handshake open on
+    // both sides — the far end is waiting for the next message and would wait forever.
+    if outcome.is_err() {
+        link.out.close().await;
+    }
+    outcome
+}
+
+async fn attempt<O: Outgoing, I: Incoming>(
+    link: &mut Link<O, I>,
+    identity: &NodeIdentity,
+    me: &Presence,
+    join: Option<&str>,
+    expect: Option<&str>,
+) -> Result<HubIdentity, HandshakeError> {
     let my_nonce = nonce()?;
     link.send(&PeerMsg::Hello(Hello {
         protocol: MESH_PROTOCOL,

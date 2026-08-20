@@ -17,11 +17,17 @@ pub struct PeerPaneCtx {
     pub peers: Arc<Peers>,
     pub wire: Arc<Wire>,
     pub global: String,
+    pub conversation: bool,
 }
 
 pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
-    let PeerPaneCtx { peers, wire, global } = ctx;
-    let mut watcher = match peers.watch(&global) {
+    let PeerPaneCtx {
+        peers,
+        wire,
+        global,
+        conversation,
+    } = ctx;
+    let mut watcher = match peers.watch(&global, conversation) {
         Ok(watcher) => watcher,
         Err(e) => {
             wire.error(e.code(), &e.to_string(), Some(&global));

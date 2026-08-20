@@ -90,10 +90,13 @@ pub struct Herdr {
     pub binary: String,
     /// Empty means herdr's own resolution order: `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default.
     pub socket: String,
-    /// Which named herdr sessions this node serves, beyond the one `socket` resolves to. Empty
-    /// means every session running on the host — each one a separate server with its own socket,
-    /// and so a separate node in the herd model.
-    pub sessions: Vec<String>,
+    /// Which named herdr sessions this node serves *beyond* the one `socket` resolves to — each
+    /// a separate server with its own socket, and so a separate node in the herd model.
+    ///
+    /// Absent serves every session running on the host; an empty list serves only the configured
+    /// one. Both states have to be expressible, which is why this is an option and not a list
+    /// whose emptiness means "all".
+    pub sessions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +166,7 @@ impl Default for Herdr {
         Self {
             binary: "herdr".into(),
             socket: String::new(),
-            sessions: Vec::new(),
+            sessions: None,
         }
     }
 }

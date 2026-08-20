@@ -150,7 +150,9 @@ struct Running {
 
 impl Running {
     async fn start(home: &Home, session: &Session, name: &str) -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
         let port = listener.local_addr().expect("an address").port();
         let mut config = home.config_for(name);
         config.server.bind = format!("127.0.0.1:{port}");
@@ -158,6 +160,10 @@ impl Running {
         config.config_dir = home.config().display().to_string();
         config.state_dir = home.state().display().to_string();
         config.herdr.socket = session.socket.display().to_string();
+        // One machine is hosting both nodes, so left to itself each would discover the other's
+        // herdr session and serve it locally — correct behaviour, and useless here. An empty list
+        // is "only the configured session", which is what two real hosts look like.
+        config.herdr.sessions = Some(Vec::new());
         config.limits.client_queue = 64;
         config.save(&home.config()).expect("a config");
 
@@ -175,11 +181,7 @@ impl Running {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Self {
-            node,
-            origin,
-            server,
-        }
+        Self { node, origin, server }
     }
 
     /// Everything a `kill -9` would do to this process, minus the process.
@@ -297,11 +299,17 @@ async fn herd_becomes(node: &Arc<Node>, seconds: u64, want: impl Fn(&kampr_node:
     }
     let model = node.herd();
     panic!(
-        "the herd never got there; nodes {:?}",
+        "the herd never got there;\n  nodes {:?}\n  panes {:?}\n  links {:?}",
         model
             .nodes
             .iter()
             .map(|n| (n.id.clone(), n.kind.clone(), n.online))
+            .collect::<Vec<_>>(),
+        model.panes.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        node.peers
+            .links()
+            .iter()
+            .map(|l| (l.node_id.clone(), l.rtt_ms()))
             .collect::<Vec<_>>()
     );
 }
@@ -383,25 +391,57 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
     );
 
     let mut peer = Running::start(&peer_home, &peer_session, "laptop").await;
-    assert_eq!(peer.node.node_id(), peer_node_id, "the node it joined as is the node it runs as");
-    let peer_pane = peer.local_pane();
+    assert_eq!(
+        peer.node.node_id(),
+        peer_node_id,
+        "the node it joined as is the node it runs as"
+    );
+
+    // The link measures its own round trip over the socket the frames use. This is the number a
+    // client renders to say how far away a node is, and on loopback it is a fraction of a
+    // millisecond — which is exactly what one machine cannot make interesting.
+    let measured = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(rtt) = hub.node.peers.links().first().and_then(|link| link.rtt_ms()) {
+                return rtt;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the mesh link never measured a round trip");
+    assert!(measured >= 0.0);
 
     // One herd, two hosts.
-    herd_becomes(&hub.node, 30, |herd| {
-        herd.nodes.iter().any(|n| n.id == peer_node_id && n.kind == "peer" && n.online)
-            && herd.panes.iter().any(|p| p.id == peer_pane)
+    let owned_by_peer = |id: &str| id == peer_node_id || id.starts_with(&format!("{peer_node_id}."));
+    herd_becomes(&hub.node, 45, |herd| {
+        herd.nodes
+            .iter()
+            .any(|n| n.id == peer_node_id && n.kind == "peer" && n.online && n.rtt_ms.is_some())
+            && herd.panes.iter().any(|p| owned_by_peer(&p.node_id))
     })
     .await;
+    let peer_pane = hub
+        .node
+        .herd()
+        .panes
+        .iter()
+        .find(|p| owned_by_peer(&p.node_id))
+        .expect("a pane on the peer, listed by the hub")
+        .id
+        .clone();
     let merged = hub.node.herd();
     let peer_entry = merged.nodes.iter().find(|n| n.id == peer_node_id).unwrap();
-    assert!(peer_entry.rtt_ms.is_some(), "a peer reports a measured round trip");
     assert_eq!(
         peer_entry.build.as_deref(),
         Some(BUILD),
         "each node names its own build, which is the whole of version skew"
     );
     assert!(
-        merged.nodes.iter().any(|n| n.id == hub.node.node_id() && n.kind == "local"),
+        merged
+            .nodes
+            .iter()
+            .any(|n| n.id == hub.node.node_id() && n.kind == "local"),
         "the hub's own sessions are still local"
     );
 
@@ -411,7 +451,11 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
     until(&mut client, "herd", 10).await;
 
     // A pane on the peer renders through the hub.
-    send(&mut client, json!({ "t": "watch", "pane": peer_pane, "scrollback": true })).await;
+    send(
+        &mut client,
+        json!({ "t": "watch", "pane": peer_pane, "scrollback": true }),
+    )
+    .await;
     let reset = until(&mut client, "grid.reset", 20).await;
     assert_eq!(reset["pane"], peer_pane.as_str());
     assert!(reset["cols"].as_u64().unwrap_or_default() > 0);
@@ -430,7 +474,11 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
     );
 
     // The hub's own pane is a different node in the same herd, driven over the same socket.
-    send(&mut client, json!({ "t": "watch", "pane": hub_pane, "scrollback": true })).await;
+    send(
+        &mut client,
+        json!({ "t": "watch", "pane": hub_pane, "scrollback": true }),
+    )
+    .await;
     let local_reset = until(&mut client, "grid.reset", 20).await;
     assert_eq!(local_reset["pane"], hub_pane.as_str());
 
@@ -450,14 +498,15 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
 
     // Its panes are refused with an honest reason…
     send(&mut client, json!({ "t": "watch", "pane": peer_pane })).await;
-    let error = until(&mut client, "error", 15).await;
+    let error = refusal(&mut client, &peer_pane, 15).await;
     assert_eq!(error["code"], "node_offline");
+    assert!(!error["message"].as_str().unwrap_or_default().is_empty());
     send(
         &mut client,
         json!({ "t": "input", "pane": peer_pane, "text": "x" }),
     )
     .await;
-    assert_eq!(until(&mut client, "error", 15).await["code"], "node_offline");
+    assert_eq!(refusal(&mut client, &peer_pane, 15).await["code"], "node_offline");
 
     // …and the rest of the herd is untouched.
     let marker = format!("{marker}-local");
@@ -477,7 +526,11 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
         herd.nodes.iter().any(|n| n.id == peer_node_id && n.online)
     })
     .await;
-    send(&mut client, json!({ "t": "watch", "pane": peer_pane, "scrollback": true })).await;
+    send(
+        &mut client,
+        json!({ "t": "watch", "pane": peer_pane, "scrollback": true }),
+    )
+    .await;
     let reset = until(&mut client, "grid.reset", 25).await;
     assert_eq!(reset["pane"], peer_pane.as_str());
 
@@ -550,6 +603,25 @@ async fn a_node_the_hub_never_enrolled_is_refused() {
     );
 
     hub.stop();
+}
+
+/// The next error *about this pane*. An error about some other pane is not an answer to a
+/// question asked about this one, and taking it would make the assertion a coin toss.
+async fn refusal(socket: &mut Socket, pane: &str, seconds: u64) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "error" {
+            if message["pane"] == pane {
+                return message;
+            }
+            seen.push(message);
+        }
+    }
+    panic!("no error about {pane}; saw {seen:?}");
 }
 
 /// Drains until a relayed grid frame carries `marker`.
