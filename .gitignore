@@ -1,6 +1,11 @@
 /target
 **/*.rs.bk
 __pycache__/
-/client/build
+
+# Gradle / KMP — build output anywhere under client/
+**/build/
+.gradle/
 /client/.gradle
 /client/local.properties
+/client/kotlin-js-store
+/client/.kotlin

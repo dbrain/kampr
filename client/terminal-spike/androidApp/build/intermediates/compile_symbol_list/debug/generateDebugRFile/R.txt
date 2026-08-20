@@ -1,1 +1,0 @@
-int style Theme_KamprSpike 0x0

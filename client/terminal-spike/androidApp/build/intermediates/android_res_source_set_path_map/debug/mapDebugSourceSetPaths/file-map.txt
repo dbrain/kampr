@@ -1,8 +1,0 @@
-dev.kampr.terminal.spike.app.androidApp-pngs-0 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/build/generated/res/pngs/debug
-dev.kampr.terminal.spike.app.androidApp-updated_navigation_xml-1 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/build/generated/updated_navigation_xml/debug
-dev.kampr.terminal.spike.app.androidApp-packageDebugResources-2 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/build/intermediates/incremental/debug/packageDebugResources/merged.dir
-dev.kampr.terminal.spike.app.androidApp-packageDebugResources-3 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
-dev.kampr.terminal.spike.app.androidApp-debug-4 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/build/intermediates/merged_res/debug/mergeDebugResources
-dev.kampr.terminal.spike.app.androidApp-debug-5 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/debug/res
-dev.kampr.terminal.spike.app.androidApp-main-6 /home/dbrain/dev/kampr/client/terminal-spike/androidApp/src/main/res
-gradleHome-0 /home/dbrain/.gradle
