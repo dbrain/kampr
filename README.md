@@ -86,6 +86,10 @@ placeholder page.
 | `docs/04-wire-protocol.md` | The node ↔ client contract |
 | `docs/05-agent-briefs.md` | Parallel workstreams |
 | `docs/06-audit.md` | Completeness audit — what is broken, incomplete, and missing |
+| `ARCHITECTURE.md` | Why Kampr is shaped the way it is |
+| `docs/adr/` | Decision records, each with what would justify revisiting it |
+| `docs/07-android-release.md` | Signing, release and kobup publish |
+| `docs/08-threat-model.md` | Assets, adversaries, and the residual risks |
 | `docs/07-mesh-deployment.md` | One hub behind Nginx Proxy Manager, peers dialling out |
 | `docs/design/` | Design canvas sources — themeable artboards |
 | `research/` | Herdr API schema, method catalogue, mirrored docs, probe tooling |
