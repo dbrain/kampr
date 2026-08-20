@@ -87,6 +87,9 @@ fun PaneScreenMobile(
                 }
                 if (pane.stale) StatusBadge("Stale", tokens.color.working, tokens.color.surface)
                 if (readOnly) StatusBadge("read-only", tokens.color.dim, tokens.color.surface)
+                if (!landscape) TakingPaneAction(pane.id, info?.let(::paneTitle) ?: pane.id)
+                NewAction(pane.id)
+                PaneManageAction(pane.id)
                 StatusChip(info)
             }
             if (!landscape) {
@@ -201,6 +204,8 @@ fun PaneScreenDesktop(
             }
             if (pane.stale) StatusBadge("Stale", tokens.color.working, tokens.color.surface)
             StatusChip(info)
+            NewAction(pane.id)
+            PaneManageAction(pane.id)
             Box(Modifier.weight(1f))
             Segmented(
                 listOf("Split", "Terminal", "Conversation"),

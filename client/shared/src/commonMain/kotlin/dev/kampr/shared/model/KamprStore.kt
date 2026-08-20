@@ -41,6 +41,9 @@ class KamprStore {
     private val _managed = MutableStateFlow<ServerMsg.Managed?>(null)
     val managed: StateFlow<ServerMsg.Managed?> = _managed.asStateFlow()
 
+    private val _notified = MutableStateFlow<ServerMsg.Notified?>(null)
+    val notified: StateFlow<ServerMsg.Notified?> = _notified.asStateFlow()
+
     private val paneStates = mutableStateMapOf<String, PaneState>()
     val styles = StyleTable()
 
@@ -62,6 +65,10 @@ class KamprStore {
     }
 
     fun prefsFor(paneId: String): PanePrefs = _prefs.value[paneId] ?: PanePrefs()
+
+    fun clearNotified() {
+        _notified.value = null
+    }
 
     fun dismissFailure() {
         _failure.value = null
@@ -115,6 +122,7 @@ class KamprStore {
             is ServerMsg.Failure -> _failure.value = msg
             is ServerMsg.Managed -> _managed.value = msg
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
+            is ServerMsg.Notified -> _notified.value = msg
             is ServerMsg.Pong -> Unit
         }
     }

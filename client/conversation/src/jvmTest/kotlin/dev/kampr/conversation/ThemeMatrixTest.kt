@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.SetupStatus
@@ -82,6 +83,8 @@ private val devices = listOf(
     DeviceRecord("d3", "shared iPad", "browser", "view", "2026-06-02T10:00:00Z", "2026-08-02T13:00:00Z"),
 )
 
+private val triage = listOf(TriageItem(herd.panes.first(), "Do you want to make this edit?"))
+
 private val setup = SetupStatus("http://192.168.1.24:8790", "4821-9930", 3, "0.5.0")
 
 // Renders the same screen once per theme, side by side, under one ground. Four narrow columns
@@ -134,7 +137,7 @@ class ThemeMatrixTest {
     @Test
     fun herdSheet() = eachGround { ground ->
         sheet(phone.first, phone.second, ground, TypeScale.Phone, "herd") {
-            HerdPortrait(herd, NOW, 4.0, herd.panes.first(), "Do you want to make this edit?", {}, {})
+            HerdPortrait(herd, NOW, 4.0, triage, {}, {})
         }
     }
 
@@ -167,6 +170,7 @@ class ThemeMatrixTest {
                 onConnect = {},
                 onOpenHerd = {},
                 onDevices = {},
+                onNotifications = {},
             )
         }
     }
@@ -197,7 +201,7 @@ class ThemeMatrixTest {
         sheet(desk.first, desk.second, ground, TypeScale.Desk, "desktop") {
             val (_, pane) = demoPane(RICH_CONVO)
             Row(Modifier.fillMaxSize()) {
-                HerdSidebar(herd, NOW, 4.0, herd.panes.first(), "Do you want to make this edit?", PANE_ID, "studio", "local · 4 ms", {}, {})
+                HerdSidebar(herd, NOW, 4.0, triage, PANE_ID, "studio", "local · 4 ms", {}, {})
                 Column(Modifier.fillMaxSize()) {
                     PaneScreenDesktop(
                         pane = pane,

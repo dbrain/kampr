@@ -90,6 +90,7 @@ fun SetupScreen(
     onConnect: (Endpoint) -> Unit,
     onOpenHerd: () -> Unit,
     onDevices: () -> Unit,
+    onNotifications: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -205,6 +206,30 @@ fun SetupScreen(
                             )
                         }
                         IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
+                    }
+                }
+            }
+            // Hidden where it cannot work, rather than present and failing at the last step: push
+            // needs a secure context and `hello.security` is what says whether this origin is one.
+            if (security.push) {
+                Box(Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp, vertical = 9.dp)) {
+                    Surface(Modifier.fillMaxWidth().clickable(onClick = onNotifications)) {
+                        Row(
+                            Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Badge(34.dp, 17.dp, KamprIcons.blockedAgent, tokens.color.dim)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                KText("Notifications", tokens.type.bodyStrong, tokens.color.text)
+                                KText(
+                                    "Be told when an agent is blocked",
+                                    tokens.type.captionSmall,
+                                    tokens.color.dim,
+                                )
+                            }
+                            IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
+                        }
                     }
                 }
             }

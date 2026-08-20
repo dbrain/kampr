@@ -154,6 +154,4 @@ val BrutalistTheme = BrutalistFamily.dark
 fun ThemeSpec.on(ground: Ground): ThemeSpec =
     if (ground == this.ground) this else AllFamilies.first { it.id == id }.on(ground)
 
-fun familyOf(key: String?): ThemeFamily = AllFamilies.firstOrNull { it.id.key == key } ?: SoftFamily
-
-fun themeOf(key: String?): ThemeSpec = familyOf(key).dark
+fun themeOf(key: String?): ThemeSpec = (AllFamilies.firstOrNull { it.id.key == key } ?: SoftFamily).dark

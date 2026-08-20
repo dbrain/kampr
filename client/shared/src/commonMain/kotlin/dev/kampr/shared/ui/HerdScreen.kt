@@ -46,7 +46,10 @@ fun HerdPortrait(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KText("Herd", tokens.type.screenTitle, tokens.color.text)
-            NodeCountPill(herd.nodes.count { it.online }, compact = false)
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                NodeCountPill(herd.nodes.count { it.online }, compact = false)
+                NewAction()
+            }
         }
         if (triage.isNotEmpty()) {
             Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
@@ -94,6 +97,7 @@ fun HerdLandscape(
         ) {
             KText("Herd", tokens.type.paneTitle, tokens.color.text)
             NodeCountPill(herd.nodes.count { it.online }, compact = true)
+            NewAction(target = LANDSCAPE_TOUCH)
             Box(Modifier.weight(1f))
             if (triage.isNotEmpty()) {
                 StatusBadge(
@@ -173,7 +177,10 @@ fun HerdSidebar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KText("Kampr", tokens.type.screenTitle, tokens.color.text)
-            NodeCountPill(herd.nodes.count { it.online }, compact = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                NodeCountPill(herd.nodes.count { it.online }, compact = true)
+                NewAction()
+            }
         }
         if (triage.isNotEmpty()) {
             Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {

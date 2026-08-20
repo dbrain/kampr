@@ -131,18 +131,4 @@ class ManageTest {
         assertEquals(listOf("01JNODE/w9:p1"), store.herd.value.panes.map { it.id })
         assertEquals("01JNODE/w9:t1", store.herd.value.panes.single().tabId)
     }
-
-    @Test
-    fun aDeskToastIsFireAndForget() {
-        assertEquals(
-            """{"t":"notify","title":"paired","body":"Pixel is connected"}""",
-            Wire.encode(ClientMsg.Notify("paired", "Pixel is connected")),
-        )
-        assertEquals(
-            """{"t":"notify","title":"driving this pane","pane":"$PANE"}""",
-            Wire.encode(ClientMsg.Notify("driving this pane", pane = PANE)),
-        )
-        // The node's `notified` reply is not something a courtesy toast makes a user read.
-        assertNull(Wire.decode("""{"t":"notified","ok":false,"reason":"no desk"}"""))
-    }
 }

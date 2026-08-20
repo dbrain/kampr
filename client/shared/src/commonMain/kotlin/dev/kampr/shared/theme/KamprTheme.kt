@@ -19,7 +19,6 @@ class KamprTokens(
     val type: KamprType,
 ) {
     val color: Palette get() = spec.palette
-    val ground: Ground get() = spec.ground
     val radii: Radii get() = spec.radii
     val card: BorderSpec get() = spec.card
     val chrome: BorderSpec get() = spec.chrome

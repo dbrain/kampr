@@ -19,6 +19,7 @@ import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -39,6 +40,13 @@ sealed interface Screen {
     data object Devices : Screen
     data object Appearance : Screen
     data object Notifications : Screen
+}
+
+// The herd-management surfaces, which float over whatever screen is showing rather than
+// replacing it — everything they act on is behind them.
+sealed interface Sheet {
+    data class New(val nodeId: String, val paneId: String?) : Sheet
+    data class Actions(val paneId: String) : Sheet
 }
 
 private const val KEY_THEME = "theme"
@@ -68,6 +76,9 @@ class AppState(
         private set
 
     var lastPaneId: String? by mutableStateOf(null)
+        private set
+
+    var sheet: Sheet? by mutableStateOf(null)
         private set
 
     val endpoint: Endpoint
@@ -112,7 +123,23 @@ class AppState(
         prefs.set(KEY_MODE, mode.key)
     }
 
+    fun openSheet(which: Sheet) {
+        if (!store.canManage) return
+        // A stale ack from an earlier op would otherwise close the sheet the moment it opened.
+        store.clearManaged()
+        sheet = which
+    }
+
+    fun closeSheet() {
+        sheet = null
+    }
+
+    fun manage(op: ManageOp) {
+        connection.manage(op)
+    }
+
     fun go(target: Screen) {
+        sheet = null
         if (target is Screen.Pane) {
             lastPaneId = target.paneId
             connection.watch(target.paneId)

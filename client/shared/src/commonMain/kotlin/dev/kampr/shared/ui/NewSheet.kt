@@ -1,0 +1,437 @@
+package dev.kampr.shared.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.SessionInfo
+import dev.kampr.shared.wire.SplitDirection
+import dev.kampr.shared.wire.workspaceIdOf
+
+private enum class Step { Menu, Workspace, Tab, Worktree, Session }
+
+private enum class Pick { Workspace, Split, Agent }
+
+private const val AGENT_CHIPS = 5
+private val RATIOS = listOf("⅓" to 0.33, "½" to 0.5, "⅔" to 0.67)
+
+// Herdr puts a named session under its config root and on a command line, so the node validates
+// the name; refusing it here means the operator sees why instead of eating a `bad_request`.
+private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
+
+@Composable
+fun NewSheet(
+    breakpoint: Breakpoint,
+    node: NodeInfo,
+    pane: PaneInfo?,
+    peers: List<NodeInfo>,
+    caps: ServerMsg.NodeCaps?,
+    outcome: ServerMsg.Managed?,
+    onManage: (ManageOp) -> Unit,
+    onNodePicker: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tokens = Kampr.tokens
+    var step by remember { mutableStateOf(Step.Menu) }
+    var pick by remember { mutableStateOf(Pick.Workspace) }
+    var direction by remember { mutableStateOf(SplitDirection.Right) }
+    var ratio by remember { mutableStateOf(0.5) }
+    var kind by remember { mutableStateOf<String?>(null) }
+    var allKinds by remember { mutableStateOf(false) }
+    var label by remember { mutableStateOf(TextFieldValue()) }
+    var cwd by remember(pane?.cwd) { mutableStateOf(TextFieldValue(pane?.cwd.orEmpty())) }
+    var branch by remember { mutableStateOf(TextFieldValue()) }
+    var base by remember { mutableStateOf(TextFieldValue()) }
+    var sessionName by remember { mutableStateOf(TextFieldValue()) }
+    var agentName by remember { mutableStateOf(TextFieldValue()) }
+    val env = remember { mutableStateListOf<Pair<String, String>>() }
+    var inFlight by remember { mutableStateOf<String?>(null) }
+    var refusal by remember { mutableStateOf<String?>(null) }
+
+    val kinds = caps?.agentKinds.orEmpty()
+    LaunchedEffect(kinds) {
+        if (kind == null) kind = kinds.firstOrNull()
+    }
+
+    // The node is authoritative: the sheet closes on its ack, and the herd redraws from the
+    // `herd.patch` that follows — never from anything guessed here.
+    LaunchedEffect(outcome) {
+        val ack = outcome ?: return@LaunchedEffect
+        if (ack.op != inFlight) return@LaunchedEffect
+        inFlight = null
+        if (ack.ok) onDismiss() else refusal = ack.message ?: ack.code
+    }
+
+    fun run(op: ManageOp) {
+        refusal = null
+        inFlight = op.op
+        onManage(op)
+    }
+
+    val nodeId = node.id
+    val workspaceId = pane?.workspaceId ?: pane?.id?.let(::workspaceIdOf)
+    val trimmedCwd = cwd.text.trim().ifEmpty { null }
+    val trimmedLabel = label.text.trim().ifEmpty { null }
+
+    val action: Pair<String, (() -> Unit)?> = when (step) {
+        Step.Menu -> when (pick) {
+            Pick.Workspace -> "Create workspace" to {
+                run(ManageOp.WorkspaceCreate(nodeId, cwd = trimmedCwd))
+            }
+            Pick.Split -> "Split ${direction.wire}" to (pane?.let { p ->
+                { run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd)) }
+            })
+            Pick.Agent -> "Start ${kind ?: "an agent"}" to (
+                if (pane != null && kind != null) {
+                    { run(ManageOp.AgentStart(pane.id, kind!!, agentName.text.trim().ifEmpty { null })) }
+                } else null
+                )
+        }
+        Step.Workspace -> "Create workspace" to {
+            run(ManageOp.WorkspaceCreate(nodeId, trimmedLabel, trimmedCwd, env.filter { it.first.isNotBlank() }.toMap()))
+        }
+        Step.Tab -> "Create tab" to (workspaceId?.let { at ->
+            { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd)) }
+        })
+        Step.Worktree -> "Create worktree" to (branch.text.trim().ifEmpty { null }?.let { b ->
+            { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
+        })
+        Step.Session -> "Start session" to (sessionName.text.trim().takeIf { SESSION_NAME.matches(it) }?.let { n ->
+            { run(ManageOp.SessionCreate(nodeId, n)) }
+        })
+    }
+
+    BottomSheet(breakpoint, onDismiss) {
+        SheetHeader(
+            title = when (step) {
+                Step.Menu -> "New"
+                Step.Workspace -> "Workspace"
+                Step.Tab -> "Tab"
+                Step.Worktree -> "Worktree"
+                Step.Session -> "Named session"
+            },
+            subtitle = listOfNotNull("on ${node.name}", pane?.workspace).joinToString(" · "),
+            onBack = if (step == Step.Menu) null else ({ step = Step.Menu; refusal = null }),
+            onClose = onDismiss,
+            compact = breakpoint == Breakpoint.Landscape,
+        )
+
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+            when (step) {
+                Step.Menu -> Menu(
+                    breakpoint = breakpoint,
+                    pane = pane,
+                    peers = peers,
+                    kinds = kinds,
+                    allKinds = allKinds,
+                    kind = kind,
+                    pick = pick,
+                    direction = direction,
+                    ratio = ratio,
+                    sessions = caps?.sessions.orEmpty(),
+                    onStep = { step = it; refusal = null },
+                    onPick = { pick = it },
+                    onDirection = { direction = it; pick = Pick.Split },
+                    onRatio = { ratio = it },
+                    onKind = { kind = it; pick = Pick.Agent },
+                    onMoreKinds = { allKinds = true },
+                    onNodePicker = onNodePicker,
+                )
+                Step.Workspace -> Fields {
+                    LabelledField("label", "kampr", label) { label = it }
+                    LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    EnvEditor(
+                        env,
+                        { index, row -> env[index] = row },
+                        { env.add("" to "") },
+                        { env.removeAt(it) },
+                    )
+                    Note("A workspace, its directory and its variables in one call — a Claude session in this worktree with these variables is one action, not a script.")
+                }
+                Step.Tab -> Fields {
+                    LabelledField("label", "tests", label) { label = it }
+                    LabelledField("directory", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    Note(
+                        if (workspaceId == null) "Open a pane first — a tab is created inside a workspace."
+                        else "In ${pane?.workspace ?: workspaceId}."
+                    )
+                }
+                Step.Worktree -> Fields {
+                    LabelledField("branch", "feat/mesh-auth", branch) { branch = it }
+                    LabelledField("base", "main", base) { base = it }
+                    LabelledField("repository", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    LabelledField("label", "mesh-auth", label) { label = it }
+                    Note("Herdr's own git support: a worktree for the branch, and a workspace opened on it.")
+                }
+                Step.Session -> Fields {
+                    LabelledField("name", "agents", sessionName) { sessionName = it }
+                    if (sessionName.text.isNotEmpty() && !SESSION_NAME.matches(sessionName.text.trim())) {
+                        Note("Letters, digits, - and _ only, up to 64 — the name becomes a directory and a command line.")
+                    }
+                    SessionList(caps?.sessions.orEmpty()) { run(ManageOp.SessionStop(nodeId, it)) }
+                    Note("A named session is its own Herdr server with its own socket, so the node starts it by running the CLI rather than calling a method. It joins the herd as another node.")
+                }
+            }
+            Box(Modifier.height(6.dp))
+        }
+
+        Column(
+            Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            if (step == Step.Menu && pick == Pick.Split) {
+                KText(
+                    "A split changes the Herdr layout, so the desk and every other viewer get the new shape too.",
+                    tokens.type.captionSmall,
+                    tokens.color.working,
+                    maxLines = 3,
+                )
+            }
+            refusal?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, maxLines = 3) }
+            PrimaryAction(
+                text = if (inFlight != null) "Waiting for the node" else action.first,
+                onClick = { action.second?.invoke() },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = inFlight == null && action.second != null,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Fields(content: @Composable () -> Unit) {
+    Column(
+        Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp),
+    ) { content() }
+}
+
+@Composable
+private fun Note(text: String) {
+    val tokens = Kampr.tokens
+    KText(text, tokens.type.captionSmall, tokens.color.mute, maxLines = 4)
+}
+
+@Composable
+private fun Menu(
+    breakpoint: Breakpoint,
+    pane: PaneInfo?,
+    peers: List<NodeInfo>,
+    kinds: List<String>,
+    allKinds: Boolean,
+    kind: String?,
+    pick: Pick,
+    direction: SplitDirection,
+    ratio: Double,
+    sessions: List<SessionInfo>,
+    onStep: (Step) -> Unit,
+    onPick: (Pick) -> Unit,
+    onDirection: (SplitDirection) -> Unit,
+    onRatio: (Double) -> Unit,
+    onKind: (String) -> Unit,
+    onMoreKinds: () -> Unit,
+    onNodePicker: () -> Unit,
+) {
+    val compact = breakpoint == Breakpoint.Landscape
+    if (breakpoint == Breakpoint.Portrait) {
+        Column {
+            Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
+            Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, onNodePicker)
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+            Column(Modifier.weight(1f)) {
+                Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
+            }
+            Column(Modifier.weight(1f)) {
+                Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, onNodePicker)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Structure(
+    compact: Boolean,
+    pane: PaneInfo?,
+    pick: Pick,
+    direction: SplitDirection,
+    ratio: Double,
+    onStep: (Step) -> Unit,
+    onPick: (Pick) -> Unit,
+    onDirection: (SplitDirection) -> Unit,
+    onRatio: (Double) -> Unit,
+) {
+    val tokens = Kampr.tokens
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        SheetCard(
+            icon = KamprIcons.workspace,
+            iconTint = tokens.color.accent,
+            title = "Workspace",
+            subtitle = "a directory and a fresh shell",
+            compact = compact,
+            selected = pick == Pick.Workspace,
+            onClick = { onPick(Pick.Workspace); onStep(Step.Workspace) },
+        )
+        SheetCard(
+            icon = KamprIcons.tab,
+            iconTint = tokens.color.accent,
+            title = "Tab",
+            subtitle = pane?.workspace?.let { "another tab in $it" } ?: "open a pane first",
+            compact = compact,
+            onClick = if (pane == null) null else ({ onStep(Step.Tab) }),
+        )
+        SheetCard(
+            icon = KamprIcons.split,
+            iconTint = tokens.color.accent,
+            title = "Split this pane",
+            subtitle = if (pane == null) "open a pane first" else "changes the layout at the desk too",
+            compact = compact,
+            selected = pick == Pick.Split,
+            trailing = if (pane == null) ({}) else ({
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Chip("right", direction == SplitDirection.Right, { onDirection(SplitDirection.Right) }, quiet = true)
+                    Chip("down", direction == SplitDirection.Down, { onDirection(SplitDirection.Down) }, quiet = true)
+                }
+            }),
+        )
+        if (pane != null && pick == Pick.Split) {
+            Row(
+                Modifier.padding(start = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                LabelText("ratio", tokens.type.micro, tokens.color.mute, Modifier.padding(top = 8.dp))
+                RATIOS.forEach { (text, value) ->
+                    Chip(text, ratio == value, { onRatio(value) }, quiet = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Elsewhere(
+    compact: Boolean,
+    pane: PaneInfo?,
+    peers: List<NodeInfo>,
+    kinds: List<String>,
+    allKinds: Boolean,
+    kind: String?,
+    pick: Pick,
+    sessions: List<SessionInfo>,
+    onStep: (Step) -> Unit,
+    onKind: (String) -> Unit,
+    onMoreKinds: () -> Unit,
+    onNodePicker: () -> Unit,
+) {
+    val tokens = Kampr.tokens
+    SheetSection("start an agent", compact)
+    Box(Modifier.padding(horizontal = 16.dp)) {
+        Surface(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp),
+            ) {
+                if (kinds.isEmpty()) {
+                    KText("The node has offered no agent kinds.", tokens.type.captionSmall, tokens.color.mute)
+                } else {
+                    val shown = if (allKinds) kinds else kinds.take(AGENT_CHIPS)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        shown.forEach { k -> Chip(k, k == kind && pick == Pick.Agent, { onKind(k) }) }
+                        val rest = kinds.size - shown.size
+                        if (rest > 0) Chip("+$rest more", false, onMoreKinds, quiet = true)
+                    }
+                }
+                KText(
+                    if (pane == null) "Open a pane first — an agent starts in one."
+                    else "Offered by the node, not baked into the app — whatever Herdr can detect on that machine.",
+                    tokens.type.captionSmall,
+                    tokens.color.mute,
+                    maxLines = 3,
+                )
+            }
+        }
+    }
+
+    SheetSection("from a branch", compact)
+    Box(Modifier.padding(horizontal = 16.dp)) {
+        SheetCard(
+            icon = KamprIcons.branch,
+            iconTint = tokens.color.done,
+            title = "Worktree",
+            subtitle = "a branch, its own directory, its own workspace",
+            compact = compact,
+            onClick = { onStep(Step.Worktree) },
+        )
+    }
+
+    SheetSection("somewhere else", compact)
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        SheetCard(
+            icon = null,
+            iconTint = null,
+            title = "Named session",
+            subtitle = sessions.takeIf { it.isNotEmpty() }
+                ?.joinToString(", ") { it.name }
+                ?.let { "its own server · $it" }
+                ?: "its own server",
+            subtitleMono = sessions.isNotEmpty(),
+            compact = compact,
+            onClick = { onStep(Step.Session) },
+        )
+        SheetCard(
+            icon = null,
+            iconTint = null,
+            title = "Another machine",
+            subtitle = peers.takeIf { it.isNotEmpty() }?.joinToString(" · ") { it.name } ?: "pair a node",
+            compact = compact,
+            onClick = onNodePicker,
+        )
+    }
+}
+
+@Composable
+private fun SessionList(sessions: List<SessionInfo>, onStop: (String) -> Unit) {
+    val tokens = Kampr.tokens
+    if (sessions.isEmpty()) return
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        LabelText("on this host", tokens.type.micro, tokens.color.mute)
+        sessions.forEach { session ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Dot(if (session.running) tokens.color.done else tokens.color.idle, 6.dp)
+                KText(session.name, tokens.type.meta, tokens.color.text, Modifier.weight(1f))
+                if (session.running) {
+                    Chip("stop", false, { onStop(session.name) }, quiet = true)
+                }
+            }
+        }
+    }
+}

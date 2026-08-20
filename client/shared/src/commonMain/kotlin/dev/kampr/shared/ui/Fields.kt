@@ -23,9 +23,9 @@ import dev.kampr.shared.theme.Kampr
 fun KField(
     hint: String,
     value: TextFieldValue,
-    onChange: (TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.meta,
+    onChange: (TextFieldValue) -> Unit,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
@@ -53,13 +53,13 @@ fun LabelledField(
     label: String,
     hint: String,
     value: TextFieldValue,
-    onChange: (TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
+    onChange: (TextFieldValue) -> Unit,
 ) {
     val tokens = Kampr.tokens
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         LabelText(label, tokens.type.micro, tokens.color.mute)
-        KField(hint, value, onChange)
+        KField(hint, value, onChange = onChange)
     }
 }
 
@@ -82,8 +82,8 @@ fun EnvEditor(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                KField("NAME", TextFieldValue(key), { onChange(index, it.text to value) }, Modifier.weight(1f))
-                KField("value", TextFieldValue(value), { onChange(index, key to it.text) }, Modifier.weight(1.2f))
+                KField("NAME", TextFieldValue(key), Modifier.weight(1f)) { onChange(index, it.text to value) }
+                KField("value", TextFieldValue(value), Modifier.weight(1.2f)) { onChange(index, key to it.text) }
                 IconGlyph(
                     KamprIcons.cross,
                     13.dp,

@@ -115,6 +115,11 @@ object Wire {
                     )
                 } ?: emptyMap()
             )
+            "notified" -> ServerMsg.Notified(
+                ok = obj.bool("ok") ?: false,
+                reason = obj.str("reason"),
+                pane = obj.str("pane"),
+            )
             "pong" -> ServerMsg.Pong(obj.int("n") ?: 0)
             else -> null
         }
@@ -151,8 +156,8 @@ object Wire {
         ClientMsg.RequestCaps -> buildJsonObject { put("t", "caps") }
         is ClientMsg.Notify -> buildJsonObject {
             put("t", "notify"); put("title", msg.title)
-            msg.body?.let { put("body", it) }
             msg.pane?.let { put("pane", it) }
+            msg.body?.let { put("body", it) }
         }
     }
 

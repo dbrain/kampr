@@ -86,8 +86,6 @@ private const val FAINT = 0.75f
 
 @Immutable
 class TerminalPalette(private val skin: TerminalSkin) {
-    val ground: Color get() = skin.ground
-    val ink: Color get() = skin.ink
     val selectionWash: Color get() = skin.selectionWash
     val linkInk: Color get() = skin.linkInk
 

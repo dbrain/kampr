@@ -24,6 +24,9 @@ import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 
 private val SHEET_MAX_WIDTH = 420.dp
+// A 844x390 landscape viewport is wide and short, so the sheet spends the width it has rather
+// than scrolling a phone-shaped column through a letterbox.
+private val SHEET_WIDE_WIDTH = 720.dp
 private const val SCRIM_ALPHA = 0.72f
 
 // The scrim is the theme's own ground at partial opacity rather than a colour of its own, so it
@@ -57,7 +60,8 @@ fun BottomSheet(
         BoxWithConstraints(
             Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center)
         ) {
-            val width = if (maxWidth < SHEET_MAX_WIDTH) maxWidth else SHEET_MAX_WIDTH
+            val wanted = if (breakpoint == Breakpoint.Portrait) SHEET_MAX_WIDTH else SHEET_WIDE_WIDTH
+            val width = if (maxWidth < wanted) maxWidth else wanted
             val tall = maxHeight * (if (breakpoint == Breakpoint.Portrait) 0.92f else 0.94f)
             val shape = RoundedCornerShape(tokens.radii.lg)
             Column(
@@ -72,27 +76,42 @@ fun BottomSheet(
     }
 }
 
+// A 390 dp-tall landscape viewport cannot afford a 26 px title and two rows of chrome, so the
+// header collapses onto one line rather than eating a third of the sheet.
 @Composable
 fun SheetHeader(
     title: String,
     subtitle: String?,
     onBack: (() -> Unit)?,
     onClose: () -> Unit,
+    compact: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     Column {
         Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 12.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 20.dp,
+                    top = if (compact) 12.dp else 18.dp,
+                    end = 20.dp,
+                    bottom = if (compact) 10.dp else 12.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (onBack != null) {
                 IconGlyph(KamprIcons.chevronLeft, 16.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
             }
-            KText(title, tokens.type.screenTitle, tokens.color.text, Modifier.weight(1f))
+            KText(title, if (compact) tokens.type.paneTitle else tokens.type.screenTitle, tokens.color.text)
+            if (compact && subtitle != null) {
+                LabelText(subtitle, tokens.type.micro, tokens.color.mute, Modifier.weight(1f))
+            } else {
+                Box(Modifier.weight(1f))
+            }
             IconGlyph(KamprIcons.cross, 18.dp, tokens.color.dim, Modifier.clickable(onClick = onClose))
         }
-        if (subtitle != null) {
+        if (!compact && subtitle != null) {
             Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 9.dp)) {
                 LabelText(subtitle, tokens.type.micro, tokens.color.mute)
             }
@@ -101,9 +120,9 @@ fun SheetHeader(
 }
 
 @Composable
-fun SheetSection(label: String) {
+fun SheetSection(label: String, compact: Boolean = false) {
     val tokens = Kampr.tokens
-    Box(Modifier.padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 9.dp)) {
+    Box(Modifier.padding(start = 20.dp, top = if (compact) 12.dp else 20.dp, end = 20.dp, bottom = 9.dp)) {
         LabelText(label, tokens.type.micro, tokens.color.mute)
     }
 }
@@ -116,6 +135,7 @@ fun SheetCard(
     subtitle: String,
     subtitleMono: Boolean = false,
     selected: Boolean = false,
+    compact: Boolean = false,
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
@@ -127,12 +147,13 @@ fun SheetCard(
             .background(tokens.color.surface, shape)
             .edge(if (selected) selectedEdge() else tokens.card, shape)
             .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-            .padding(horizontal = 15.dp, vertical = 13.dp),
+            .padding(horizontal = 15.dp, vertical = if (compact) 9.dp else 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (icon != null) {
-            Badge(36.dp, 17.dp, icon, iconTint ?: tokens.color.accent)
+            if (compact) Badge(28.dp, 14.dp, icon, iconTint ?: tokens.color.accent)
+            else Badge(36.dp, 17.dp, icon, iconTint ?: tokens.color.accent)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             KText(title, tokens.type.bodyStrong, tokens.color.text)
@@ -156,7 +177,7 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit, quiet: Boolean = 
     Box(
         Modifier
             .background(if (selected) tokens.color.accent else tokens.color.raise, shape)
-            .edge(if (selected) tokens.card else tokens.card, shape)
+            .edge(tokens.card, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp, vertical = 7.dp),
     ) {

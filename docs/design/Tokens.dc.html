@@ -86,7 +86,8 @@
       --ansi-0: #1a1a1a; --ansi-1: #ff2b1f; --ansi-2: #00e05a; --ansi-3: #ffe500; --ansi-4: #4d7cff; --ansi-5: #ff3ddb; --ansi-6: #00e5e5; --ansi-7: #e6e6e6; --ansi-8: #8a8a8a; --ansi-9: #ff6a60; --ansi-10: #5cff9e; --ansi-11: #fff35c; --ansi-12: #8faeff; --ansi-13: #ff8ae8; --ansi-14: #6bffff; --ansi-15: #ffffff;
     }
 
-    [data-theme="soft"][data-ground="light"] {
+    [data-theme="soft"][data-ground="light"],
+    [data-ground="light"] [data-theme="soft"] {
       --bg: #f7f8fb; --bar: #eef1f7; --surface: #ffffff; --surface-2: #e7ebf2;
       --raise: #e2e7f0; --line: #d8dee9;
       --text: #12151b; --dim: #565d6d; --mute: #6a7183;
@@ -97,18 +98,20 @@
     }
 
     @media (prefers-color-scheme: light) {
-      [data-theme="soft"][data-ground="system"] {
-        --bg: #f7f8fb; --bar: #eef1f7; --surface: #ffffff; --surface-2: #e7ebf2;
+    [data-theme="soft"][data-ground="system"],
+    [data-ground="system"] [data-theme="soft"] {
+      --bg: #f7f8fb; --bar: #eef1f7; --surface: #ffffff; --surface-2: #e7ebf2;
       --raise: #e2e7f0; --line: #d8dee9;
       --text: #12151b; --dim: #565d6d; --mute: #6a7183;
       --accent: #2560cc; --accent-hi: #17439a; --on-accent: #ffffff;
       --accent-soft: #a8c4f030;
       --blocked: #b8281f; --blocked-bg: #fbe4e1; --working: #8a5a00;
       --idle: #9aa1b2; --done: #0f6b45;
-      }
+    }
     }
 
-    [data-theme="phosphor"][data-ground="light"] {
+    [data-theme="phosphor"][data-ground="light"],
+    [data-ground="light"] [data-theme="phosphor"] {
       --bg: #f3f5ef; --bar: #eaeee4; --surface: #fbfcf8; --surface-2: #e2e7d9;
       --raise: #dde3d3; --line: #cdd5c1;
       --text: #0f150d; --dim: #4d5749; --mute: #68725f;
@@ -119,18 +122,20 @@
     }
 
     @media (prefers-color-scheme: light) {
-      [data-theme="phosphor"][data-ground="system"] {
-        --bg: #f3f5ef; --bar: #eaeee4; --surface: #fbfcf8; --surface-2: #e2e7d9;
+    [data-theme="phosphor"][data-ground="system"],
+    [data-ground="system"] [data-theme="phosphor"] {
+      --bg: #f3f5ef; --bar: #eaeee4; --surface: #fbfcf8; --surface-2: #e2e7d9;
       --raise: #dde3d3; --line: #cdd5c1;
       --text: #0f150d; --dim: #4d5749; --mute: #68725f;
       --accent: #7a5400; --accent-hi: #5c3f00; --on-accent: #ffffff;
       --accent-soft: #f0e6c8;
       --blocked: #a82015; --blocked-bg: #f8e3e0; --working: #7a5400;
       --idle: #98a291; --done: #1d5e2a;
-      }
+    }
     }
 
-    [data-theme="warm"][data-ground="light"] {
+    [data-theme="warm"][data-ground="light"],
+    [data-ground="light"] [data-theme="warm"] {
       --bg: #faf6ef; --bar: #f3ecdf; --surface: #fffdf8; --surface-2: #efe7d8;
       --raise: #eae0cd; --line: #ded3bf;
       --text: #1c1610; --dim: #635749; --mute: #7b6f5d;
@@ -141,18 +146,20 @@
     }
 
     @media (prefers-color-scheme: light) {
-      [data-theme="warm"][data-ground="system"] {
-        --bg: #faf6ef; --bar: #f3ecdf; --surface: #fffdf8; --surface-2: #efe7d8;
+    [data-theme="warm"][data-ground="system"],
+    [data-ground="system"] [data-theme="warm"] {
+      --bg: #faf6ef; --bar: #f3ecdf; --surface: #fffdf8; --surface-2: #efe7d8;
       --raise: #eae0cd; --line: #ded3bf;
       --text: #1c1610; --dim: #635749; --mute: #7b6f5d;
       --accent: #8f5210; --accent-hi: #6e3c06; --on-accent: #fffdf8;
       --accent-soft: #f2e3cb;
       --blocked: #a83521; --blocked-bg: #f8e2da; --working: #8f5210;
       --idle: #aa9c86; --done: #3a6127;
-      }
+    }
     }
 
-    [data-theme="brutalist"][data-ground="light"] {
+    [data-theme="brutalist"][data-ground="light"],
+    [data-ground="light"] [data-theme="brutalist"] {
       --bg: #ffffff; --bar: #ffffff; --surface: #ffffff; --surface-2: #ffffff;
       --raise: #ffffff; --line: #000000;
       --text: #000000; --dim: #4a4a4a; --mute: #5e5e5e;
@@ -163,15 +170,16 @@
     }
 
     @media (prefers-color-scheme: light) {
-      [data-theme="brutalist"][data-ground="system"] {
-        --bg: #ffffff; --bar: #ffffff; --surface: #ffffff; --surface-2: #ffffff;
+    [data-theme="brutalist"][data-ground="system"],
+    [data-ground="system"] [data-theme="brutalist"] {
+      --bg: #ffffff; --bar: #ffffff; --surface: #ffffff; --surface-2: #ffffff;
       --raise: #ffffff; --line: #000000;
       --text: #000000; --dim: #4a4a4a; --mute: #5e5e5e;
       --accent: #cc0a00; --accent-hi: #960700; --on-accent: #ffffff;
       --accent-soft: #ffffff;
       --blocked: #cc0a00; --blocked-bg: #ffffff; --working: #000000;
       --idle: #b5b5b5; --done: #000000;
-      }
+    }
     }
 
     .lbl { text-transform: var(--label-tt); letter-spacing: var(--label-ls); font-weight: var(--label-w); }
@@ -186,7 +194,7 @@
             font-family: 'JetBrains Mono', ui-monospace, monospace; }
 </style>
 </helmet>
-<div data-theme="{{theme}}" data-ground="{{ground}}" style="width: 940px; height: 790px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
+<div data-theme="{{theme}}" data-ground="{{ground}}" style="width: 940px; height: 710px; background: var(--bg); color: var(--text); font-family: var(--font-ui); display: flex; flex-direction: column; overflow: hidden;">
   <div style="padding: 20px 24px 14px 24px; display: flex; align-items: baseline; gap: 12px;">
     <span style="font-size: 19px; font-weight: 800; letter-spacing: -0.02em;">One token layer, four skins</span>
     <span style="font-size: 12.5px; color: var(--dim);">Soft native ships. The rest stay one attribute away.</span>
@@ -397,7 +405,7 @@
   </div>
 </div>
 </x-dc>
-<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "ground": {"editor": "enum", "options": ["system", "dark", "light"], "default": "dark", "section": "Theme"}, "$preview": {"width": 940, "height": 790}}'>
+<script data-dc-script data-props='{"theme": {"editor": "enum", "options": ["soft", "phosphor", "warm", "brutalist"], "default": "soft", "section": "Theme"}, "ground": {"editor": "enum", "options": ["system", "dark", "light"], "default": "dark", "section": "Theme"}, "$preview": {"width": 940, "height": 710}}'>
 class Component extends DCLogic {
   renderVals() {
     return { theme: this.props.theme ?? 'soft', ground: this.props.ground ?? 'dark' };

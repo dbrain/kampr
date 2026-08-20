@@ -92,7 +92,10 @@ fun KamprApp(surfaces: PaneSurfaces = FallbackSurfaces, deepLink: DeepLink? = nu
         val breakpoint = breakpointOf(maxWidth, maxHeight)
         val scale = if (breakpoint == Breakpoint.Desktop) TypeScale.Desk else TypeScale.Phone
         KamprTheme(state.theme, scale, groundOf(state.themeMode)) {
-            CompositionLocalProvider(LocalPaneIo provides remember(state) { AppPaneIo(state) }) {
+            CompositionLocalProvider(
+                LocalPaneIo provides remember(state) { AppPaneIo(state) },
+                LocalManage provides remember(state) { AppManage(state) },
+            ) {
                 AppScaffold(
                     state, breakpoint, surfaces, now, setup, devices, connectionStatus, deepLink,
                     onRevoke = { id ->
@@ -202,10 +205,10 @@ private fun AppScaffold(
                                 onView = state::setPaneView,
                                 onAnswer = { answer(screen.paneId, it) },
                             )
-                            Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
+                            Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
                             Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
                             Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                            Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Herd) }
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
                             Screen.Herd -> EmptyDetail(connectionStatus)
                         }
                     }
@@ -225,10 +228,10 @@ private fun AppScaffold(
                     onView = state::setPaneView,
                     onAnswer = { answer(screen.paneId, it) },
                 )
-                Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
+                Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
                 Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
                 Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Herd) }
+                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
                 Screen.Herd -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
             }
 
@@ -246,10 +249,10 @@ private fun AppScaffold(
                             onView = state::setPaneView,
                             onAnswer = { answer(screen.paneId, it) },
                         )
-                        Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) })
+                        Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
                         Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-                        Screen.Notifications -> NotificationsScreen(state, herd.panes) { state.go(Screen.Setup) }
+                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                         Screen.Herd -> HerdPortrait(
                             herd, now, localRtt, triage,
                             state::openPane,
@@ -269,6 +272,7 @@ private fun AppScaffold(
         }
 
         failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+        ManageLayer(state, herd, breakpoint)
     }
 }
 

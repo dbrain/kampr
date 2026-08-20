@@ -129,15 +129,16 @@ def _themes():
     out = []
     for theme in DARK:
         out.append(f'    [data-theme="{theme}"] {{\n      {DARK[theme]}{SHAPE[theme]}\n{_terminal(theme)}\n    }}\n')
-    # An explicit ground wins; "system" defers to the OS. Both spellings resolve to one block.
+    # An explicit ground wins; "system" defers to the OS. The descendant form is load-bearing:
+    # a nested [data-theme] (the theme-preview cards) re-declares every token, so without it the
+    # inner card would fall back to dark inside a light artboard.
     for theme in LIGHT:
-        sel = f'[data-theme="{theme}"][data-ground="light"]'
-        out.append(f'    {sel} {{\n      {LIGHT[theme]}\n    }}\n')
-        out.append(
-            '    @media (prefers-color-scheme: light) {\n'
-            f'      [data-theme="{theme}"][data-ground="system"] {{\n        {LIGHT[theme]}\n      }}\n'
-            '    }\n'
-        )
+        for ground in ("light", "system"):
+            sel = (f'[data-theme="{theme}"][data-ground="{ground}"],\n'
+                   f'    [data-ground="{ground}"] [data-theme="{theme}"]')
+            block = f'    {sel} {{\n      {LIGHT[theme]}\n    }}\n'
+            out.append(block if ground == "light"
+                       else '    @media (prefers-color-scheme: light) {\n' + block + '    }\n')
     return "\n".join(out)
 
 
@@ -207,7 +208,7 @@ SIZES = {
     "Pane-Landscape":        (844, 390),
     "Desktop":              (1440, 900),
     "Desktop-Mosaic":       (1440, 900),
-    "Tokens":                (940, 790),
+    "Tokens":                (940, 710),
 }
 
 def main():

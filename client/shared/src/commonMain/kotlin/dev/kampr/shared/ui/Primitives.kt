@@ -133,17 +133,19 @@ fun PrimaryAction(
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.button,
     vertical: Dp = 15.dp,
+    enabled: Boolean = true,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
     Box(
         modifier
-            .background(tokens.color.accent, shape)
-            .clickable(onClick = onClick)
+            .background(if (enabled) tokens.color.accent else tokens.color.raise, shape)
+            .edge(tokens.card, shape)
+            .let { if (enabled) it.clickable(onClick = onClick) else it }
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
-        KText(text, style, tokens.color.onAccent)
+        KText(text, style, if (enabled) tokens.color.onAccent else tokens.color.mute)
     }
 }
 
