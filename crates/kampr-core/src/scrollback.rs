@@ -12,6 +12,8 @@ pub struct ScrollbackDoc {
     /// Absolute index of the first delivered row, counted from the top of the node's ring.
     pub from_top: u32,
     pub rows: Vec<RowDiff>,
+    /// How many rows the ring holds, not the index it ends at: it spans
+    /// `from_top .. from_top + total_rows`.
     pub total_rows: u32,
     pub complete: bool,
     /// True when history above `from_top` existed and is unreachable — herdr's read cap, a gap
@@ -111,7 +113,8 @@ impl ScrollbackRing {
     }
 
     pub fn render(&self) -> ScrollbackDoc {
-        let total_rows = self.base + self.rows.len() as u32;
+        // A depth, not a highest index: the ring spans `from_top .. from_top + total_rows`.
+        let total_rows = self.rows.len() as u32;
         if self.rows.is_empty() {
             return ScrollbackDoc {
                 from_top: self.base,

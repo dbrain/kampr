@@ -1,4 +1,4 @@
-use kampr_core::wire::{NodeEntry, PaneEntry, ServerMsg};
+use kampr_core::wire::{HerdDelta, NodeEntry, PaneEntry, ServerMsg};
 use std::collections::HashMap;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -44,8 +44,8 @@ impl HerdModel {
             return None;
         }
         Some(ServerMsg::HerdPatch {
-            added,
-            changed,
+            added: HerdDelta::panes(added),
+            changed: HerdDelta::panes(changed),
             removed_ids,
         })
     }
@@ -113,8 +113,8 @@ mod tests {
                 changed,
                 removed_ids,
             } => (
-                added.iter().map(|p| p.id.clone()).collect(),
-                changed.iter().map(|p| p.id.clone()).collect(),
+                added.panes.iter().map(|p| p.id.clone()).collect(),
+                changed.panes.iter().map(|p| p.id.clone()).collect(),
                 removed_ids.clone(),
             ),
             other => panic!("expected a herd patch, got {other:?}"),

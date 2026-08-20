@@ -118,6 +118,29 @@ impl PaneEntry {
     }
 }
 
+/// `herd.patch` carries the same shape as `herd` under `added` and `changed`, so a node going
+/// offline and a pane changing travel the same way.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HerdDelta {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panes: Vec<PaneEntry>,
+}
+
+impl HerdDelta {
+    pub fn panes(panes: Vec<PaneEntry>) -> Self {
+        Self {
+            nodes: Vec::new(),
+            panes,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && self.panes.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "t")]
 pub enum ServerMsg {
@@ -130,10 +153,10 @@ pub enum ServerMsg {
     },
     #[serde(rename = "herd.patch")]
     HerdPatch {
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        added: Vec<PaneEntry>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        changed: Vec<PaneEntry>,
+        #[serde(skip_serializing_if = "HerdDelta::is_empty")]
+        added: HerdDelta,
+        #[serde(skip_serializing_if = "HerdDelta::is_empty")]
+        changed: HerdDelta,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         removed_ids: Vec<String>,
     },

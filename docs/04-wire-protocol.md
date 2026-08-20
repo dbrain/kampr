@@ -192,7 +192,9 @@ Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` �
 `bad_request` · `unsupported` (the node does not implement that op) · `not_found`.
 
 `code` is an open string, not a closed enum: a client must handle an unrecognised code by showing
-`message` rather than failing.
+`message` rather than failing. `revoked` is one such: the node re-reads the device behind a live
+socket, so a revocation, a demotion to `readonly` or a Tier 0 expiry lands on the connection that
+is already open rather than at the next handshake. `revoked` is followed by a close.
 
 ## Client → server
 
@@ -221,6 +223,10 @@ Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` �
 // against the device, so they follow you between browsers on the same enrolled device.
 { "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
 //   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "zoom": 1.6, "view": "terminal" } } }
+// `pane` must be a pane this node is serving (`unknown_pane` otherwise) and `prefs` must fit in
+// 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the role,
+// so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
+// preferences per device and drops the least recently updated first.
 
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
@@ -372,3 +378,9 @@ node resolves it to a device and a role before `hello`. A client that sends any 
 spelling fails the handshake. `readonly` devices get every server → client
 message and are refused `input` / `answer` with `not_writer`. HTTP endpoints for enrolment
 (`/auth/pair`, `/auth/webauthn/*`) are specified alongside the auth work, not here.
+
+A pairing code is **not on its own a credential once any device is enrolled.** `kampr setup` prints
+it into a Herdr popup pane, and a `readonly` device receives every frame of every pane — so a code
+minted for the console stays inert until an operator arms it from that console, for a short window.
+The keypress is the channel a watching device does not have. A code handed back over an
+authenticated `POST /api/pair` was never on a screen and is armed as it is minted.

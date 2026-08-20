@@ -1,4 +1,5 @@
-use kampr_core::wire::{Cursor, Encoder, ServerMsg};
+use kampr_core::provider::{AgentStatus, PaneInfo};
+use kampr_core::wire::{Cursor, Encoder, HerdDelta, PaneEntry, ServerMsg};
 use kampr_term::{Cell, CellAttrs, Color, RowDiff};
 
 fn cell(ch: char, fg: Color) -> Cell {
@@ -213,4 +214,33 @@ fn an_absolute_ring_index_beyond_sixteen_bits_survives_the_wire() {
     assert_eq!(v["rows"][0]["row"], 200_000);
     assert_eq!(v["capped"], true);
     assert_eq!(v["complete"], false);
+}
+
+#[test]
+fn a_herd_patch_carries_the_same_shape_as_herd() {
+    let pane = PaneEntry::new(
+        "01J",
+        &PaneInfo {
+            pane_id: "w3:p2".into(),
+            cols: 74,
+            rows: 30,
+            agent_status: AgentStatus::Blocked,
+            ..PaneInfo::default()
+        },
+        false,
+    );
+    let v = serde_json::to_value(ServerMsg::HerdPatch {
+        added: HerdDelta::default(),
+        changed: HerdDelta::panes(vec![pane]),
+        removed_ids: vec!["01J/w3:p9".into()],
+    })
+    .unwrap();
+    assert_eq!(v["t"], "herd.patch");
+    assert!(
+        v.get("added").is_none(),
+        "an empty delta is omitted, not sent as []"
+    );
+    assert_eq!(v["changed"]["panes"][0]["id"], "01J/w3:p2");
+    assert_eq!(v["changed"]["panes"][0]["agent_status"], "blocked");
+    assert_eq!(v["removed_ids"][0], "01J/w3:p9");
 }

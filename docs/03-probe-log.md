@@ -171,8 +171,26 @@ Raw logs behind every number: `client/terminal-spike/results/`. Each line carrie
 | 67 | This machine's `GRADLE_HOME` points at a broken install | `./gradlew` fails with `Cannot find module 'gradle-public-api-legacy'` unless invoked as `env -u GRADLE_HOME ./gradlew` |
 
 
+## First end-to-end run (real client → real node → real herdr)
+
+Browser client (Chromium 151, wasm bundle served by the node) against `kampr serve` against a
+headless `herdr server --session kamprtest`. Everything below was seen live, not in a fixture.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 68 | **In a headless session the PTY does not follow the layout rect**, and `observe --cols <rect>` then crops the pane | created a workspace (rect 94×40), split it (rects 47/47), ran `stty size` in the left pane through Kampr | `40 93`. The PTY stayed 93 columns while the rect said 47, so the node observed at 47 and the remote view lost the right half of every row. Nothing in the socket API reports a pane's true PTY width — `pane.get` carries `viewport_rows` and no columns — so a node cannot detect the divergence |
+| 69 | The rect is one column wider than the PTY even before a split | same session, single pane | rect `width: 94`, `stty size` → `93`. `observe` pads the missing column rather than cropping, so it is cosmetic where #68 is not |
+| 70 | **A herdr server restart keeps its workspaces and panes** | `herdr server stop` under a live watcher, restarted 8 s later | Both panes came back (fresh shells, same ids). The node reconnected on its own and re-emitted `grid.reset`; no client action was needed. But **nothing told the client herdr was gone** — no `herdr_unavailable`, and `herd.nodes[].online` stayed `true` for the whole outage |
+| 71 | The documented scrollback gap-discard fires in ordinary use | `seq 1 40000` in a watched pane, 3 s poll | First `scrollback` 962 rows `capped:true`; the next read shared no overlap, so the ring restarted and `from_top` advanced to 963. A single verbose command is enough to lose history — #51's cap is not a corner case |
+| 72 | Claude answers both its trust prompt and a tool-permission prompt on the **bare digit** | answered `1` from the Kampr UI to "Is this a project you trust?" and to a real `Bash` permission prompt | Both took effect with no submit key, including the dialog whose footer reads "Enter to confirm". Confirms #43 for Claude against two real dialogs |
+| 73 | Herdr's own `observe` children outlive a node that is killed | `SIGTERM` to `kampr serve` with a pane watched | `herdr terminal session observe` survives, reparented to init, still streaming into a closed pipe. `kill_on_drop` cannot help — a signal skips the destructor |
+| 74 | Backpressure never engaged against a stalled client | paused the client's TCP socket for 10 s while 3 000 lines were produced | 254 `grid.patch` against 255 for an unstalled client, and the 256-frame queue never overflowed — herdr's coalescing keeps the frame rate an order of magnitude below the bound |
+
 ## Still open
 
 - Does `pane.read recent` scroll a plain shell pane *that has a detected agent*? (#27 covered the
   no-agent case; the interlock assumes the worst for the other.)
 - **A real mid-range ARM phone.** #56 is emulator-only; the shaping cost is the part that will move.
+- **The headless PTY/rect divergence (#68).** Either herdr resizes a pane's PTY only when a client
+  is attached, or it never resizes on split at all; the difference decides whether a node should
+  observe at the rect or at the widest frame it has seen.

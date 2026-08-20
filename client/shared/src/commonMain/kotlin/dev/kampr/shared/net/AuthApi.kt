@@ -8,6 +8,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -49,9 +50,10 @@ class AuthApi(private val client: HttpClient, private val endpoint: Endpoint) {
     suspend fun devices(): List<DeviceRecord> =
         call("/auth/devices") { json.decodeFromString(DeviceList.serializer(), it).devices } ?: emptyList()
 
+    // Ktor does not throw on a non-2xx, so without this a revocation that the node refused —
+    // or never routed — reports success and the device stays in the list, still connected.
     suspend fun revoke(id: String): Boolean = runCatching {
-        client.post("${endpoint.httpBase}/auth/devices/$id/revoke") { auth() }
-        true
+        client.post("${endpoint.httpBase}/auth/devices/$id/revoke") { auth() }.status.isSuccess()
     }.getOrDefault(false)
 
     // The enrolment endpoints are specified alongside brief B. A node that returns a device

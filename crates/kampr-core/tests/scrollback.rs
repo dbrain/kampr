@@ -187,7 +187,7 @@ fn the_ring_is_bounded_and_says_so_when_it_trims() {
     assert!(ring.capped());
     assert_eq!(lines_of(&ring), numbered(7, 10));
     assert_eq!(ring.render().from_top, 6);
-    assert_eq!(ring.render().total_rows, 10);
+    assert_eq!(ring.render().total_rows, 4, "a depth, so the ring spans 6..10");
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn absolute_indices_survive_past_sixteen_bits() {
     let doc = ring.render();
     assert_eq!(doc.from_top, 70_006);
     assert_eq!(doc.rows.first().unwrap().row, 70_006);
-    assert_eq!(doc.total_rows, 70_009);
+    assert_eq!(doc.total_rows, 3);
 }
 
 #[test]

@@ -2,7 +2,45 @@ use kampr_herdr::Herdr;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+
+/// `caps` is answered from here rather than from the host, because a client may send it as often
+/// as it likes and one of the two answers costs a process. Long enough that a socket cannot turn
+/// itself into a fork bomb; short enough that a session created at the keyboard shows up.
+const CAPS_TTL: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Default)]
+pub struct Caps {
+    cached: Mutex<Option<(Instant, Value)>>,
+    /// Test-visible: what "cached" has to mean is "did not spawn", not "returned quickly".
+    spawns: AtomicU64,
+}
+
+impl Caps {
+    pub fn spawns(&self) -> u64 {
+        self.spawns.load(Ordering::Relaxed)
+    }
+
+    pub async fn get(&self, node_id: &str, herdr: &Herdr, binary: &str) -> Value {
+        if let Some((at, value)) = self.cached.lock().unwrap().as_ref()
+            && at.elapsed() < CAPS_TTL
+        {
+            return value.clone();
+        }
+        self.spawns.fetch_add(1, Ordering::Relaxed);
+        let value = serde_json::json!({
+            "t": "caps",
+            "node": node_id,
+            "agent_kinds": agent_kinds(herdr).await,
+            "sessions": sessions(binary).await,
+        });
+        *self.cached.lock().unwrap() = Some((Instant::now(), value.clone()));
+        value
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SessionEntry {
