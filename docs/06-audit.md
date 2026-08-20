@@ -28,22 +28,25 @@ Two structural facts that let it happen, both worth fixing on their own:
 
 ## Broken
 
+Eight of the fifteen are fixed (`413083a`), each with a test that fails first. The rest are open.
+
+
 | # | Defect | Owner |
 |---|---|---|
-| 1 | **Revoking a device does not disconnect it.** The session captures `Device` at handshake and never re-reads it, so a revoked or demoted device keeps writing until the socket happens to drop. Both "covering" tests dodge it | `kampr-node`, `kampr-auth` |
-| 2 | **Binds `0.0.0.0` in cleartext by default**, reversing P3.11 and crossing the Phase 3 gate | `kampr-node` |
-| 3 | **A read-only device can promote itself to full.** `/auth/pair` is unauthenticated and the pairing code is printed into a Herdr pane, which read-only devices watch by design | `kampr-node`, `kampr-cli` |
+| 1 | ~~**Revoking a device does not disconnect it.** The session captures `Device` at handshake and never re-reads it, so a revoked or demoted device keeps writing until the socket happens to drop. Both "covering" tests dodge it~~ — **FIXED** — device re-read on a short interval plus a broadcast, and before every write verb; tests drive the already-open socket | `kampr-node`, `kampr-auth` |
+| 2 | ~~**Binds `0.0.0.0` in cleartext by default**, reversing P3.11 and crossing the Phase 3 gate~~ — **FIXED** — loopback default, `--bind` is the explicit opt-in | `kampr-node` |
+| 3 | ~~**A read-only device can promote itself to full.** `/auth/pair` is unauthenticated and the pairing code is printed into a Herdr pane, which read-only devices watch by design~~ — **FIXED** — a printed code is inert until an operator arms it at the console; wrong guesses burn it | `kampr-node`, `kampr-cli` |
 | 4 | **The conversation server side does not exist.** `kampr-journal` is 1,823 lines with four items used; `caps.conversation` is hardcoded false; `convo.load` answers `unsupported` — yet agent panes *default* to Conversation, so they open blank | `kampr-node` |
 | 5 | **`herd.patch` is structurally incompatible** — node emits arrays, client decodes objects, the throw is swallowed. No incremental herd update ever reaches the UI, including every `agent_status` change | both |
 | 6 | **Three of four auth HTTP paths do not exist** (`/auth/*` vs `/api/*`). The revoke POST 405s and **reports success while revoking nothing** | `client/shared` |
-| 7 | `kampr.db-wal` is world-readable and carries unsalted SHA-256 digests of ~39.6-bit pairing codes | `kampr-auth` |
-| 8 | `trust_proxy` reads the **leftmost** `X-Forwarded-For` entry — attacker-controlled even behind a correct proxy, defeating the rate limiter it exists to protect | `kampr-node` |
-| 9 | The pairing `attempts` counter is read but never written | `kampr-auth` |
+| 7 | ~~`kampr.db-wal` is world-readable and carries unsalted SHA-256 digests of ~39.6-bit pairing codes~~ — **FIXED** — state and config dirs 0700, db and both sidecars 0600, argon2id digests | `kampr-auth` |
+| 8 | ~~`trust_proxy` reads the **leftmost** `X-Forwarded-For` entry — attacker-controlled even behind a correct proxy, defeating the rate limiter it exists to protect~~ — **FIXED** — reads the hop the proxy appended | `kampr-node` |
+| 9 | ~~The pairing `attempts` counter is read but never written~~ — **FIXED** — `attempts` written; a run of misses burns outstanding codes | `kampr-auth` |
 | 10 | **The node errors on unknown `t`**, violating the protocol's own forward-compatibility rule. The test that "covers" it skips past the error | `kampr-node` |
 | 11 | `answer` never sends Codex's submit key, so answering a Codex prompt does nothing (probe #43) | `kampr-node` |
 | 12 | `applyReset` **appends** to the link table instead of replacing it, so after any second reset link ids resolve to the wrong URL | `client/shared` |
-| 13 | The same-origin gate builds its allow-list from the request's own `Host`, so it is self-satisfying under DNS rebinding — and fails open when `Origin` is absent | `kampr-node` |
-| 14 | `readonly` is not gated on `prefs` or `caps`: unbounded disk writes, and an unrated process-spawn amplifier | `kampr-node` |
+| 13 | ~~The same-origin gate builds its allow-list from the request's own `Host`, so it is self-satisfying under DNS rebinding — and fails open when `Origin` is absent~~ — **FIXED** — allowlist derives from the bind address; cookie-without-Origin fails closed | `kampr-node` |
+| 14 | ~~`readonly` is not gated on `prefs` or `caps`: unbounded disk writes, and an unrated process-spawn amplifier~~ — **FIXED** — bounded for every role rather than gated by role | `kampr-node` |
 | 15 | `manage.rs` spawns `herdr server --session` and drops the `Child` without `kill_on_drop` — a zombie per created session | `kampr-node` |
 
 ## Incomplete
@@ -62,6 +65,14 @@ Two structural facts that let it happen, both worth fixing on their own:
 - **Observability**: registry accessors exist with no endpoint, `/healthz` returns a literal string, no metrics. `KamprStore.blocked()` — the triage list the roadmap called the one Collie idea worth stealing — has no callers.
 - **Audit log holes**: nothing on failed auth (token probing is invisible), nothing on `watch`/scrollback (a read-only device exfiltrating every terminal leaves one line), and `manage` omits `cwd`/`env`/`args` — the fields that say what actually ran. No rotation.
 - Missing outright: `kampr doctor`, recovery code, destructive-command confirm, threat model, ARCHITECTURE.md, ADRs, release workflow. `kamprctl.sh uninstall` keeps tokens, contradicting P7.8.
+
+## One wire gap the security pass opened, deliberately
+
+**A mid-session demotion is enforced but not announced.** The client still holds the `hello` that
+said `role: full` and learns only from an `error{not_writer}`. Telling it properly needs either a
+re-sent `hello` or a new `role` message — and the protocol says `hello` is the *first* message on a
+connection, so inventing one unilaterally was the wrong move. Decide it before the client grows any
+UI that trusts `hello.role`.
 
 ## Decisions worth revisiting
 
