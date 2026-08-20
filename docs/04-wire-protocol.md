@@ -108,6 +108,7 @@ absolute size scales with how much colour is on screen.
 { "t": "scrollback", "pane": "01J.../w3:p2", "from_top": 0,
   "rows": [ /* RowDiff, row = absolute index from the top of the node's ring */ ],
   "total_rows": 171, "complete": true, "capped": false }
+// total_rows is a DEPTH, not a highest index: the ring spans from_top .. from_top + total_rows.
 ```
 Only sent for panes with `scrollback_rows > 0`. Sourced from `pane.read recent format=ansi` and run
 through the same emulator, so styling matches the live grid. Agent panes never have this — their
@@ -248,6 +249,14 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
   it is configurable — a client must not impose its own cap on top.
 - Full bleed on every breakpoint: the terminal reaches the edges, with chrome floating over it rather
   than insetting it.
+- **Paint bleeds; content insets.** These are two different rectangles and conflating them is what
+  produces either a letterbox or an unreadable row hidden under the key row. The terminal *paints*
+  edge to edge, so rows run under the header and the key row and nothing is ever blank. The
+  *scrollable content* is inset by the chrome, so the pinned last row settles clear of it and no row
+  is permanently obscured. Same semantics as safe-area insets on a phone, and the reason chrome can
+  stay opaque.
+- **Fill is computed against the paint rectangle**, not the inset one — otherwise the insets
+  reintroduce the letterbox they exist to avoid.
 
 
 ## Herd management

@@ -22,9 +22,17 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 /// `'wasm-unsafe-eval'` is what a Compose Multiplatform wasm bundle needs and is strictly weaker
 /// than `'unsafe-eval'`: it permits WebAssembly compilation and nothing else.
+///
+/// The `style-src` hash covers the single `<style>` CMP injects into its shadow root:
+/// `:host { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+/// position: relative }`. Dropping it costs an OS long-press callout over the terminal and the
+/// positioning ancestor the offscreen input anchors to. A hash rather than `'unsafe-inline'`
+/// because pane output is the most attacker-influenced surface here — and note a browser ignores
+/// `'unsafe-inline'` entirely once any hash is present, so the two cannot be combined as a
+/// belt-and-braces. If a CMP upgrade changes that rule, the console names the expected hash.
 const CSP: &str = "default-src 'self'; \
      script-src 'self' 'wasm-unsafe-eval'; \
-     style-src 'self' 'unsafe-inline'; \
+     style-src 'self' 'sha256-+bHRyQ0Z1/Lb6dgSILtTESBRCIFl8jkBb/dPQA4Pdnw='; \
      img-src 'self' data: blob:; \
      font-src 'self' data:; \
      connect-src 'self' ws: wss:; \
