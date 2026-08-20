@@ -2,6 +2,27 @@
 
 Tick as you go. Derived from `01-implementation-findings.md`; every item traces to a finding there.
 
+> **Tick state is unreliable and was never maintained during the build.** Treat the per-phase
+> summaries below as the truth and `docs/06-audit.md` as the live gap list; the individual checkboxes
+> lag reality in both directions. Five ids were duplicated (P1.3, P1.4b, P1.6c, P4.5, P8.5) — a
+> checkbox is a note to a human here, not an identifier to cite.
+
+## Where each phase actually stands
+
+| Phase | State |
+|---|---|
+| **Phase 1** | ✅ Streaming, provider seam, pane registry, VT emulation, wire encoding. Verified against a live herdr; `kampr-spike` reproduces herdr's own grid exactly. |
+| **Phase 2** | ✅ Renderer, both render modes, zoom and pan, key row with the inverted-T cluster, live input, selection, links, paste framing, destructive guard. |
+| **Phase 3** | ✅ Tiered auth, devices, roles, passkeys server-side, audit log, recovery code. Nine security defects found by audit and closed with tests. |
+| **Phase 4** | ✅ Mesh: peers dial out to a hub, ed25519 mutual auth, relay with per-hop backpressure. Proven across two nodes on one host. |
+| **Phase 5** | ✅ Conversation view, both halves. Claude and Codex adapters, markdown with real tables, turn revision by id. |
+| **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision, verified install path, `kampr doctor`. |
+| **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. **Accessibility (P6.11) is not started** — zero `semantics`/`contentDescription` in the client. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
+| **Phase 8** | ⚠️ **Not started.** No push, no VAPID, no service worker, no deep link, no snooze. In flight now. |
+| **Phase 8.5** | ⚠️ **Not started.** Kampr as an Android *provider* — distinct from the Android client, which ships. |
+| **Phase 9** | ⚠️ Release workflow written and never run: no tag has been pushed, so aarch64 cross-compilation and cosign signing are untested. |
+| **Phase 4.5** | Server complete — all 13 `manage` ops. Client in flight. |
+
 **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked · `[-]` cut
 **Gate** = do not start the next phase until this is true.
 
@@ -145,21 +166,26 @@ per-node `build`, and the UI has still to render them.
 Everything you would do at the keyboard. Probes #46–#50 confirm the socket carries all of it except
 named-session creation, which shells out. Depends on Phase 4's node model for the `node` field.
 
-- [ ] P4.5.1 `manage` op dispatch on the node, with `hello.caps.manage` and per-op `not_writer` gating
-- [ ] P4.5.2 Structure: `workspace.create` / `tab.create` / `pane.split` / `pane.zoom` / rename / close / focus
-- [ ] P4.5.3 `env` and `cwd` on create — "new session in this worktree with these variables" is one call
-- [ ] P4.5.4 `agent.start`, with kinds from `server.agent_manifests` at runtime, **never a hardcoded client list**
-- [ ] P4.5.5 Worktrees: list / create / open / remove — Herdr's git support maps straight through
-- [ ] P4.5.6 Layouts: `layout.export` → store → `layout.apply`; named layouts a user can re-apply
-- [ ] P4.5.7 Named sessions: enumerate via `herdr session list --json`, create via a headless `herdr server --session`, stop and delete. The one management path that shells out
+- [x] P4.5.1 `manage` op dispatch on the node, with `hello.caps.manage` and per-op `not_writer` gating
+- [x] P4.5.2 Structure: `workspace.create` / `tab.create` / `pane.split` / `pane.zoom` / rename / close / focus
+- [x] P4.5.3 `env` and `cwd` on create — "new session in this worktree with these variables" is one call
+- [x] P4.5.4 `agent.start`, with kinds from `server.agent_manifests` at runtime, **never a hardcoded client list**
+- [~] P4.5.5 Worktrees: list / create / open / remove — Herdr's git support maps straight through
+- [~] P4.5.6 Layouts: `layout.export` → store → `layout.apply`; named layouts a user can re-apply
+- [x] P4.5.7 Named sessions: enumerate via `herdr session list --json`, create via a headless `herdr server --session`, stop and delete. The one management path that shells out
 - [ ] P4.5.8 **Kampr split view** — a client-side mosaic of 2–4 panes that may come from different sessions on different nodes. The TUI cannot do this; it is the clearest place Kampr beats it
 - [ ] P4.5.9 Split view on mobile: one pane at a time with a fast switcher, not a squeezed mosaic
-- [ ] P4.5.10 Structural actions state their effect before acting — a split reshapes the pane for everyone
-- [ ] P4.5.11 Clients never optimistically mutate the herd model; they wait for the `herd.patch`
+- [x] P4.5.10 Structural actions state their effect before acting — a split reshapes the pane for everyone
+- [x] P4.5.11 Clients never optimistically mutate the herd model; they wait for the `herd.patch`
 - [ ] P4.5.12 `notification.show` — raise a desktop toast from the phone
 
 **Gate:** create a workspace, split it, start a Claude agent in the new pane, and watch two panes from
-two different nodes side by side — all from a phone.
+two different nodes side by side — all from a phone. **The management half is met**
+(`crates/kampr-node/tests/live.rs::every_client_op_lands_on_a_real_herd` drives every op the client
+can build against a real herd, and `client/shared`'s `LiveNodeTest` drives the same ops through the
+real client and waits for the `herd.patch`). P4.5.5 and P4.5.6 have the ops and the wire but no
+list/remove and no stored named layouts; P4.5.8/P4.5.9 — the client-side mosaic — are still the
+missing half of the gate.
 
 ---
 
