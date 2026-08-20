@@ -1,0 +1,7 @@
+{
+  "projectSlug": "kampr",
+  "projectName": "Kampr",
+  "packageName": "dev.kampr.app",
+  "channel": "stable",
+  "server": "https://kobup.oldug.com"
+}

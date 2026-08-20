@@ -13,3 +13,9 @@ __pycache__/
 # Staged client bundle, baked in by rust-embed
 /crates/kampr-node/dist/*
 !/crates/kampr-node/dist/.gitkeep
+
+# Android release signing — never commit keystores, tokens or passwords
+*.keystore
+*.jks
+.env
+local.properties
