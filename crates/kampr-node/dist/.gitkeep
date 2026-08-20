@@ -1,0 +1,3 @@
+The Compose Multiplatform wasm bundle is copied here before `cargo build` and baked into the
+binary by rust-embed. An empty directory is a valid state: the node serves a placeholder page and
+everything except the UI still works.

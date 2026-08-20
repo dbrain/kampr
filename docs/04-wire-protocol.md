@@ -25,10 +25,23 @@ where `pane_id` is Herdr's own (`w3:p2`). Clients treat it as opaque.
 ## Server → client
 
 ### `hello` — first message on every connection
+
+**Clients decide what to show from `security`, never by guessing from the URL.** A passkey button
+that cannot work must be absent, not present-and-failing — and `unlocks` is the copy for what a
+hostname would buy (findings §3.7).
 ```jsonc
 { "t": "hello", "protocol": 1, "node_id": "01J...", "node_name": "comingclean",
   "build": "0.1.0+abc1234", "role": "full",          // "full" | "readonly"
-  "caps": { "push": true, "scrollback": true, "conversation": true } }
+  "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true },
+  "security": {
+    "tier": 0,                       // 0 = ip:port, 1 = hostname+cert, 2 = public, 3 = tailscale
+    "encrypted": false,              // is this a secure context?
+    "unencrypted_banner": true,      // show the persistent Tier-0 warning
+    "passkeys": false,               // WebAuthn possible here? an IP is never a registrable domain
+    "push": false,                   // needs a secure context
+    "installable": false,            // PWA install / Add to Home Screen
+    "unlocks": ["passkeys", "push", "installable"]   // what a hostname would buy
+  } }
 ```
 
 ### `herd` — the whole model; sent after `hello` and on any reconnect
@@ -100,6 +113,15 @@ Only sent for panes with `scrollback_rows > 0`. Sourced from `pane.read recent f
 through the same emulator, so styling matches the live grid. Agent panes never have this — their
 history is the conversation.
 
+**Scrollback is delivered as one document then tails.** The first `scrollback` after a `watch` carries
+what the node holds; as the ring grows under a live watcher, further `scrollback` messages carry only
+rows above what was already sent, keyed on absolute row index. A client appends by index and never
+assumes a message is the whole ring.
+
+**A backpressure purge must never drop a `scrollback` or `styles` message.** History is append-only
+and nothing repairs a hole in it, and a purged style entry orphans runs that survive. Only
+`grid.reset` and `grid.patch` are purgeable — the reset that follows a purge restores them both.
+
 **There is no `scrollback.load`, deliberately.** Herdr caps a scrollback read at **1000 lines** and
 `pane.read` has no offset parameter (probe #51), so a client cannot page further back and neither can
 the node — asking again just returns the same newest 1000. What the node *can* do is accumulate: while
@@ -143,16 +165,22 @@ it, so tables stay tables.
   "options": [ { "key": "1", "label": "Yes" }, { "key": "2", "label": "Yes, and don't ask again" } ],
   "source": "transcript" }              // "transcript" | "screen"
 ```
-`source` records where the question came from. If a pending tool request turns out not to reach the
-transcript before approval (probe #40, still open), the node falls back to parsing `pane.read visible`
-and sets `"screen"`. **Clients must not care which.**
+`source` records where the question came from. Claude does **not** write a pending tool request to its
+transcript before approval, so its questions come from the screen; Codex does, so an unmatched tool
+call is its signal (probes #42, #43). **Clients must not care which.**
+
+**A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
+"resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
 
 ### `error`
 ```jsonc
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
 ```
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `rate_limited` ·
-`bad_request`.
+`bad_request` · `unsupported` (the node does not implement that op) · `not_found`.
+
+`code` is an open string, not a closed enum: a client must handle an unrecognised code by showing
+`message` rather than failing.
 
 ## Client → server
 
@@ -174,7 +202,14 @@ Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` �
 { "t": "input", "pane": "01J.../w3:p2", "keys": ["ctrl+c"] }
 
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
+// The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,
+// Codex needs Enter (probe #43). A client sends only the key it was offered in `pending.options`.
 { "t": "convo.load",  "pane": "01J.../w3:p2", "before": "opaque" }
+// Per-pane, per-device preferences — zoom level, view choice, render mode. The node stores them
+// against the device, so they follow you between browsers on the same enrolled device.
+{ "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
+//   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "zoom": 1.6, "view": "terminal" } } }
+
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
 ```
@@ -226,6 +261,7 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 // Structure. `at` is a pane, tab or workspace id depending on the verb.
 { "t": "manage", "op": "workspace.create", "node": "01J...", "label": "kampr", "cwd": "~/dev/kampr", "env": {} }
 { "t": "manage", "op": "tab.create",       "at": "01J.../w3",    "label": "tests", "cwd": "~/dev/kampr" }
+// `at` for tab.create is a WORKSPACE id. Nodes accept a tab id too and derive its workspace.
 { "t": "manage", "op": "pane.split",       "at": "01J.../w3:p2", "direction": "right", "ratio": 0.5, "cwd": null }
 { "t": "manage", "op": "pane.zoom",        "at": "01J.../w3:p2", "mode": "toggle" }
 { "t": "manage", "op": "rename",           "at": "01J.../w3:p2", "label": "build" }   // null clears, panes only
@@ -242,6 +278,7 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 // Layouts. `layout` is Herdr's own nestable split tree, opaque to the client.
 { "t": "manage", "op": "layout.export", "at": "01J.../w3:t1" }
 { "t": "manage", "op": "layout.apply",  "at": "01J.../w3:t1", "layout": { } }
+// `layout` is either Herdr's `layout.export` reply verbatim or just its `root` node; both accepted.
 
 // Named sessions are separate Herdr servers, so this one shells out on the node rather than
 // calling a socket method. Same shape to the client; only the node knows the difference.
@@ -254,6 +291,10 @@ and the resulting structure change arrives as an ordinary `herd.patch`. Clients 
 optimistically mutate their herd model — wait for the patch, so the node stays authoritative.
 
 `readonly` devices are refused every `manage` op with `not_writer`.
+
+**Content-Security-Policy.** The node serves a strict CSP with **no external origins** — everything a
+client needs must be bundled. It includes `'wasm-unsafe-eval'` (required by Skiko/wasm, and strictly
+weaker than `'unsafe-eval'`) and `worker-src 'self' blob:`.
 
 ### Capability discovery
 
@@ -277,7 +318,9 @@ watching several panes at once.
 
 ## Auth
 
-The WebSocket carries a device token in `Sec-WebSocket-Protocol` or a `kampr_session` cookie; the
-node resolves it to a device and a role before `hello`. `readonly` devices get every server → client
+The WebSocket carries a device token as a `Sec-WebSocket-Protocol` subprotocol of the exact form
+**`kampr.token.<token>`**, echoed back verbatim by the server, or as a `kampr_session` cookie. The
+node resolves it to a device and a role before `hello`. A client that sends any other subprotocol
+spelling fails the handshake. `readonly` devices get every server → client
 message and are refused `input` / `answer` with `not_writer`. HTTP endpoints for enrolment
 (`/auth/pair`, `/auth/webauthn/*`) are specified alongside the auth work, not here.

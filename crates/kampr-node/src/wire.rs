@@ -1,0 +1,206 @@
+use crate::outbox::{Frame, Outbox};
+use kampr_core::registry::PaneUpdate;
+use kampr_core::scrollback::ScrollbackDoc;
+use kampr_core::wire::{Encoder, ServerMsg};
+use serde_json::Value;
+use std::sync::{Arc, Mutex};
+
+/// One connection's view of the protocol: its own style table, its own queue.
+///
+/// The style table is per connection because ids are only promised to be stable for the life of
+/// a connection — sharing one across sockets would mean either replaying the whole table to every
+/// joiner or handing out ids a client was never told about.
+pub struct Wire {
+    outbox: Arc<Outbox>,
+    encoder: Mutex<Encoder>,
+}
+
+impl Wire {
+    pub fn new(outbox: Arc<Outbox>) -> Self {
+        Self {
+            outbox,
+            encoder: Mutex::new(Encoder::new()),
+        }
+    }
+
+    pub fn outbox(&self) -> &Arc<Outbox> {
+        &self.outbox
+    }
+
+    pub fn send(&self, msg: &ServerMsg) -> bool {
+        match serde_json::to_string(msg) {
+            Ok(json) => self.outbox.push(Frame::plain(json)),
+            Err(e) => {
+                tracing::error!(error = %e, "a server message would not serialise");
+                true
+            }
+        }
+    }
+
+    pub fn send_json(&self, value: &Value) -> bool {
+        self.outbox.push(Frame::plain(value.to_string()))
+    }
+
+    /// Encodes and enqueues under one lock, so the `styles` message that introduces a pen always
+    /// precedes the runs that reference it — on this connection and in this order.
+    pub fn send_update(&self, pane: &str, update: &PaneUpdate) -> bool {
+        let mut encoder = self.encoder.lock().unwrap();
+        self.emit(pane, encoder.encode(pane, update))
+    }
+
+    pub fn send_scrollback(&self, pane: &str, doc: &ScrollbackDoc) -> bool {
+        let mut encoder = self.encoder.lock().unwrap();
+        self.emit(pane, encoder.encode_scrollback(pane, doc))
+    }
+
+    /// Only `grid.reset` and `grid.patch` are marked as the pane's, because those are the only
+    /// frames a purge may drop: a reset makes every patch it replaced irrelevant.
+    ///
+    /// `styles` is excluded so a purge cannot drop the table entry a surviving run depends on,
+    /// and `scrollback` because history is append-only and the pump's cursor only moves forward —
+    /// a dropped one is a hole in the client's ring that the following reset does not repair,
+    /// since a reset carries the viewport and nothing above it.
+    fn emit(&self, pane: &str, messages: Vec<ServerMsg>) -> bool {
+        for message in messages {
+            let Ok(json) = serde_json::to_string(&message) else {
+                continue;
+            };
+            let frame = match message {
+                ServerMsg::GridReset { .. } | ServerMsg::GridPatch { .. } => Frame::grid(pane, json),
+                _ => Frame::plain(json),
+            };
+            if !self.outbox.push(frame) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `code` is a string rather than an enum because the protocol's `manage` section adds
+    /// `unsupported`, which the v1 error-code list does not carry.
+    pub fn error(&self, code: &str, message: &str, pane: Option<&str>) -> bool {
+        self.send_json(&serde_json::json!({
+            "t": "error", "code": code, "message": message, "pane": pane
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kampr_core::scrollback::ScrollbackDoc;
+    use kampr_core::wire::Cursor;
+    use kampr_term::{Cell, RowDiff};
+
+    fn reset() -> PaneUpdate {
+        PaneUpdate::Reset {
+            cols: 3,
+            rows: 1,
+            rows_data: Arc::new(vec![RowDiff {
+                row: 0,
+                cells: vec![Cell {
+                    ch: 'h',
+                    ..Cell::default()
+                }],
+            }]),
+            cursor: Cursor {
+                col: 1,
+                row: 0,
+                visible: true,
+            },
+            links: Arc::new(vec![]),
+        }
+    }
+
+    fn drain(outbox: &Outbox) -> Vec<Value> {
+        let mut out = Vec::new();
+        while let Ok(frame) = futures_util::FutureExt::now_or_never(outbox.next())
+            .flatten()
+            .ok_or(())
+        {
+            out.push(serde_json::from_str(&frame.json).unwrap());
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_grid_reset_is_purgeable_and_a_styles_message_is_not() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        wire.send_update("n/w1:p1", &reset());
+        assert_eq!(
+            outbox.purge_pane("n/w1:p1"),
+            1,
+            "only the grid frame is droppable"
+        );
+        assert_eq!(
+            outbox.depth(),
+            0,
+            "no styles frame was emitted for the default pen"
+        );
+    }
+
+    #[tokio::test]
+    async fn styles_precede_the_runs_that_use_them() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        let mut coloured = reset();
+        if let PaneUpdate::Reset { rows_data, .. } = &mut coloured {
+            *rows_data = Arc::new(vec![RowDiff {
+                row: 0,
+                cells: vec![Cell {
+                    ch: 'x',
+                    fg: kampr_term::Color::Indexed(9),
+                    ..Cell::default()
+                }],
+            }]);
+        }
+        wire.send_update("n/w1:p1", &coloured);
+        let frames = drain(&outbox);
+        assert_eq!(frames[0]["t"], "styles");
+        assert_eq!(frames[1]["t"], "grid.reset");
+        assert_eq!(frames[1]["rows_data"][0]["runs"][0]["s"], frames[0]["from"]);
+    }
+
+    /// History is append-only and the pump's cursor only moves forward, so a dropped
+    /// `scrollback` is a hole nothing repairs — the `grid.reset` that replaces a purged patch
+    /// queue carries the viewport and nothing above it.
+    #[tokio::test]
+    async fn a_purge_drops_patches_but_never_history() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        wire.send_scrollback(
+            "n/w1:p1",
+            &ScrollbackDoc {
+                from_top: 0,
+                rows: vec![RowDiff {
+                    row: 0,
+                    cells: vec![Cell {
+                        ch: 'h',
+                        ..Cell::default()
+                    }],
+                }],
+                total_rows: 1,
+                complete: true,
+                capped: false,
+            },
+        );
+        wire.send_update("n/w1:p1", &reset());
+
+        assert_eq!(outbox.purge_pane("n/w1:p1"), 1, "the grid frame goes");
+        let survivors = drain(&outbox);
+        assert_eq!(survivors.len(), 1);
+        assert_eq!(survivors[0]["t"], "scrollback", "history survives a purge");
+    }
+
+    #[tokio::test]
+    async fn an_error_can_carry_a_code_the_v1_enum_does_not_have() {
+        let outbox = Arc::new(Outbox::new(4));
+        let wire = Wire::new(outbox.clone());
+        wire.error("unsupported", "this node does not do that", None);
+        let frames = drain(&outbox);
+        assert_eq!(frames[0]["t"], "error");
+        assert_eq!(frames[0]["code"], "unsupported");
+        assert!(frames[0]["pane"].is_null());
+    }
+}

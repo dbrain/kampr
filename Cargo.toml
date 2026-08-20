@@ -11,11 +11,40 @@ repository = "https://github.com/dbrain/kampr"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 base64 = "0.22"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+ed25519-dalek = { version = "3.0.0", default-features = false }
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+hex = "0.4.3"
+mime_guess = "2.0.5"
+qrcode = { version = "0.14.1", default-features = false }
+rust-embed = "8.12.0"
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 thiserror = "2"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time"] }
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time", "signal", "fs"] }
 tokio-stream = "0.1"
+toml = "1.1.4"
+tower = "0.5.3"
+tower-http = { version = "0.7.0", features = ["set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid = "3.0.0"
+url = "2.5.8"
+webauthn-rs = "0.5.5"
+
+# dev
+# `ring` rather than the default aws-lc, so the tree carries one crypto backend and it is
+# the one rustls is configured with.
+rcgen = { version = "0.14.9", default-features = false, features = ["ring", "pem"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3.27.0"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+tokio-tungstenite = "0.30.0"
