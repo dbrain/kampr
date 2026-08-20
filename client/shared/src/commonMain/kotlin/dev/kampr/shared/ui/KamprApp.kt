@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -22,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
@@ -188,102 +188,111 @@ private fun AppScaffold(
         state.connection.send(ClientMsg.Answer(paneId, key))
     }
 
+    // A sheet is modal, and a screen reader has no idea unless the screen behind it stops being
+    // readable. Clearing the subtree is what a focus trap buys, without turning a sheet that is
+    // deliberately part of the same window into a platform dialog.
+    val modal = state.sheet != null
+    fun Modifier.behindSheet(): Modifier = if (modal) clearAndSetSemantics { } else this
+
     Box(Modifier.fillMaxSize().background(tokens.color.bg)) {
         // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
         // and this screen is about four.
         if (state.screen is Screen.Mosaic) {
-            mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize())
+            mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
             failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+            ManageLayer(state, herd, breakpoint)
             return@Box
         }
-        when (breakpoint) {
-            Breakpoint.Desktop -> Column(Modifier.fillMaxSize()) {
-                Row(Modifier.weight(1f)) {
-                    HerdSidebar(
-                        herd = herd,
-                        now = now,
-                        localRtt = localRtt,
-                        triage = triage,
-                        activePaneId = (state.screen as? Screen.Pane)?.paneId,
-                        deviceName = devices.firstOrNull { it.current }?.name ?: "this device",
-                        deviceDetail = hello?.let { "${it.role} access · ${it.build}" } ?: "not connected",
-                        onOpenPane = { state.openPane(it, PaneView.Split) },
-                        onSettings = { state.go(Screen.Appearance) },
+        Box(Modifier.fillMaxSize().behindSheet()) {
+            when (breakpoint) {
+                Breakpoint.Desktop -> Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.weight(1f)) {
+                        HerdSidebar(
+                            herd = herd,
+                            now = now,
+                            localRtt = localRtt,
+                            triage = triage,
+                            activePaneId = (state.screen as? Screen.Pane)?.paneId,
+                            deviceName = devices.firstOrNull { it.current }?.name ?: "this device",
+                            deviceDetail = hello?.let { "${it.role} access · ${it.build}" } ?: "not connected",
+                            onOpenPane = { state.openPane(it, PaneView.Split) },
+                            onSettings = { state.go(Screen.Appearance) },
+                        )
+                        Box(Modifier.weight(1f).fillMaxSize()) {
+                            when (val screen = state.screen) {
+                                is Screen.Pane -> PaneScreenDesktop(
+                                    pane = state.store.pane(screen.paneId),
+                                    info = state.store.paneInfo(screen.paneId),
+                                    view = screen.view,
+                                    surfaces = surfaces,
+                                    readOnly = readOnly,
+                                    onView = state::setPaneView,
+                                    onAnswer = { answer(screen.paneId, it) },
+                                )
+                                Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
+                                Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
+                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
+                                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
+                                Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
+                            }
+                        }
+                    }
+                    StatusStrip(state, connectionStatus, localRtt, hello?.build)
+                }
+
+                Breakpoint.Landscape -> when (val screen = state.screen) {
+                    is Screen.Pane -> PaneScreenMobile(
+                        pane = state.store.pane(screen.paneId),
+                        info = state.store.paneInfo(screen.paneId),
+                        view = screen.view,
+                        surfaces = surfaces,
+                        landscape = true,
+                        readOnly = readOnly,
+                        onBack = state::back,
+                        onView = state::setPaneView,
+                        onAnswer = { answer(screen.paneId, it) },
                     )
-                    Box(Modifier.weight(1f).fillMaxSize()) {
+                    Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
+                    Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
+                    Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
+                    Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
+                    Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
+                }
+
+                Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
                         when (val screen = state.screen) {
-                            is Screen.Pane -> PaneScreenDesktop(
+                            is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
                                 info = state.store.paneInfo(screen.paneId),
                                 view = screen.view,
                                 surfaces = surfaces,
+                                landscape = false,
                                 readOnly = readOnly,
+                                onBack = state::back,
                                 onView = state::setPaneView,
                                 onAnswer = { answer(screen.paneId, it) },
                             )
                             Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                            Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
-                            Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
+                            Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
+                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                            Screen.Herd, Screen.Mosaic -> HerdPortrait(
+                                herd, now, localRtt, triage,
+                                state::openPane,
+                                if (readOnly) null else { paneId: String -> answer(paneId, "1") },
+                            )
                         }
                     }
+                    BottomNav(
+                        when (state.screen) {
+                            is Screen.Pane -> Tab.Pane
+                            Screen.Herd, Screen.Mosaic -> Tab.Herd
+                            else -> Tab.Nodes
+                        },
+                        state::selectTab,
+                    )
                 }
-                StatusStrip(state, connectionStatus, localRtt, hello?.build)
-            }
-
-            Breakpoint.Landscape -> when (val screen = state.screen) {
-                is Screen.Pane -> PaneScreenMobile(
-                    pane = state.store.pane(screen.paneId),
-                    info = state.store.paneInfo(screen.paneId),
-                    view = screen.view,
-                    surfaces = surfaces,
-                    landscape = true,
-                    readOnly = readOnly,
-                    onBack = state::back,
-                    onView = state::setPaneView,
-                    onAnswer = { answer(screen.paneId, it) },
-                )
-                Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
-                Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
-            }
-
-            Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f)) {
-                    when (val screen = state.screen) {
-                        is Screen.Pane -> PaneScreenMobile(
-                            pane = state.store.pane(screen.paneId),
-                            info = state.store.paneInfo(screen.paneId),
-                            view = screen.view,
-                            surfaces = surfaces,
-                            landscape = false,
-                            readOnly = readOnly,
-                            onBack = state::back,
-                            onView = state::setPaneView,
-                            onAnswer = { answer(screen.paneId, it) },
-                        )
-                        Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                        Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                        Screen.Herd, Screen.Mosaic -> HerdPortrait(
-                            herd, now, localRtt, triage,
-                            state::openPane,
-                            if (readOnly) null else { paneId: String -> answer(paneId, "1") },
-                        )
-                    }
-                }
-                BottomNav(
-                    when (state.screen) {
-                        is Screen.Pane -> Tab.Pane
-                        Screen.Herd, Screen.Mosaic -> Tab.Herd
-                        else -> Tab.Nodes
-                    },
-                    state::selectTab,
-                )
             }
         }
 
@@ -296,13 +305,17 @@ private fun AppScaffold(
 @Composable
 private fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () -> Unit) {
     val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    val spoken = "${message.ifBlank { code }} ($code). Activate to dismiss."
     Row(
         Modifier
             .align(Alignment.TopCenter)
             .padding(12.dp)
-            .background(tokens.color.blockedBg, RoundedCornerShape(tokens.radii.md))
-            .edge(BorderSpec(1.dp, tokens.color.blocked), RoundedCornerShape(tokens.radii.md))
-            .clickable(onClick = onDismiss)
+            .background(tokens.color.blockedBg, shape)
+            .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
+            .announce(spoken, urgent = true)
+            .touchable()
+            .action(spoken, onDismiss, shape)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
@@ -316,7 +329,7 @@ private fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () -> 
 @Composable
 private fun EmptyDetail(connectionStatus: ConnectionStatus) {
     val tokens = Kampr.tokens
-    Box(Modifier.fillMaxSize().background(tokens.color.surface2), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize().background(tokens.color.surface2).readingOrder(1f), contentAlignment = Alignment.Center) {
         KText(
             when (connectionStatus) {
                 is ConnectionStatus.Live -> "Pick a pane"
@@ -351,23 +364,36 @@ private fun StatusStrip(
     ) {
         val live = connectionStatus is ConnectionStatus.Live
         Row(
+            Modifier.announce(
+                if (live) "Connected to hub ${hub?.name ?: "unknown"}"
+                else "Not connected to hub ${hub?.name ?: "unknown"}",
+            ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(7.dp),
         ) {
-            Dot(if (live) tokens.color.done else tokens.color.working, 6.dp)
+            Mark(
+                if (live) tokens.color.done else tokens.color.working,
+                if (live) MarkShape.Bar else MarkShape.Ring,
+                6.dp,
+            )
             KText("hub · ${hub?.name ?: "—"}", tokens.type.meta, if (live) tokens.color.done else tokens.color.working)
         }
         for (node in herd.nodes.filter { it.kind != "local" }) {
             KText("${node.name} ${formatLatency(node.rttMs)}", tokens.type.meta, tokens.color.mute)
         }
         Box(Modifier.weight(1f))
+        val offline = connectionStatus as? ConnectionStatus.Offline
         KText(
-            when (connectionStatus) {
-                is ConnectionStatus.Offline -> "reconnecting in ${connectionStatus.retryInMs / 1000}s — showing cached grid"
-                else -> "no lease held — desktop shape untouched"
+            when (offline) {
+                null -> "no lease held — desktop shape untouched"
+                else -> "reconnecting in ${offline.retryInMs / 1000}s — showing cached grid"
             },
             tokens.type.meta,
             tokens.color.mute,
+            if (offline == null) Modifier
+            else Modifier.announce(
+                "Offline — reconnecting in ${offline.retryInMs / 1000} seconds, showing a cached grid",
+            ),
         )
         KText("local ${formatLatency(localRtt)}", tokens.type.meta, tokens.color.mute)
         KText("kampr ${build ?: "0.1.0"}", tokens.type.meta, tokens.color.mute)

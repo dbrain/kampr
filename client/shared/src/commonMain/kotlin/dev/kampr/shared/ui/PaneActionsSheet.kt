@@ -80,9 +80,15 @@ fun PaneActionsSheet(
                         zoomable = false,
                         onManage = ::send,
                     ) {
-                        Chip("snapshot shape", false, { send(ManageOp.LayoutExport(tabId)) })
+                        Chip(
+                            "snapshot shape", false, { send(ManageOp.LayoutExport(tabId)) },
+                            label = "Snapshot the split shape of this tab",
+                        )
                         snapshot?.let { tree ->
-                            Chip("put it back", false, { send(ManageOp.LayoutApply(tabId, tree)) })
+                            Chip(
+                                "put it back", false, { send(ManageOp.LayoutApply(tabId, tree)) },
+                                label = "Restore the snapshotted split shape",
+                            )
                         }
                     }
                 }
@@ -102,7 +108,9 @@ fun PaneActionsSheet(
                         maxLines = 2,
                     )
                 }
-                refusal?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, maxLines = 3) }
+                refusal?.let {
+                    KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3)
+                }
             }
             Box(Modifier.height(18.dp))
         }
@@ -129,7 +137,7 @@ private fun Target(
             Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.named("$kind: $name"), verticalAlignment = Alignment.CenterVertically) {
                 LabelText(kind, tokens.type.micro, tokens.color.mute, Modifier.weight(1f))
                 KText(name, tokens.type.meta, tokens.color.dim)
             }
@@ -137,10 +145,18 @@ private fun Target(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Chip("focus", false, { onManage(ManageOp.Focus(at)) })
-                if (zoomable) Chip("zoom", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) })
-                Chip("rename", renaming, { renaming = !renaming })
-                Chip("close", confirming, { confirming = !confirming }, quiet = !confirming)
+                Chip("focus", false, { onManage(ManageOp.Focus(at)) }, label = "Focus this $kind at the desk")
+                if (zoomable) {
+                    Chip(
+                        "zoom", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
+                        label = "Toggle zoom on this $kind at the desk",
+                    )
+                }
+                Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind", )
+                Chip(
+                    "close", confirming, { confirming = !confirming }, quiet = !confirming,
+                    label = "Close this $kind",
+                )
                 extra?.invoke()
             }
             if (renaming) {
@@ -149,7 +165,7 @@ private fun Target(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    KField("label", label, Modifier.weight(1f)) { label = it }
+                    KField("label", label, Modifier.weight(1f), label = "New name for this $kind") { label = it }
                     Chip(
                         "save",
                         false,
@@ -160,6 +176,7 @@ private fun Target(
                                 renaming = false
                             }
                         },
+                        label = "Save the new name",
                     )
                 }
                 if (clearable) {
@@ -181,11 +198,19 @@ private fun Target(
                         if (kind == "tab") "Closes every pane in it." else "Close $name?",
                         tokens.type.captionSmall,
                         tokens.color.blocked,
-                        Modifier.weight(1f),
+                        Modifier.weight(1f).announce(
+                            if (kind == "tab") "Closing this tab closes every pane in it. Confirm or cancel."
+                            else "Close $name? Confirm or cancel.",
+                            urgent = true,
+                        ),
                         maxLines = 2,
                     )
-                    Chip("cancel", false, { confirming = false }, quiet = true)
-                    Chip("close", true, { confirming = false; onManage(ManageOp.Close(at)) })
+                    Chip("cancel", false, { confirming = false }, quiet = true, label = "Do not close it")
+                    Chip(
+                        "close", true, { confirming = false; onManage(ManageOp.Close(at)) },
+                        label = if (kind == "tab") "Confirm — close the tab and every pane in it"
+                        else "Confirm — close $name",
+                    )
                 }
             }
         }

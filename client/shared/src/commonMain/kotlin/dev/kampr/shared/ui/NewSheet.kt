@@ -226,10 +226,15 @@ fun NewSheet(
                     "A split changes the Herdr layout, so the desk and every other viewer get the new shape too.",
                     tokens.type.captionSmall,
                     tokens.color.working,
+                    Modifier.announce(
+                        "A split changes the Herdr layout, so the desk and every other viewer get the new shape too.",
+                    ),
                     maxLines = 3,
                 )
             }
-            refusal?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, maxLines = 3) }
+            refusal?.let {
+                KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3)
+            }
             PrimaryAction(
                 text = if (inFlight != null) "Waiting for the node" else action.first,
                 onClick = { action.second?.invoke() },
@@ -334,8 +339,14 @@ private fun Structure(
             selected = pick == Pick.Split,
             trailing = if (pane == null) ({}) else ({
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Chip("right", direction == SplitDirection.Right, { onDirection(SplitDirection.Right) }, quiet = true)
-                    Chip("down", direction == SplitDirection.Down, { onDirection(SplitDirection.Down) }, quiet = true)
+                    Chip(
+                        "right", direction == SplitDirection.Right, { onDirection(SplitDirection.Right) },
+                        quiet = true, label = "Split to the right",
+                    )
+                    Chip(
+                        "down", direction == SplitDirection.Down, { onDirection(SplitDirection.Down) },
+                        quiet = true, label = "Split downwards",
+                    )
                 }
             }),
         )
@@ -346,7 +357,7 @@ private fun Structure(
             ) {
                 LabelText("ratio", tokens.type.micro, tokens.color.mute, Modifier.padding(top = 8.dp))
                 RATIOS.forEach { (text, value) ->
-                    Chip(text, ratio == value, { onRatio(value) }, quiet = true)
+                    Chip(text, ratio == value, { onRatio(value) }, quiet = true, label = "Split ratio $text")
                 }
             }
         }
@@ -386,9 +397,13 @@ private fun Elsewhere(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        shown.forEach { k -> Chip(k, k == kind && pick == Pick.Agent, { onKind(k) }) }
+                        shown.forEach { k ->
+                            Chip(k, k == kind && pick == Pick.Agent, { onKind(k) }, label = "Start a $k agent")
+                        }
                         val rest = kinds.size - shown.size
-                        if (rest > 0) Chip("+$rest more", false, onMoreKinds, quiet = true)
+                        if (rest > 0) {
+                            Chip("+$rest more", false, onMoreKinds, quiet = true, label = "Show $rest more agent kinds")
+                        }
                     }
                 }
                 if (pane != null && pick == Pick.Agent) {
@@ -454,10 +469,21 @@ private fun SessionList(sessions: List<SessionInfo>, onStop: (String) -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Dot(if (session.running) tokens.color.done else tokens.color.idle, 6.dp)
-                KText(session.name, tokens.type.meta, tokens.color.text, Modifier.weight(1f))
+                Mark(
+                    if (session.running) tokens.color.done else tokens.color.idle,
+                    if (session.running) MarkShape.Bar else MarkShape.Ring,
+                    6.dp,
+                )
+                KText(
+                    session.name,
+                    tokens.type.meta,
+                    tokens.color.text,
+                    Modifier.weight(1f).named(
+                        "${session.name}, ${if (session.running) "running" else "stopped"}",
+                    ),
+                )
                 if (session.running) {
-                    Chip("stop", false, { onStop(session.name) }, quiet = true)
+                    Chip("stop", false, { onStop(session.name) }, quiet = true, label = "Stop the ${session.name} session")
                 }
             }
         }

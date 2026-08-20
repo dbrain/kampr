@@ -2,7 +2,6 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -100,8 +99,16 @@ fun SetupScreen(
                 Modifier.widthIn(max = 520.dp).padding(start = 22.dp, top = 22.dp, end = 22.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Dot(if (running) tokens.color.done else tokens.color.blocked, 9.dp)
+                Row(
+                    Modifier.announce(if (running) "This node is running" else "This node is not reachable"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    Mark(
+                        if (running) tokens.color.done else tokens.color.blocked,
+                        if (running) MarkShape.Bar else MarkShape.Square,
+                        9.dp,
+                    )
                     LabelText(
                         if (running) "Running" else "Not reachable",
                         tokens.type.caption.copy(fontWeight = tokens.label.weight, letterSpacing = tokens.label.tracking),
@@ -112,6 +119,7 @@ fun SetupScreen(
                     if (running) "You're already in." else "Point Kampr at a node.",
                     tokens.type.screenTitle,
                     tokens.color.text,
+                    Modifier.asHeading(),
                     maxLines = 2,
                 )
                 KText(
@@ -159,6 +167,10 @@ fun SetupScreen(
                                     .fillMaxWidth()
                                     .background(tokens.color.blockedBg, shape)
                                     .border(1.dp, tokens.color.blocked, shape)
+                                    .announce(
+                                        "Warning: plain HTTP on your LAN. Fine to try; add a " +
+                                            "certificate before you leave it running.",
+                                    )
                                     .padding(horizontal = 11.dp, vertical = 9.dp),
                                 horizontalArrangement = Arrangement.spacedBy(9.dp),
                             ) {
@@ -190,7 +202,7 @@ fun SetupScreen(
                 LabelText("This device", tokens.type.captionSmall, tokens.color.mute)
             }
             Box(Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp, vertical = 0.dp)) {
-                Surface(Modifier.fillMaxWidth().clickable(onClick = onDevices)) {
+                Surface(Modifier.fillMaxWidth().touchable().action("Devices paired with this node", onDevices)) {
                     Row(
                         Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -213,7 +225,7 @@ fun SetupScreen(
             // needs a secure context and `hello.security` is what says whether this origin is one.
             if (security.push) {
                 Box(Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp, vertical = 9.dp)) {
-                    Surface(Modifier.fillMaxWidth().clickable(onClick = onNotifications)) {
+                    Surface(Modifier.fillMaxWidth().touchable().action("Notifications on this device", onNotifications)) {
                         Row(
                             Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -283,7 +295,12 @@ private fun PairingMark() {
         listOf(true, true, false, true),
     )
     Column(
-        Modifier.size(44.dp).background(tokens.color.raise, shape).edge(tokens.card, shape).padding(6.dp),
+        Modifier
+            .size(44.dp)
+            .named("Pairing code block")
+            .background(tokens.color.raise, shape)
+            .edge(tokens.card, shape)
+            .padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         for (row in cells) {

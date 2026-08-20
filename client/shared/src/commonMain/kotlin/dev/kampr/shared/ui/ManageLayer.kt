@@ -1,21 +1,12 @@
 package dev.kampr.shared.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.Kampr
 
@@ -54,42 +45,21 @@ class AppManage(private val state: AppState) : ManageIo {
 fun NewAction(paneId: String? = null, target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val manage = LocalManage.current
     if (!manage.enabled) return
-    GlyphButton(KamprIcons.plus, Kampr.tokens.color.accent, target, modifier) { manage.openNew(paneId) }
+    GlyphAction(
+        KamprIcons.plus,
+        if (paneId == null) "New workspace or session" else "New, from this pane",
+        Kampr.tokens.color.accent,
+        target,
+        modifier,
+    ) { manage.openNew(paneId) }
 }
 
 @Composable
 fun PaneManageAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val manage = LocalManage.current
     if (!manage.enabled) return
-    GlyphButton(KamprIcons.ellipsis, Kampr.tokens.color.dim, target, modifier) { manage.openActions(paneId) }
-}
-
-// 44 dp in portrait and 36 in landscape is the touch rule; the painted chip stays small so the
-// header does not grow around it, and the target is the box that catches the tap.
-private val TOUCH = 44.dp
-val LANDSCAPE_TOUCH = 36.dp
-private val CHIP = 28.dp
-
-@Composable
-private fun GlyphButton(
-    icon: Icon,
-    tint: Color,
-    target: Dp,
-    modifier: Modifier,
-    onClick: () -> Unit,
-) {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.sm)
-    Box(modifier.size(target).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .size(CHIP)
-                .background(tokens.color.raise, shape)
-                .edge(tokens.card, shape),
-            contentAlignment = Alignment.Center,
-        ) {
-            IconGlyph(icon, 15.dp, tint)
-        }
+    GlyphAction(KamprIcons.ellipsis, "Pane actions", Kampr.tokens.color.dim, target, modifier) {
+        manage.openActions(paneId)
     }
 }
 

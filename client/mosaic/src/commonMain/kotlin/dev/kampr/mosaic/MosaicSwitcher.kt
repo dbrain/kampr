@@ -1,7 +1,6 @@
 package dev.kampr.mosaic
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +18,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -28,11 +28,14 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.BackAction
 import dev.kampr.shared.ui.Dot
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.TOUCH
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.GlyphAction
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
-import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneSurfaces
@@ -65,7 +68,7 @@ fun MosaicSwitcher(
     val paneId = mosaic.focused
     val chrome: Dp = if (landscape) SWITCHER_LANDSCAPE else SWITCHER_PORTRAIT + SWITCHER_STRIP
 
-    Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
+    Box(modifier.fillMaxSize().clipToBounds().background(tokens.color.surface2)) {
         if (paneId == null) {
             SwitcherEmpty(onAdd)
         } else {
@@ -89,10 +92,7 @@ fun MosaicSwitcher(
                     Modifier.fillMaxWidth().background(tokens.color.bar).edgeBottom().height(SWITCHER_LANDSCAPE),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconGlyph(
-                        KamprIcons.chevronLeft, 17.dp, tokens.color.dim,
-                        Modifier.padding(horizontal = 14.dp).clickable(onClick = onHerd),
-                    )
+                    BackAction("Back to the herd", onHerd, target = LANDSCAPE_TOUCH)
                     Strip(mosaic, herd, Modifier.weight(1f))
                     Trailing(mosaic, herd, onAdd)
                 }
@@ -101,10 +101,7 @@ fun MosaicSwitcher(
                     Modifier.fillMaxWidth().background(tokens.color.bar).height(SWITCHER_PORTRAIT),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconGlyph(
-                        KamprIcons.chevronLeft, 17.dp, tokens.color.dim,
-                        Modifier.padding(horizontal = 14.dp).clickable(onClick = onHerd),
-                    )
+                    BackAction("Back to the herd", onHerd)
                     val info = paneId?.let { id -> herd.panes.firstOrNull { it.id == id } }
                     KText(
                         info?.let(::paneTitle) ?: "Mosaic",
@@ -138,9 +135,12 @@ private fun Trailing(mosaic: MosaicState, herd: Herd, onAdd: () -> Unit) {
     ) {
         node?.rttMs?.let { KText(formatLatency(it), tokens.type.meta, tokens.color.mute) }
         if (paneId != null) {
-            GlyphAction(KamprIcons.cross, tokens.color.mute, 34.dp, chip = 22.dp) { mosaic.remove(paneId) }
+            val title = info?.let(::paneTitle) ?: paneId
+            GlyphAction(KamprIcons.cross, "Remove $title from the mosaic", tokens.color.mute, 34.dp, chip = 22.dp) {
+                mosaic.remove(paneId)
+            }
         }
-        GlyphAction(KamprIcons.plus, tokens.color.accent, 34.dp, chip = 22.dp, onClick = onAdd)
+        GlyphAction(KamprIcons.plus, "Add a pane to the mosaic", tokens.color.accent, 34.dp, chip = 22.dp, onClick = onAdd)
     }
 }
 
@@ -172,7 +172,12 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
                 Modifier
                     .background(if (active) tokens.color.raise else tokens.color.surface, shape)
                     .edge(if (active) selectedEdge() else tokens.card, shape)
-                    .clickable { mosaic.focus(paneId) }
+                    .action(
+                        "Show ${info?.let(::paneTitle) ?: paneId}",
+                        { mosaic.focus(paneId) },
+                        shape,
+                        selected = active,
+                    )
                     .padding(horizontal = 11.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -210,7 +215,7 @@ private fun SwitcherEmpty(onAdd: () -> Unit) {
                 tokens.type.caption,
                 tokens.color.mute,
             )
-            GlyphAction(KamprIcons.plus, tokens.color.accent, 44.dp, onClick = onAdd)
+            GlyphAction(KamprIcons.plus, "Add a pane to the mosaic", tokens.color.accent, TOUCH, onClick = onAdd)
         }
     }
 }

@@ -1,7 +1,6 @@
 package dev.kampr.mosaic
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,7 +28,14 @@ import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.Pill
 import dev.kampr.shared.ui.Segmented
-import dev.kampr.shared.ui.Dot
+import dev.kampr.shared.ui.Mark
+import dev.kampr.shared.ui.MarkShape
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.asHeading
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.util.formatLatency
@@ -93,7 +100,10 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
 @Composable
 private fun MosaicBar(mosaic: MosaicState, herd: Herd, onHerd: () -> Unit, onAdd: () -> Unit) {
     val tokens = Kampr.tokens
-    val sessions = herd.nodes.map { it.session }.toSet().size
+    // Every node in the herd is one herdr server, so sessions is the node count and "nodes" is
+    // the number of machines behind them. Counting distinct session *names* would call two hosts
+    // both running `default` one session.
+    val sessions = herd.nodes.size
     val hosts = herd.nodes.map { it.host }.toSet().size
     Row(
         Modifier
@@ -107,7 +117,11 @@ private fun MosaicBar(mosaic: MosaicState, herd: Herd, onHerd: () -> Unit, onAdd
         KText("Kampr", tokens.type.screenTitle, tokens.color.text)
         Segmented(listOf("Herd", "Mosaic"), 1, { if (it == 0) onHerd() }, Modifier.width(168.dp))
         KText(
-            "${mosaic.panes.size} panes · $hosts nodes · $sessions sessions",
+            listOf(
+                count(mosaic.panes.size, "pane"),
+                count(hosts, "node"),
+                count(sessions, "session"),
+            ).joinToString(" · "),
             tokens.type.caption,
             tokens.color.mute,
         )
@@ -127,8 +141,9 @@ private fun MosaicBar(mosaic: MosaicState, herd: Herd, onHerd: () -> Unit, onAdd
 private fun BarButton(icon: Icon?, text: String, tint: Color, onClick: () -> Unit, enabled: Boolean) {
     val tokens = Kampr.tokens
     val color = if (enabled) tint else tokens.color.mute
+    val shape = RoundedCornerShape(tokens.radii.pill)
     Pill(
-        Modifier.let { if (enabled) it.clickable(onClick = onClick) else it },
+        Modifier.let { if (enabled) it.action(text, onClick, shape) else it },
         horizontal = 13.dp,
         vertical = 7.dp,
     ) {
@@ -145,7 +160,7 @@ private fun EmptyMosaic(onAdd: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-            KText("Nothing in the mosaic yet", tokens.type.paneTitle, tokens.color.dim)
+            KText("Nothing in the mosaic yet", tokens.type.paneTitle, tokens.color.dim, Modifier.asHeading())
             KText(
                 "Up to $MAX_CELLS panes, from any session on any node in the herd.",
                 tokens.type.caption,
@@ -174,15 +189,24 @@ private fun MosaicStatus(
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
+            .readingOrder(1f)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Row(
+            Modifier.announce(
+                if (live) "Connected to hub ${hub?.name ?: "unknown"}"
+                else "Not connected to hub ${hub?.name ?: "unknown"}",
+            ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Dot(if (live) tokens.color.done else tokens.color.working, 6.dp)
+            Mark(
+                if (live) tokens.color.done else tokens.color.working,
+                if (live) MarkShape.Bar else MarkShape.Ring,
+                6.dp,
+            )
             KText(
                 "hub · ${hub?.name ?: "—"}",
                 tokens.type.meta,
@@ -203,6 +227,13 @@ private fun MosaicStatus(
                     skewed -> tokens.color.working
                     else -> tokens.color.mute
                 },
+                Modifier.announce(
+                    when {
+                        !node.online -> "${node.name} is offline"
+                        skewed -> "${node.name} is on build ${node.build}, which differs from this client"
+                        else -> "${node.name}, ${formatLatency(node.rttMs)}"
+                    },
+                ),
             )
         }
         Box(Modifier.weight(1f))
@@ -210,7 +241,10 @@ private fun MosaicStatus(
             "${mosaic.observers} observers · 0 panes reshaped",
             tokens.type.meta,
             tokens.color.mute,
+            Modifier.named("${mosaic.observers} observe streams open, no panes reshaped"),
         )
         KText("kampr ${build ?: "0.1.0"}", tokens.type.meta, tokens.color.mute)
     }
 }
+
+private fun count(n: Int, noun: String): String = if (n == 1) "1 $noun" else "$n ${noun}s"

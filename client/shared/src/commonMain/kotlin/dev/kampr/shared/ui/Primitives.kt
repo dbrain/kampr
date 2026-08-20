@@ -2,11 +2,12 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -111,14 +113,28 @@ fun Pill(
     )
 }
 
+// Four silhouettes, not four colours. A 7 dp square, disc, bar and ring stay apart from each
+// other with the hue removed, which is what a status indicator has to do to mean anything to a
+// third of colour-blind readers.
+enum class MarkShape { Square, Circle, Bar, Ring }
+
+@Composable
+fun Mark(color: Color, shape: MarkShape, size: Dp = 8.dp, modifier: Modifier = Modifier) {
+    val round = RoundedCornerShape(size)
+    val box = modifier.size(size)
+    when (shape) {
+        MarkShape.Square -> Box(box.background(color, RoundedCornerShape(size * 0.16f)))
+        MarkShape.Circle -> Box(box.background(color, round))
+        MarkShape.Ring -> Box(box.border(size * 0.18f, color, round))
+        MarkShape.Bar -> Box(box, contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(size * 0.38f).background(color, round))
+        }
+    }
+}
+
 @Composable
 fun Dot(color: Color, size: Dp = 8.dp, hollow: Boolean = false, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(size)
-    if (hollow) {
-        Box(modifier.size(size).border(1.2.dp, color, shape))
-    } else {
-        Box(modifier.size(size).background(color, shape))
-    }
+    Mark(color, if (hollow) MarkShape.Ring else MarkShape.Circle, size, modifier)
 }
 
 @Composable
@@ -134,6 +150,7 @@ fun PrimaryAction(
     style: TextStyle = Kampr.tokens.type.button,
     vertical: Dp = 15.dp,
     enabled: Boolean = true,
+    label: String? = null,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
@@ -141,7 +158,8 @@ fun PrimaryAction(
         modifier
             .background(if (enabled) tokens.color.accent else tokens.color.raise, shape)
             .edge(tokens.card, shape)
-            .let { if (enabled) it.clickable(onClick = onClick) else it }
+            .touchable()
+            .action(label ?: text, onClick, shape, enabled = enabled)
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
@@ -156,6 +174,7 @@ fun QuietAction(
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.buttonSmall,
     vertical: Dp = 10.dp,
+    label: String? = null,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
@@ -163,7 +182,8 @@ fun QuietAction(
         modifier
             .background(tokens.color.raise, shape)
             .edge(tokens.card, shape)
-            .clickable(onClick = onClick)
+            .touchable()
+            .action(label ?: text, onClick, shape)
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
@@ -177,6 +197,7 @@ fun Segmented(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    what: String = "view",
 ) {
     val tokens = Kampr.tokens
     val outer = RoundedCornerShape(tokens.radii.md)
@@ -185,6 +206,7 @@ fun Segmented(
         modifier
             .background(tokens.color.surface, outer)
             .edge(tokens.card, outer)
+            .group()
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -194,7 +216,14 @@ fun Segmented(
                 Modifier
                     .weight(1f)
                     .let { if (active) it.background(tokens.color.raise, inner) else it }
-                    .clickable { onSelect(index) }
+                    .touchable(LANDSCAPE_TOUCH)
+                    .action(
+                        "$option $what",
+                        { onSelect(index) },
+                        inner,
+                        role = Role.Tab,
+                        selected = active,
+                    )
                     .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -218,6 +247,7 @@ fun Gap(width: Dp) {
 @Composable
 fun GlyphAction(
     icon: Icon,
+    label: String,
     tint: Color,
     target: Dp,
     modifier: Modifier = Modifier,
@@ -226,7 +256,7 @@ fun GlyphAction(
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
-    Box(modifier.size(target).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(modifier.size(target).action(label, onClick), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(chip).background(tokens.color.raise, shape).edge(tokens.card, shape),
             contentAlignment = Alignment.Center,

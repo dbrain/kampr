@@ -1,7 +1,6 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,7 +29,11 @@ import dev.kampr.conversation.syntax.scan
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.touchable
 import kotlinx.coroutines.delay
 
 @Composable
@@ -48,7 +51,7 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 KText(lang ?: "text", tokens.type.meta, tokens.color.mute)
-                CopyButton(code)
+                CopyButton(code, lang)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
             BasicText(
@@ -65,7 +68,7 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
 }
 
 @Composable
-fun CopyButton(text: String) {
+fun CopyButton(text: String, lang: String? = null) {
     val tokens = Kampr.tokens
     // LocalClipboard replaces this, but its ClipEntry can only be built from a platform-native
     // object, so a plain string still has no common-code path in CMP 1.11.
@@ -79,10 +82,15 @@ fun CopyButton(text: String) {
         }
     }
     Row(
-        Modifier.clickable {
-            clipboard.setText(AnnotatedString(text))
-            copied = true
-        },
+        Modifier
+            .touchable(LANDSCAPE_TOUCH)
+            .action(
+                if (copied) "Copied" else "Copy the ${lang ?: "code"} block",
+                {
+                    clipboard.setText(AnnotatedString(text))
+                    copied = true
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {

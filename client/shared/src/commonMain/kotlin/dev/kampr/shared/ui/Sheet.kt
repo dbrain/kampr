@@ -16,10 +16,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
@@ -33,14 +43,14 @@ private const val SCRIM_ALPHA = 0.72f
 // The scrim is the theme's own ground at partial opacity rather than a colour of its own, so it
 // stays right on a black brutalist ground and on a light one.
 @Composable
-fun Scrim(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+fun Scrim(onDismiss: () -> Unit, label: String = "Close", modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
-    val interaction = remember { MutableInteractionSource() }
     Box(
         modifier
             .fillMaxSize()
             .background(tokens.color.bg.copy(alpha = SCRIM_ALPHA))
-            .clickable(interaction, indication = null, onClick = onDismiss)
+            .gestureAction(label, onClick = onDismiss)
+            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
     )
 }
 
@@ -48,6 +58,10 @@ fun Scrim(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
 fun selectedEdge(): BorderSpec =
     BorderSpec(if (Kampr.tokens.card.visible) Kampr.tokens.card.width else Kampr.tokens.chrome.width, Kampr.tokens.color.accent)
 
+// Escape closes it and focus moves into it on open, so the sheet is operable from a keyboard.
+// What holds the reader inside it is not this composable: the screen underneath drops out of the
+// semantics tree while a sheet is up (see `AppScaffold`), which is what a trap buys and this is
+// how Kampr buys it without turning every sheet into a platform dialog.
 @Composable
 fun BottomSheet(
     breakpoint: Breakpoint,
@@ -56,7 +70,9 @@ fun BottomSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = Kampr.tokens
-    Box(modifier.fillMaxSize()) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Box(modifier.fillMaxSize().escapes(onDismiss)) {
         Scrim(onDismiss)
         BoxWithConstraints(
             Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center)
@@ -70,10 +86,24 @@ fun BottomSheet(
                     .width(width)
                     .heightIn(max = tall)
                     .background(tokens.color.bar, shape)
+                    .focusRequester(focus)
+                    .focusable()
+                    .focusGroup()
+                    .readingOrder(-1f)
                     .edge(tokens.chrome, shape),
                 content = content,
             )
         }
+    }
+}
+
+// Escape is the one key every sheet and dialog owes a keyboard user, and none of them had it.
+fun Modifier.escapes(onDismiss: () -> Unit): Modifier = onKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+        onDismiss()
+        true
+    } else {
+        false
     }
 }
 
@@ -102,7 +132,7 @@ fun SheetHeader(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (onBack != null) {
-                IconGlyph(KamprIcons.chevronLeft, 16.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
+                BackAction("Back", onBack, target = if (compact) LANDSCAPE_TOUCH else TOUCH)
             }
             KText(title, if (compact) tokens.type.paneTitle else tokens.type.screenTitle, tokens.color.text)
             if (compact && subtitle != null) {
@@ -110,7 +140,7 @@ fun SheetHeader(
             } else {
                 Box(Modifier.weight(1f))
             }
-            IconGlyph(KamprIcons.cross, 18.dp, tokens.color.dim, Modifier.clickable(onClick = onClose))
+            CloseAction("Close $title", onClose, target = if (compact) LANDSCAPE_TOUCH else TOUCH)
         }
         if (!compact && subtitle != null) {
             Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 9.dp)) {
@@ -138,6 +168,7 @@ fun SheetCard(
     selected: Boolean = false,
     compact: Boolean = false,
     onClick: (() -> Unit)? = null,
+    label: String? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
@@ -147,7 +178,10 @@ fun SheetCard(
             .fillMaxWidth()
             .background(tokens.color.surface, shape)
             .edge(if (selected) selectedEdge() else tokens.card, shape)
-            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+            .let {
+                if (onClick == null) it.named(listOf(title, subtitle).joinToString(", "))
+                else it.touchable().action(label ?: "$title, $subtitle", onClick, shape, selected = selected)
+            }
             .padding(horizontal = 15.dp, vertical = if (compact) 9.dp else 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -172,14 +206,21 @@ fun SheetCard(
 }
 
 @Composable
-fun Chip(text: String, selected: Boolean, onClick: () -> Unit, quiet: Boolean = false) {
+fun Chip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    quiet: Boolean = false,
+    label: String? = null,
+) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
     Box(
         Modifier
             .background(if (selected) tokens.color.accent else tokens.color.raise, shape)
             .edge(tokens.card, shape)
-            .clickable(onClick = onClick)
+            .touchable(LANDSCAPE_TOUCH)
+            .action(label ?: text, onClick, shape, selected = selected)
             .padding(horizontal = 13.dp, vertical = 7.dp),
     ) {
         KText(

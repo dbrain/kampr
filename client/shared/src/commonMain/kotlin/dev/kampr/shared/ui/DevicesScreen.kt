@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +32,8 @@ fun DevicesScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            IconGlyph(KamprIcons.chevronLeft, 17.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
-            KText("Devices", tokens.type.screenTitle, tokens.color.text, Modifier.weight(1f))
+            BackAction("Back", onBack)
+            KText("Devices", tokens.type.screenTitle, tokens.color.text, Modifier.weight(1f).asHeading())
         }
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).widthIn(max = 620.dp).padding(horizontal = 16.dp),
@@ -50,7 +49,7 @@ fun DevicesScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Badge(34.dp, 17.dp, KamprIcons.lock, if (device.current) tokens.color.accent else tokens.color.dim)
+                        Badge(34.dp, 17.dp, KamprIcons.lock, if (device.current) tokens.color.accent else tokens.color.dim, "Paired device")
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             KText(device.name, tokens.type.bodyStrong, tokens.color.text)
                             KText(
@@ -60,9 +59,15 @@ fun DevicesScreen(
                             )
                         }
                         if (!device.current) {
-                            QuietAction("Revoke", { onRevoke(device.id) }, Modifier.widthIn(min = 92.dp))
+                            QuietAction(
+                                "Revoke", { onRevoke(device.id) }, Modifier.widthIn(min = 92.dp),
+                                label = "Revoke ${device.name} — it loses access to this node",
+                            )
                         } else {
-                            StatusBadge("this device", tokens.color.done, tokens.color.surface2)
+                            StatusBadge(
+                                "this device", tokens.color.done, tokens.color.surface2,
+                                label = "This is the device you are using",
+                            )
                         }
                     }
                 }

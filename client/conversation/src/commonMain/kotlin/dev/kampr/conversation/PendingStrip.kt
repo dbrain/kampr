@@ -1,7 +1,6 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,9 +17,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.Dot
+import dev.kampr.shared.ui.Mark
+import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.wire.ServerMsg
 
 // `pending.source` records whether the node lifted the question from the transcript or from the
@@ -37,6 +40,11 @@ fun PendingStrip(pending: ServerMsg.Pending, onAnswer: (String) -> Unit, modifie
             .padding(horizontal = 12.dp, vertical = 9.dp)
             .background(tokens.color.blockedBg, shape)
             .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
+            .announce(
+                "The agent is asking: $question. ${pending.options.size} answers: " +
+                    pending.options.joinToString(", ") { "${it.key} ${it.label}" },
+                urgent = true,
+            )
             .padding(horizontal = 13.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -44,7 +52,7 @@ fun PendingStrip(pending: ServerMsg.Pending, onAnswer: (String) -> Unit, modifie
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Dot(tokens.color.blocked, 7.dp)
+            Mark(tokens.color.blocked, MarkShape.Square, 7.dp)
             KText(question, tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f), maxLines = 3)
         }
         Row(
@@ -59,7 +67,8 @@ fun PendingStrip(pending: ServerMsg.Pending, onAnswer: (String) -> Unit, modifie
                         .widthIn(min = 96.dp)
                         .background(if (primary) tokens.color.accent else tokens.color.raise, chip)
                         .edge(if (primary) BorderSpec(0.dp, tokens.color.accent) else tokens.card, chip)
-                        .clickable { onAnswer(option.key) }
+                        .touchable()
+                        .action("Answer ${option.key}, ${option.label}", { onAnswer(option.key) }, chip)
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {

@@ -1,7 +1,6 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
@@ -15,7 +14,9 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.PaneSession
 
 private fun label(zoom: Float): String {
@@ -33,10 +34,17 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
     val open = session.view.sheetOpen
     Row(
         modifier
-            .defaultMinSize(minWidth = 68.dp, minHeight = 44.dp)
+            .defaultMinSize(minWidth = 68.dp)
             .background(if (open) tokens.color.accentSoft else tokens.color.surface, shape)
             .edge(tokens.card, shape)
-            .clickable { session.view.sheetOpen = !open }
+            .touchable()
+            .action(
+                "Zoom, currently ${label(session.view.displayZoom)}",
+                { session.view.sheetOpen = !open },
+                shape,
+                selected = open,
+                state = if (open) "sheet open" else null,
+            )
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),

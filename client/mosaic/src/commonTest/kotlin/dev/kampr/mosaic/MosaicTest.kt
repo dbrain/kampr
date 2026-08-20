@@ -90,6 +90,10 @@ class MosaicStateTest {
         assertFalse(mosaic.saved)
         mosaic.save()
         assertTrue(mosaic.saved)
+        mosaic.add("n2/p2")
+        assertFalse(mosaic.saved, "changing the arrangement makes it savable again")
+        mosaic.remove("n2/p2")
+        assertTrue(mosaic.saved, "and undoing the change makes it saved again")
 
         val restored = MosaicState(prefs, KamprConnection(CoroutineScope(Job()), KamprStore()))
         restored.restore()
@@ -145,6 +149,29 @@ class MosaicStateTest {
         mosaic.add("n1/p1")
         mosaic.reconcile(Herd())
         assertEquals(listOf("n1/p1"), mosaic.panes)
+    }
+}
+
+class CellInputTest {
+    private class Base(override val readOnly: Boolean) : dev.kampr.shared.ui.PaneIo {
+        val sent = mutableListOf<dev.kampr.shared.wire.ClientMsg>()
+        override fun send(msg: dev.kampr.shared.wire.ClientMsg) {
+            sent += msg
+        }
+        override fun prefs(paneId: String) = dev.kampr.shared.wire.PanePrefs()
+    }
+
+    // Input reaches exactly one cell, and a read-only device reaches none — refused the same way,
+    // so the key row and the destructive-command guard both follow the focus without knowing it.
+    @Test
+    fun onlyTheFocusedCellOfAWritableDeviceTakesInput() {
+        val writable = Base(readOnly = false)
+        assertFalse(CellIo(writable, writable = true).readOnly, "the focused cell is writable")
+        assertTrue(CellIo(writable, writable = false).readOnly, "an unfocused cell is not")
+
+        val readonlyDevice = Base(readOnly = true)
+        assertTrue(CellIo(readonlyDevice, writable = true).readOnly, "a readonly device is refused every cell")
+        assertTrue(CellIo(readonlyDevice, writable = false).readOnly)
     }
 }
 

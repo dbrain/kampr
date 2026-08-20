@@ -1,13 +1,13 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -34,13 +34,17 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.breakpointOf
+import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.guard.SubmitGuard
@@ -56,7 +60,9 @@ import dev.kampr.terminal.render.TargetKind
 import dev.kampr.terminal.render.detectTarget
 import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.TextCache
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
@@ -66,6 +72,10 @@ private const val INDICATOR_HEIGHT_DP = 22f
 private const val DECAY = 0.94f
 private const val PREFS_DEBOUNCE_MS = 400L
 private const val FONT_SETTLE_FRAMES = 120
+
+// ADR 0010. The cursor line is the unit of speech, and a live region wired straight to `revision`
+// would speak over itself at frame rate — so it settles first and speaks the line once.
+private const val SPEECH_SETTLE_MS = 450L
 
 // Mirrors the header PaneScreen floats over this surface and the answer strip it shows while a
 // prompt is outstanding. Chrome insets the scrollable content; it never insets the paint.
@@ -106,11 +116,26 @@ fun TerminalView(
     val view = session.view
     val ground = palette.background(pane.styles[0])
 
+    val stillness = LocalReduceMotion.current
     var cursorOn by remember { mutableStateOf(true) }
-    LaunchedEffect(pane) {
+    LaunchedEffect(pane, stillness) {
+        if (stillness) {
+            cursorOn = true
+            return@LaunchedEffect
+        }
         while (true) {
             delay(CURSOR_BLINK_MS)
             cursorOn = !cursorOn
+        }
+    }
+
+    // ADR 0010: what a screen reader is given instead of 74x30 cells.
+    var spokenLine by remember(pane.id) { mutableStateOf("") }
+    LaunchedEffect(pane, logical, rows) {
+        snapshotFlow { pane.revision to pane.cursor }.collectLatest {
+            delay(SPEECH_SETTLE_MS)
+            val line = logical.lineAt(rows.historyRows + pane.cursor.row).first.trim()
+            spokenLine = if (line.isEmpty()) "blank line" else line
         }
     }
 
@@ -169,7 +194,12 @@ fun TerminalView(
             }
         }
 
-        LaunchedEffect(view.flings) {
+        LaunchedEffect(view.flings, stillness) {
+            if (stillness) {
+                view.velocityX = 0f
+                view.velocityY = 0f
+                return@LaunchedEffect
+            }
             while (abs(view.velocityX) > 1f || abs(view.velocityY) > 1f) {
                 withFrameNanos { }
                 view.panX = (view.panX + view.velocityX / 60f).coerceIn(view.minPanX, 0f)
@@ -214,10 +244,38 @@ fun TerminalView(
             if (found == null) session.openKeyboard()
         }
 
+        val visibleRows = (paint.contentHeight / metrics.height).toInt().coerceAtLeast(1)
+        val transcript = io.info(pane.id)?.hasConversation == true
+        val gridSummary = buildString {
+            append("Terminal grid, $cols columns by ${rows.liveRows} rows")
+            append(", cursor on row ${pane.cursor.row + 1}, column ${pane.cursor.col + 1}")
+            if (rows.historyRows > 0) append(", ${rows.historyRows} rows of history above")
+            if (pane.stale) append(", stale — frames have stopped arriving")
+            if (io.readOnly) append(", read-only")
+            append(
+                if (transcript) {
+                    ". A cell grid does not linearise; the Conversation view of this pane is " +
+                        "ordinary text and is the surface to read it on."
+                } else {
+                    ". Only the line under the cursor is spoken."
+                }
+            )
+        }
+
         Box(
-            Modifier.fillMaxSize().pointerInput(pane.id) {
-                terminalGestures(session, presets, paint, probe, ::tapped)
-            },
+            Modifier
+                .fillMaxSize()
+                .gestureAction(
+                    label = gridSummary,
+                    onClick = { session.openKeyboard() },
+                    clickLabel = "Type into this pane",
+                    actions = buildList {
+                        if (transcript) add("Open the Conversation view" to { io.show(PaneView.Conversation) })
+                    },
+                )
+                .pointerInput(pane.id) {
+                    terminalGestures(session, presets, paint, probe, ::tapped)
+                },
         ) {
             Box(
                 Modifier
@@ -251,6 +309,16 @@ fun TerminalView(
                     },
             )
         }
+
+        // A one-dp strip carrying the cursor line: nothing to look at, and the only thing on this
+        // surface a screen reader can follow as the pane writes.
+        Box(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .height(1.dp)
+                .announce(spokenLine),
+        )
 
         PaneTextInput(
             session = session,
@@ -336,7 +404,7 @@ fun TerminalView(
                 zoom = view.displayZoom,
                 window = window,
                 totalRows = rows.total,
-                visibleRows = (paint.contentHeight / metrics.height).toInt(),
+                visibleRows = visibleRows,
                 remembered = view.remembered,
                 followCursor = view.followCursor,
                 confirmRisky = guard.wanted(),

@@ -31,8 +31,8 @@ fun ConnectPanel(current: Endpoint, onConnect: (Endpoint) -> Unit, modifier: Mod
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             LabelText("Point Kampr at a node", tokens.type.captionSmall, tokens.color.mute)
-            KField("http://192.168.1.24:8790", address) { address = it }
-            KField("pairing code", code) { code = it }
+            KField("http://192.168.1.24:8790", address, label = "Node address") { address = it }
+            KField("pairing code", code, label = "Pairing code") { code = it }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PrimaryAction(
                     "Connect",
@@ -44,6 +44,7 @@ fun ConnectPanel(current: Endpoint, onConnect: (Endpoint) -> Unit, modifier: Mod
                     Modifier.weight(1f),
                     tokens.type.buttonSmall,
                     12.dp,
+                    label = "Connect to this node",
                 )
             }
         }

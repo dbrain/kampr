@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,7 +44,7 @@ fun HerdPortrait(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            KText("Herd", tokens.type.screenTitle, tokens.color.text)
+            KText("Herd", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 NodeCountPill(herd.nodes.count { it.online }, compact = false)
                 MosaicAction()
@@ -96,7 +95,7 @@ fun HerdLandscape(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            KText("Herd", tokens.type.paneTitle, tokens.color.text)
+            KText("Herd", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
             NodeCountPill(herd.nodes.count { it.online }, compact = true)
             MosaicAction(LANDSCAPE_TOUCH)
             NewAction(target = LANDSCAPE_TOUCH)
@@ -106,6 +105,7 @@ fun HerdLandscape(
                     if (triage.size > 1) "Needs you · ${triage.size}" else "Needs you",
                     tokens.color.blocked,
                     tokens.color.blockedBg,
+                    label = if (triage.size > 1) "${triage.size} agents need you" else "One agent needs you",
                 )
             }
         }
@@ -171,6 +171,7 @@ fun HerdSidebar(
             .width(296.dp)
             .fillMaxHeight()
             .background(tokens.color.bar)
+            .readingOrder(-1f)
             .edgeEnd(),
     ) {
         Row(
@@ -178,7 +179,7 @@ fun HerdSidebar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            KText("Kampr", tokens.type.screenTitle, tokens.color.text)
+            KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
                 NodeCountPill(herd.nodes.count { it.online }, compact = true)
                 MosaicAction(LANDSCAPE_TOUCH)
@@ -208,8 +209,9 @@ fun HerdSidebar(
             Modifier
                 .fillMaxWidth()
                 .edgeTop()
-                .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp)
-                .clickable(onClick = onSettings),
+                .touchable()
+                .action("Settings — $deviceName, $deviceDetail", onSettings)
+                .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {

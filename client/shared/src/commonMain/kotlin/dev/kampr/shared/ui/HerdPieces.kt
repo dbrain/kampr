@@ -2,7 +2,6 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
@@ -48,10 +48,43 @@ fun statusIcon(status: AgentStatus): Icon = when (status) {
     AgentStatus.Idle, AgentStatus.Unknown -> KamprIcons.shell
 }
 
+fun statusShape(status: AgentStatus): MarkShape = when (status) {
+    AgentStatus.Blocked -> MarkShape.Square
+    AgentStatus.Working -> MarkShape.Circle
+    AgentStatus.Done -> MarkShape.Bar
+    AgentStatus.Idle, AgentStatus.Unknown -> MarkShape.Ring
+}
+
+fun statusWord(status: AgentStatus): String = when (status) {
+    AgentStatus.Blocked -> "Blocked"
+    AgentStatus.Working -> "Working"
+    AgentStatus.Done -> "Done"
+    AgentStatus.Idle -> "Idle"
+    AgentStatus.Unknown -> "No status"
+}
+
+// Colour, shape and — wherever a row is spoken — the word. The dot on its own was the whole of
+// the encoding, and it is the one channel a colour-blind reader does not have.
+@Composable
+fun StatusMark(status: AgentStatus, size: Dp = 8.dp, modifier: Modifier = Modifier) {
+    Mark(statusColor(status), statusShape(status), size, modifier.named(statusWord(status)))
+}
+
+fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
+    paneTitle(pane),
+    statusWord(statusOf(pane)),
+    pane.cwd,
+    "updated ${relativeTime(pane.updatedAt, now)}",
+).joinToString(", ")
+
 @Composable
 fun NodeCountPill(online: Int, compact: Boolean) {
     val tokens = Kampr.tokens
-    Pill(horizontal = if (compact) 11.dp else 13.dp, vertical = if (compact) 5.dp else 7.dp) {
+    Pill(
+        Modifier.named(if (online == 1) "1 node online" else "$online nodes online"),
+        horizontal = if (compact) 11.dp else 13.dp,
+        vertical = if (compact) 5.dp else 7.dp,
+    ) {
         Dot(tokens.color.done, 7.dp)
         KText("$online nodes", tokens.type.pill, tokens.color.dim)
     }
@@ -60,8 +93,12 @@ fun NodeCountPill(online: Int, compact: Boolean) {
 @Composable
 fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
     val tokens = Kampr.tokens
+    val transportWord = if (node.kind == "local") "local" else "tailnet"
     Row(
-        Modifier.fillMaxWidth().padding(padding),
+        Modifier
+            .fillMaxWidth()
+            .named("${node.name}, $transportWord, ${formatLatency(node.rttMs ?: measuredRtt)}")
+            .padding(padding),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -76,13 +113,18 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
     val tokens = Kampr.tokens
     val status = statusOf(pane)
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
-    Surface(modifier.alpha(if (quiet) 0.72f else 1f).clickable(onClick = onClick)) {
+    val shape = RoundedCornerShape(tokens.radii.lg)
+    Surface(
+        modifier
+            .alpha(if (quiet) 0.72f else 1f)
+            .action("Open ${paneSpoken(pane, now)}", onClick, shape)
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Badge(36.dp, 16.dp, statusIcon(status), statusColor(status))
+            Badge(36.dp, 16.dp, statusIcon(status), statusColor(status), statusWord(status))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 KText(
                     paneTitle(pane),
@@ -92,7 +134,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                 KText(pane.cwd ?: "", tokens.type.meta, tokens.color.mute)
             }
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (!quiet) Dot(statusColor(status), 8.dp)
+                if (!quiet) StatusMark(status, 8.dp)
                 KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
             }
         }
@@ -109,13 +151,20 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .let { if (active) it.background(tokens.color.raise, shape) else it }
-            .clickable(onClick = onClick)
+            .touchable(LANDSCAPE_TOUCH)
+            .action(
+                "Open ${paneSpoken(pane, now)}",
+                onClick,
+                shape,
+                role = Role.Tab,
+                selected = active,
+            )
             .alpha(if (quiet) 0.68f else 1f)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Dot(statusColor(status), 7.dp, hollow = quiet)
+        StatusMark(status, 7.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             KText(
                 paneTitle(pane),
@@ -129,11 +178,15 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-fun Badge(box: Dp, glyph: Dp, icon: Icon, tint: Color) {
+fun Badge(box: Dp, glyph: Dp, icon: Icon, tint: Color, label: String? = null) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
     Box(
-        Modifier.size(box).background(tokens.color.raise, shape).edge(tokens.card, shape),
+        Modifier
+            .size(box)
+            .let { if (label != null) it.named(label) else it }
+            .background(tokens.color.raise, shape)
+            .edge(tokens.card, shape),
         contentAlignment = Alignment.Center,
     ) {
         IconGlyph(icon, glyph, tint)
@@ -141,11 +194,12 @@ fun Badge(box: Dp, glyph: Dp, icon: Icon, tint: Color) {
 }
 
 @Composable
-fun StatusBadge(text: String, tone: Color, background: Color) {
+fun StatusBadge(text: String, tone: Color, background: Color, label: String? = null) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.pill)
     Box(
         Modifier
+            .let { if (label != null) it.named(label) else it }
             .background(background, shape)
             .edge(tokens.card, shape)
             .padding(horizontal = 11.dp, vertical = 5.dp),
@@ -166,14 +220,25 @@ fun TriageList(
 ) {
     if (items.isEmpty()) return
     val tokens = Kampr.tokens
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp)) {
+    // It arrives without the reader asking — an agent blocks while they are somewhere else on the
+    // screen — and it is the one thing on this surface with a deadline attached to it.
+    Column(
+        modifier
+            .fillMaxWidth()
+            .announce(
+                if (items.size > 1) "Needs you: ${items.size} agents are blocked"
+                else "Needs you: ${paneTitle(items.first().pane)} is blocked",
+                urgent = true,
+            ),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp),
+    ) {
         if (items.size > 1) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Dot(tokens.color.blocked, 8.dp)
+                Mark(tokens.color.blocked, MarkShape.Square, 8.dp)
                 LabelText(
                     "Needs you · ${items.size}",
                     tokens.type.caption.copy(
@@ -229,7 +294,7 @@ fun BlockedNotice(
     ) {
         if (label != null) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!compact) Dot(tokens.color.blocked, 8.dp)
+                if (!compact) Mark(tokens.color.blocked, MarkShape.Square, 8.dp)
                 LabelText(
                     label,
                     tokens.type.caption.copy(fontWeight = tokens.label.weight, letterSpacing = tokens.label.tracking),
@@ -252,8 +317,16 @@ fun BlockedNotice(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                PrimaryAction("Open", onOpen, Modifier.weight(1f), tokens.type.buttonSmall, 10.dp)
-                if (onApprove != null) QuietAction("Approve", onApprove, Modifier.weight(1f))
+                PrimaryAction(
+                    "Open", onOpen, Modifier.weight(1f), tokens.type.buttonSmall, 10.dp,
+                    label = "Open ${paneTitle(pane)}",
+                )
+                if (onApprove != null) {
+                    QuietAction(
+                        "Approve", onApprove, Modifier.weight(1f),
+                        label = "Approve, and answer ${paneTitle(pane)} with option 1",
+                    )
+                }
             }
         }
     }
@@ -267,6 +340,7 @@ fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
+            .readingOrder(1f)
             .padding(top = 5.dp, bottom = 10.dp),
     ) {
         NavItem(Tab.Herd, "Herd", KamprIcons.herd, selected, onSelect)
@@ -281,7 +355,11 @@ private fun RowScope.NavItem(tab: Tab, label: String, icon: Icon, selected: Tab,
     val active = tab == selected
     val tint = if (active) tokens.color.accent else tokens.color.mute
     Column(
-        Modifier.weight(1f).clickable { onSelect(tab) }.padding(vertical = 5.dp),
+        Modifier
+            .weight(1f)
+            .touchable()
+            .action("$label tab", { onSelect(tab) }, role = Role.Tab, selected = active)
+            .padding(vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

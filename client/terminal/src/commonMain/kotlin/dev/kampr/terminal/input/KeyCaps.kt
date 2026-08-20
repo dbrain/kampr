@@ -55,6 +55,46 @@ private fun fn(n: Int, alternate: Int? = null) =
 // null is the fixed separator track between the modifier/symbol group and the navigation group.
 typealias KeyRowSpec = List<KeyCap?>
 
+// A cap paints two or three characters because that is all a 44 dp square holds. None of them is
+// what the key is called, and a slash read aloud as "slash" is the difference between a key row a
+// screen reader can drive and a row of forty unnamed buttons.
+private val SPOKEN = mapOf(
+    "esc" to "Escape",
+    "ctrl" to "Control",
+    "alt" to "Alt",
+    "tab" to "Tab",
+    "shift" to "Shift",
+    "fn" to "Function",
+    "kbd" to "Keyboard",
+    "ins" to "Insert",
+    "del" to "Delete",
+    "home" to "Home",
+    "end" to "End",
+    "pgup" to "Page up",
+    "pgdn" to "Page down",
+    "\u2191" to "Up arrow",
+    "\u2193" to "Down arrow",
+    "\u2190" to "Left arrow",
+    "\u2192" to "Right arrow",
+    "/" to "Slash",
+    "\\" to "Backslash",
+    "|" to "Pipe",
+    "-" to "Hyphen",
+    "_" to "Underscore",
+    "~" to "Tilde",
+    "&" to "Ampersand",
+    "*" to "Asterisk",
+    "$" to "Dollar",
+    "\"" to "Double quote",
+    "'" to "Apostrophe",
+    "`" to "Backtick",
+)
+
+private val FUNCTION = Regex("^F(\\d{1,2})$")
+
+fun spokenKey(label: String): String =
+    SPOKEN[label] ?: FUNCTION.matchEntire(label)?.let { "F " + it.groupValues[1] } ?: label
+
 object KeyLayouts {
     val portrait: List<KeyRowSpec> = listOf(
         listOf(escape, ctrl, alt, tab, null) + navTop,

@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +24,7 @@ fun KField(
     value: TextFieldValue,
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.meta,
+    label: String? = null,
     onChange: (TextFieldValue) -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -43,7 +43,7 @@ fun KField(
             singleLine = true,
             textStyle = style.copy(color = tokens.color.text),
             cursorBrush = SolidColor(tokens.color.accent),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().named(label ?: hint),
         )
     }
 }
@@ -59,7 +59,7 @@ fun LabelledField(
     val tokens = Kampr.tokens
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         LabelText(label, tokens.type.micro, tokens.color.mute)
-        KField(hint, value, onChange = onChange)
+        KField(hint, value, label = label, onChange = onChange)
     }
 }
 
@@ -82,18 +82,24 @@ fun EnvEditor(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                KField("NAME", TextFieldValue(key), Modifier.weight(1f)) { onChange(index, it.text to value) }
-                KField("value", TextFieldValue(value), Modifier.weight(1.2f)) { onChange(index, key to it.text) }
-                IconGlyph(
+                KField("NAME", TextFieldValue(key), Modifier.weight(1f), label = "Variable name") {
+                    onChange(index, it.text to value)
+                }
+                KField("value", TextFieldValue(value), Modifier.weight(1.2f), label = "Value of $key") {
+                    onChange(index, key to it.text)
+                }
+                GlyphTarget(
                     KamprIcons.cross,
-                    13.dp,
+                    "Remove ${key.ifBlank { "this variable" }}",
                     tokens.color.mute,
-                    Modifier.clickable { onRemove(index) },
+                    { onRemove(index) },
+                    target = LANDSCAPE_TOUCH,
+                    glyph = 13.dp,
                 )
             }
         }
         Row(
-            Modifier.clickable(onClick = onAdd).padding(vertical = 4.dp),
+            Modifier.touchable(LANDSCAPE_TOUCH).action("Add a variable", onAdd).padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {

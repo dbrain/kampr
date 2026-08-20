@@ -1,7 +1,6 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,10 +13,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.Dot
+import dev.kampr.shared.ui.Mark
+import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.wire.Block
 
 const val TOOL_RUNNING = "running"
@@ -40,17 +43,39 @@ fun ToolCard(
         TOOL_ERROR -> tokens.color.blocked
         else -> tokens.color.dim
     }
+    val outcome = when (tool.state) {
+        TOOL_RUNNING -> "running"
+        TOOL_ERROR -> "failed"
+        else -> tool.lines?.let { "$it lines" } ?: "finished"
+    }
+    val named = listOfNotNull(tool.name, tool.summary).joinToString(", ")
     Surface(modifier.fillMaxWidth(), radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = detail.isNotEmpty(), onClick = onToggle)
+                    .let {
+                        if (detail.isEmpty()) it.named("Tool $named, $outcome")
+                        else it.touchable().action(
+                            if (expanded) "Hide the output of $named, $outcome"
+                            else "Show the output of $named, $outcome",
+                            onToggle,
+                            selected = expanded,
+                        )
+                    }
                     .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Dot(tone, 7.dp, hollow = !running && tool.state != TOOL_ERROR)
+                Mark(
+                    tone,
+                    when (tool.state) {
+                        TOOL_RUNNING -> MarkShape.Circle
+                        TOOL_ERROR -> MarkShape.Square
+                        else -> MarkShape.Bar
+                    },
+                    7.dp,
+                )
                 KText(
                     listOfNotNull(tool.name, tool.summary).joinToString(" · "),
                     tokens.type.meta,

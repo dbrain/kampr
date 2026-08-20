@@ -1,7 +1,6 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,7 +23,13 @@ import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.escapes
+import dev.kampr.shared.ui.gestureAction
+import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.guard.HeldSubmit
 
 // Never a bare "are you sure": the command that tripped the guard is on the sheet, verbatim, so
@@ -38,8 +43,19 @@ fun ConfirmSheet(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    Box(Modifier.fillMaxSize().clickable(onClick = onEdit))
-    Column(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp)) {
+    val heading = if (held.paste) "Pasted command" else "Before this runs"
+    Box(Modifier.fillMaxSize().gestureAction("Back to edit", onEdit))
+    Column(
+        modifier
+            .fillMaxWidth()
+            .escapes(onEdit)
+            .readingOrder(-1f)
+            .announce(
+                "$heading. ${held.reason}. The command is: ${held.command}",
+                urgent = true,
+            )
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+    ) {
         Surface(Modifier.fillMaxWidth(), background = tokens.color.surface, radius = tokens.radii.lg) {
             Column(
                 Modifier.padding(horizontal = 15.dp, vertical = 14.dp),
@@ -52,7 +68,7 @@ fun ConfirmSheet(
                 ) {
                     IconGlyph(KamprIcons.warning, 15.dp, tokens.color.blocked)
                     LabelText(
-                        if (held.paste) "Pasted command" else "Before this runs",
+                        heading,
                         tokens.type.sectionLabel,
                         tokens.color.blocked,
                         Modifier.weight(1f),
@@ -78,8 +94,14 @@ fun ConfirmSheet(
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    QuietAction("Back to edit", onEdit, Modifier.weight(1f), vertical = 13.dp)
-                    PrimaryAction("Run it", onRun, Modifier.weight(1f), vertical = 13.dp)
+                    QuietAction(
+                        "Back to edit", onEdit, Modifier.weight(1f), vertical = 13.dp,
+                        label = "Back to edit — do not run it",
+                    )
+                    PrimaryAction(
+                        "Run it", onRun, Modifier.weight(1f), vertical = 13.dp,
+                        label = "Run ${held.command}",
+                    )
                 }
 
                 val shape = RoundedCornerShape(tokens.radii.md)
@@ -87,7 +109,8 @@ fun ConfirmSheet(
                     Modifier
                         .fillMaxWidth()
                         .edge(tokens.card, shape)
-                        .clickable(onClick = onMute)
+                        .touchable()
+                        .action("Run it, and stop checking destructive commands in this pane", onMute, shape)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

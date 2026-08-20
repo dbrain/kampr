@@ -30,6 +30,9 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeTop
+import dev.kampr.shared.ui.gestureAction
+import dev.kampr.shared.ui.group
+import dev.kampr.shared.ui.named
 import dev.kampr.terminal.PaneSession
 
 @Composable
@@ -61,6 +64,7 @@ fun PaneKeyRow(
             }
             .background(tokens.color.bar)
             .edgeTop()
+            .group()
             .padding(bottom = dock)
             .padding(start = 8.dp, top = if (compact) 6.dp else 10.dp, end = 8.dp),
         verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
@@ -107,11 +111,40 @@ private fun RowScope.Cap(
         else -> tokens.color.text
     }
 
+    val label = when {
+        cap.hold != null && held.active() -> holdLabel(cap.hold)
+        else -> cap.label
+    }
+    // A pointerInput block never sees TalkBack's double tap, so the caps carried a gesture and no
+    // action: reachable, named nothing, and impossible to press. The names and the two actions are
+    // the same press and hold the finger gets.
+    val spoken = spokenKey(label) + if (cap.kind == CapKind.Text) " key" else ""
+    val alternate = cap.alternate?.let { spokenKey(it.label) }
     Box(
         Modifier
             .weight(1f)
             .background(background, shape)
             .edge(tokens.card, shape)
+            .then(
+                if (!enabled) Modifier.named("$spoken, unavailable on a read-only device")
+                else Modifier.gestureAction(
+                    label = spoken,
+                    onClick = { press(cap, session, sink) },
+                    onLongClick = { hold(cap, session, sink) },
+                    state = when {
+                        state == LatchState.Locked -> "locked"
+                        state == LatchState.Armed -> "armed for the next key"
+                        cap.kind == CapKind.Keyboard && session.keyboardOpen -> "keyboard showing"
+                        else -> null
+                    },
+                    longLabel = when {
+                        cap.hold != null -> holdLabel(cap.hold).replaceFirstChar(Char::uppercase)
+                        alternate != null -> alternate
+                        cap.kind == CapKind.Latch -> "Lock"
+                        else -> null
+                    },
+                )
+            )
             .pointerInput(cap, enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(
@@ -123,10 +156,6 @@ private fun RowScope.Cap(
             .padding(vertical = if (compact) 7.dp else 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        val label = when {
-            cap.hold != null && held.active() -> holdLabel(cap.hold)
-            else -> cap.label
-        }
         KText(label, if (cap.symbol) tokens.type.badge else tokens.type.key, ink)
     }
 }

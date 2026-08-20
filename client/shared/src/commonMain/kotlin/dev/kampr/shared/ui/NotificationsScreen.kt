@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,8 +93,8 @@ fun NotificationsScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            IconGlyph(KamprIcons.chevronLeft, 17.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
-            KText("Notifications", tokens.type.screenTitle, tokens.color.text, Modifier.weight(1f))
+            BackAction("Back", onBack)
+            KText("Notifications", tokens.type.screenTitle, tokens.color.text, Modifier.weight(1f).asHeading())
         }
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).widthIn(max = 620.dp)
@@ -155,7 +154,7 @@ fun NotificationsScreen(
                                 }
                             }, Modifier.fillMaxWidth())
                         }
-                        note?.let { KText(it, tokens.type.meta, tokens.color.blocked) }
+                        note?.let { KText(it, tokens.type.meta, tokens.color.blocked, Modifier.announce(it)) }
                     }
                 }
 
@@ -221,12 +220,16 @@ private fun RuleRow(
                 )
             }
             if (!muted && !snoozing) {
-                QuietAction("Snooze ${SNOOZE_MINUTES}m", onSnooze, Modifier.widthIn(min = 96.dp))
+                QuietAction(
+                    "Snooze ${SNOOZE_MINUTES}m", onSnooze, Modifier.widthIn(min = 96.dp),
+                    label = "Snooze $title for $SNOOZE_MINUTES minutes",
+                )
             }
             QuietAction(
                 if (muted || snoozing) "Unmute" else "Mute",
                 { onMute(!muted && !snoozing) },
                 Modifier.widthIn(min = 84.dp),
+                label = if (muted || snoozing) "Unmute $title" else "Mute $title",
             )
         }
     }

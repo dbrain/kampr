@@ -24,12 +24,17 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
 
     private var attached = false
 
-    val saved: Boolean get() = encodeArrangement(panes) == prefs.get(KEY_ARRANGEMENT).orEmpty()
+    // Snapshot state, not a read straight off disk: the Save control has to stop saying "save"
+    // the moment it has, and Prefs is invisible to recomposition.
+    private var persisted by mutableStateOf("")
+
+    val saved: Boolean get() = encodeArrangement(panes) == persisted
 
     val full: Boolean get() = panes.size >= MAX_CELLS
 
     fun restore() {
-        panes = decodeArrangement(prefs.get(KEY_ARRANGEMENT))
+        persisted = prefs.get(KEY_ARRANGEMENT).orEmpty()
+        panes = decodeArrangement(persisted)
         focused = panes.firstOrNull()
     }
 
@@ -72,7 +77,8 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
     }
 
     fun save() {
-        prefs.set(KEY_ARRANGEMENT, encodeArrangement(panes))
+        persisted = encodeArrangement(panes)
+        prefs.set(KEY_ARRANGEMENT, persisted)
     }
 
     // A pane that has left the herd cannot be watched and must not hold a cell hostage; the

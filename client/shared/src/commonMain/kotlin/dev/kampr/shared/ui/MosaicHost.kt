@@ -5,7 +5,6 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 
 // The mosaic is several renderers at once over the merged herd, so it lives outside shared for
@@ -37,7 +36,7 @@ object NoMosaic : MosaicHost {
 val LocalMosaic: ProvidableCompositionLocal<(() -> Unit)?> = staticCompositionLocalOf { null }
 
 @Composable
-fun MosaicAction(target: Dp = 44.dp, modifier: Modifier = Modifier) {
+fun MosaicAction(target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val open = LocalMosaic.current ?: return
-    GlyphAction(KamprIcons.mosaic, Kampr.tokens.color.dim, target, modifier, onClick = open)
+    GlyphAction(KamprIcons.mosaic, "Mosaic, several panes at once", Kampr.tokens.color.dim, target, modifier, onClick = open)
 }

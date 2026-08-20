@@ -1,7 +1,6 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.render.Target
 import dev.kampr.terminal.render.TargetKind
 
@@ -29,9 +31,15 @@ fun TargetStrip(
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
+    val kind = when (target.kind) {
+        TargetKind.Link -> "Declared link"
+        TargetKind.Url -> "Detected address"
+        TargetKind.Path -> "File path"
+    }
     Row(
         modifier
             .fillMaxWidth()
+            .announce("$kind: ${target.text}")
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -41,7 +49,8 @@ fun TargetStrip(
                 .weight(1f)
                 .background(tokens.color.surface, shape)
                 .edge(tokens.card, shape)
-                .clickable(onClick = onDismiss)
+                .touchable()
+                .action("Dismiss $kind ${target.text}", onDismiss, shape)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -60,8 +69,14 @@ fun TargetStrip(
         Box(
             Modifier
                 .background(tokens.color.accent, shape)
-                .clickable(onClick = onAct)
+                .touchable()
+                .action(
+                    if (target.kind == TargetKind.Path) "Copy ${target.text}" else "Open ${target.text}",
+                    onAct,
+                    shape,
+                )
                 .padding(horizontal = 16.dp, vertical = 11.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             KText(
                 if (target.kind == TargetKind.Path) "Copy" else "Open",

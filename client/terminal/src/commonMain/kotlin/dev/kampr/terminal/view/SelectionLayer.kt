@@ -1,7 +1,6 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +17,10 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.render.Selection
 import kotlin.math.roundToInt
 
@@ -53,8 +55,8 @@ fun SelectionLayer(
     val endX = originX + (end.col + 1) * cellWidth
     val endY = originY + (end.row + 1) * cellHeight
 
-    Handle(startX, startY, accent, onAnchor)
-    Handle(endX, endY - cellHeight, accent, onHead)
+    Handle(startX, startY, accent, "Selection start handle", onAnchor)
+    Handle(endX, endY - cellHeight, accent, "Selection end handle", onHead)
 
     val pillY = (startY - 46f).coerceAtLeast(4f)
     Row(
@@ -64,20 +66,36 @@ fun SelectionLayer(
             .edge(tokens.card, RoundedCornerShape(tokens.radii.md)),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Box(Modifier.clickable(onClick = onCopy).padding(horizontal = 14.dp, vertical = 9.dp)) {
+        Box(
+            Modifier
+                .touchable()
+                .action("Copy the selection", onCopy)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
             KText("Copy", tokens.type.buttonSmall, tokens.color.text)
         }
-        Box(Modifier.clickable(onClick = onBlock).padding(horizontal = 14.dp, vertical = 9.dp)) {
+        Box(
+            Modifier
+                .touchable()
+                .action(
+                    if (block) "Select by line instead of by column" else "Select by column instead of by line",
+                    onBlock,
+                )
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
             KText(if (block) "Linear" else "Block", tokens.type.buttonSmall, tokens.color.dim)
         }
     }
 }
 
 @Composable
-private fun Handle(x: Float, y: Float, accent: Color, onDrag: (Offset) -> Unit) {
+private fun Handle(x: Float, y: Float, accent: Color, label: String, onDrag: (Offset) -> Unit) {
     Box(
         Modifier
             .atPixels(x - 22f, y - 6f)
+            .named(label)
             .size(HANDLE)
             .background(accent, RoundedCornerShape(HANDLE))
             .pointerInput(x, y) {

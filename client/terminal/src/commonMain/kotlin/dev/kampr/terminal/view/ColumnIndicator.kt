@@ -1,7 +1,6 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -16,6 +15,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.action
 
 data class ColumnWindow(
     val firstCol: Int,
@@ -33,11 +33,13 @@ fun ColumnIndicator(window: ColumnWindow, onOpen: () -> Unit, modifier: Modifier
     val span = ((window.lastCol - window.firstCol).toFloat() / cols).coerceIn(0.02f, 1f)
     val trailer = if (window.rowsBack > 0) " · ${window.rowsBack} rows back" else ""
 
+    val spoken = "Showing columns ${window.firstCol + 1} to ${window.lastCol} of ${window.cols}" +
+        (if (window.rowsBack > 0) ", ${window.rowsBack} rows back" else "") + ". Opens the zoom sheet."
     Row(
         modifier
             .fillMaxWidth()
             .background(tokens.color.surface2)
-            .clickable(onClick = onOpen)
+            .action(spoken, onOpen)
             .padding(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),

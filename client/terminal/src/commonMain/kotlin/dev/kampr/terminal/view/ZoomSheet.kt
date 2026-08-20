@@ -2,7 +2,6 @@ package dev.kampr.terminal.view
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +26,13 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.escapes
+import dev.kampr.shared.ui.gestureAction
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.ui.touchable
 import kotlin.math.abs
 
 private fun format(value: Float): String {
@@ -53,8 +58,14 @@ fun ZoomSheet(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    Box(Modifier.fillMaxSize().clickable(onClick = onDismiss))
-    Column(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp)) {
+    Box(Modifier.fillMaxSize().gestureAction("Close the zoom sheet", onDismiss))
+    Column(
+        modifier
+            .fillMaxWidth()
+            .escapes(onDismiss)
+            .readingOrder(-1f)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+    ) {
         Surface(Modifier.fillMaxWidth(), background = tokens.color.surface, radius = tokens.radii.lg) {
             Column(
                 Modifier.padding(horizontal = 15.dp, vertical = 14.dp),
@@ -75,7 +86,16 @@ fun ZoomSheet(
                     radius = tokens.radii.md,
                 ) {
                     Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Minimap(window, totalRows, visibleRows, Modifier.fillMaxWidth().height(74.dp))
+                        Minimap(
+                            window, totalRows, visibleRows,
+                            Modifier
+                                .fillMaxWidth()
+                                .height(74.dp)
+                                .named(
+                                    "Showing columns ${window.firstCol + 1} to ${window.lastCol} " +
+                                        "of ${window.cols}, and $visibleRows of $totalRows rows",
+                                ),
+                        )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             KText(
                                 "viewing col ${window.firstCol + 1}–${window.lastCol}, " +
@@ -168,7 +188,8 @@ private fun Preset(
         modifier
             .background(if (active) tokens.color.accentSoft else tokens.color.raise, shape)
             .edge(if (active) BorderSpec(1.dp, tokens.color.accent) else tokens.card, shape)
-            .clickable { onZoom(value) }
+            .touchable()
+            .action("$title, ${format(value)}", { onZoom(value) }, shape, selected = active)
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -182,7 +203,16 @@ private fun Preset(
 private fun Toggle(on: Boolean, title: String, detail: String, onChange: (Boolean) -> Unit) {
     val tokens = Kampr.tokens
     Row(
-        Modifier.fillMaxWidth().clickable { onChange(!on) },
+        Modifier
+            .fillMaxWidth()
+            .touchable()
+            .action(
+                "$title. $detail",
+                { onChange(!on) },
+                role = androidx.compose.ui.semantics.Role.Switch,
+                selected = on,
+                state = if (on) "on" else "off",
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {

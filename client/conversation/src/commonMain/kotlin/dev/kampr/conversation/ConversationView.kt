@@ -1,7 +1,6 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +30,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
@@ -39,8 +39,14 @@ import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.GlyphTarget
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.asHeading
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 
@@ -63,9 +69,11 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     val hits = remember(pane.revision, query) { searchHits(turns, query) }
     val leading = if (pane.convoMore) 1 else 0
 
+    val stillness = LocalReduceMotion.current
     LaunchedEffect(hits, focus) {
         val target = hits.getOrNull(focus) ?: return@LaunchedEffect
-        listState.animateScrollToItem(target + leading)
+        if (stillness) listState.scrollToItem(target + leading)
+        else listState.animateScrollToItem(target + leading)
     }
 
     // Paging backwards is the whole point of the opaque cursor: ask once per cursor, and let the
@@ -101,6 +109,7 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
             onQuery = { query = it; focus = 0 },
             onSearching = { searching = it; if (!it) query = "" },
             onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
+            agent = info?.agent,
         )
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -123,7 +132,7 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                 if (pane.convoMore) {
                     item(key = "older") {
                         Row(
-                            Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                            Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
@@ -165,6 +174,7 @@ private fun TranscriptBar(
     onQuery: (String) -> Unit,
     onSearching: (Boolean) -> Unit,
     onStep: (Int) -> Unit,
+    agent: String?,
 ) {
     val tokens = Kampr.tokens
     Row(
@@ -172,28 +182,54 @@ private fun TranscriptBar(
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeBottom()
+            .readingOrder(-1f)
             .padding(horizontal = 16.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (!searching) {
             LabelText("transcript", tokens.type.metaSmall, tokens.color.mute)
-            KText("$count turns", tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
-            IconGlyph(
-                ConversationIcons.search, 15.dp, tokens.color.dim,
-                Modifier.clickable { onSearching(true) },
+            KText(
+                "$count turns",
+                tokens.type.meta,
+                tokens.color.mute,
+                Modifier
+                    .weight(1f)
+                    .asHeading()
+                    .named("Transcript of ${agent ?: "this pane"}, $count turns"),
+            )
+            GlyphTarget(
+                ConversationIcons.search, "Search the transcript", tokens.color.dim,
+                { onSearching(true) }, target = LANDSCAPE_TOUCH, glyph = 15.dp,
             )
             return@Row
         }
         SearchField(query, onQuery, Modifier.weight(1f))
+        val tally = if (query.length < 2) "type to search" else if (hits == 0) "no matches" else "${focus + 1}/$hits"
         KText(
-            if (query.length < 2) "type to search" else if (hits == 0) "no matches" else "${focus + 1}/$hits",
+            tally,
             tokens.type.meta,
             if (hits == 0 && query.length >= 2) tokens.color.blocked else tokens.color.mute,
+            Modifier.announce(
+                when {
+                    query.length < 2 -> "Type to search"
+                    hits == 0 -> "No matches"
+                    else -> "Match ${focus + 1} of $hits"
+                },
+            ),
         )
-        IconGlyph(ConversationIcons.up, 13.dp, tokens.color.dim, Modifier.clickable { onStep(-1) })
-        IconGlyph(ConversationIcons.down, 13.dp, tokens.color.dim, Modifier.clickable { onStep(1) })
-        IconGlyph(ConversationIcons.close, 13.dp, tokens.color.mute, Modifier.clickable { onSearching(false) })
+        GlyphTarget(
+            ConversationIcons.up, "Previous match", tokens.color.dim,
+            { onStep(-1) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+        )
+        GlyphTarget(
+            ConversationIcons.down, "Next match", tokens.color.dim,
+            { onStep(1) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+        )
+        GlyphTarget(
+            ConversationIcons.close, "Close search", tokens.color.mute,
+            { onSearching(false) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+        )
     }
 }
 
@@ -212,7 +248,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
         BasicTextField(
             value = value,
             onValueChange = { value = it; onQuery(it.text) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().named("Search the transcript"),
             textStyle = tokens.type.caption.copy(color = tokens.color.text),
             cursorBrush = SolidColor(tokens.color.accent),
         )
@@ -248,7 +284,10 @@ private fun AbsentConversation(info: PaneInfo, modifier: Modifier, onTerminal: (
                     maxLines = 3,
                 )
                 Box(Modifier.height(2.dp))
-                QuietAction("Open the terminal view", onTerminal, Modifier.fillMaxWidth())
+                QuietAction(
+                    "Open the terminal view", onTerminal, Modifier.fillMaxWidth(),
+                    label = "Open the terminal view of this pane instead",
+                )
             }
         }
     }

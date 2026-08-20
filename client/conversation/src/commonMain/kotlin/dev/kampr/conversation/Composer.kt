@@ -1,7 +1,6 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -25,8 +24,12 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.TOUCH
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeTop
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.readingOrder
 
 // Herdr's send_text takes a JSON string, and a carriage return is what a harness reads as submit.
 // It goes as its own message so a harness that debounces sees the text settle before the newline.
@@ -53,6 +56,7 @@ fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifie
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
+            .readingOrder(1f)
             .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -75,16 +79,25 @@ fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifie
                 value = value,
                 onValueChange = { value = it },
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 96.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 96.dp)
+                    .named(if (enabled) "Reply to ${agent ?: "the agent"}" else "Read-only device — replies are refused"),
                 textStyle = tokens.type.body.copy(color = tokens.color.text),
                 cursorBrush = SolidColor(tokens.color.accent),
             )
         }
+        val pillShape = RoundedCornerShape(tokens.radii.pill)
         Box(
             Modifier
-                .size(42.dp)
-                .background(if (ready) tokens.color.accent else tokens.color.raise, RoundedCornerShape(tokens.radii.pill))
-                .clickable(enabled = ready) { submit() },
+                .size(TOUCH)
+                .background(if (ready) tokens.color.accent else tokens.color.raise, pillShape)
+                .action(
+                    "Send this reply to ${agent ?: "the agent"}",
+                    { submit() },
+                    pillShape,
+                    enabled = ready,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             IconGlyph(ConversationIcons.send, 18.dp, if (ready) tokens.color.onAccent else tokens.color.mute)

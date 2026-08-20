@@ -21,6 +21,8 @@ import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.BottomSheet
 import dev.kampr.shared.ui.Dot
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.statusWord
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.SheetCard
 import dev.kampr.shared.ui.SheetHeader
@@ -60,7 +62,14 @@ fun PanePicker(
                 for (group in sessions) {
                     val node = group.node
                     Row(
-                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .named(
+                                "${node.session} on ${node.host}, " +
+                                    (if (node.online) "online" else "offline") + ", " +
+                                    formatLatency(node.rttMs),
+                            )
+                            .padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -103,6 +112,7 @@ fun PanePicker(
                                 selected = already,
                                 compact = compact,
                                 onClick = if (already || full) null else ({ onPick(pane.id) }),
+                                label = "Add ${paneTitle(pane)}, ${statusWord(status)}, to the mosaic",
                                 trailing = if (already) ({
                                     KText("in the mosaic", tokens.type.micro, tokens.color.accent)
                                 }) else null,

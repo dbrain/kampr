@@ -2,7 +2,6 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.AllThemes
 import dev.kampr.shared.theme.Kampr
@@ -43,8 +43,8 @@ fun AppearanceScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            IconGlyph(KamprIcons.chevronLeft, 17.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
-            KText("One token layer, four skins", tokens.type.screenTitle, tokens.color.text)
+            BackAction("Back", onBack)
+            KText("One token layer, four skins", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
             KText(
                 "Soft native ships. The rest stay one attribute away.",
                 tokens.type.caption,
@@ -86,7 +86,14 @@ private fun GroundPicker(mode: ThemeMode, onMode: (ThemeMode) -> Unit) {
                         .weight(1f)
                         .background(if (active) tokens.color.accent else tokens.color.raise, shape)
                         .edge(tokens.card, shape)
-                        .clickable { onMode(option) }
+                        .touchable()
+                        .action(
+                            "${option.title} ground",
+                            { onMode(option) },
+                            shape,
+                            role = Role.RadioButton,
+                            selected = active,
+                        )
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -112,7 +119,13 @@ private fun ThemeCard(spec: ThemeSpec, active: Boolean, onSelect: () -> Unit) {
                 .fillMaxWidth()
                 .background(tokens.color.bg, shape)
                 .border(if (active) 2.dp else 1.dp, if (active) outerAccent else tokens.color.line, shape)
-                .clickable(onClick = onSelect)
+                .action(
+                    "${spec.id.title} theme — ${spec.id.credit}",
+                    onSelect,
+                    shape,
+                    role = Role.RadioButton,
+                    selected = active,
+                )
                 .padding(horizontal = 14.dp, vertical = 15.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

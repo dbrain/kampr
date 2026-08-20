@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,9 +26,7 @@ import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 
 private fun statusLabel(status: AgentStatus): String? = when (status) {
-    AgentStatus.Blocked -> "Blocked"
-    AgentStatus.Working -> "Working"
-    AgentStatus.Done -> "Done"
+    AgentStatus.Blocked, AgentStatus.Working, AgentStatus.Done -> statusWord(status)
     else -> null
 }
 
@@ -39,7 +36,14 @@ private fun StatusChip(info: PaneInfo?) {
     val status = info?.let(::statusOf) ?: AgentStatus.Unknown
     val label = statusLabel(status) ?: return
     val tone = statusColor(status)
-    StatusBadge(label, tone, if (status == AgentStatus.Blocked) tokens.color.blockedBg else tokens.color.surface)
+    Row(
+        Modifier.announce("This agent is ${label.lowercase()}", urgent = status == AgentStatus.Blocked),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        StatusMark(status, 7.dp)
+        StatusBadge(label, tone, if (status == AgentStatus.Blocked) tokens.color.blockedBg else tokens.color.surface)
+    }
 }
 
 @Composable
@@ -66,7 +70,9 @@ fun PaneScreenMobile(
             else -> surfaces.Terminal(pane, info, Modifier.fillMaxSize())
         }
 
-        Column(Modifier.align(Alignment.TopStart).fillMaxWidth()) {
+        // The surface is painted first and the chrome floats over it, so composition order and
+        // reading order disagree: without this a reader lands in the grid before the title.
+        Column(Modifier.align(Alignment.TopStart).fillMaxWidth().readingOrder(-1f)) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -75,18 +81,23 @@ fun PaneScreenMobile(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                IconGlyph(KamprIcons.chevronLeft, 17.dp, tokens.color.dim, Modifier.clickable(onClick = onBack))
+                BackAction("Back to the herd", onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
                 if (landscape) {
-                    KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text)
+                    KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
                     KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text)
+                        KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
                         KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute)
                     }
                 }
-                if (pane.stale) StatusBadge("Stale", tokens.color.working, tokens.color.surface)
-                if (readOnly) StatusBadge("read-only", tokens.color.dim, tokens.color.surface)
+                if (pane.stale) StaleBadge()
+                if (readOnly) {
+                    StatusBadge(
+                        "read-only", tokens.color.dim, tokens.color.surface,
+                        label = "This device is read-only — it cannot type into the pane",
+                    )
+                }
                 if (!landscape) TakingPaneAction(pane.id, info?.let(::paneTitle) ?: pane.id)
                 NewAction(pane.id)
                 PaneManageAction(pane.id)
@@ -107,6 +118,7 @@ fun PaneScreenMobile(
                         if (view == PaneView.Conversation) 1 else 0,
                         { onView(if (it == 1) PaneView.Conversation else PaneView.Terminal) },
                         Modifier.weight(1f),
+                        what = "view",
                     )
                     surfaces.Zoom(pane, Modifier)
                 }
@@ -116,11 +128,21 @@ fun PaneScreenMobile(
         // The conversation surface renders its own prompt strip and reply box, so the terminal
         // chrome stands down rather than stacking a second one underneath it.
         if (view != PaneView.Conversation) {
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
                 if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
                 surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
             }
         }
+    }
+}
+
+// A frame that has stopped arriving is a fact about what is on the screen, and the eye gets it
+// from a badge that a reader had no way to hear.
+@Composable
+private fun StaleBadge() {
+    val tokens = Kampr.tokens
+    Box(Modifier.announce("Stale — this pane has stopped sending frames, showing the last grid")) {
+        StatusBadge("Stale", tokens.color.working, tokens.color.surface)
     }
 }
 
@@ -131,12 +153,20 @@ private fun geometryLine(info: PaneInfo?, pane: PaneState): String {
     return listOf(node, local, size, "observing").filter { it.isNotEmpty() }.joinToString(" · ")
 }
 
+// The strip appears because the agent asked something, not because anyone touched the screen, so
+// it announces itself and carries the question a reader would otherwise have to go looking for.
 @Composable
 private fun PendingBar(pending: ServerMsg.Pending, onAnswer: (String) -> Unit) {
     val tokens = Kampr.tokens
+    val question = pending.question ?: "The agent is waiting for an answer"
     Row(
         Modifier
             .fillMaxWidth()
+            .announce(
+                "$question. ${pending.options.size} answers: " +
+                    pending.options.joinToString(", ") { "${it.key} ${it.label}" },
+                urgent = true,
+            )
             .horizontalScroll(rememberScrollState())
             .padding(start = 10.dp, top = 11.dp, end = 10.dp, bottom = 9.dp),
         horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -147,8 +177,10 @@ private fun PendingBar(pending: ServerMsg.Pending, onAnswer: (String) -> Unit) {
                 Modifier
                     .background(if (index == 0) tokens.color.accent else tokens.color.surface, shape)
                     .edge(if (index == 0) tokens.card else tokens.card, shape)
-                    .clickable { onAnswer(option.key) }
+                    .touchable()
+                    .action("Answer ${option.key}, ${option.label}", { onAnswer(option.key) }, shape)
                     .padding(horizontal = 17.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 KText(
                     "${option.key} · ${option.label}",
@@ -194,15 +226,16 @@ fun PaneScreenDesktop(
                 .fillMaxWidth()
                 .background(tokens.color.bar)
                 .edgeBottom()
+                .readingOrder(-1f)
                 .padding(horizontal = 18.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text)
+                KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
                 KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute)
             }
-            if (pane.stale) StatusBadge("Stale", tokens.color.working, tokens.color.surface)
+            if (pane.stale) StaleBadge()
             StatusChip(info)
             NewAction(pane.id)
             PaneManageAction(pane.id)
@@ -224,6 +257,7 @@ fun PaneScreenDesktop(
                     )
                 },
                 Modifier.width(320.dp),
+                what = "view",
             )
         }
 

@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -26,7 +27,6 @@ import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.Dot
 import dev.kampr.shared.ui.GlyphAction
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
@@ -37,8 +37,13 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.StatusMark
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.statusColor
+import dev.kampr.shared.ui.statusWord
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.NodeInfo
@@ -52,17 +57,12 @@ private val FOCUS_EDGE = 2.dp
 // which is the whole point of putting the number in the cell.
 private const val SLOW_MS = 150.0
 
-private fun statusWord(status: AgentStatus): String? = when (status) {
-    AgentStatus.Blocked -> "BLOCKED"
-    AgentStatus.Working -> "WORKING"
-    AgentStatus.Done -> "DONE"
-    AgentStatus.Idle -> "IDLE"
-    AgentStatus.Unknown -> null
-}
+private fun cellStatusWord(status: AgentStatus): String? =
+    if (status == AgentStatus.Unknown) null else statusWord(status).uppercase()
 
 // Input reaches exactly one cell. Refusing it the way a read-only device is refused it means the
 // key row and the destructive-command guard both follow the focus without knowing about it.
-private class CellIo(private val base: PaneIo, private val writable: Boolean) : PaneIo {
+internal class CellIo(private val base: PaneIo, private val writable: Boolean) : PaneIo {
     override fun send(msg: ClientMsg) = base.send(msg)
     override fun prefs(paneId: String): PanePrefs = base.prefs(paneId)
     override fun info(paneId: String): PaneInfo? = base.info(paneId)
@@ -82,6 +82,8 @@ private fun latencyTone(node: NodeInfo?): Color {
         else -> color.dim
     }
 }
+
+private fun status(info: PaneInfo?): AgentStatus = info?.let(::statusOf) ?: AgentStatus.Unknown
 
 fun cellPlace(info: PaneInfo?, node: NodeInfo?, pane: PaneState): String {
     val where = node?.let { "${it.host} / ${it.session}" } ?: info?.nodeId ?: "—"
@@ -108,6 +110,9 @@ fun MosaicCell(
 
     Box(
         modifier
+            // The surface is taller and wider than the cell by design, and a graphicsLayer does
+            // not clip: without this a cell paints over its neighbour and over the chrome.
+            .clipToBounds()
             .background(tokens.color.surface2)
             .edge(BorderSpec(FOCUS_EDGE, if (focused) tokens.color.accent else tokens.color.surface2), RectangleShape)
             // Initial pass, unconsumed: focus follows the touch that the terminal underneath is
@@ -130,7 +135,7 @@ fun MosaicCell(
         }
 
         // Under the header, not over it: the cell is unreachable, its controls are not.
-        if (offline) CellUnavailable(node.detail ?: "${node.name} is not connected")
+        if (offline) CellUnavailable(node.name, node.detail ?: "${node.name} is not connected")
 
         CellHeader(pane, info, node, focused, onRemove, Modifier.align(Alignment.TopStart).height(header))
     }
@@ -148,17 +153,19 @@ private fun CellHeader(
     val tokens = Kampr.tokens
     val status = info?.let(::statusOf) ?: AgentStatus.Unknown
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
+    val title = info?.let(::paneTitle) ?: pane.id
     Row(
         modifier
             .fillMaxWidth()
             .background(tokens.color.bar)
+            .readingOrder(-1f)
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Dot(statusColor(status), 7.dp, hollow = quiet)
+        StatusMark(status, 7.dp)
         KText(
-            info?.let(::paneTitle) ?: pane.id,
+            title,
             tokens.type.cardTitle,
             if (quiet) tokens.color.dim else tokens.color.text,
         )
@@ -170,6 +177,7 @@ private fun CellHeader(
         }
         GlyphAction(
             KamprIcons.cross,
+            "Remove $title from the mosaic",
             if (focused) tokens.color.dim else tokens.color.mute,
             28.dp,
             chip = 20.dp,
@@ -181,10 +189,13 @@ private fun CellHeader(
 // The mesh already degrades one node without touching the others; a cell says so in the node's
 // own words and clears itself when the node comes back.
 @Composable
-private fun CellUnavailable(detail: String) {
+private fun CellUnavailable(name: String, detail: String) {
     val tokens = Kampr.tokens
     Box(
-        Modifier.fillMaxSize().background(tokens.color.bg.copy(alpha = UNAVAILABLE_WASH)),
+        Modifier
+            .fillMaxSize()
+            .background(tokens.color.bg.copy(alpha = UNAVAILABLE_WASH))
+            .announce("$name is unavailable. $detail. It recovers on its own."),
         contentAlignment = Alignment.Center,
     ) {
         Surface(
