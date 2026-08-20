@@ -57,7 +57,7 @@ pub struct RawScrollback {
     pub text: String,
     pub cols: u16,
     pub viewport_rows: u16,
-    pub scrollback_rows: u32,
+    /// Set by herdr when more history existed than it returned — the read cap, in practice.
     pub truncated: bool,
 }
 

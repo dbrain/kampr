@@ -62,7 +62,9 @@ impl Default for Cell {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RowDiff {
-    pub row: u16,
+    /// Wide enough for an absolute scrollback index: a ring outgrows 16 bits long before it
+    /// outgrows memory.
+    pub row: u32,
     pub cells: Vec<Cell>,
 }
 
@@ -146,7 +148,7 @@ impl Grid {
         for r in 0..self.rows {
             if std::mem::replace(&mut self.dirty[r as usize], false) {
                 out.push(RowDiff {
-                    row: r,
+                    row: r as u32,
                     cells: self.row(r).to_vec(),
                 });
             }

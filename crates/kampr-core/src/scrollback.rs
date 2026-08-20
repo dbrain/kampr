@@ -1,51 +1,182 @@
 use crate::provider::RawScrollback;
 use kampr_term::{Emulator, RowDiff};
 
+/// Four times herdr's own 1000-line read cap: deep enough for stitching to be worth doing, and
+/// bounded because the ring is rendered into a cell grid in one piece.
+pub const DEFAULT_MAX_ROWS: usize = 4000;
+
 #[derive(Debug, Clone)]
 pub struct ScrollbackDoc {
-    /// Absolute index of the first delivered row, counted from the top of herdr's ring.
+    /// Absolute index of the first delivered row, counted from the top of the node's ring.
     pub from_top: u32,
     pub rows: Vec<RowDiff>,
     pub total_rows: u32,
     pub complete: bool,
+    /// True when history above `from_top` existed and is unreachable — herdr's read cap, a gap
+    /// between reads, or the ring's own bound.
+    pub capped: bool,
 }
 
-/// Renders `pane.read recent format=ansi` through the same emulator the live grid uses, so a
-/// client's history is styled identically to its viewport.
-pub fn render(raw: &RawScrollback) -> ScrollbackDoc {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ingest {
+    Fresh {
+        rows: usize,
+    },
+    Stitched {
+        added: usize,
+    },
+    /// No overlap with what we hold: output outran the poll, so the two reads cannot be joined.
+    Gap {
+        dropped: usize,
+    },
+    /// The pane changed width, so every stored row was re-wrapped underneath us.
+    Rewrapped {
+        dropped: usize,
+    },
+}
+
+/// History accumulated across reads.
+///
+/// `pane.read recent` returns at most the newest 1000 rows and takes no offset (probe #51), so a
+/// single read can never reach past the cap. Successive reads overlap while the node is watching,
+/// and the overlap is what lets the ring grow deeper than any one read.
+#[derive(Debug, Clone)]
+pub struct ScrollbackRing {
+    rows: Vec<String>,
+    cols: u16,
+    /// Absolute index of `rows[0]`. Only ever increases.
+    base: u32,
+    capped: bool,
+    max_rows: usize,
+}
+
+impl Default for ScrollbackRing {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_ROWS)
+    }
+}
+
+impl ScrollbackRing {
+    pub fn new(max_rows: usize) -> Self {
+        Self {
+            rows: Vec::new(),
+            cols: 0,
+            base: 0,
+            capped: false,
+            max_rows: max_rows.max(1),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn capped(&self) -> bool {
+        self.capped
+    }
+
+    pub fn ingest(&mut self, raw: &RawScrollback) -> Ingest {
+        let incoming = history_rows(raw);
+        // A width change re-wraps every stored row, so nothing older can be trusted to line up.
+        if raw.cols != self.cols && !self.rows.is_empty() {
+            let dropped = self.restart(incoming);
+            return Ingest::Rewrapped { dropped };
+        }
+        self.cols = raw.cols;
+        if self.rows.is_empty() {
+            self.rows = incoming;
+            self.capped |= raw.truncated;
+            self.trim();
+            return Ingest::Fresh {
+                rows: self.rows.len(),
+            };
+        }
+        match overlap(&self.rows, &incoming) {
+            0 => Ingest::Gap {
+                dropped: self.restart(incoming),
+            },
+            k => {
+                let added = incoming.len() - k;
+                self.rows.extend_from_slice(&incoming[k..]);
+                self.trim();
+                Ingest::Stitched { added }
+            }
+        }
+    }
+
+    pub fn render(&self) -> ScrollbackDoc {
+        let total_rows = self.base + self.rows.len() as u32;
+        if self.rows.is_empty() {
+            return ScrollbackDoc {
+                from_top: self.base,
+                rows: Vec::new(),
+                total_rows,
+                complete: self.base == 0,
+                capped: self.capped,
+            };
+        }
+        let mut term = Emulator::new(self.cols.max(1), self.rows.len().min(u16::MAX as usize) as u16);
+        // herdr separates rows with LF alone, which moves down without returning the carriage.
+        term.feed(self.rows.join("\r\n").as_bytes());
+        let grid = term.grid();
+        let rows = (0..grid.rows())
+            .map(|r| RowDiff {
+                row: self.base + r as u32,
+                cells: grid.row(r).to_vec(),
+            })
+            .collect();
+        ScrollbackDoc {
+            from_top: self.base,
+            rows,
+            total_rows,
+            complete: self.base == 0,
+            capped: self.capped,
+        }
+    }
+
+    /// The newest read shares nothing with what we hold. Splicing them would fabricate adjacency
+    /// between two unrelated stretches of history, so the old rows go and the ring says it is
+    /// capped from here.
+    fn restart(&mut self, incoming: Vec<String>) -> usize {
+        let dropped = self.rows.len();
+        self.base += dropped as u32;
+        self.rows = incoming;
+        self.capped = true;
+        self.trim();
+        dropped
+    }
+
+    fn trim(&mut self) {
+        if self.rows.len() <= self.max_rows {
+            return;
+        }
+        let excess = self.rows.len() - self.max_rows;
+        self.rows.drain(..excess);
+        self.base += excess as u32;
+        self.capped = true;
+    }
+}
+
+/// The rows of a read that are history: `recent` hands back the live viewport too, and that
+/// already travels as the grid.
+fn history_rows(raw: &RawScrollback) -> Vec<String> {
     let mut lines: Vec<&str> = raw.text.split('\n').collect();
     if lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
-    // `recent` returns history *and* the live viewport; the viewport already travels as the grid.
     let keep = lines.len().saturating_sub(raw.viewport_rows as usize);
-    let total_rows = raw.scrollback_rows.max(keep as u32);
-    let from_top = total_rows - keep as u32;
-    if keep == 0 {
-        return ScrollbackDoc {
-            from_top: 0,
-            rows: Vec::new(),
-            total_rows,
-            complete: !raw.truncated,
-        };
-    }
+    lines[..keep].iter().map(|l| l.to_string()).collect()
+}
 
-    let mut term = Emulator::new(raw.cols.max(1), keep as u16);
-    // herdr separates rows with LF alone, which moves down without returning the carriage.
-    term.feed(lines[..keep].join("\r\n").as_bytes());
-
-    let grid = term.grid();
-    let rows = (0..keep as u16)
-        .map(|r| RowDiff {
-            row: (from_top + r as u32).min(u16::MAX as u32) as u16,
-            cells: grid.row(r).to_vec(),
-        })
-        .collect();
-
-    ScrollbackDoc {
-        from_top,
-        rows,
-        total_rows,
-        complete: from_top == 0 && !raw.truncated,
-    }
+/// Longest suffix of `held` that is also a prefix of `incoming`.
+fn overlap(held: &[String], incoming: &[String]) -> usize {
+    let max = held.len().min(incoming.len());
+    (1..=max)
+        .rev()
+        .find(|k| held[held.len() - k..] == incoming[..*k])
+        .unwrap_or(0)
 }

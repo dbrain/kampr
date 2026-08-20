@@ -31,7 +31,7 @@ pub struct Run {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RowRuns {
-    pub row: u16,
+    pub row: u32,
     pub runs: Vec<Run>,
 }
 
@@ -165,6 +165,7 @@ pub enum ServerMsg {
         rows: Vec<RowRuns>,
         total_rows: u32,
         complete: bool,
+        capped: bool,
     },
     #[serde(rename = "error")]
     Error {
@@ -340,6 +341,7 @@ impl Encoder {
             rows,
             total_rows: doc.total_rows,
             complete: doc.complete,
+            capped: doc.capped,
         });
         out
     }

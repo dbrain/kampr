@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
-use kampr_core::registry::{PaneRegistry, PaneUpdate, Watcher};
+use kampr_core::registry::{PaneRegistry, PaneUpdate, RegistryConfig, Watcher};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,6 +13,8 @@ struct Scripted {
     opens: AtomicUsize,
     writes: Mutex<Vec<(String, Input)>>,
     topology: watch::Sender<u64>,
+    reads: Mutex<std::collections::VecDeque<RawScrollback>>,
+    last_read: Mutex<Option<RawScrollback>>,
 }
 
 impl Default for Scripted {
@@ -22,6 +24,8 @@ impl Default for Scripted {
             opens: AtomicUsize::default(),
             writes: Mutex::default(),
             topology: watch::channel(0).0,
+            reads: Mutex::default(),
+            last_read: Mutex::default(),
         }
     }
 }
@@ -61,7 +65,11 @@ impl Provider for Scripted {
     }
 
     async fn read_scrollback(&self, _pane_id: &str) -> Result<Option<RawScrollback>> {
-        Ok(None)
+        if let Some(next) = self.reads.lock().await.pop_front() {
+            *self.last_read.lock().await = Some(next.clone());
+            return Ok(Some(next));
+        }
+        Ok(self.last_read.lock().await.clone())
     }
 
     fn topology(&self) -> watch::Receiver<u64> {
@@ -330,4 +338,124 @@ async fn the_registry_forwards_the_providers_topology_signal() {
         .unwrap();
     assert_eq!(*topo.borrow(), 1);
     assert_eq!(reg.list_panes().await.unwrap()[0].pane_id, "p");
+}
+
+fn read(lines: &[String], viewport_rows: u16) -> RawScrollback {
+    RawScrollback {
+        text: lines.iter().map(|l| format!("{l}\n")).collect(),
+        cols: 16,
+        viewport_rows,
+        truncated: true,
+    }
+}
+
+#[tokio::test]
+async fn a_watched_pane_stitches_its_history_across_reads() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            scrollback_poll: Duration::from_millis(40),
+            ..RegistryConfig::default()
+        },
+    );
+    let numbered =
+        |from: usize, to: usize| -> Vec<String> { (from..=to).map(|i| format!("line-{i}")).collect() };
+    {
+        let mut q = p.reads.lock().await;
+        q.push_back(read(&numbered(1, 5), 1));
+        q.push_back(read(&numbered(3, 9), 1));
+    }
+
+    let _w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(220)).await;
+
+    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    let lines: Vec<String> = doc
+        .rows
+        .iter()
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(lines, numbered(1, 8), "two overlapping reads become one ring");
+    assert!(doc.capped, "the reads were against herdr's cap");
+    assert_eq!(doc.total_rows, 8);
+}
+
+#[tokio::test]
+async fn history_is_torn_down_with_the_last_watcher() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            scrollback_poll: Duration::from_millis(40),
+            ..RegistryConfig::default()
+        },
+    );
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["a".into(), "b".into(), "v".into()], 1));
+
+    let w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(reg.scrollback("p").await.unwrap().unwrap().rows.len(), 2);
+
+    drop(w);
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(reg.watcher_count("p"), 0);
+    let fresh = reg.scrollback("p").await.unwrap().unwrap();
+    assert_eq!(
+        fresh.from_top, 0,
+        "an unwatched pane starts a ring from the one read it can do"
+    );
+}
+
+#[tokio::test]
+async fn new_hyperlinks_ride_a_patch_as_a_delta_in_arrival_order() {
+    let (p, reg) = setup().await;
+    let mut a = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 40, rows: 3 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"\x1b[1;1H\x1b]8;;https://one\x1b\\ONE\x1b]8;;\x1b\\".to_vec(),
+    })
+    .await
+    .unwrap();
+    let u = next(&mut a).await;
+    match &u {
+        PaneUpdate::Reset { links, .. } => assert_eq!(links.as_slice(), ["https://one"]),
+        other => panic!("{other:?}"),
+    }
+
+    feed.send(PaneEvent::Bytes {
+        full: false,
+        bytes: b"\x1b[2;1H\x1b]8;;https://two\x1b\\TWO\x1b]8;;\x1b\\".to_vec(),
+    })
+    .await
+    .unwrap();
+    let u = next(&mut a).await;
+    match &u {
+        PaneUpdate::Patch { new_links, .. } => {
+            assert_eq!(
+                new_links.as_slice(),
+                ["https://two"],
+                "only what the client lacks"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(u.rows()[0].cells[0].link, Some(1), "ids index the appended table");
+
+    let mut enc = kampr_core::wire::Encoder::new();
+    let v = serde_json::to_value(enc.encode("n/p", &u).last().unwrap()).unwrap();
+    assert_eq!(v["links"], serde_json::json!(["https://two"]));
+    assert_eq!(v["rows"][0]["runs"][0]["l"], 1);
 }

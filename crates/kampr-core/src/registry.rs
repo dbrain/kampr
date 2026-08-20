@@ -1,5 +1,5 @@
 use crate::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider};
-use crate::scrollback::{self, ScrollbackDoc};
+use crate::scrollback::{Ingest, ScrollbackDoc, ScrollbackRing};
 use crate::wire::Cursor;
 use anyhow::Result;
 use kampr_term::{Emulator, RowDiff};
@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub enum PaneUpdate {
@@ -62,6 +63,11 @@ pub struct RegistryConfig {
     /// How long the very first watcher waits for real geometry, so no client is ever handed the
     /// placeholder grid that exists before the provider's first `Reset`.
     pub first_grid_wait: Duration,
+    /// How often a watched pane's history is re-read. Reads overlap at this cadence, and the
+    /// overlap is the only way a ring grows past herdr's 1000-line cap (probe #51). Slower than
+    /// the pane produces 1000 rows and the stitch breaks.
+    pub scrollback_poll: Duration,
+    pub scrollback_max_rows: usize,
 }
 
 impl Default for RegistryConfig {
@@ -70,6 +76,8 @@ impl Default for RegistryConfig {
             broadcast_capacity: 256,
             reset_flush_after: Duration::from_millis(300),
             first_grid_wait: Duration::from_secs(2),
+            scrollback_poll: Duration::from_secs(2),
+            scrollback_max_rows: crate::scrollback::DEFAULT_MAX_ROWS,
         }
     }
 }
@@ -84,13 +92,16 @@ struct PaneState {
 struct PaneEntry {
     pane_id: String,
     state: Arc<Mutex<PaneState>>,
+    history: Arc<Mutex<ScrollbackRing>>,
     tx: broadcast::Sender<PaneUpdate>,
-    task: JoinHandle<()>,
+    tasks: [JoinHandle<()>; 2],
 }
 
 impl Drop for PaneEntry {
     fn drop(&mut self) {
-        self.task.abort();
+        for t in &self.tasks {
+            t.abort();
+        }
     }
 }
 
@@ -131,12 +142,24 @@ impl PaneRegistry {
         self.provider.write_pane(pane_id, input).await
     }
 
+    /// Reads once more before rendering, so a client's history is current at the moment it asks
+    /// and the ring gets one more chance to stitch.
     pub async fn scrollback(&self, pane_id: &str) -> Result<Option<ScrollbackDoc>> {
-        Ok(self
-            .provider
-            .read_scrollback(pane_id)
-            .await?
-            .map(|raw| scrollback::render(&raw)))
+        let Some(raw) = self.provider.read_scrollback(pane_id).await? else {
+            return Ok(None);
+        };
+        match self.lookup(pane_id) {
+            Some(entry) => {
+                let mut ring = entry.history.lock().unwrap();
+                ring.ingest(&raw);
+                Ok(Some(ring.render()))
+            }
+            None => {
+                let mut ring = ScrollbackRing::new(self.config.scrollback_max_rows);
+                ring.ingest(&raw);
+                Ok(Some(ring.render()))
+            }
+        }
     }
 
     pub fn watcher_count(&self, pane_id: &str) -> usize {
@@ -166,17 +189,27 @@ impl PaneRegistry {
             ready: false,
         }));
         let (tx, _) = broadcast::channel(self.config.broadcast_capacity);
-        let task = tokio::spawn(pump(
-            stream,
-            state.clone(),
-            tx.clone(),
-            self.config.reset_flush_after,
-        ));
+        let history = Arc::new(Mutex::new(ScrollbackRing::new(self.config.scrollback_max_rows)));
+        let tasks = [
+            tokio::spawn(pump(
+                stream,
+                state.clone(),
+                tx.clone(),
+                self.config.reset_flush_after,
+            )),
+            tokio::spawn(accumulate_history(
+                self.provider.clone(),
+                pane_id.to_string(),
+                history.clone(),
+                self.config.scrollback_poll,
+            )),
+        ];
         let entry = Arc::new(PaneEntry {
             pane_id: pane_id.to_string(),
             state,
+            history,
             tx,
-            task,
+            tasks,
         });
         self.panes
             .lock()
@@ -251,7 +284,7 @@ fn full_update(state: &PaneState) -> PaneUpdate {
     let grid = state.term.grid();
     let rows_data = (0..grid.rows())
         .map(|r| RowDiff {
-            row: r,
+            row: r as u32,
             cells: grid.row(r).to_vec(),
         })
         .collect();
@@ -336,6 +369,33 @@ async fn pump(
                     });
                 }
             }
+        }
+    }
+}
+
+/// Grows a pane's ring while it is watched. Each read overlaps the last, and the overlap is what
+/// carries history past a single read's 1000-line ceiling.
+async fn accumulate_history(
+    provider: Arc<dyn Provider>,
+    pane_id: String,
+    ring: Arc<Mutex<ScrollbackRing>>,
+    every: Duration,
+) {
+    let mut tick = tokio::time::interval(every);
+    loop {
+        tick.tick().await;
+        match provider.read_scrollback(&pane_id).await {
+            Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
+                Ingest::Gap { dropped } => {
+                    warn!(pane = %pane_id, dropped, "history outran the poll; ring capped here")
+                }
+                Ingest::Rewrapped { dropped } => {
+                    warn!(pane = %pane_id, dropped, "pane re-wrapped; ring restarted")
+                }
+                _ => {}
+            },
+            Ok(None) => {}
+            Err(e) => debug!(pane = %pane_id, error = %e, "scrollback read failed"),
         }
     }
 }

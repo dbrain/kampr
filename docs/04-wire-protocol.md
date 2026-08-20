@@ -107,6 +107,24 @@ it is watching, successive reads overlap, so it stitches them into a ring that g
 History that scrolled away before the node started watching is unreachable, and `capped: true` says
 so rather than pretending the top of the ring is the top of history.
 
+**On a gap, the node discards what it held rather than keeping it behind a hole.** If output outruns
+the poll — more than 1000 rows between reads — the new read shares no overlap with the ring, so the
+two stretches are not adjacent and nothing can prove what sits between them. Splicing them would make
+`from_top` and `total_rows` fiction. The node drops the old rows, advances `from_top` by their count
+so absolute indices stay true, and sets `capped`.
+
+That is a real loss, and a `cat` of a large file or a verbose build will cause it. Two things follow:
+
+- **The node polls adaptively**, faster while a pane is producing output, so gaps stay rare rather
+  than being accepted as normal. This is the mitigation; the discard is the honest floor beneath it.
+- **Preserving history across a gap needs a wire change, and is deliberately not in v1** — it would
+  take either a per-segment `from_top` or a gap sentinel row, and both should be specified before
+  anyone implements them. Decide it on evidence that gaps still hurt after adaptive polling.
+
+A **width change** restarts the ring for a different reason: every stored row was wrapped at the old
+width, so nothing older can be trusted to line up. Same restart, distinct cause, and the log says
+which happened.
+
 ### `convo` / `convo.turn` — transcript-derived, agent panes only
 ```jsonc
 { "t": "convo", "pane": "01J.../w3:p2", "cursor": "opaque", "more": true,

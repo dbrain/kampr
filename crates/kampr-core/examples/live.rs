@@ -16,7 +16,8 @@ use kampr_herdr::Herdr;
 use std::sync::Arc;
 use std::time::Duration;
 
-const LINES: usize = 600;
+const LINES: usize = 1600;
+const BURST: usize = 4000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -76,18 +77,20 @@ async fn main() -> Result<()> {
     drain(&mut a, Duration::from_millis(1200)).await;
     drain(&mut b, Duration::from_millis(200)).await;
 
+    // Paced so fewer than herdr's 1000-line read cap accumulates between history polls; that is
+    // the condition stitching needs.
     registry
         .write(
             &target,
             Input::Bytes(
                 format!(
-                    "for i in $(seq 1 {LINES}); do printf '\\033[38;5;%dmSB-%04d\\033[0m coloured scrollback row\\n' $((i % 214 + 16)) $i; done\n"
+                    "for i in $(seq 1 {LINES}); do printf '\\033[38;5;%dmSB-%04d\\033[0m coloured scrollback row\\n' $((i % 214 + 16)) $i; [ $((i % 200)) -eq 0 ] && sleep 0.75; done\n"
                 )
                 .into_bytes(),
             ),
         )
         .await?;
-    let ua = drain(&mut a, Duration::from_secs(3)).await;
+    let ua = drain(&mut a, Duration::from_secs(12)).await;
     let ub = drain(&mut b, Duration::from_secs(1)).await;
     println!("  A saw {} updates, B saw {} updates", ua.len(), ub.len());
     println!("  observe children still = {}", observe_children(&target));
@@ -121,7 +124,7 @@ async fn main() -> Result<()> {
     let per_cell = serde_json::to_string(joined.rows())?.len();
     println!("  interned styles: {style_count};  per-cell JSON would be {per_cell} bytes");
 
-    println!("\n== 4. scrollback ==");
+    println!("\n== 4. scrollback, stitched past herdr's 1000-line read cap ==");
     let doc = registry
         .scrollback(&target)
         .await?
@@ -135,13 +138,6 @@ async fn main() -> Result<()> {
         .iter()
         .filter(|r| r.cells.iter().any(|c| c.fg != kampr_term::Color::Default))
         .count();
-    println!(
-        "  rows {} (from_top {} of total {}, complete {})",
-        doc.rows.len(),
-        doc.from_top,
-        doc.total_rows,
-        doc.complete
-    );
     let on_screen = {
         let live = registry.watch(&target).await?;
         rows_text(live.initial())
@@ -152,18 +148,63 @@ async fn main() -> Result<()> {
             text.iter().any(|l| l.contains(&m)) || on_screen.iter().any(|l| l.contains(&m))
         })
         .count();
+    println!(
+        "  ring {} rows (from_top {}, total {}, complete {}, capped {})",
+        doc.rows.len(),
+        doc.from_top,
+        doc.total_rows,
+        doc.complete,
+        doc.capped
+    );
+    println!("  a single herdr read can never exceed 1000 rows — anything above that is stitched");
     println!("  markers in the ring: {markers}/{LINES};  rows carrying colour: {coloured}");
     println!("  markers in ring + live grid: {union}/{LINES}");
     println!(
-        "  first row index {:?}, last {:?}",
+        "  row index range {:?}..{:?}",
         doc.rows.first().map(|r| r.row),
         doc.rows.last().map(|r| r.row)
     );
-    let sb = enc.encode_scrollback(&format!("{node_id}/{target}"), &doc);
     println!(
         "  scrollback message: {} bytes",
-        serde_json::to_string(sb.last().unwrap())?.len()
+        serde_json::to_string(
+            enc.encode_scrollback(&format!("{node_id}/{target}"), &doc)
+                .last()
+                .unwrap()
+        )?
+        .len()
     );
+
+    println!("\n== 4b. a burst that outruns the poll is reported, not fabricated ==");
+    registry
+        .write(
+            &target,
+            Input::Bytes(
+                format!("for i in $(seq 1 {BURST}); do printf 'BURST-%04d\\n' $i; done\n").into_bytes(),
+            ),
+        )
+        .await?;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let after = registry
+        .scrollback(&target)
+        .await?
+        .context("scrollback was refused")?;
+    let after_text = rows_text_diffs(&after.rows);
+    let survived = (1..=LINES)
+        .filter(|i| after_text.iter().any(|l| l.contains(&format!("SB-{i:04}"))))
+        .count();
+    println!(
+        "  ring {} rows (from_top {}, total {}, complete {}, capped {})",
+        after.rows.len(),
+        after.from_top,
+        after.total_rows,
+        after.complete,
+        after.capped
+    );
+    println!(
+        "  from_top moved {} -> {}: that many rows are unreachable and said to be",
+        doc.from_top, after.from_top
+    );
+    println!("  SB markers still reachable: {survived}/{LINES}");
 
     println!("\n== 5. observer restart ==");
     let before = observe_children(&target);

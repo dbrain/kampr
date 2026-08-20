@@ -9,7 +9,7 @@ fn cell(ch: char, fg: Color) -> Cell {
     }
 }
 
-fn row(n: u16, cells: Vec<Cell>) -> RowDiff {
+fn row(n: u32, cells: Vec<Cell>) -> RowDiff {
     RowDiff { row: n, cells }
 }
 
@@ -192,4 +192,25 @@ fn run_length_encoding_is_far_smaller_than_per_cell_json() {
     let rows = enc.rows(&diffs);
     let runs = serde_json::to_string(&rows).unwrap().len();
     assert!(runs * 10 < per_cell, "run encoding {runs} vs per-cell {per_cell}");
+}
+
+#[test]
+fn an_absolute_ring_index_beyond_sixteen_bits_survives_the_wire() {
+    let mut enc = Encoder::new();
+    let rows = enc.rows(&[RowDiff {
+        row: 200_000,
+        cells: vec![cell('x', Color::Default)],
+    }]);
+    let v = serde_json::to_value(ServerMsg::Scrollback {
+        pane: "01J/w3:p2".into(),
+        from_top: 200_000,
+        rows,
+        total_rows: 200_001,
+        complete: false,
+        capped: true,
+    })
+    .unwrap();
+    assert_eq!(v["rows"][0]["row"], 200_000);
+    assert_eq!(v["capped"], true);
+    assert_eq!(v["complete"], false);
 }

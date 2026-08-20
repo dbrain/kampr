@@ -9,11 +9,13 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, warn};
 
-/// `pane.updated` is what actually fires when the desk resizes — `layout.updated` does not
-/// (probed 2026-08-20, herdr 0.8.2). Both are subscribed, and the poll below is the backstop for
-/// anything neither reports — including `pane.agent_status_changed`, which cannot be listed here
-/// because herdr rejects a subscription to it without a `pane_id`, and one rejection kills the
-/// whole `events.subscribe` call.
+/// **Nothing here fires when the desk client resizes** (probe #52): `layout.updated` covers
+/// structural change only, and a native geometry change is detectable *only* by polling. The
+/// `poll_interval` below is therefore load-bearing, not a backstop — drop it and a resized pane
+/// keeps streaming at a stale width forever.
+///
+/// `pane.agent_status_changed` is absent because herdr rejects a subscription to it without a
+/// `pane_id`, and one rejected entry kills the whole `events.subscribe` call.
 const TOPOLOGY_EVENTS: &[&str] = &[
     "layout.updated",
     "pane.created",
@@ -32,11 +34,15 @@ const TOPOLOGY_EVENTS: &[&str] = &[
     "workspace.moved",
 ];
 
+/// Well past herdr's 1000-line read cap; over-asking clamps rather than failing.
+const READ_CEILING: u64 = 4096;
+
 #[derive(Debug, Clone)]
 pub struct HerdrConfig {
     pub binary: String,
     pub backoff: Backoff,
-    /// Re-snapshot even when no event arrived; also the reconnect probe for a dead socket.
+    /// The only way a desk resize is ever noticed (probe #52), and the reconnect probe for a
+    /// dead socket.
     pub poll_interval: Duration,
     /// A burst of events after one structural change collapses into a single snapshot.
     pub settle: Duration,
@@ -47,7 +53,7 @@ impl Default for HerdrConfig {
         Self {
             binary: "herdr".into(),
             backoff: Backoff::default(),
-            poll_interval: Duration::from_secs(5),
+            poll_interval: Duration::from_secs(3),
             settle: Duration::from_millis(60),
         }
     }
@@ -145,20 +151,25 @@ impl Provider for HerdrProvider {
     }
 
     async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>> {
-        let snapshot = self.inner.refresh().await?;
+        let snapshot = self.inner.snapshot.borrow().clone();
         let pane = snapshot.pane(pane_id).context("unknown pane")?;
         if !pane.scrollback_is_safe_to_read() {
             return Ok(None);
         }
         let scroll = pane.scroll.context("pane reported no scroll state")?;
         let (cols, _) = snapshot.geometry(pane_id).context("pane has no layout rect")?;
-        let want = scroll.max_offset_from_bottom + scroll.viewport_rows;
-        let read = self.inner.herdr.read_scrollback(pane_id, want).await?;
+        // Over-asking clamps to herdr's own cap (probe #51), so the request is deliberately far
+        // past it: `truncated` then means "history exists above this", independent of how fresh
+        // the cached snapshot's ring depth happens to be.
+        let read = self
+            .inner
+            .herdr
+            .read_scrollback(pane_id, READ_CEILING + scroll.viewport_rows)
+            .await?;
         Ok(Some(RawScrollback {
             text: read.text,
             cols: cols as u16,
             viewport_rows: scroll.viewport_rows as u16,
-            scrollback_rows: scroll.max_offset_from_bottom as u32,
             truncated: read.truncated,
         }))
     }
