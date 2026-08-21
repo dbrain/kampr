@@ -24,7 +24,9 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.util.relativeTime
@@ -76,6 +78,7 @@ fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     statusWord(statusOf(pane)),
     pane.cwd,
     "updated ${relativeTime(pane.updatedAt, now)}",
+    watchersPhrase(othersWatching(pane)),
 ).joinToString(", ")
 
 @Composable
@@ -134,6 +137,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                 )
                 KText(pane.cwd ?: "", tokens.type.meta, tokens.color.mute)
             }
+            WatchersTag(othersWatching(pane))
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (!quiet) StatusMark(status, 8.dp)
                 KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
@@ -174,6 +178,7 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
             )
             KText(pane.cwd ?: "", tokens.type.meta, tokens.color.mute)
         }
+        WatchersTag(othersWatching(pane))
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
     }
 }

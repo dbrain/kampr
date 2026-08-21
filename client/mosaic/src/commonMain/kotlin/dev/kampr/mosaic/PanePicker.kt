@@ -23,6 +23,9 @@ import dev.kampr.shared.ui.Dot
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.statusWord
+import dev.kampr.shared.model.othersWatching
+import dev.kampr.shared.model.watchersPhrase
+import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.SheetCard
 import dev.kampr.shared.ui.SheetHeader
@@ -106,13 +109,21 @@ fun PanePicker(
                                 icon = statusIcon(status),
                                 iconTint = statusColor(status),
                                 title = paneTitle(pane),
-                                subtitle = listOfNotNull(pane.cwd, "${pane.cols?.toString() ?: "—"}×${pane.rows}")
-                                    .joinToString(" · "),
+                                subtitle = listOfNotNull(
+                                    pane.cwd,
+                                    "${pane.cols?.toString() ?: "—"}×${pane.rows}",
+                                    watchersTag(othersWatching(pane)),
+                                ).joinToString(" · "),
                                 subtitleMono = true,
                                 selected = already,
                                 compact = compact,
                                 onClick = if (already || full) null else ({ onPick(pane.id) }),
-                                label = "Add ${paneTitle(pane)}, ${statusWord(status)}, to the mosaic",
+                                label = listOfNotNull(
+                                    "Add ${paneTitle(pane)}",
+                                    statusWord(status),
+                                    watchersPhrase(othersWatching(pane)),
+                                    "to the mosaic",
+                                ).joinToString(", "),
                                 trailing = if (already) ({
                                     KText("in the mosaic", tokens.type.micro, tokens.color.accent)
                                 }) else null,

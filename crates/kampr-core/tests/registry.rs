@@ -360,9 +360,13 @@ fn brisk() -> HistoryPolicy {
 }
 
 fn read(lines: &[String], viewport_rows: u16) -> RawScrollback {
+    read_at(lines, viewport_rows, 16)
+}
+
+fn read_at(lines: &[String], viewport_rows: u16, cols: u16) -> RawScrollback {
     RawScrollback {
         text: lines.iter().map(|l| format!("{l}\n")).collect(),
-        cols: 16,
+        cols,
         viewport_rows,
         truncated: true,
     }
@@ -709,4 +713,38 @@ async fn a_pane_with_no_ring_yet_is_still_read_once_it_starts_producing() {
         "output must keep the poller looking for a ring, saw {} reads",
         after - parked
     );
+}
+
+/// Probe #112: a watched pane logged `pane re-wrapped; ring restarted` over and over while its
+/// `from_top` climbed by the ring's whole depth each time. A pane whose measured width moves once
+/// owes one restart, not one per read — and every read after it must go back to stitching.
+#[tokio::test]
+async fn a_single_width_change_costs_a_single_restart() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: brisk(),
+            ..RegistryConfig::default()
+        },
+    );
+    let numbered =
+        |from: usize, to: usize| -> Vec<String> { (from..=to).map(|i| format!("line-{i}")).collect() };
+    {
+        let mut q = p.reads.lock().await;
+        q.push_back(read(&numbered(1, 5), 1));
+        q.push_back(read_at(&numbered(3, 9), 1, 40));
+    }
+
+    let _w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(220)).await;
+
+    let restarted = reg.scrollback("p").await.unwrap().expect("history");
+    let again = reg.scrollback("p").await.unwrap().expect("history");
+    assert_eq!(
+        (again.from_top, again.total_rows),
+        (restarted.from_top, restarted.total_rows),
+        "re-reading the same history at the same width must not restart the ring"
+    );
+    assert_eq!(again.total_rows, 6, "the rows the restart kept are still there");
 }

@@ -244,3 +244,21 @@ fn a_herd_patch_carries_the_same_shape_as_herd() {
     assert_eq!(v["changed"]["panes"][0]["agent_status"], "blocked");
     assert_eq!(v["removed_ids"][0], "01J/w3:p9");
 }
+
+/// Two people can type into one pane with no sign of each other. `watchers` is how a client says
+/// so — and it is absent for nobody and for one, so the common case costs nothing on the wire and
+/// a client can read "absent" as "just me".
+#[test]
+fn a_shared_pane_carries_a_watcher_count_and_a_solitary_one_does_not() {
+    let info = PaneInfo {
+        pane_id: "w3:p2".into(),
+        rows: 30,
+        ..PaneInfo::default()
+    };
+    let entry =
+        |watchers| serde_json::to_value(PaneEntry::new("01J", &info, false).with_watchers(watchers)).unwrap();
+    assert!(entry(0).get("watchers").is_none(), "{}", entry(0));
+    assert!(entry(1).get("watchers").is_none(), "{}", entry(1));
+    assert_eq!(entry(2)["watchers"], 2);
+    assert_eq!(entry(7)["watchers"], 7);
+}

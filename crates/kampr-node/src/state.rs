@@ -21,10 +21,15 @@ pub const BUILD: &str = match option_env!("KAMPR_BUILD") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// Herdr fires no event when the attached client resizes (probe #52), so the herd model is
-/// re-derived on a timer as well as on every structural event. This poll is the only thing that
-/// notices a desk resize.
-const HERD_POLL: Duration = Duration::from_secs(3);
+/// How long the herd model may go un-rebuilt when nothing has told it to.
+///
+/// **The model is event-driven; this is the sweep behind it.** Every structural change reaches it
+/// through the provider's own subscription, a herdr going away reaches it through the health
+/// watch, and a viewer arriving reaches it through the registry — so what is left for a timer is
+/// only what none of those carry: each node's round trip, and a pane whose transcript appeared
+/// after it was last looked for. Neither is worth a rebuild every three seconds on a box nobody is
+/// connected to.
+const HERD_RECONCILE: Duration = Duration::from_secs(30);
 
 pub struct Node {
     pub config: Config,
@@ -263,6 +268,10 @@ async fn refresh_herd(
     let mut mesh = peers.subscribe();
     let conversations = Conversations::default();
     loop {
+        // Subscribed *before* the model is built. A viewer joining while `build_model` is still
+        // running would otherwise be seen by neither this round nor the wait that follows it, and
+        // what is behind that wait is a sweep measured in tens of seconds.
+        let mut changes = session_changes(&sessions);
         let journal = journals.borrow().clone();
         let mut model = build_model(&sessions, &journal, &conversations).await;
         // One herd, whatever host a pane is on. A peer's own nodes arrive already marked `peer`
@@ -276,33 +285,58 @@ async fn refresh_herd(
         previous = model.clone();
         herd.send_replace(model);
 
+        // A transcript appearing on disk is the one change nothing signals — no herdr event, no
+        // provider revision, no watcher — so the sweep shortens to the retry floor for exactly as
+        // long as some pane is still waiting for one, and goes back to slow when none is.
+        let sweep = match conversations.pending() {
+            true => CONVERSATION_RETRY,
+            false => HERD_RECONCILE,
+        };
         tokio::select! {
-            _ = wait_for_change(&sessions) => {}
+            _ = wait_for_change(&mut changes) => {}
             _ = sessions.notified() => {}
             _ = mesh.changed() => {}
-            _ = tokio::time::sleep(HERD_POLL) => {}
+            _ = tokio::time::sleep(sweep) => {}
         }
         // A harness installed after the node started should not need a restart to be seen.
         journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home)));
     }
 }
 
-/// Wakes on the first session to report anything new — a structural change or a herdr going
-/// away — so an outage lands on the wire at once rather than at the next poll.
-async fn wait_for_change(sessions: &Sessions) {
-    let mut watches: Vec<_> = sessions
+/// The three things a session can report between two rebuilds: a structural change, a herdr going
+/// away, and a viewer joining or leaving a pane.
+type SessionChanges = (
+    watch::Receiver<u64>,
+    watch::Receiver<kampr_core::herdr_provider::Health>,
+    watch::Receiver<u64>,
+);
+
+fn session_changes(sessions: &Sessions) -> Vec<SessionChanges> {
+    sessions
         .all()
         .iter()
-        .map(|s| (s.registry.topology(), s.provider.watch_health()))
-        .collect();
+        .map(|s| {
+            (
+                s.registry.topology(),
+                s.provider.watch_health(),
+                s.registry.watchers_changed(),
+            )
+        })
+        .collect()
+}
+
+/// Wakes on the first session to report any of them, so all three land on the wire at once rather
+/// than at the next sweep.
+async fn wait_for_change(watches: &mut [SessionChanges]) {
     if watches.is_empty() {
         std::future::pending::<()>().await;
     }
-    let waits = watches.iter_mut().map(|(topology, health)| {
+    let waits = watches.iter_mut().map(|(topology, health, watchers)| {
         Box::pin(async move {
             tokio::select! {
                 _ = topology.changed() => {}
                 _ = health.changed() => {}
+                _ = watchers.changed() => {}
             }
         })
     });
@@ -311,8 +345,9 @@ async fn wait_for_change(sessions: &Sessions) {
 
 /// How long a pane that resolved to no transcript is left alone before the directories are
 /// searched again. Deriving a transcript from a working directory is a `read_dir` and up to 64
-/// file heads, and the herd is rebuilt every three seconds — so the miss is what needs a floor.
-/// A hit needs none: the answer stays true for as long as the file is there, which is a `stat`.
+/// file heads, and an event-driven rebuild can fire far faster than that — so the miss is what
+/// needs a floor. A hit needs none: the answer stays true for as long as the file is there, which
+/// is a `stat`.
 const CONVERSATION_RETRY: Duration = Duration::from_secs(5);
 
 /// Whether a pane has a conversation, which is whether a transcript resolves — not whether the
@@ -322,6 +357,8 @@ const CONVERSATION_RETRY: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Conversations {
     seen: Mutex<HashMap<ConversationKey, Resolved>>,
+    /// Whether the last round left an agent pane whose transcript has not appeared yet.
+    waiting: std::sync::atomic::AtomicBool,
 }
 
 type ConversationKey = (String, String, String);
@@ -376,7 +413,14 @@ impl Conversations {
 
     /// Working directories churn and a node runs for weeks.
     fn keep(&self, live: &HashSet<ConversationKey>) {
-        self.seen.lock().unwrap().retain(|key, _| live.contains(key));
+        let mut seen = self.seen.lock().unwrap();
+        seen.retain(|key, _| live.contains(key));
+        let waiting = seen.values().any(|r| r.path.is_none());
+        self.waiting.store(waiting, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn pending(&self) -> bool {
+        self.waiting.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -404,7 +448,8 @@ async fn build_model(sessions: &Sessions, journals: &Journals, conversations: &C
         // client that is about to get them all back.
         for info in session.registry.list_panes().await.unwrap_or_default() {
             let has_conversation = conversations.resolves(journals, &session, &info, &mut live);
-            panes.push(PaneEntry::new(&session.node_id, &info, has_conversation));
+            let watchers = session.registry.watcher_count(&info.pane_id);
+            panes.push(PaneEntry::new(&session.node_id, &info, has_conversation).with_watchers(watchers));
         }
     }
     conversations.keep(&live);

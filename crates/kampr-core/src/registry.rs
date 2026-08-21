@@ -223,6 +223,8 @@ pub struct PaneRegistry {
     config: RegistryConfig,
     panes: Mutex<HashMap<String, Weak<PaneEntry>>>,
     opening: tokio::sync::Mutex<()>,
+    /// A revision, not a count: it only ever goes up, and a reader wants the edge.
+    watcher_changes: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 impl PaneRegistry {
@@ -236,6 +238,7 @@ impl PaneRegistry {
             config,
             panes: Mutex::new(HashMap::new()),
             opening: tokio::sync::Mutex::new(()),
+            watcher_changes: Arc::new(tokio::sync::watch::channel(0).0),
         })
     }
 
@@ -280,6 +283,15 @@ impl PaneRegistry {
 
     pub fn watcher_count(&self, pane_id: &str) -> usize {
         self.lookup(pane_id).map_or(0, |e| Arc::strong_count(&e) - 1)
+    }
+
+    /// Bumps whenever a viewer joins or leaves any pane.
+    ///
+    /// The herd carries `watchers`, and nothing else moves when a second phone opens a pane that
+    /// is already streaming — no herdr event, no change to any snapshot. Without this the count
+    /// would sit stale until the next reconciliation sweep, which is measured in tens of seconds.
+    pub fn watchers_changed(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.watcher_changes.subscribe()
     }
 
     pub fn watched_panes(&self) -> Vec<String> {
@@ -362,11 +374,13 @@ impl PaneRegistry {
         let rx = entry.tx.subscribe();
         let initial = full_update(&state);
         drop(state);
+        self.watcher_changes.send_modify(|n| *n += 1);
         Watcher {
             entry,
             rx,
             initial,
             ready,
+            watcher_changes: self.watcher_changes.clone(),
         }
     }
 }
@@ -376,6 +390,13 @@ pub struct Watcher {
     rx: broadcast::Receiver<PaneUpdate>,
     initial: PaneUpdate,
     ready: bool,
+    watcher_changes: Arc<tokio::sync::watch::Sender<u64>>,
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.watcher_changes.send_modify(|n| *n += 1);
+    }
 }
 
 impl Watcher {

@@ -94,6 +94,9 @@ data class PaneInfo(
     val rows: Int = 24,
     @SerialName("scrollback_rows") val scrollbackRows: Int = 0,
     @SerialName("has_conversation") val hasConversation: Boolean = false,
+    // Clients currently watching this pane, omitted when it is 0 or 1. A hub holds one watch for
+    // every client behind it, so this can undercount a relayed pane and never overcounts.
+    val watchers: Int? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
 )
 

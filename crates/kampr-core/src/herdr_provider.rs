@@ -10,10 +10,22 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
+/// Every event that can move a field the herd model carries.
+///
 /// **Nothing here fires when the desk client resizes** (probe #52): `layout.updated` covers
-/// structural change only, and a native geometry change is detectable *only* by polling. The
-/// `poll_interval` below is therefore load-bearing, not a backstop — drop it and a resized pane
-/// keeps streaming at a stale width forever.
+/// structural change only, and a native geometry change is detectable *only* by looking. The
+/// sweep below is what covers that, and it is the reason this is not an events-only design.
+///
+/// What is deliberately absent is as load-bearing as what is present, because every subscribed
+/// event costs a `session.snapshot`:
+/// - `workspace.focused`, `tab.focused` and `pane.focused` — focus is not in the herd model, and
+///   at the desk it moves constantly.
+/// - `workspace.metadata_updated` — presentation tokens, which the model does not carry, and it
+///   fires on TTL expiry rather than on anything a user did.
+/// - `pane.scroll_changed` — per pane, one event per scroll; the only field it moves is
+///   `scrollback_rows`, which the sweep carries.
+/// - `pane.output_changed` — **not subscribable at all.** herdr emits it, but `events.subscribe`
+///   refuses the name, and one bad name refuses the whole list (probe #54).
 const TOPOLOGY_EVENTS: &[&str] = &[
     "layout.updated",
     "pane.created",
@@ -27,9 +39,14 @@ const TOPOLOGY_EVENTS: &[&str] = &[
     "tab.renamed",
     "tab.moved",
     "workspace.created",
+    "workspace.updated",
     "workspace.closed",
     "workspace.renamed",
     "workspace.moved",
+    "workspace.reordered",
+    "worktree.created",
+    "worktree.opened",
+    "worktree.removed",
 ];
 
 /// The one event the whole triage story rests on, and the one that cannot be subscribed to for
@@ -45,10 +62,23 @@ const READ_CEILING: u64 = 4096;
 pub struct HerdrConfig {
     pub binary: String,
     pub backoff: Backoff,
-    /// The only way a desk resize is ever noticed (probe #52), and the reconnect probe for a
-    /// dead socket.
-    pub poll_interval: Duration,
-    /// A burst of events after one structural change collapses into a single snapshot.
+    /// How long the herd may go un-re-derived while nobody is watching a pane.
+    ///
+    /// **Reconciliation, not the source of truth.** [`TOPOLOGY_EVENTS`] carries every structural
+    /// change, and a socket that dies takes the subscription with it, so this sweep exists for the
+    /// two things neither covers: a desk resize, which emits nothing at all (probe #52), and a
+    /// herdr that is wedged with its socket still open. Both are worth a minute's staleness on a
+    /// box nobody is looking at; neither is worth twenty snapshots a minute for ever.
+    pub sweep: Duration,
+    /// The same sweep while at least one pane is being watched.
+    ///
+    /// Somebody is looking, so a resize has to reach them now rather than eventually — this is the
+    /// only thing that sees one, and it is what keeps the change-to-client latency of a resize
+    /// where it was before the slow sweep existed.
+    pub sweep_watched: Duration,
+    /// How long an arriving event waits for the rest of its burst before one snapshot is taken for
+    /// all of them. herdr replays the whole herd as `created` events the instant a subscription
+    /// opens, so a burst is the normal case rather than the exception.
     pub settle: Duration,
     /// How often a live stream re-measures the pane's true PTY width. Nothing announces a
     /// PTY/rect divergence either (probe #68), so this is the only thing that notices one.
@@ -68,7 +98,8 @@ impl Default for HerdrConfig {
         Self {
             binary: "herdr".into(),
             backoff: Backoff::default(),
-            poll_interval: Duration::from_secs(3),
+            sweep: Duration::from_secs(30),
+            sweep_watched: Duration::from_secs(3),
             settle: Duration::from_millis(60),
             width_poll: Duration::from_secs(3),
             resubscribe_min: Duration::from_millis(500),
@@ -95,6 +126,25 @@ struct Inner {
     revision: watch::Sender<u64>,
     health: watch::Sender<Health>,
     widths: Mutex<HashMap<String, Measured>>,
+    /// Panes with a live stream. The sweep reads it to pick its cadence and waits on it, so the
+    /// first watcher speeds the herd up without waiting out the slow interval it is parked in.
+    watching: watch::Sender<usize>,
+}
+
+/// One watched pane, for as long as its stream lives.
+struct Watching(Arc<Inner>);
+
+impl Watching {
+    fn new(inner: &Arc<Inner>) -> Self {
+        inner.watching.send_modify(|n| *n += 1);
+        Self(inner.clone())
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.0.watching.send_modify(|n| *n = n.saturating_sub(1));
+    }
 }
 
 /// What this pane's width readings have established while the rect has held still.
@@ -152,6 +202,7 @@ impl HerdrProvider {
             revision: rev_tx,
             health: health_tx,
             widths: Mutex::new(HashMap::new()),
+            watching: watch::channel(0).0,
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
         Self { inner, topology_task }
@@ -181,6 +232,13 @@ impl HerdrProvider {
 }
 
 impl Inner {
+    fn sweep(&self) -> Duration {
+        match *self.watching.borrow() > 0 {
+            true => self.config.sweep_watched,
+            false => self.config.sweep,
+        }
+    }
+
     async fn refresh(&self) -> Result<Arc<Snapshot>> {
         let snapshot = match self.herdr.snapshot().await {
             Ok(s) => Arc::new(s),
@@ -511,13 +569,14 @@ async fn topology(inner: Arc<Inner>) {
 
 /// Drives one subscription until it breaks or the pane set it named goes stale.
 ///
-/// **Events poke the poll; they never replace it.** Every event ends in the same `refresh` the
-/// timer would have done, so a missed event costs one interval and never correctness — which is
-/// what makes the per-pane status subscription safe to lose and safe to rebuild.
+/// **Events poke the sweep; they never replace it.** Every event ends in the same `refresh` the
+/// sweep would have done, so a missed event costs one sweep and never correctness — which is what
+/// makes the per-pane status subscription safe to lose and safe to rebuild, and what lets the
+/// sweep itself be slow.
 async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) -> Ended {
-    // `read_line` is not cancel-safe, so the subscription gets its own task and the poll races a
+    // `read_line` is not cancel-safe, so the subscription gets its own task and the sweep races a
     // channel receive instead of the socket read itself.
-    let (events, mut rx) = mpsc::channel::<()>(8);
+    let (events, mut rx) = mpsc::channel::<()>(64);
     let reader = tokio::spawn(async move {
         while let Ok(Some(_)) = sub.next().await {
             if events.send(()).await.is_err() {
@@ -525,18 +584,23 @@ async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) ->
             }
         }
     });
-    let mut poll = tokio::time::interval(inner.config.poll_interval);
-    poll.tick().await;
+    let mut watching = inner.watching.subscribe();
     let ended = loop {
         let live = tokio::select! {
             event = rx.recv() => {
                 if event.is_none() {
                     break Ended::Broken;
                 }
+                // Wait out the burst, then take everything that arrived during it. A subscription
+                // opening replays the whole herd as `created` events, and one snapshot answers all
+                // of them.
                 tokio::time::sleep(inner.config.settle).await;
+                while rx.try_recv().is_ok() {}
                 true
             }
-            _ = poll.tick() => true,
+            // The first watcher arriving must not have to wait out the slow sweep it interrupted.
+            _ = watching.changed() => true,
+            _ = tokio::time::sleep(inner.sweep()) => true,
         };
         if !live || inner.refresh().await.is_err() {
             break Ended::Broken;
@@ -574,6 +638,7 @@ struct Geometry {
 /// Owns restart. `terminal.closed` is routine — a pane that runs `clear`, a herdr restart, a desk
 /// resize — so every one of them comes back as a `Reset`, never an error.
 async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEvent>) {
+    let _watching = Watching::new(&inner);
     let mut snapshots = inner.snapshot.subscribe();
     let mut backoff = inner.config.backoff.start();
     loop {

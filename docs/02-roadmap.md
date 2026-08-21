@@ -14,14 +14,14 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 1** | ✅ Streaming, provider seam, pane registry, VT emulation, wire encoding. Verified against a live herdr; `kampr-spike` reproduces herdr's own grid exactly. |
 | **Phase 2** | ✅ Renderer, both render modes, zoom and pan, key row with the inverted-T cluster, live input, selection, links, paste framing, destructive guard. |
 | **Phase 3** | ✅ Tiered auth, devices, roles, passkeys server-side, audit log, recovery code. Nine security defects found by audit and closed with tests. |
-| **Phase 4** | ✅ Mesh: peers dial out to a hub, ed25519 mutual auth, relay with per-hop backpressure. Proven across two nodes on one host. |
+| **Phase 4** | ✅ Mesh: peers dial out to a hub, ed25519 mutual auth, relay with per-hop backpressure. Proven across two nodes on one host. The latency indicator (P4.9) is now drawn in four places, so the phase is complete on one machine; real latency, a real NAT and a real proxy remain unproven. |
 | **Phase 5** | ✅ Conversation view, both halves. Claude and Codex adapters, markdown with real tables, turn revision by id. |
-| **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision, verified install path, `kampr doctor`. |
-| **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) is done for navigation and shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md); the terminal has no review mode and undersized touch targets remain, both listed in the audit. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
+| **Phase 7** | ⚠️ Setup ladder, plugin manifest, service supervision and `kampr doctor` (14 checks) are done and exercised. The **install path is written and has never run** — it depends on Phase 9's untagged release, so `install.sh` and `herdr plugin install` have nothing to fetch, and the gate below is unmet for that reason alone. |
+| **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md) and the terminal now **has** a review mode (`terminal/review/`). PWA (P6.10) **is** built — manifest and service worker both ship, with no install prompt and no offline shell, deliberately — so `security.installable` is no longer overclaiming. Remaining: two controls under the 44 dp target (the column indicator at 26 dp, `Segmented` at the deliberate 36 dp `LANDSCAPE_TOUCH`), and no emulator has re-measured any of it. |
 | **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
 | **Phase 8.5** | ➖ **Cut**, 2026-08-21. Kampr as an Android *provider*. The sandbox makes it a novelty — see below. |
-| **Phase 9** | ⚠️ Release workflow written and never run: no tag has been pushed, so aarch64 cross-compilation and cosign signing are untested. |
-| **Phase 4.5** | Server complete — all 13 `manage` ops. Client in flight. |
+| **Phase 9** | ⚠️ Release workflow written and **never run**: `git tag` is empty, `release.yml` is tag-triggered, and it pins cosign's certificate identity to `release.yml@refs/tags/…` — so `workflow_dispatch` builds but never signs or publishes. macOS cross-compilation, cosign signing and `gh release create` are all unexercised, and `install.sh` / `herdr plugin install` have nothing to fetch. aarch64 Linux was proven by hand. |
+| **Phase 4.5** | ✅ Server complete — all 13 `manage` ops, each driven against a real herd. Client complete: `client/mosaic` closes P4.5.8/P4.5.9. Remaining: P4.5.5/P4.5.6 have ops and wire but no list/remove and no stored named layouts, and P4.5.12 (`notification.show`) was never built. |
 
 **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked · `[-]` cut
 **Gate** = do not start the next phase until this is true.
@@ -156,8 +156,8 @@ Herdr contributes nothing here and blocks nothing (findings §1.8, §3.1).
 **Gate:** two hosts, one hub, panes from both drivable from one phone. **Met on one machine**
 (`crates/kampr-node/tests/mesh.rs`: two nodes, two herdr sessions, one hub — a peer pane renders and
 takes input through the hub, the peer dying degrades only its own panes, and it recovers unaided).
-P4.9 is the client half of the latency indicator: the node now ships a measured `rtt_ms` and a
-per-node `build`, and the UI has still to render them.
+P4.9 is now drawn as well as measured — `HerdPieces.kt`, `MosaicCell.kt`, `MosaicSwitcher.kt`,
+`PanePicker.kt`. What one host cannot prove is unchanged: real latency, a real NAT, a real proxy.
 
 ---
 
@@ -183,9 +183,10 @@ named-session creation, which shells out. Depends on Phase 4's node model for th
 two different nodes side by side — all from a phone. **The management half is met**
 (`crates/kampr-node/tests/live.rs::every_client_op_lands_on_a_real_herd` drives every op the client
 can build against a real herd, and `client/shared`'s `LiveNodeTest` drives the same ops through the
-real client and waits for the `herd.patch`). P4.5.5 and P4.5.6 have the ops and the wire but no
-list/remove and no stored named layouts; P4.5.8/P4.5.9 — the client-side mosaic — are still the
-missing half of the gate.
+real client and waits for the `herd.patch`). **The client half is now built**: `client/mosaic` is
+P4.5.8 and P4.5.9, with `MosaicCell`, `MosaicSwitcher`, `PanePicker` and 32 green tests. P4.5.5 and
+P4.5.6 still have the ops and the wire but no list/remove and no stored named layouts, and P4.5.12
+was never built.
 
 ---
 
@@ -256,7 +257,10 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [x] P7.8 Uninstall that actually cleans up: `uninstall` removes service and units and says where the devices still live; `purge` removes those too. `purge` is deliberately not a Herdr action — an action list is one tap away from a phone
 - [x] P7.9 Release workflow: Gradle stages the bundle, `build.rs` refuses to build a binary without it, `cross` builds static musl for linux x86_64/aarch64 and macOS for both arches, `SHA256SUMS` is signed keyless with cosign, and a clean runner installs the artefact and runs it — unexercised until the first tag
 
-**Gate:** a clean machine goes from `herdr plugin install` to a working authenticated phone session with no manual file editing.
+**Gate:** a clean machine goes from `herdr plugin install` to a working authenticated phone session with
+no manual file editing. **Not met** — and not for a reason inside this phase: no release has ever been
+tagged, so there is no artefact for either install route to download. Everything downstream of the
+download is built and tested.
 
 ---
 

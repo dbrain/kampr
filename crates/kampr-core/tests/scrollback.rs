@@ -220,3 +220,41 @@ fn scrollback_serialises_to_the_documented_shape() {
         "new styles precede the rows that reference them"
     );
 }
+
+/// Probe #112. One width change is one restart; every read after it overlaps the rows the restart
+/// kept, so the ring has to go back to stitching rather than throwing its history away forever.
+#[test]
+fn history_accumulates_again_after_a_width_change() {
+    let mut ring = ScrollbackRing::new(60);
+    ring.ingest(&raw(&refs(&numbered(1, 10)), 40, 1, false));
+    assert!(matches!(
+        ring.ingest(&raw(&refs(&numbered(1, 10)), 93, 1, false)),
+        Ingest::Rewrapped { dropped: 9 }
+    ));
+    let restarted_at = ring.render().from_top;
+
+    assert_eq!(
+        ring.ingest(&raw(&refs(&numbered(3, 14)), 93, 1, false)),
+        Ingest::Stitched { added: 4 }
+    );
+    assert_eq!(
+        ring.ingest(&raw(&refs(&numbered(5, 18)), 93, 1, false)),
+        Ingest::Stitched { added: 4 }
+    );
+    assert_eq!(
+        ring.render().from_top,
+        restarted_at,
+        "the ring restarted once, not once per read"
+    );
+    assert_eq!(lines_of(&ring), numbered(1, 17));
+}
+
+/// The rows a restart keeps were read at the *new* width, so rendering them at the old one wraps
+/// history that never wrapped.
+#[test]
+fn a_restarted_ring_renders_at_the_width_it_restarted_at() {
+    let mut ring = ScrollbackRing::new(60);
+    ring.ingest(&raw(&["short", "viewport"], 10, 1, false));
+    ring.ingest(&raw(&["0123456789abcdefghij", "viewport"], 40, 1, false));
+    assert_eq!(lines_of(&ring), ["0123456789abcdefghij"]);
+}

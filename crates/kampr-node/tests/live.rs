@@ -2688,3 +2688,198 @@ async fn an_unmeasured_pane_reports_no_width_rather_than_its_rect() {
         .expect("herdr reports the viewport rows");
     assert_eq!(entry["rows"].as_u64(), Some(viewport), "{entry}");
 }
+
+/// Probe #112. The pane's measured width moves once — the layout rect is not the PTY width until
+/// something wraps and proves it (probes #68/#69) — and the ring restarts on it. What must not
+/// happen is the restart repeating: a quiet pane whose width has settled has nothing new to say,
+/// and a ring that threw itself away on every read would re-send its whole history for ever.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settled_pane_stops_restarting_its_ring() {
+    let h = harness!("rewrap");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut socket, "grid.reset", 15).await;
+    // Short rows first, so the ring is keyed on the layout rect. Only then a line longer than the
+    // pane, which is the one thing that proves the PTY's real width — and the rect is a column
+    // wider than the PTY even unsplit (probe #69), so proving it *moves* the ring's width.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "seq 1 200\n" }),
+    )
+    .await;
+    until_pane(&mut socket, "scrollback", &pane, 25).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "printf '#%.0s' $(seq 1 400); echo\n" }),
+    )
+    .await;
+    let first = until_pane(&mut socket, "scrollback", &pane, 25).await;
+
+    // Let the pane drain and the width prober settle before measuring.
+    let mut settled = first["from_top"].as_u64().expect("from_top");
+    let settle = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < settle {
+        if let Some(m) = recv(&mut socket, Duration::from_secs(1)).await
+            && m["t"] == "scrollback"
+            && m["pane"] == pane.as_str()
+            && let Some(from_top) = m["from_top"].as_u64()
+        {
+            settled = from_top;
+        }
+    }
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+    while tokio::time::Instant::now() < deadline {
+        let Some(m) = recv(&mut socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if m["t"] != "scrollback" || m["pane"] != pane.as_str() {
+            continue;
+        }
+        assert_eq!(
+            m["from_top"].as_u64(),
+            Some(settled),
+            "the pane is idle, so its ring must not have restarted; it holds {} rows",
+            m["total_rows"]
+        );
+    }
+}
+
+/// The count the herd reports for one pane, from a `herd` or a `herd.patch`. `Some(None)` is the
+/// field being absent, which is what one viewer looks like on the wire.
+fn watchers_in(message: &Value, pane: &str) -> Option<Option<u64>> {
+    let lists = [
+        &message["panes"],
+        &message["changed"]["panes"],
+        &message["added"]["panes"],
+    ];
+    lists
+        .iter()
+        .filter_map(|l| l.as_array())
+        .flatten()
+        .find(|p| p["id"] == pane)
+        .map(|p| p["watchers"].as_u64())
+}
+
+async fn until_watchers(socket: &mut Socket, pane: &str, want: Option<u64>, seconds: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if let Some(found) = watchers_in(&message, pane) {
+            if found == want {
+                return;
+            }
+            seen.push(found);
+        }
+    }
+    panic!("never saw watchers={want:?} for {pane}; saw {seen:?}");
+}
+
+/// Two people can type into one pane and neither could tell. The herd says so now — and it says
+/// nothing at all while a pane has one viewer, so the field is a signal rather than noise.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_viewer_is_announced_on_the_pane_they_share() {
+    let h = harness!("watchers");
+    let token = h.token(Role::Full).await;
+    let mut first = h.connect(&token).await;
+    until(&mut first, "hello", 10).await;
+    let pane = h.pane_id();
+
+    let herd = until(&mut first, "herd", 10).await;
+    assert_eq!(
+        watchers_in(&herd, &pane),
+        Some(None),
+        "an unwatched pane says nothing about viewers"
+    );
+
+    send(&mut first, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut first, "grid.reset", &pane, 15).await;
+
+    let mut second = h.connect(&token).await;
+    until(&mut second, "hello", 10).await;
+    send(&mut second, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut second, "grid.reset", &pane, 15).await;
+    until_watchers(&mut first, &pane, Some(2), 10).await;
+
+    send(&mut second, json!({ "t": "unwatch", "pane": pane })).await;
+    until_watchers(&mut first, &pane, None, 10).await;
+}
+
+/// The subscription list, offered to a real herdr.
+///
+/// All-or-nothing twice over (probes #54, #76): one name herdr will not accept refuses the whole
+/// list, and the node then has no events at all and falls back on a sweep measured in tens of
+/// seconds with nothing in the log to say why. `pane.output_changed` is exactly such a name —
+/// herdr emits it and refuses to subscribe you to it — so no schema check can stand in for this.
+#[tokio::test(flavor = "multi_thread")]
+async fn herdr_accepts_every_event_the_node_subscribes_to() {
+    let Some(session) = Session::start("subs").await else {
+        eprintln!("skipping: no herdr on PATH");
+        return;
+    };
+    session
+        .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
+        .await;
+    let snapshot = session.call("session.snapshot", json!({})).await;
+    let pane = snapshot["snapshot"]["panes"][0]["pane_id"]
+        .as_str()
+        .expect("a pane")
+        .to_string();
+
+    for agents in [vec![], vec![pane]] {
+        let subs = kampr_core::herdr_provider::subscriptions(&agents);
+        session
+            .herdr()
+            .subscribe(&subs)
+            .await
+            .unwrap_or_else(|e| panic!("herdr refused the {}-entry list: {e}", subs.len()));
+    }
+}
+
+/// Change-to-client latency, which is the price the slow sweep is not allowed to charge.
+///
+/// The reconciliation sweep is tens of seconds now, so nothing but the event subscription can
+/// carry this: a workspace opened at the desk has to be on the phone in a fraction of a second, or
+/// the herd is only as current as its slowest timer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_opened_at_the_desk_reaches_a_client_at_once() {
+    let h = harness!("evtlatency");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let before: Vec<String> = h.node.herd().panes.iter().map(|p| p.id.clone()).collect();
+
+    let at = tokio::time::Instant::now();
+    h._session
+        .call("workspace.create", json!({ "label": "second", "cwd": "/tmp" }))
+        .await;
+
+    while at.elapsed() < Duration::from_secs(2) {
+        let Some(message) = recv(&mut socket, Duration::from_millis(250)).await else {
+            continue;
+        };
+        let fresh = [&message["panes"], &message["added"]["panes"]]
+            .iter()
+            .filter_map(|l| l.as_array())
+            .flatten()
+            .filter_map(|p| p["id"].as_str())
+            .any(|id| !before.iter().any(|seen| seen == id));
+        if fresh {
+            eprintln!("a new pane reached the client in {:?}", at.elapsed());
+            return;
+        }
+    }
+    panic!("a new workspace took longer than two seconds to reach a connected client");
+}

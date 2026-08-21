@@ -49,7 +49,9 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.WatchPresence
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.GlyphAction
@@ -63,6 +65,8 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.WatchNotice
+import dev.kampr.shared.ui.rememberWatchPresence
 import dev.kampr.shared.ui.StatusMark
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
@@ -141,6 +145,7 @@ fun MosaicCell(
     val io = remember(base, focused) { CellIo(base, focused) }
     val offline = node != null && !node.online
     val held = drag?.held == pane.id
+    val presence = rememberWatchPresence(pane.id, info)
 
     DisposableEffect(drag, pane.id) { onDispose { drag?.forget(pane.id) } }
 
@@ -189,9 +194,18 @@ fun MosaicCell(
         if (offline) CellUnavailable(node.name, node.detail ?: "${node.name} is not connected")
 
         CellHeader(
-            pane, info, node, focused, onRemove, drag, place, onDrop, onMove,
+            pane, info, node, presence, focused, onRemove, drag, place, onDrop, onMove,
             Modifier.align(Alignment.TopStart).height(header),
         )
+
+        // Four cells announcing at once is four interruptions for one fact, so only the cell that
+        // input actually reaches puts the notice up. The others carry it in their header.
+        if (focused) {
+            WatchNotice(
+                presence,
+                Modifier.align(Alignment.TopEnd).padding(top = header + 6.dp, end = 10.dp),
+            )
+        }
     }
 }
 
@@ -200,6 +214,7 @@ private fun CellHeader(
     pane: PaneState,
     info: PaneInfo?,
     node: NodeInfo?,
+    presence: WatchPresence,
     focused: Boolean,
     onRemove: () -> Unit,
     drag: MosaicDrag?,
@@ -233,6 +248,9 @@ private fun CellHeader(
         KText(cellPlace(info, node, pane), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
         node?.rttMs?.let { KText(formatLatency(it), tokens.type.meta, latencyTone(node)) }
         if (pane.stale) KText("STALE", tokens.type.metaSmall, tokens.color.working)
+        watchersTag(presence.others)?.let {
+            KText(it.uppercase(), tokens.type.metaSmall, tokens.color.mute)
+        }
         statusWord(status)?.let {
             KText(it, tokens.type.metaSmall, if (quiet) tokens.color.mute else statusColor(status))
         }

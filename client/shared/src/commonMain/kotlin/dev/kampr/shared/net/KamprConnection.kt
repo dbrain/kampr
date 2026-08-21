@@ -198,8 +198,10 @@ class KamprConnection(
         while (true) {
             delay(10_000)
             val n = ++pingSeq
-            pingSentAt[n] = nowMillis()
-            outbox.trySend(ClientMsg.Ping(n))
+            // A full outbox is the backlog a heartbeat exists to find, so a dropped ping is left
+            // dropped: the pong that never comes closes the socket. Stamping a send that did not
+            // happen would only turn the next round trip into a lie about the latency.
+            if (outbox.trySend(ClientMsg.Ping(n)).isSuccess) pingSentAt[n] = nowMillis()
             if (pingSentAt.size > 8) pingSentAt.clear()
         }
     }

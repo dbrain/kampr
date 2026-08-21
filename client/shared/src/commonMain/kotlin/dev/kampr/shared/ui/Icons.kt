@@ -64,6 +64,12 @@ object KamprIcons {
         18f, 1.7f, Glyph.Round(5f, 4f, 2.2f), Glyph.Round(5f, 14f, 2.2f), Glyph.Round(13f, 9f, 2.2f),
         d("M5 6.2v5.6M7.2 4h1.6A2.2 2.2 0 0 1 11 6.2v.9"),
     )
+    // Two windows, one behind the other: the same pane open somewhere that is not here.
+    val alsoOpen = icon(
+        16f, 1.5f,
+        Glyph.Frame(1.4f, 5f, 9.2f, 9.2f, 1.4f),
+        d("M5 5V1.4h9.6V11h-3.6"),
+    )
     val plus = icon(16f, 1.8f, d("M8 2.2v11.6M2.2 8h11.6"))
     val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
     val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))

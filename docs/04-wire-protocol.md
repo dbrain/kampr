@@ -82,6 +82,7 @@ unasked so a client can restore per-pane zoom and view before it paints — see 
                                                      // cols: ABSENT until measured — see below
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a transcript for this pane resolves on disk
+               "watchers": 2,                        // ABSENT below 2 — see below
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -133,6 +134,30 @@ adapter".** A `claude` started a minute ago has written nothing yet, and a pane 
 conversation it could not produce opened on a blank Conversation view whose `convo.load` answered
 `not_found`. It can still never outrun `hello.caps.conversation`: a node with no adapter for a
 harness resolves nothing for it.
+
+**`watchers` is how many viewers the node is streaming this pane to, and it is omitted at 0 and
+at 1.** A phone and the person at the desk could type into the same terminal with no sign of each
+other; this is the sign. The common case is one viewer and costs nothing on the wire, so a client
+reads an absent field as *just me* and must not distinguish absent from `1`.
+
+It means **open, not typing.** A viewer is somebody with the pane on screen — nothing here knows
+whether anyone's hands are on the keys, and a client must not say they are.
+
+**It is a floor, never a headcount, and it never over-counts.** Three things it does not see:
+
+- **The operator at the desk.** These are Kampr viewers. Somebody sitting at the herdr session
+  itself is not one of them and is never counted.
+- **Everyone behind a hub.** A mesh-relayed pane is watched through one `watch` per pane however
+  many clients sit behind the hub, so a peer's pane carries **the peer's own number** — its local
+  viewers plus one for the whole hub — and the hub republishes it unchanged. Two phones on a hub
+  looking at the same peer pane are one viewer in that number.
+- **A client that has not watched yet.** The count is of live `watch`es, so the `herd` a client
+  receives on connect reflects the world *before* its own watch. Joining a pane somebody else has
+  open produces a `herd.patch` a moment later; the opening `herd` is not where the badge comes
+  from.
+
+Under-counting is deliberate. A phone that claims company when there is none has told a lie about
+a terminal, and there is no reading of this field that recovers from that.
 
 ### `grid.reset` — full repaint; drop any prior state for this pane
 ```jsonc

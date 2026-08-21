@@ -123,6 +123,7 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.rows == b.rows
         && a.scrollback_rows == b.scrollback_rows
         && a.has_conversation == b.has_conversation
+        && a.watchers == b.watchers
 }
 
 #[cfg(test)]
@@ -206,6 +207,19 @@ mod tests {
         let mut third = model(&[("w1:p1", 94)]);
         third.stamp(&second);
         assert_ne!(third.panes[0].updated_at, stamped);
+    }
+
+    /// A viewer joining or leaving is a change to the pane like any other: a client that is told
+    /// once and never again would show a stale "someone else is here" for the life of the session.
+    #[test]
+    fn a_watcher_arriving_is_a_change() {
+        let before = model(&[("w1:p1", 74)]);
+        let mut after = model(&[("w1:p1", 74)]);
+        after.panes[0] = after.panes[0].clone().with_watchers(2);
+        let (added, changed, removed) = patch(&after.diff(&before).unwrap());
+        assert!(added.is_empty() && removed.is_empty());
+        assert_eq!(changed, ["01J/w1:p1"]);
+        assert!(after.diff(&after).is_none());
     }
 
     #[test]

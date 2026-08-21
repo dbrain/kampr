@@ -86,11 +86,15 @@ impl ScrollbackRing {
     pub fn ingest(&mut self, raw: &RawScrollback) -> Ingest {
         let incoming = history_rows(raw);
         // A width change re-wraps every stored row, so nothing older can be trusted to line up.
-        if raw.cols != self.cols && !self.rows.is_empty() {
+        // The ring adopts the new width *before* restarting on it (probe #112): a restart that
+        // kept the old one would find every later read disagreeing with it too, and throw the
+        // whole ring away on every read for as long as the pane stayed that width.
+        let rewrapped = raw.cols != self.cols && !self.rows.is_empty();
+        self.cols = raw.cols;
+        if rewrapped {
             let dropped = self.restart(incoming);
             return Ingest::Rewrapped { dropped };
         }
-        self.cols = raw.cols;
         if self.rows.is_empty() {
             self.rows = incoming;
             self.capped |= raw.truncated;

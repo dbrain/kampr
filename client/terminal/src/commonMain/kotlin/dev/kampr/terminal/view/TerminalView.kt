@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.othersWatching
+import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
@@ -298,7 +300,8 @@ fun TerminalView(
         }
 
         val visibleRows = (paint.contentHeight / metrics.height).toInt().coerceAtLeast(1)
-        val transcript = io.info(pane.id)?.hasConversation == true
+        val info = io.info(pane.id)
+        val transcript = info?.hasConversation == true
         val gridSummary = buildString {
             append("Terminal grid, $cols columns by ${rows.liveRows} rows")
             append(", cursor on row ${pane.cursor.row + 1}, column ${pane.cursor.col + 1}")
@@ -306,6 +309,9 @@ fun TerminalView(
             historyWarning(reviewSurface())?.let { append(", $it") }
             if (pane.stale) append(", stale — frames have stopped arriving")
             if (io.readOnly) append(", read-only")
+            // Read when the grid is reached rather than pushed: the pane's own notice is what
+            // announces an arrival, and this is what answers the question afterwards.
+            watchersPhrase(othersWatching(info))?.let { append(", $it") }
             append(
                 if (transcript) {
                     ". A cell grid does not linearise; the Conversation view of this pane is " +

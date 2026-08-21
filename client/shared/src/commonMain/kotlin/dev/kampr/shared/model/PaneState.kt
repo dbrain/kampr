@@ -101,8 +101,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         for (row in msg.rowsData) cells.apply(row)
         cursor = msg.cursor
         // A reset carries the pane's whole link table from index 0, because a full repaint clears
-        // herdr's; only a patch carries the suffix. Appending here is what makes a post-reset id
-        // resolve to a URL some earlier program printed.
+        // herdr's; only a patch carries the suffix.
         links.clear()
         links += msg.links
         painted = true

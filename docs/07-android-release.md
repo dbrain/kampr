@@ -198,9 +198,9 @@ versionName=0.1.0
 `KOBUP_TOKEN` is the CI token from `kobup login`; the CLI leaves it in `~/.config/kobup/config.json`.
 It is never in the repository and never in a Gradle file. Two ways to supply it:
 
-- **`.env`** in `client/`, read by the `co.uzzu.dotenv.gradle` plugin applied in
-  `client/build.gradle.kts`. Copy `client/.env.template` to `client/.env` and fill it in. `.env` is
-  gitignored. This is the convenient local option, and the one the helper reads first.
+- **`.env`** in `client/`, read by the `env` extension from `client/gradle/dotenv`, applied in
+  `client/settings.gradle.kts`. Copy `client/.env.template` to `client/.env` and fill it in. `.env`
+  is gitignored. This is the convenient local option, and the one the helper reads first.
 - **Environment variable** — `KOBUP_TOKEN=… make android-publish`. This is the CI option, and the
   fallback when no `.env` exists.
 

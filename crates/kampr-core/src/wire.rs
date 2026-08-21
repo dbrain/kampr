@@ -122,6 +122,17 @@ pub struct PaneEntry {
     pub scrollback_rows: u32,
     #[serde(default)]
     pub has_conversation: bool,
+    /// How many viewers this node is streaming the pane to, when it is more than one — so a client
+    /// can say the pane is **open** somewhere else. It says nothing about typing: a viewer is
+    /// somebody who has the pane on screen, not somebody at the keys. Absent for nought and for
+    /// one, which is the overwhelmingly common case and reads as "just me".
+    ///
+    /// **A floor, never a headcount.** It counts *this node's* watchers, so a pane relayed through
+    /// a hub carries the peer's own number and the whole hub is one viewer in it however many
+    /// clients sit behind it. Under-counting is the only direction this may fail in: a phone that
+    /// claims company when there is none has told a lie about a terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watchers: Option<u32>,
     /// Node-stamped; herdr's snapshot carries no timestamp, so whoever assembles the herd message
     /// owns this clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,8 +156,16 @@ impl PaneEntry {
             rows: p.rows,
             scrollback_rows: p.scrollback_rows,
             has_conversation,
+            watchers: None,
             updated_at: None,
         }
+    }
+
+    /// The one place the "omitted below two" rule lives, so the node cannot spell it one way and
+    /// the wire document another.
+    pub fn with_watchers(mut self, watchers: usize) -> Self {
+        self.watchers = (watchers > 1).then_some(watchers as u32);
+        self
     }
 }
 

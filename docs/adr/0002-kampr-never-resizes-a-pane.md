@@ -79,8 +79,10 @@ this ADR forbids is reshaping somebody's session *as a consequence of looking at
 - **`observe --cols` crops rather than reflows** (#15), so the observed geometry must be the pane's
   actual geometry or rows are silently truncated. Getting it wrong is not a cosmetic error.
 - **Native geometry is poll-only.** No Herdr event fires when the desk resizes a pane — six event
-  types, three verified resizes, zero events (#52). The node polls the layout rect every 3 s and
-  restarts the observer on a change, which costs one `full` frame. `layout.updated` covers
+  types, three verified resizes, zero events (#52). This is why the sweep survived the move to
+  events: it is not a backstop for the subscription, it is the only thing that sees a resize at all.
+  It runs every 3 s for as long as any pane is streamed and every 30 s otherwise, and restarts the
+  observer on a change, which costs one `full` frame. `layout.updated` covers
   structural change only.
 - **The layout rect is not always the truth.** In a headless session — the configuration both the
   plugin and the service produce — the PTY does not follow the layout rect at all (#68), and nothing

@@ -59,7 +59,7 @@ private val LINES = listOf(
     "dbrain@comingclean ~/dev/kampr $ rm -rf build",
 )
 
-private class GridIo(private val conversation: Boolean) : PaneIo {
+private class GridIo(private val conversation: Boolean, private val watchers: Int? = null) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     var shown: dev.kampr.shared.ui.PaneView? = null
     override fun send(msg: ClientMsg) { sent += msg }
@@ -67,7 +67,7 @@ private class GridIo(private val conversation: Boolean) : PaneIo {
     override fun info(paneId: String) = PaneInfo(
         id = GRID_PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
         cwd = "~/dev/kampr", agent = if (conversation) "claude" else null,
-        agentStatus = "idle", cols = 62, rows = 24, hasConversation = conversation,
+        agentStatus = "idle", cols = 62, rows = 24, hasConversation = conversation, watchers = watchers,
     )
     override fun show(view: dev.kampr.shared.ui.PaneView) { shown = view }
 }
@@ -135,6 +135,26 @@ class GridAccessibilityTest {
         setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
         onNodeWithContentDescription("Conversation view of this pane is ordinary text", substring = true)
             .assertExists()
+    }
+
+    // The surface a reader is typing into is the one place the fact matters most, and a badge is
+    // not reachable by a reader who never sees it. It rides in the grid's own description, which
+    // is spoken when the grid is reached rather than pushed.
+    @Test
+    fun theGridSaysWhenAnotherClientHasThisPaneOpen() = runComposeUiTest {
+        val io = GridIo(conversation = false, watchers = 2)
+        setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
+        onNodeWithContentDescription("also open on another client", substring = true).assertExists()
+    }
+
+    @Test
+    fun theGridSaysNothingAboutWatchersWhenThereAreNone() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
+        assertTrue(
+            onAllNodesWithContentDescription("also open", substring = true).fetchSemanticsNodes().isEmpty(),
+            "a pane nobody else had open said somebody did",
+        )
     }
 
     // The caps were driven by a raw tap detector, which TalkBack's double tap never reaches: they

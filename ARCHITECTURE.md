@@ -192,8 +192,12 @@ The split is forced rather than chosen. **There is no output-change event on the
 alone has no option but to poll, which is what Collie does and does well. The frame stream is the
 only live content path there is.
 
-Structure still comes from polling `session.snapshot` every 3 s, poked by an event subscription with
-a 60 ms settle. Most of that subscription is a fixed list of topology events. One is not:
+Structure comes from an event subscription, with a sweep behind it rather than in front: 30 s while
+nobody is watching anything, 3 s for as long as any pane is being streamed. The fast cadence is not a
+backstop — a desk resize emits no event at all (#52), so the sweep is the *only* thing that sees one,
+and it is kept fast exactly where that matters. The trade is stated plainly: on a node nobody is
+watching, a resize takes up to 30 s to reach the herd list. Idle cost fell from ~40 herdr calls a
+minute to 4, with change-to-client latency unchanged (198.5 ms → 189.6 ms). Most of that subscription is a fixed list of topology events. One is not:
 `pane.agent_status_changed` is rejected by Herdr unless it names a `pane_id`, and **one invalid entry
 rejects the whole `events.subscribe` call** (#54) — so it has to be subscribed per pane and
 re-subscribed whenever the pane set changes, and a mistake there silently costs every other

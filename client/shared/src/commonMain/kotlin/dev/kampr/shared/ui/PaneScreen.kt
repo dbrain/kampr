@@ -30,6 +30,7 @@ import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
@@ -80,6 +81,7 @@ fun PaneScreenMobile(
     // through it, the bar grows by exactly the inset, and the number the terminal is handed grows
     // with it. Padding the screen would letterbox the grid, which is the one thing it must not do.
     var chrome by remember { mutableStateOf<Dp?>(null) }
+    val presence = rememberWatchPresence(pane.id, info)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             when (view) {
@@ -117,11 +119,11 @@ fun PaneScreenMobile(
                 BackAction("Back to the herd", onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
                 if (landscape) {
                     KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
-                    KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+                    KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-                        KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute)
+                        KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
                     }
                 }
                 if (pane.stale) StaleBadge()
@@ -158,6 +160,17 @@ fun PaneScreenMobile(
                 }
             }
         }
+
+        // Over the surface, never in the chrome: the terminal insets its scrollable content by
+        // the chrome it measures, so a notice that joined the bar would hide a row of the pane
+        // behind the thing telling you about it.
+        WatchNotice(
+            presence,
+            Modifier
+                .align(Alignment.TopEnd)
+                .readingOrder(-0.5f)
+                .padding(top = (chrome ?: if (landscape) 44.dp else 108.dp) + 8.dp, end = 12.dp),
+        )
 
         // The conversation surface renders its own prompt strip and reply box, so the terminal
         // chrome stands down rather than stacking a second one underneath it.
@@ -207,14 +220,19 @@ private fun UnsentBadge(count: Int) {
     }
 }
 
-private fun geometryLine(info: PaneInfo?, pane: PaneState): String {
+private fun geometryLine(info: PaneInfo?, pane: PaneState, others: Int): String {
     val node = info?.id?.substringBefore('/')?.take(8) ?: ""
     val local = info?.id?.substringAfter('/') ?: pane.id
     // A pane nobody has watched has no measured width, and the layout rect is not one — the node
     // omits `cols` rather than reporting a number no row was ever wrapped at.
     val size = info?.let { "${it.cols?.toString() ?: "—"}×${it.rows}" }
         ?: "${pane.cells.cols}×${pane.cells.rows}"
-    return listOf(node, local, size, "observing").filter { it.isNotEmpty() }.joinToString(" · ")
+    // "observing" is a constant and this line is ellipsised on a phone, so a trailing tag never
+    // survives to be read. The tag takes the constant's place, because it is the half of the line
+    // that is actually news.
+    return listOf(node, local, size, watchersTag(others) ?: "observing")
+        .filter { it.isNotEmpty() }
+        .joinToString(" · ")
 }
 
 // The strip appears because the agent asked something, not because anyone touched the screen, so
@@ -271,6 +289,7 @@ fun PaneScreenDesktop(
     val density = LocalDensity.current
     val safe = LocalSafeArea.current
     var chrome by remember { mutableStateOf<Dp?>(null) }
+    val presence = rememberWatchPresence(pane.id, info)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             Row(Modifier.fillMaxSize()) {
@@ -303,7 +322,7 @@ fun PaneScreenDesktop(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-                KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute)
+                KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
             }
             if (pane.stale) StaleBadge()
             if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
@@ -331,6 +350,14 @@ fun PaneScreenDesktop(
                 what = "view",
             )
         }
+
+        WatchNotice(
+            presence,
+            Modifier
+                .align(Alignment.TopEnd)
+                .readingOrder(-0.5f)
+                .padding(top = (chrome ?: 56.dp) + 8.dp, end = 14.dp),
+        )
 
         if (!readOnly && view == PaneView.Terminal) {
             pane.pending?.let {
