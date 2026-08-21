@@ -67,6 +67,9 @@ pub struct Policy {
     pub challenge_ttl: Duration,
     pub pairing_attempts: RatePolicy,
     pub auth_attempts: RatePolicy,
+    /// Refills slowly enough to be a limit and fast enough to survive a real peer's reconnect
+    /// backoff, which starts at one second and settles at thirty.
+    pub mesh_attempts: RatePolicy,
 }
 
 impl Default for Policy {
@@ -78,6 +81,7 @@ impl Default for Policy {
             challenge_ttl: Duration::from_secs(300),
             pairing_attempts: RatePolicy::new(5.0, 0.05),
             auth_attempts: RatePolicy::new(20.0, 0.5),
+            mesh_attempts: RatePolicy::new(5.0, 0.2),
         }
     }
 }
@@ -126,6 +130,7 @@ pub struct Auth {
     policy: Policy,
     pairing_limiter: RateLimiter,
     auth_limiter: RateLimiter,
+    mesh_limiter: RateLimiter,
     changes: broadcast::Sender<String>,
 }
 
@@ -152,6 +157,7 @@ impl Auth {
             policy,
             pairing_limiter: RateLimiter::new(policy.pairing_attempts),
             auth_limiter: RateLimiter::new(policy.auth_attempts),
+            mesh_limiter: RateLimiter::new(policy.mesh_attempts),
             changes: broadcast::channel(64).0,
         })
     }
@@ -224,6 +230,25 @@ impl Auth {
             );
         }
         Ok(done)
+    }
+
+    /// Whether this address may open another mesh handshake.
+    ///
+    /// The handshake runs argon2id over a join code the caller chose, before it knows whether the
+    /// caller is anybody — the same shape as `/auth/pair`, so it gets the same answer: the limiter
+    /// runs *before* the work, not around it. A miss also charges every outstanding invite an
+    /// attempt, so without this a stranger decides whether the operator's join succeeds.
+    pub fn check_mesh(&self, peer: &str) -> bool {
+        if self.mesh_limiter.check(peer) {
+            return true;
+        }
+        self.audit.record(&Entry::new("mesh.rate_limited").peer(peer));
+        false
+    }
+
+    /// A handshake that authenticated is not an attempt worth counting against the next one.
+    pub fn mesh_settled(&self, peer: &str) {
+        self.mesh_limiter.forget(peer);
     }
 
     /// A pairing code is short enough to guess if you may guess often, so the limiter is part of

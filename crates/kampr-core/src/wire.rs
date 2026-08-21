@@ -113,7 +113,10 @@ pub struct PaneEntry {
     pub agent: Option<String>,
     #[serde(default)]
     pub agent_status: AgentStatus,
-    pub cols: u16,
+    /// Absent until measured: the layout rect is not the PTY width in a headless session, and a
+    /// client shows the operator this number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cols: Option<u16>,
     pub rows: u16,
     #[serde(default)]
     pub scrollback_rows: u32,
@@ -274,15 +277,22 @@ impl ServerMsg {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Every code an `error` frame can carry. One vocabulary rather than two: a node that spelled its
+/// codes as strings beside a typed enum nothing constructed had already drifted — the enum was
+/// missing three codes production emitted and carried one it never did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     NotWriter,
     UnknownPane,
     NodeOffline,
     HerdrUnavailable,
-    RateLimited,
     BadRequest,
+    NotFound,
+    Revoked,
+    /// `manage` only: an op this node has no verb for. Not on the v1 list, because v1 had no
+    /// `manage`.
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Deserialize)]

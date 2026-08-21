@@ -284,11 +284,11 @@ async fn head_of(url: &str, body: &Value) -> String {
         .map_or(text.clone(), |(h, _)| h.to_string())
 }
 
-async fn post_with_cookie(url: &str, token: &str, origin: Option<&str>) -> String {
+async fn with_cookie(method: &str, url: &str, token: &str, origin: Option<&str>) -> String {
     let (host, port, path) = split(url);
     let origin = origin.map_or(String::new(), |o| format!("Origin: {o}\r\n"));
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nCookie: kampr_session={token}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nCookie: kampr_session={token}\r\n\
          {origin}Content-Length: 0\r\nConnection: close\r\n\r\n"
     );
     raw_with_status(&host, port, &request).await.0
@@ -434,7 +434,10 @@ async fn a_paired_device_drives_a_pane_end_to_end() {
     let herd = until(&mut socket, "herd", 10).await;
     let pane = herd["panes"][0]["id"].as_str().expect("a pane").to_string();
     assert!(pane.starts_with(hello["node_id"].as_str().unwrap()));
-    assert!(herd["panes"][0]["cols"].as_u64().unwrap() > 0);
+    assert!(herd["panes"][0]["rows"].as_u64().unwrap() > 0);
+    // `cols` is absent until a wrap has proved the PTY width. The layout rect is not it: headless,
+    // a pane whose rect reads 47 is really 93 wide (probe #68).
+    assert!(herd["panes"][0]["cols"].as_u64().is_none_or(|cols| cols > 0));
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
     let reset = until(&mut socket, "grid.reset", 15).await;
@@ -672,11 +675,12 @@ async fn an_origin_the_attacker_chose_never_satisfies_the_same_origin_gate() {
     assert!(good["token"].is_string(), "{good}");
 }
 
-/// A cookie is the one credential a browser attaches on its own, so a state-changing request
-/// carrying one and no `Origin` is the shape CSRF has — the absence must fail closed there. The
-/// same-origin gate is the only CSRF defence on this surface, so it does not get to fail open.
+/// A cookie is the one credential a browser attaches by itself, and the origin gate exempts every
+/// `GET` outside `/ws` — so as long as a cookie authenticates anything, `GET /api/devices` is one
+/// deployment decision away from being a cross-origin read of the whole inventory. Nothing sets
+/// this cookie and no client sends one, so the honest fix is that it is not a credential at all.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_cookie_credential_without_an_origin_cannot_change_anything() {
+async fn a_session_cookie_is_not_a_credential() {
     let h = harness!("cookie");
     let token = h.token(Role::Full).await;
     h.token(Role::Readonly).await;
@@ -691,15 +695,31 @@ async fn a_cookie_credential_without_an_origin_cannot_change_anything() {
         .unwrap()
         .id;
 
-    let url = format!("{}/api/devices/{victim_id}/revoke", h.origin);
+    let revoke = format!("{}/api/devices/{victim_id}/revoke", h.origin);
     assert!(
-        post_with_cookie(&url, &token, None).await.contains("403"),
-        "an ambient credential with no origin must not revoke anything"
+        with_cookie("POST", &revoke, &token, None).await.contains("401"),
+        "an ambient credential must not be a credential"
     );
     assert!(
-        post_with_cookie(&url, &token, Some(&h.origin))
+        with_cookie("POST", &revoke, &token, Some(&h.origin))
             .await
-            .contains("200")
+            .contains("401"),
+        "a same-origin cookie is still a cookie"
+    );
+
+    // The un-gated GET is the one that mattered: the device inventory, read from another origin.
+    let devices = format!("{}/api/devices", h.origin);
+    assert!(
+        with_cookie("GET", &devices, &token, Some("https://evil.example"))
+            .await
+            .contains("401"),
+        "a cross-origin page must not be able to read the device inventory"
+    );
+
+    // And the header the shipped client actually sends still works.
+    assert!(
+        get(&devices, Some(&token)).await.0.contains("200"),
+        "the bearer path is the one the client uses and must be untouched"
     );
 }
 
@@ -876,6 +896,9 @@ async fn prefs_and_caps_are_bounded_rather_than_an_amplifier() {
     let token = h.token(Role::Readonly).await;
     let mut socket = h.connect(&token).await;
     until(&mut socket, "hello", 10).await;
+    // The greeting now carries this device's stored preferences, so the answer to a *write* is
+    // the second `prefs` frame on the socket rather than the first.
+    until(&mut socket, "prefs", 10).await;
     let pane = h.pane_id();
 
     send(
@@ -1063,6 +1086,13 @@ async fn pane_preferences_are_stored_per_device() {
     let mut second = h.connect(&h.token(Role::Full).await).await;
     until(&mut first, "hello", 10).await;
     until(&mut second, "hello", 10).await;
+    for socket in [&mut first, &mut second] {
+        assert_eq!(
+            until(socket, "prefs", 10).await["panes"],
+            json!({}),
+            "the greeting's prefs, before either device has stored any"
+        );
+    }
     let pane = h.pane_id();
 
     send(
@@ -2279,4 +2309,382 @@ async fn a_readonly_device_is_refused_every_manage_op() {
         send(&mut socket, op).await;
         assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
     }
+}
+
+/// The New sheet builds a `workspace.create` with **no `env` key at all** whenever the operator
+/// typed no environment variables, which is almost always. Herdr 0.8.2 refuses `"env": null`
+/// with `invalid type: null, expected a map`, so a node that serialises `Option::None` into the
+/// params fails every one of those — the button has never worked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_with_no_environment_is_created() {
+    let h = harness!("bareenv");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+
+    // The three shapes a client can produce: no key (the New sheet's own), an empty map, and a
+    // populated one. Only the last was ever exercised.
+    for (case, request) in [
+        (
+            "no env key",
+            json!({ "t": "manage", "op": "workspace.create", "node": node, "label": "bare" }),
+        ),
+        (
+            "an empty env map",
+            json!({ "t": "manage", "op": "workspace.create", "node": node, "label": "empty",
+                    "env": {} }),
+        ),
+        (
+            "a populated env map",
+            json!({ "t": "manage", "op": "workspace.create", "node": node, "label": "full",
+                    "env": { "KAMPR_LIVE": "1" } }),
+        ),
+    ] {
+        send(&mut socket, request).await;
+        let ack = managed(&mut socket, "workspace.create", 25).await;
+        assert_eq!(ack["ok"], true, "{case}: {ack}");
+        let workspace = ack["id"].as_str().expect("a workspace id").to_string();
+        patch_adding(&mut socket, &workspace, 25).await;
+        ok(
+            &mut socket,
+            json!({ "t": "manage", "op": "close", "at": workspace }),
+            20,
+        )
+        .await;
+    }
+}
+
+/// `docs/04-wire-protocol.md`, first rule: unknown `t` values are ignored, not errors. A node
+/// that answers `bad_request` breaks every v1 client the moment a v1.1 client shares a build.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_tag_draws_no_answer_at_all() {
+    let h = harness!("futuret");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    send(&mut socket, json!({ "t": "future.thing", "whatever": 1 })).await;
+    send(&mut socket, json!({ "t": "ping", "n": 11 })).await;
+    // The pong is the fence: anything the node had to say about `future.thing` is ahead of it.
+    let mut answers = Vec::new();
+    loop {
+        let message = recv(&mut socket, Duration::from_secs(5))
+            .await
+            .expect("the node answered the ping");
+        if message["t"] == "pong" {
+            assert_eq!(message["n"], 11);
+            break;
+        }
+        if message["t"] == "error" {
+            answers.push(message);
+        }
+    }
+    assert!(
+        answers.is_empty(),
+        "an unknown `t` must be ignored, not refused: {answers:?}"
+    );
+
+    // Ignoring the unknown must not cost the refusal of a *known* verb sent wrong.
+    send(&mut socket, json!({ "t": "watch" })).await;
+    assert_eq!(until(&mut socket, "error", 10).await["code"], "bad_request");
+}
+
+/// Per-device preferences are the mechanism behind remembered zoom, and neither half worked: a
+/// fresh socket was never told what it had stored, and a one-key write replaced the blob.
+#[tokio::test(flavor = "multi_thread")]
+async fn prefs_are_restored_at_hello_and_merged_on_a_partial_write() {
+    let h = harness!("prefsmerge");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let empty = until(&mut socket, "prefs", 10).await;
+    assert_eq!(empty["panes"], json!({}), "a device with nothing stored: {empty}");
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": pane, "prefs": { "view": "conversation" } }),
+    )
+    .await;
+    until(&mut socket, "prefs", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": pane, "prefs": { "zoom": "2" } }),
+    )
+    .await;
+    let merged = until(&mut socket, "prefs", 10).await;
+    assert_eq!(
+        merged["panes"][&pane],
+        json!({ "view": "conversation", "zoom": "2" }),
+        "a one-key write must merge, not replace: {merged}"
+    );
+
+    // A null clears one key and leaves the rest, which is the only way a client can ever undo a
+    // preference once writes merge.
+    send(
+        &mut socket,
+        json!({ "t": "prefs", "pane": pane, "prefs": { "view": null } }),
+    )
+    .await;
+    let cleared = until(&mut socket, "prefs", 10).await;
+    assert_eq!(cleared["panes"][&pane], json!({ "zoom": "2" }), "{cleared}");
+
+    // And a new socket is told, unasked. Nothing restores otherwise: the client has no other
+    // source for the zoom it left the pane at.
+    let mut second = h.connect(&token).await;
+    let restored = until(&mut second, "prefs", 10).await;
+    assert_eq!(restored["panes"][&pane], json!({ "zoom": "2" }), "{restored}");
+}
+
+/// The protocol says a refused op is acknowledged too, and the client's New sheet clears its
+/// in-flight state on the ack alone — so a `manage` that draws only an `error` leaves the sheet
+/// spinning forever. `rid` has to survive both refusal paths as well.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_manage_is_still_acknowledged() {
+    let h = harness!("refusedack");
+    let readonly = h.token(Role::Readonly).await;
+    let mut socket = h.connect(&readonly).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "close", "at": pane, "rid": "r1" }),
+    )
+    .await;
+    let ack = managed(&mut socket, "close", 10).await;
+    assert_eq!(ack["ok"], false, "{ack}");
+    assert_eq!(ack["code"], "not_writer", "{ack}");
+    assert_eq!(ack["rid"], "r1", "the ack echoes the caller's token: {ack}");
+    assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
+
+    // The peer-routing refusal is the other path that built an ack by hand and dropped the `rid`.
+    let full = h.token(Role::Full).await;
+    let mut writer = h.connect(&full).await;
+    until(&mut writer, "hello", 10).await;
+    send(
+        &mut writer,
+        json!({ "t": "manage", "op": "layout.export", "at": "01JNOTANODE/w9:t1", "rid": "r2" }),
+    )
+    .await;
+    let refused = managed(&mut writer, "layout.export", 10).await;
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["code"], "unknown_pane", "{refused}");
+    assert_eq!(refused["rid"], "r2", "{refused}");
+}
+
+/// Field 5 of `/proc/<pid>/stat`, read past the comm field so a process named `a) b` cannot
+/// shift the count.
+#[cfg(target_os = "linux")]
+fn process_group(pid: u32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = stat.rsplit_once(") ")?.1;
+    after_comm.split_whitespace().nth(2)?.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn herdr_pid_for(session: &str) -> Option<u32> {
+    let wanted = format!("--session\0{session}\0");
+    std::fs::read_dir("/proc").ok()?.flatten().find_map(|entry| {
+        let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+        let cmdline = std::fs::read_to_string(entry.path().join("cmdline")).ok()?;
+        cmdline.contains(&wanted).then_some(pid)
+    })
+}
+
+/// A herdr session the node created has to outlive the node. It does not while it is a member of
+/// the node's process group: `systemctl restart` and a Ctrl-C on a foreground `kampr serve` both
+/// signal the group, and take every agent in every node-created session with them.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_created_session_leaves_the_nodes_process_group() {
+    let h = harness!("detach");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let session = format!("kampr-detach-{}", std::process::id());
+    let session_dir = herdr_home().join("sessions").join(&session);
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    for _ in 0..100 {
+        if session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let spawned = herdr_pid_for(&session).expect("the created herdr is running");
+    let ours = process_group(std::process::id()).expect("our own process group");
+    let theirs = process_group(spawned).expect("the created herdr's process group");
+
+    let stopped = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.stop", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    // N5: a session op answers with a session, so its `id` must not be dressed up as a pane id a
+    // client would then try to watch.
+    assert_eq!(stopped["id"], session.as_str(), "{stopped}");
+
+    for _ in 0..100 {
+        if !session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for _ in 0..20 {
+        let _ = std::fs::remove_dir_all(&session_dir);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !session_dir.exists() {
+            break;
+        }
+    }
+
+    assert_ne!(
+        theirs, ours,
+        "a created session shares the node's process group, so one signal kills both"
+    );
+    assert_eq!(theirs, spawned as i32, "a detached session leads its own group");
+}
+
+/// `has_conversation` promised a transcript and delivered `not_found`: it was derived from the
+/// pane's *harness*, so a `claude` started a minute ago — the pane the New sheet creates, opening
+/// on the Conversation view by default — advertised a conversation nothing could load.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_freshly_started_agent_claims_no_conversation_until_one_exists() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("nojournal", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let hello = until(&mut socket, "hello", 10).await;
+    assert_eq!(hello["caps"]["conversation"], true, "{hello}");
+
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    // Give the herd every chance to make the claim before it is disproved.
+    let mut claimed = false;
+    for _ in 0..24 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            claimed |= serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+    }
+    assert!(
+        !claimed,
+        "the pane advertised a conversation that convo.load answers not_found for"
+    );
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    send(&mut socket, json!({ "t": "convo.load", "pane": pane })).await;
+    assert_eq!(
+        until_pane(&mut socket, "error", &pane, 15).await["code"],
+        "not_found"
+    );
+
+    // And it flips once the transcript is on disk, which is what makes it a derivation rather
+    // than a refusal.
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let (body, _) = claude_transcript("/tmp", 2);
+    std::fs::write(project.join("9f1c0b2e-0000-4000-8000-000000000043.jsonl"), body).unwrap();
+    let mut announced = false;
+    for _ in 0..60 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "a transcript on disk never reached the herd");
+}
+
+/// In a headless session the PTY does not follow the layout rect — a pane whose rect says 47 is
+/// really 93 wide — so reporting the rect as `cols` is reporting a number no row was ever
+/// wrapped at. The client prints it to the operator in three places.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unmeasured_pane_reports_no_width_rather_than_its_rect() {
+    let h = harness!("colslie");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    let rect_before = h._session.call("session.snapshot", json!({})).await["snapshot"]["layouts"][0]["panes"]
+        [0]["rect"]["width"]
+        .as_u64()
+        .expect("a layout rect");
+    h._session
+        .call(
+            "pane.split",
+            json!({ "target_pane_id": local, "direction": "right", "focus": false }),
+        )
+        .await;
+
+    let mut narrowed = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let snapshot = h._session.call("session.snapshot", json!({})).await;
+        let rect = snapshot["snapshot"]["layouts"][0]["panes"][0]["rect"]["width"]
+            .as_u64()
+            .unwrap_or(rect_before);
+        if rect < rect_before {
+            narrowed = Some(rect);
+            break;
+        }
+    }
+    let rect = narrowed.expect("the split never narrowed the rect");
+
+    let mut entry = json!(null);
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if let Some(pane) = h.node.herd().pane(&pane) {
+            entry = serde_json::to_value(pane).unwrap();
+            if entry["rows"].as_u64().is_some() {
+                break;
+            }
+        }
+    }
+    assert_ne!(
+        entry["cols"].as_u64(),
+        Some(rect),
+        "the herd reported the layout rect as a measured width: {entry}"
+    );
+    assert!(
+        entry["cols"].is_null(),
+        "an unmeasured pane has no width to report: {entry}"
+    );
+    // Rows are knowable without measuring — herdr reports the PTY's own viewport — so they stay.
+    let viewport = h._session.call("session.snapshot", json!({})).await["snapshot"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pane_id"] == local.as_str())
+        .and_then(|p| p["scroll"]["viewport_rows"].as_u64())
+        .expect("herdr reports the viewport rows");
+    assert_eq!(entry["rows"].as_u64(), Some(viewport), "{entry}");
 }

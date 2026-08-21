@@ -25,6 +25,7 @@ kampr-node = { path = "../kampr-node" }
 kampr-push = { path = "../kampr-push" }
 openssl-sys = { workspace = true, optional = true }
 qrcode.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 time.workspace = true
 url.workspace = true
@@ -35,4 +36,5 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
+sqlx.workspace = true
 tempfile.workspace = true

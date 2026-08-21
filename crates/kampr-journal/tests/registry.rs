@@ -19,13 +19,14 @@ fn registry() -> Registry {
 
 #[test]
 fn a_shell_pane_has_no_conversation() {
-    assert!(!registry().has_conversation(None));
+    assert!(!registry().serves(None));
+    assert!(registry().locate(None, None, None).unwrap().is_none());
 }
 
 #[test]
 fn a_harness_with_no_adapter_has_no_conversation() {
     let session = SessionRef::id("gemini", CLAUDE_SESSION);
-    assert!(!registry().has_conversation(Some("gemini")));
+    assert!(!registry().serves(Some("gemini")));
     assert!(
         registry()
             .open(Some("gemini"), Some(&session), None)
@@ -34,17 +35,46 @@ fn a_harness_with_no_adapter_has_no_conversation() {
     );
 }
 
-/// `has_conversation` is "a journal adapter exists for this harness" — exactly what the wire
-/// document says it means — so it can never be true on a node whose `caps.conversation` is false.
+/// `has_conversation` is "a transcript resolves", and a node that serves no adapter at all
+/// resolves nothing — so a pane's claim can never outrun `caps.conversation`.
 #[test]
 fn a_pane_conversation_can_never_outrun_the_node_capability() {
     let registry = registry();
     for agent in [None, Some("claude"), Some("codex"), Some("gemini")] {
-        assert!(!registry.has_conversation(agent) || registry.serves_any());
+        assert!(!registry.serves(agent) || registry.serves_any());
     }
     let empty = Registry::new();
     assert!(!empty.serves_any());
-    assert!(!empty.has_conversation(Some("claude")));
+    assert!(!empty.serves(Some("claude")));
+    assert!(
+        empty
+            .locate(Some("claude"), None, Some(Path::new("/home/u/demo")))
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// An adapter for the harness is not a conversation. A `claude` whose working directory nothing
+/// has ever run in resolves to nothing — which is the pane the New sheet creates, opening on the
+/// Conversation view — and `locate` is what says so before the herd claims otherwise.
+#[test]
+fn a_harness_with_no_transcript_on_disk_resolves_to_nothing() {
+    let registry = registry();
+    assert!(registry.serves(Some("claude")), "the adapter is registered");
+    assert!(
+        registry
+            .locate(Some("claude"), None, Some(Path::new("/home/u/never-used")))
+            .unwrap()
+            .is_none(),
+        "a directory with no transcript has no conversation"
+    );
+    assert!(
+        registry
+            .locate(Some("claude"), None, Some(Path::new("/home/u/demo")))
+            .unwrap()
+            .is_some(),
+        "and one with a transcript does"
+    );
 }
 
 #[test]
@@ -72,7 +102,7 @@ fn a_stale_session_announcement_falls_back_to_the_working_directory() {
 fn a_matching_session_opens_its_transcript() {
     let registry = registry();
     let session = SessionRef::id("claude", CLAUDE_SESSION);
-    assert!(registry.has_conversation(Some("claude")));
+    assert!(registry.serves(Some("claude")));
 
     let mut journal = registry
         .open(Some("claude"), Some(&session), None)

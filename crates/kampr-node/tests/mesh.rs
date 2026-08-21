@@ -164,6 +164,9 @@ impl Running {
         // herdr session and serve it locally — correct behaviour, and useless here. An empty list
         // is "only the configured session", which is what two real hosts look like.
         config.herdr.sessions = Some(Vec::new());
+        // Every node here is either a hub or about to be dialled by one. The door is shut by
+        // default, so a mesh test has to open it as an operator would.
+        config.mesh.accept = true;
         config.limits.client_queue = 64;
         config.save(&home.config()).expect("a config");
 

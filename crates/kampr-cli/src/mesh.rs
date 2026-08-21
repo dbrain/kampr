@@ -14,6 +14,17 @@ use std::time::Duration;
 /// confirmed one.
 pub async fn invite(config_dir: &Path, state: Option<&Path>) -> Result<()> {
     let local = Local::open(config_dir, state).await?;
+    // A code is only spendable against a node that answers `/mesh`, and that door is shut until
+    // the operator opens it. Minting one anyway hands them a code and a URL that will refuse
+    // them, with nothing on the screen saying why.
+    if !local.config.mesh.accept {
+        bail!(
+            "this node is not a hub, so a join code would have nothing to spend itself against.\n\
+             Set `accept = true` under `[mesh]` in {} and restart `kampr serve`.\n\
+             Peers dial out and never need this; only the node being dialled *into* does.",
+            Config::path(config_dir).display()
+        );
+    }
     let identity = NodeIdentity::load_or_create(&Config::node_key_path(config_dir))?;
     let now = kampr_auth::now();
     let ttl = local.auth.policy().pairing_ttl.as_secs() as i64;

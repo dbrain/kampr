@@ -7,10 +7,11 @@ mod cert;
 mod exposure;
 mod herd;
 mod host;
+mod origin;
 mod render;
 
 use crate::dirs::Dirs;
-use crate::report::Local;
+use crate::report::{Local, StoreProblem};
 use anyhow::Result;
 use kampr_node::Config;
 use serde::Serialize;
@@ -117,18 +118,31 @@ async fn collect(dirs: &Dirs) -> Report {
     )];
     checks.extend(herd::checks(&config).await);
     checks.extend(exposure::checks(&config));
+    checks.push(origin::check(&config).await);
     checks.extend(host::files(&config_dir, &state_dir));
     checks.push(host::bundle());
-    checks.push(host::service(&config).await);
+    let service = crate::service::details();
+    checks.push(host::service(&config, &service).await);
+    checks.push(host::linger(&service));
 
     // The device store is the one check that needs the database open, and a database that will
     // not open is itself the answer.
     match Local::open(&config_dir, Some(&state_dir)).await {
         Ok(local) => checks.extend(host::access(&local).await),
-        Err(e) => checks.push(
-            Check::fail("devices", format!("the device store did not open: {e}"))
-                .fix("kampr init --force  (keeps nothing; re-pairs every device)"),
-        ),
+        // `kampr init --force` used to be the remedy here for every failure. It opens the same
+        // database and dies with the same error, and for a permissions or locking problem it
+        // would have re-paired every device to fix nothing.
+        Err(e) => checks.push(match e.downcast_ref::<StoreProblem>() {
+            Some(problem) => Check::fail(
+                "devices",
+                format!("the device store did not open: {}", problem.detail),
+            )
+            .fix(problem.fix.clone()),
+            None => Check::fail("devices", format!("the device store did not open: {e}")).fix(format!(
+                "check {} is readable by this user",
+                Config::state_db(&state_dir).display()
+            )),
+        }),
     }
     Report::new(Some(&config), checks)
 }

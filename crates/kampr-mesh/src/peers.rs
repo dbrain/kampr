@@ -3,7 +3,7 @@ use crate::shadow::{History, Shadow, StyleTable};
 use crate::transport::{Incoming, Outgoing};
 use kampr_core::registry::PaneUpdate;
 use kampr_core::scrollback::ScrollbackDoc;
-use kampr_core::wire::{Cursor, HerdDelta, NodeEntry, PaneEntry, RowRuns, Styles};
+use kampr_core::wire::{Cursor, ErrorCode, HerdDelta, NodeEntry, PaneEntry, RowRuns, Styles};
 use kampr_term::RowDiff;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -39,10 +39,10 @@ pub enum RelayError {
 
 impl RelayError {
     /// The wire's own error codes, so a relayed failure reads to a client exactly like a local one.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Unknown(_) => "unknown_pane",
-            Self::Offline(_) | Self::Wedged | Self::NoAnswer => "node_offline",
+            Self::Unknown(_) => ErrorCode::UnknownPane,
+            Self::Offline(_) | Self::Wedged | Self::NoAnswer => ErrorCode::NodeOffline,
         }
     }
 }

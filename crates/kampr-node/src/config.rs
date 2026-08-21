@@ -35,18 +35,16 @@ pub struct Config {
 }
 
 /// The hub role, which is configuration rather than a build.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Mesh {
     /// Whether this node accepts inbound peer links at all. Enrolment already decides *who* may
     /// join; this is the switch that says the door is not there.
+    ///
+    /// **Off by default**, for the same reason `bind` is loopback: `/mesh` is a second
+    /// unauthenticated protocol endpoint, and a node that only ever serves a phone should not be
+    /// answering it on the public internet. `kampr mesh invite` refuses until this is on.
     pub accept: bool,
-}
-
-impl Default for Mesh {
-    fn default() -> Self {
-        Self { accept: true }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +145,14 @@ pub struct Limits {
     /// Frames a slow client may have queued before the node drops its patches and resets it.
     pub client_queue: usize,
     pub scrollback_max_rows: usize,
+    /// Client sessions served at once. One token opens as many sockets as its holder likes and
+    /// each is a session with its own queue, so a publicly reachable node needs a bound of its
+    /// own rather than the proxy's.
+    pub sockets: usize,
+    /// Mesh handshakes in flight at once. Each one costs an argon2id pass at 19 MiB against a
+    /// join code an anonymous caller chose, so this is what bounds that memory — a limiter keyed
+    /// on the source address cannot, because addresses rotate.
+    pub mesh_handshakes: usize,
 }
 
 impl Default for Server {
@@ -187,6 +193,8 @@ impl Default for Limits {
         Self {
             client_queue: 256,
             scrollback_max_rows: kampr_core::scrollback::DEFAULT_MAX_ROWS,
+            sockets: 64,
+            mesh_handshakes: 4,
         }
     }
 }
@@ -444,15 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn the_hub_role_is_configuration_and_is_on_by_default() {
-        assert!(Config::bootstrap("x").mesh.accept);
+    fn the_hub_role_is_configuration_and_is_off_until_it_is_asked_for() {
+        assert!(!Config::bootstrap("x").mesh.accept);
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             Config::path(dir.path()),
-            "node_id = \"01J\"\nnode_name = \"x\"\n[mesh]\naccept = false\n",
+            "node_id = \"01J\"\nnode_name = \"x\"\n[mesh]\naccept = true\n",
         )
         .unwrap();
-        assert!(!Config::load(dir.path()).unwrap().mesh.accept);
+        assert!(Config::load(dir.path()).unwrap().mesh.accept);
     }
 
     #[test]

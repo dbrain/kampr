@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     println!("== herd ==");
     for p in &panes {
         println!(
-            "  {}  {}x{}  agent {:?}  scrollback {}",
+            "  {}  {:?}x{}  agent {:?}  scrollback {}",
             p.pane_id, p.cols, p.rows, p.agent, p.scrollback_rows
         );
     }
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
                 };
                 let line = panes
                     .iter()
-                    .map(|p| format!("{} {}x{} sb{}", p.pane_id, p.cols, p.rows, p.scrollback_rows))
+                    .map(|p| format!("{} {:?}x{} sb{}", p.pane_id, p.cols, p.rows, p.scrollback_rows))
                     .collect::<Vec<_>>()
                     .join("  ");
                 herd_log.lock().unwrap().push(line);

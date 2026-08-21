@@ -1,4 +1,5 @@
 use crate::wire::Wire;
+use kampr_core::wire::ErrorCode;
 use kampr_mesh::{Peers, RemoteEvent, RemoteWatcher};
 use std::sync::Arc;
 use tracing::debug;
@@ -44,7 +45,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
             // The link went away under a live watcher. Say so on the pane rather than going
             // quiet: a client that is told nothing shows a frozen grid forever.
             wire.error(
-                "node_offline",
+                ErrorCode::NodeOffline,
                 "the node serving this pane left the herd",
                 Some(&global),
             );
@@ -76,6 +77,11 @@ fn emit(wire: &Wire, global: &str, event: RemoteEvent) -> bool {
         RemoteEvent::Update(update) => wire.send_update(global, &update),
         RemoteEvent::Scrollback(doc) => wire.send_scrollback(global, &doc),
         RemoteEvent::Passthrough(value) => wire.send_json(&value),
-        RemoteEvent::Error { code, message } => wire.error(&code, &message, Some(global)),
+        // A peer's code is forwarded verbatim rather than narrowed to this build's vocabulary:
+        // a newer peer may name one this hub has no variant for, and dropping it is the same
+        // forward-compatibility failure as refusing an unknown `t`.
+        RemoteEvent::Error { code, message } => wire.send_json(&serde_json::json!({
+            "t": "error", "code": code, "message": message, "pane": global
+        })),
     }
 }

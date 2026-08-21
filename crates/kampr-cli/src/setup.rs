@@ -9,12 +9,17 @@ use std::path::Path;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-/// The setup ladder.
+/// Devices, and the service that keeps the node alive.
 ///
-/// Not a wizard: the node already works, and every rung here is an optional upgrade that says
-/// what it unlocks. It runs inside a Herdr popup pane, and popups are not always a terminal — a
-/// plugin action can be invoked with its output piped — so it prints the whole ladder and exits
-/// when there is nobody to read a keystroke.
+/// Not a wizard: the node already works. It *reports* the tier ladder — what is unlocked, what is
+/// locked and why — and the rungs above Tier 0 are climbed elsewhere: a certificate and a
+/// hostname in `config.toml`, passkeys and notifications from the client on the phone, extra
+/// machines from `kampr mesh`. What can be done from here is what is listed below and nothing
+/// else, so nothing here should promise more.
+///
+/// It runs inside a Herdr popup pane, and popups are not always a terminal — a plugin action can
+/// be invoked with its output piped — so it prints the whole report and exits when there is
+/// nobody to read a keystroke.
 pub async fn run(config_dir: &Path, state_dir: Option<&Path>) -> Result<()> {
     let local = Local::open(config_dir, state_dir).await?;
     show(&local).await?;
@@ -91,7 +96,7 @@ async fn pair(local: &Local, role: Role) -> Result<()> {
     let pairing = pairing::create(local, role).await?;
     let url = local.config.origin();
     println!();
-    print!("{}", report::qr(&url));
+    print!("{}", report::qr(&format!("{url}#pair={}", pairing.code)));
     println!("  {url}");
     println!("  code   {}   ({}, one device)", pairing.code, role.as_str());
     println!(
@@ -156,8 +161,12 @@ fn devices_listing(devices: &[kampr_auth::Device]) {
 fn install(config_dir: &Path, state_dir: &Path) -> Result<()> {
     let binary = std::env::current_exe()?;
     let socket = std::env::var("HERDR_SOCKET_PATH").ok();
-    let path = service::install(&binary, config_dir, state_dir, socket.as_deref())?;
-    println!("  installed {}", path.display());
+    let installed = service::install(&binary, config_dir, state_dir, socket.as_deref())?;
+    println!("  installed {}", installed.path.display());
+    if let Some(note) = installed.reboot.note() {
+        println!();
+        println!("{note}");
+    }
     Ok(())
 }
 

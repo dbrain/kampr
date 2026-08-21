@@ -37,15 +37,21 @@ enum Command {
         /// bound to an origin and does not survive a change of one.
         #[arg(long)]
         origin: Option<String>,
+        /// Rewrite config.toml from defaults, carrying the identity, the bind, the origin, the
+        /// proxy settings and `[mesh]` forward. It says what it keeps and what it resets.
         #[arg(long)]
         force: bool,
+        /// Mint a new node identity as well. Every enrolled passkey and every mesh peer pinned to
+        /// the old one stops working, so it is never implied by --force.
+        #[arg(long)]
+        new_identity: bool,
     },
     /// Run the node
     Serve {
         #[command(flatten)]
         dirs: Dirs,
     },
-    /// The setup ladder
+    /// Pair devices, revoke them, and install the service; and report the tier ladder
     Setup {
         #[command(flatten)]
         dirs: Dirs,
@@ -155,6 +161,7 @@ async fn main() -> Result<()> {
             bind,
             origin,
             force,
+            new_identity,
         } => {
             init::run(
                 &dirs.config(),
@@ -164,6 +171,7 @@ async fn main() -> Result<()> {
                     bind,
                     origin,
                     force,
+                    new_identity,
                 },
             )
             .await
@@ -226,19 +234,33 @@ async fn main() -> Result<()> {
         },
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {
-                let path = service::install(
+                // Loaded rather than guessed: `serve` resolves the state directory from the
+                // config, so a unit that guessed the XDG default would supervise a node that
+                // came up on an empty database and a fresh VAPID key.
+                let config = Config::load(&dirs.config())?;
+                let installed = service::install(
                     &std::env::current_exe()?,
                     &dirs.config(),
-                    &dirs.state(),
+                    &config.resolve_state_dir(dirs.state_override()),
                     std::env::var("HERDR_SOCKET_PATH").ok().as_deref(),
                 )?;
-                println!("installed {}", path.display());
+                println!("installed {}", installed.path.display());
                 println!("start it with: {}", service::start_hint());
+                if let Some(note) = installed.reboot.note() {
+                    println!();
+                    println!("{note}");
+                }
                 Ok(())
             }
             ServiceAction::Uninstall => {
+                let state = Config::load(&dirs.config())
+                    .map(|c| c.resolve_state_dir(dirs.state_override()))
+                    .unwrap_or_else(|_| dirs.state());
                 service::uninstall()?;
-                println!("removed. Config and devices are kept — delete them by hand to reset.");
+                println!("removed. Config and devices are kept at:");
+                println!("  {}", dirs.config().display());
+                println!("  {}", state.display());
+                println!("Delete both to reset — every paired device loses access.");
                 Ok(())
             }
             ServiceAction::Status => {

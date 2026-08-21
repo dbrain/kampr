@@ -76,11 +76,14 @@ impl Registry {
         self.adapters.get(agent)
     }
 
-    /// Exactly what the wire document says `has_conversation` means: a journal adapter exists for
-    /// this harness. Deriving it from adapter registration is what keeps it from disagreeing with
-    /// `caps.conversation`, which is [`Self::serves_any`] — a pane can never claim more than the
-    /// node does.
-    pub fn has_conversation(&self, pane_agent: Option<&str>) -> bool {
+    /// Whether this node could serve a conversation for a pane running `pane_agent` *at all* —
+    /// the adapter half of the question, and the cheap half.
+    ///
+    /// It is not the answer to `has_conversation`: a harness started a minute ago has no
+    /// transcript, and a pane that claims one it cannot produce is a blank Conversation view and
+    /// a `convo.load` that answers `not_found`. That question is [`Self::locate`], because only a
+    /// path on disk settles it.
+    pub fn serves(&self, pane_agent: Option<&str>) -> bool {
         pane_agent.is_some_and(|agent| self.adapters.contains_key(agent))
     }
 
@@ -103,17 +106,34 @@ impl Registry {
         let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
             return Ok(None);
         };
+        let Some(path) = self.locate(pane_agent, session, cwd)? else {
+            return Ok(None);
+        };
+        Ok(Some(adapter.open_path(path)))
+    }
+
+    /// The transcript [`Self::open`] would open, without opening it. This is what
+    /// `has_conversation` is answered from: the file either resolves or it does not, and nothing
+    /// short of looking can tell the difference.
+    pub fn locate(
+        &self,
+        pane_agent: Option<&str>,
+        session: Option<&SessionRef>,
+        cwd: Option<&Path>,
+    ) -> Result<Option<PathBuf>, JournalError> {
+        let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
+            return Ok(None);
+        };
         let announced = session
             .filter(|s| Some(s.agent.as_str()) == pane_agent)
             .and_then(|s| adapter.locate(s).ok());
-        let path = match announced {
-            Some(path) => path,
+        match announced {
+            Some(path) => Ok(Some(path)),
             None => match cwd.map(|cwd| adapter.locate_by_cwd(cwd)) {
-                Some(Ok(path)) => path,
-                Some(Err(JournalError::NotFound(_))) | None => return Ok(None),
-                Some(Err(e)) => return Err(e),
+                Some(Ok(path)) => Ok(Some(path)),
+                Some(Err(JournalError::NotFound(_))) | None => Ok(None),
+                Some(Err(e)) => Err(e),
             },
-        };
-        Ok(Some(adapter.open_path(path)))
+        }
     }
 }

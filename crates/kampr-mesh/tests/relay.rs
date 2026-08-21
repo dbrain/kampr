@@ -6,6 +6,7 @@
 
 use kampr_auth::{MeshNode, MeshRole};
 use kampr_core::registry::PaneUpdate;
+use kampr_core::wire::ErrorCode;
 use kampr_mesh::handshake::Accepted;
 use kampr_mesh::transport::{Incoming, Link, Outgoing, Receiver, Sender, pair};
 use kampr_mesh::{PeerState, Peers, PeersConfig, RemoteEvent};
@@ -228,7 +229,7 @@ async fn input_for_a_peer_pane_is_relayed_as_the_client_sent_it() {
 async fn a_pane_on_a_node_nobody_serves_is_unknown_rather_than_offline() {
     let peers = peers();
     let error = peers.watch("01JZ/w1:p1", false).expect_err("nobody serves it");
-    assert_eq!(error.code(), "unknown_pane");
+    assert_eq!(error.code(), ErrorCode::UnknownPane);
 }
 
 #[tokio::test]
@@ -282,7 +283,7 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
     }
     assert_eq!(
         peers.watch("01JA/w1:p1", false).unwrap_err().code(),
-        "node_offline"
+        ErrorCode::NodeOffline
     );
 
     // The other peer never noticed.

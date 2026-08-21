@@ -1,3 +1,4 @@
+use kampr_core::wire::ErrorCode;
 use kampr_herdr::Herdr;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,12 +55,12 @@ pub enum ManageError {
 }
 
 impl ManageError {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Unsupported(_) => "unsupported",
-            Self::BadRequest(_) => "bad_request",
-            Self::UnknownTarget(_) => "unknown_pane",
-            Self::Herdr(_) => "herdr_unavailable",
+            Self::Unsupported(_) => ErrorCode::Unsupported,
+            Self::BadRequest(_) => ErrorCode::BadRequest,
+            Self::UnknownTarget(_) => ErrorCode::UnknownPane,
+            Self::Herdr(_) => ErrorCode::HerdrUnavailable,
         }
     }
 }
@@ -89,12 +90,6 @@ pub fn parse_target(node_id: &str, at: &str) -> Result<Target, ManageError> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Managed {
-    pub id: Option<String>,
-    pub layout: Option<String>,
-}
-
 pub struct Manager<'a> {
     pub herdr: &'a Herdr,
     pub node_id: &'a str,
@@ -105,11 +100,11 @@ impl Manager<'_> {
     pub async fn run(&self, op: &ManageOp) -> Result<Value, ManageError> {
         match op.op.as_str() {
             "workspace.create" => {
-                self.call(
-                    "workspace.create",
-                    json!({ "label": op.label, "cwd": op.cwd, "env": op.env, "focus": false }),
-                )
-                .await
+                let mut params = json!({ "label": op.label, "cwd": op.cwd, "focus": false });
+                if let Some(env) = env_map(op.env.as_ref())? {
+                    params["env"] = env;
+                }
+                self.call("workspace.create", params).await
             }
             "tab.create" => {
                 let workspace = self.workspace_of(op).await?;
@@ -258,15 +253,24 @@ impl Manager<'_> {
         }
     }
 
+    /// The session outlives the node on purpose: an operator's agents are inside it, and a node
+    /// restart is not a reason to end them.
+    ///
+    /// `herdr server` does not daemonise, so without this the new session joins the node's own
+    /// process group and dies with it — a Ctrl-C on a foreground `kampr serve` signals the whole
+    /// group, and systemd's default `KillMode` signals the whole cgroup. The unit answers the
+    /// cgroup half with `KillMode=process`; this answers the group half.
     async fn create_session(&self, op: &ManageOp) -> Result<Value, ManageError> {
         let name = session_name(op)?;
-        Command::new(self.binary)
+        let mut command = Command::new(self.binary);
+        command
             .args(["server", "--session", &name])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| ManageError::Herdr(e.to_string()))?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        command.process_group(0);
+        command.spawn().map_err(|e| ManageError::Herdr(e.to_string()))?;
         Ok(json!({ "session": name }))
     }
 
@@ -292,6 +296,21 @@ impl Manager<'_> {
             .call::<Value>(method, params)
             .await
             .map_err(|e| ManageError::Herdr(e.to_string()))
+    }
+}
+
+/// Herdr 0.8.2 types `env` as a map and refuses a `null` outright — and the client omits the key
+/// whenever the operator typed no variables, which is nearly every new workspace. `Option::None`
+/// serialising to `null` therefore failed the op every time, so an absent or empty map has to
+/// leave the key off the params rather than name it as nothing.
+fn env_map(env: Option<&Value>) -> Result<Option<Value>, ManageError> {
+    match env {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) if map.is_empty() => Ok(None),
+        Some(value @ Value::Object(_)) => Ok(Some(value.clone())),
+        Some(other) => Err(ManageError::BadRequest(format!(
+            "env must be a map of strings, not {other}"
+        ))),
     }
 }
 
@@ -324,7 +343,10 @@ fn layout_root(layout: Option<&Value>) -> Result<Value, ManageError> {
     Ok(root.clone())
 }
 
-/// The id a creating op produced, dug out of whichever record herdr chose to echo.
+/// The herdr-local id a creating op produced, dug out of whichever record herdr chose to echo.
+///
+/// A session is deliberately not one of them: it is named, not addressed, and node-qualifying its
+/// name produced an `id` shaped exactly like a pane id for something no client can watch.
 pub fn created_id(reply: &Value) -> Option<String> {
     for (record, field) in [
         ("workspace", "workspace_id"),
@@ -336,7 +358,7 @@ pub fn created_id(reply: &Value) -> Option<String> {
             return Some(id.to_string());
         }
     }
-    reply["session"].as_str().map(str::to_string)
+    None
 }
 
 #[cfg(test)]
@@ -384,7 +406,11 @@ mod tests {
             created_id(&json!({"pane":{"pane_id":"w1:p3"}})),
             Some("w1:p3".into())
         );
-        assert_eq!(created_id(&json!({"session":"agents"})), Some("agents".into()));
+        assert_eq!(
+            created_id(&json!({"session":"agents"})),
+            None,
+            "a session name is not a pane id"
+        );
         assert_eq!(created_id(&json!({"type":"ok"})), None);
     }
 
@@ -416,9 +442,10 @@ mod tests {
 
     #[test]
     fn error_codes_map_onto_the_wire_vocabulary() {
-        assert_eq!(ManageError::Unsupported("x".into()).code(), "unsupported");
-        assert_eq!(ManageError::BadRequest("x".into()).code(), "bad_request");
-        assert_eq!(ManageError::UnknownTarget("x".into()).code(), "unknown_pane");
-        assert_eq!(ManageError::Herdr("x".into()).code(), "herdr_unavailable");
+        let spelled = |e: ManageError| serde_json::to_value(e.code()).unwrap();
+        assert_eq!(spelled(ManageError::Unsupported("x".into())), "unsupported");
+        assert_eq!(spelled(ManageError::BadRequest("x".into())), "bad_request");
+        assert_eq!(spelled(ManageError::UnknownTarget("x".into())), "unknown_pane");
+        assert_eq!(spelled(ManageError::Herdr("x".into())), "herdr_unavailable");
     }
 }

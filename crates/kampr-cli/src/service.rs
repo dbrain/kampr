@@ -7,32 +7,128 @@ const LABEL: &str = "dev.kampr.node";
 
 /// Herdr's `[[startup]]` hooks are one-shot, not supervised, so keeping the node alive across a
 /// reboot or a crash needs a real service manager. This installs one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Supervisor {
     Systemd,
     Launchd,
+    Unsupported,
 }
 
 impl Supervisor {
     pub fn detect() -> Self {
         if cfg!(target_os = "macos") {
-            Self::Launchd
-        } else {
+            return Self::Launchd;
+        }
+        // sd_booted(3): `/run/systemd/system` exists only when systemd is the init system. WSL2
+        // without `systemd=true`, OpenRC and a plain container all fail it, and on those hosts a
+        // user unit is a file nothing will ever read.
+        if Path::new("/run/systemd/system").is_dir() {
             Self::Systemd
+        } else {
+            Self::Unsupported
         }
     }
 }
 
-pub fn install(binary: &Path, config_dir: &Path, state_dir: &Path, socket: Option<&str>) -> Result<PathBuf> {
-    kampr_auth::private_dir(config_dir)?;
-    kampr_auth::private_dir(state_dir)?;
+/// What happens to an installed unit at the next reboot, which is not the same question as
+/// whether it is enabled: a `systemd --user` manager lives inside the caller's login session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reboot {
+    Survives,
+    NeedsLinger { user: String },
+    LingerUnknown { user: String },
+    NeedsGuiLogin,
+}
+
+impl Reboot {
+    pub fn note(&self) -> Option<String> {
+        match self {
+            Self::Survives => None,
+            Self::NeedsLinger { user } => Some(format!(
+                "Required — without this the node does not come back after a reboot:\n\
+                 \n  loginctl enable-linger {user}\n\n\
+                 systemd tears your user manager down when your last session ends and does not \
+                 start it at boot, so the unit above stops at logout and stays stopped."
+            )),
+            Self::LingerUnknown { user } => Some(format!(
+                "Could not tell whether lingering is on for {user}. Without it a `systemd --user` \
+                 manager stops at logout and is not started at boot:\n\n  loginctl enable-linger {user}"
+            )),
+            Self::NeedsGuiLogin => Some(
+                "This is a launchd agent in `gui/$(id -u)`, a domain that only exists once someone \
+                 logs in at the screen — a Mac that reboots to the login window does not start the \
+                 node until you do. A headless Mac needs a LaunchDaemon in /Library/LaunchDaemons \
+                 instead."
+                    .into(),
+            ),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Installed {
+    pub path: PathBuf,
+    pub reboot: Reboot,
+}
+
+pub fn install(
+    binary: &Path,
+    config_dir: &Path,
+    state_dir: &Path,
+    socket: Option<&str>,
+) -> Result<Installed> {
     match Supervisor::detect() {
-        Supervisor::Systemd => install_systemd(binary, config_dir, state_dir, socket),
-        Supervisor::Launchd => install_launchd(binary, config_dir, state_dir, socket),
+        Supervisor::Unsupported => bail!(
+            "this host has no systemd, so there is no user unit to install. WSL2 needs \
+             `systemd=true` in /etc/wsl.conf and a `wsl --shutdown`; on OpenRC, in a container, \
+             or anywhere else, run `kampr serve` under whatever already supervises this box."
+        ),
+        supervisor => {
+            kampr_auth::private_dir(config_dir)?;
+            kampr_auth::private_dir(state_dir)?;
+            match supervisor {
+                Supervisor::Systemd => install_systemd(binary, config_dir, state_dir, socket),
+                _ => install_launchd(binary, config_dir, state_dir, socket),
+            }
+        }
+    }
+}
+
+/// `/var/lib/systemd/linger/<user>` is the file logind reads at boot, so it answers even when the
+/// bus is out of reach — which is exactly the case on the hosts where this matters most.
+pub fn linger(user: &str) -> Option<bool> {
+    let dir = Path::new("/var/lib/systemd/linger");
+    if dir.is_dir() {
+        return Some(dir.join(user).exists());
+    }
+    run_output("loginctl", &["show-user", user, "-p", "Linger"])
+        .ok()
+        .and_then(|out| out.split('=').nth(1).map(|v| v.trim() == "yes"))
+}
+
+pub fn username() -> String {
+    std::env::var("USER")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .or_else(|| run_output("id", &["-un"]).ok().filter(|u| !u.is_empty()))
+        .unwrap_or_else(|| "$USER".into())
+}
+
+fn ensure_linger() -> Reboot {
+    let user = username();
+    if linger(&user) != Some(true) {
+        try_run("loginctl", &["enable-linger", &user]);
+    }
+    match linger(&user) {
+        Some(true) => Reboot::Survives,
+        Some(false) => Reboot::NeedsLinger { user },
+        None => Reboot::LingerUnknown { user },
     }
 }
 
 pub fn uninstall() -> Result<()> {
     match Supervisor::detect() {
+        Supervisor::Unsupported => Ok(()),
         Supervisor::Systemd => {
             let path = systemd_unit_path()?;
             quiet("systemctl", &["--user", "stop", UNIT]);
@@ -59,7 +155,7 @@ fn install_systemd(
     config_dir: &Path,
     state_dir: &Path,
     socket: Option<&str>,
-) -> Result<PathBuf> {
+) -> Result<Installed> {
     let path = systemd_unit_path()?;
     std::fs::create_dir_all(path.parent().expect("unit path has a parent"))?;
     let unit = SYSTEMD_UNIT
@@ -74,7 +170,10 @@ fn install_systemd(
     if !try_run("systemctl", &["--user", "enable", UNIT]) {
         eprintln!("kampr: could not enable {UNIT}; run `systemctl --user enable {UNIT}` by hand");
     }
-    Ok(path)
+    Ok(Installed {
+        path,
+        reboot: ensure_linger(),
+    })
 }
 
 fn install_launchd(
@@ -82,7 +181,7 @@ fn install_launchd(
     config_dir: &Path,
     state_dir: &Path,
     socket: Option<&str>,
-) -> Result<PathBuf> {
+) -> Result<Installed> {
     let path = launchd_plist_path()?;
     std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
     // launchd expands nothing, and an empty HERDR_SOCKET_PATH is worse than an absent one:
@@ -103,11 +202,15 @@ fn install_launchd(
             &path.display().to_string(),
         ],
     )?;
-    Ok(path)
+    Ok(Installed {
+        path,
+        reboot: Reboot::NeedsGuiLogin,
+    })
 }
 
 pub fn status() -> String {
     match Supervisor::detect() {
+        Supervisor::Unsupported => "no service manager on this host".into(),
         Supervisor::Systemd => {
             run_output("systemctl", &["--user", "is-active", UNIT]).unwrap_or_else(|_| "unknown".into())
         }
@@ -134,6 +237,15 @@ pub fn details() -> State {
     match Supervisor::detect() {
         Supervisor::Systemd => systemd_state(),
         Supervisor::Launchd => launchd_state(),
+        Supervisor::Unsupported => State {
+            installed: false,
+            enabled: "no service manager".into(),
+            active: "unknown".into(),
+            running: false,
+            failed: false,
+            result: "unknown".into(),
+            since: "unknown".into(),
+        },
     }
 }
 
@@ -227,6 +339,7 @@ pub fn start_hint() -> &'static str {
     match Supervisor::detect() {
         Supervisor::Systemd => "systemctl --user start kampr.service",
         Supervisor::Launchd => "launchctl kickstart gui/$(id -u)/dev.kampr.node",
+        Supervisor::Unsupported => "kampr serve",
     }
 }
 
@@ -285,26 +398,9 @@ fn run_output(program: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-const SYSTEMD_UNIT: &str = r#"[Unit]
-Description=Kampr node
-After=default.target
-# A phone-only operator cannot run `systemctl reset-failed`, so never stop trying.
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-ExecStart=@BIN@ serve --config-dir @CONFIG_DIR@ --state-dir @STATE_DIR@
-Restart=on-failure
-RestartSec=5
-# The node can type into every terminal in the herd, so deny escalation and give it a private /tmp.
-# ProtectSystem is deliberately unset: the state directory may be anywhere the operator chose.
-NoNewPrivileges=yes
-PrivateTmp=yes
-Environment=HERDR_SOCKET_PATH=@SOCKET@
-
-[Install]
-WantedBy=default.target
-"#;
+/// The same file `packaging/kamprctl.sh` renders, included rather than repeated: two
+/// copies of a unit are two units, and they drift silently.
+const SYSTEMD_UNIT: &str = include_str!("../../../packaging/kampr.service");
 
 const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -341,6 +437,23 @@ mod tests {
         assert!(unit.contains("NoNewPrivileges=yes"));
     }
 
+    /// Sessions created through `manage{session.create}` are the operator's agents, and they are
+    /// children of this process. Measured on a real user manager, all three modes: with the
+    /// default `control-group` and with `KillMode=mixed` a `systemctl --user restart` killed the
+    /// detached child; only `process` left it running.
+    #[test]
+    fn the_unit_signals_the_node_and_not_the_sessions_it_created() {
+        assert!(
+            SYSTEMD_UNIT.contains("\nKillMode=process\n"),
+            "any other KillMode SIGKILLs the whole cgroup, agents included: {SYSTEMD_UNIT}"
+        );
+        assert!(
+            !SYSTEMD_UNIT.contains("\nPrivateTmp="),
+            "a created session inherits the node's mount namespace, so a private /tmp is the \
+             operator's agents writing somewhere their own shell cannot see: {SYSTEMD_UNIT}"
+        );
+    }
+
     #[test]
     fn the_plist_template_is_fully_substituted() {
         let plist = LAUNCHD_PLIST
@@ -368,6 +481,49 @@ mod tests {
             return;
         };
         assert_eq!(packaged.trim(), LAUNCHD_PLIST.trim());
+    }
+
+    #[test]
+    fn an_installed_unit_without_linger_says_the_exact_command_and_why() {
+        let note = Reboot::NeedsLinger {
+            user: "dbrain".into(),
+        }
+        .note()
+        .expect("a required next step");
+        assert!(note.contains("loginctl enable-linger dbrain"), "{note}");
+        assert!(note.contains("Required"), "{note}");
+        assert!(note.contains("boot"), "{note}");
+
+        assert_eq!(
+            Reboot::Survives.note(),
+            None,
+            "nothing to say when it will come back"
+        );
+
+        let unknown = Reboot::LingerUnknown { user: "x".into() }.note().unwrap();
+        assert!(unknown.contains("loginctl enable-linger x"), "{unknown}");
+
+        let mac = Reboot::NeedsGuiLogin.note().unwrap();
+        assert!(mac.contains("LaunchDaemon"), "{mac}");
+        assert!(mac.contains("logs in at the screen"), "{mac}");
+    }
+
+    /// A unit written on a host with no systemd is a file nothing reads, and `installed …` is a
+    /// lie the operator has no way to catch.
+    #[test]
+    fn a_host_with_no_service_manager_refuses_rather_than_writing_into_the_void() {
+        if Supervisor::detect() != Supervisor::Unsupported {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let error = install(
+            Path::new("/usr/local/bin/kampr"),
+            &dir.path().join("config"),
+            &dir.path().join("state"),
+            None,
+        )
+        .expect_err("no supervisor to install into");
+        assert!(error.to_string().contains("systemd"), "{error}");
     }
 
     fn packaged(name: &str) -> Option<String> {

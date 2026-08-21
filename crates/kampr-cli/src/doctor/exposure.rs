@@ -11,7 +11,7 @@ fn bind(config: &Config) -> Check {
     let addr = &config.server.bind;
     let Ok(parsed) = config.bind_addr() else {
         return Check::fail("bind", format!("server.bind {addr:?} is not host:port"))
-            .fix("kampr init --bind 127.0.0.1:8790 --force");
+            .fix("kampr init --bind 127.0.0.1:8790");
     };
     if !config.server.exposed() {
         return Check::ok(
@@ -27,7 +27,7 @@ fn bind(config: &Config) -> Check {
         ),
     )
     .fix(format!(
-        "kampr init --bind 127.0.0.1:{} --force   (if that was not deliberate)",
+        "kampr init --bind 127.0.0.1:{}   (if that was not deliberate)",
         parsed.port()
     ))
 }

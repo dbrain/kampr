@@ -8,7 +8,7 @@ use axum::extract::ws::WebSocket;
 use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
 use kampr_core::provider::Input;
-use kampr_core::wire::{ClientMsg, PROTOCOL, PendingSource, ServerMsg};
+use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
 use kampr_mesh::{Incoming, Outgoing};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -31,6 +31,18 @@ const PENDING_ATTEMPTS: u32 = 12;
 const DEVICE_RECHECK: Duration = Duration::from_secs(2);
 
 const MAX_PREFS_BYTES: usize = 2048;
+
+/// Every `t` [`ClientMsg`] decodes, kept beside it because the enum's own refusal of an unknown
+/// variant is indistinguishable from a malformed known one.
+const CLIENT_VERBS: [&str; 7] = [
+    "watch",
+    "unwatch",
+    "input",
+    "answer",
+    "convo.load",
+    "resync",
+    "ping",
+];
 
 pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
     let link = crate::mesh::split(socket);
@@ -80,7 +92,7 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
         panes: HashMap::new(),
         toaster: crate::toast::Toaster::default(),
     };
-    session.greet();
+    session.greet().await;
     let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
     let _herd_guard = crate::mesh::AbortOnDrop(herd_task.abort_handle());
 
@@ -161,10 +173,25 @@ struct Session {
 }
 
 impl Session {
-    fn greet(&self) {
+    /// `hello`, the herd, and this device's stored preferences — unasked, because there is no
+    /// other way for a client to learn the zoom it left a pane at. A client that has to ask has
+    /// already rendered the pane at the wrong size.
+    async fn greet(&self) {
         self.wire.send_json(&hello(&self.node, &self.device));
         self.wire.send(&self.node.herd().message());
+        self.wire.send_json(&self.stored_prefs().await);
         self.audit("session.opened", None, None);
+    }
+
+    async fn stored_prefs(&self) -> Value {
+        let panes = self
+            .node
+            .auth
+            .store()
+            .pane_prefs(&self.device.id)
+            .await
+            .unwrap_or_else(|_| json!({}));
+        json!({ "t": "prefs", "panes": panes })
     }
 
     fn audit(&self, action: &str, pane: Option<&str>, detail: Option<Value>) {
@@ -186,7 +213,8 @@ impl Session {
         if self.device.role.writes() {
             return true;
         }
-        self.wire.error("not_writer", "this device is read-only", pane);
+        self.wire
+            .error(ErrorCode::NotWriter, "this device is read-only", pane);
         false
     }
 
@@ -217,7 +245,7 @@ impl Session {
             }
             None => {
                 self.wire
-                    .error("revoked", "this device is no longer authorised", None);
+                    .error(ErrorCode::Revoked, "this device is no longer authorised", None);
                 self.audit("session.revoked", None, None);
                 false
             }
@@ -227,7 +255,7 @@ impl Session {
     /// `false` closes the socket.
     async fn dispatch(&mut self, text: &str) -> bool {
         let Ok(value) = serde_json::from_str::<Value>(text) else {
-            self.wire.error("bad_request", "not JSON", None);
+            self.wire.error(ErrorCode::BadRequest, "not JSON", None);
             return true;
         };
         let tag = value["t"].as_str().map(str::to_string);
@@ -238,20 +266,25 @@ impl Session {
             return false;
         }
         // Unknown `t` values are ignored rather than refused — that is how a v1 client survives a
-        // later node, and it has to work in this direction too.
+        // later node, and it has to work in this direction too. The tagged enum refuses a variant
+        // it does not know, so the vocabulary is checked *before* it, and only a verb this node
+        // does know is allowed to fail decoding.
         match tag.as_deref() {
             Some("manage") => self.manage(value).await,
             Some("caps") => self.caps().await,
             Some("prefs") => self.prefs(&value).await,
             Some("notify") => self.notify(&value).await,
-            Some(_) => match serde_json::from_value::<ClientMsg>(value) {
-                Ok(msg) => self.client_msg(msg).await,
-                Err(e) => {
-                    self.wire.error("bad_request", &e.to_string(), None);
+            Some(known) if CLIENT_VERBS.contains(&known) => {
+                match serde_json::from_value::<ClientMsg>(value) {
+                    Ok(msg) => self.client_msg(msg).await,
+                    Err(e) => {
+                        self.wire.error(ErrorCode::BadRequest, &e.to_string(), None);
+                    }
                 }
-            },
+            }
+            Some(unknown) => debug!(t = %unknown, "ignoring a message this node has no verb for"),
             None => {
-                self.wire.error("bad_request", "message has no `t`", None);
+                self.wire.error(ErrorCode::BadRequest, "message has no `t`", None);
             }
         }
         true
@@ -286,12 +319,13 @@ impl Session {
             return;
         };
         if self.node.herd().pane(pane).is_none() {
-            self.wire.error("unknown_pane", "no such pane", Some(pane));
+            self.wire
+                .error(ErrorCode::UnknownPane, "no such pane", Some(pane));
             return;
         }
         if !session.online() {
             self.wire.error(
-                "node_offline",
+                ErrorCode::NodeOffline,
                 "the herdr serving this pane is not reachable",
                 Some(pane),
             );
@@ -345,7 +379,7 @@ impl Session {
     async fn watch_peer(&mut self, pane: &str, scrollback: bool, conversation: bool) {
         if self.node.peers.state(pane) == kampr_mesh::PeerState::Unknown {
             self.wire.error(
-                "unknown_pane",
+                ErrorCode::UnknownPane,
                 "no node in this herd serves that pane",
                 Some(pane),
             );
@@ -406,8 +440,11 @@ impl Session {
                 self.wire.send(&page);
             }
             None => {
-                self.wire
-                    .error("not_found", "no conversation open for this pane", Some(pane));
+                self.wire.error(
+                    ErrorCode::NotFound,
+                    "no conversation open for this pane",
+                    Some(pane),
+                );
             }
         }
     }
@@ -444,7 +481,7 @@ impl Session {
             .count();
         if supplied != 1 {
             self.wire.error(
-                "bad_request",
+                ErrorCode::BadRequest,
                 "input takes exactly one of text, b64, keys",
                 Some(pane),
             );
@@ -463,8 +500,11 @@ impl Session {
                 {
                     Some(text) => Input::Bytes(text.into_bytes()),
                     None => {
-                        self.wire
-                            .error("bad_request", "b64 must decode to valid UTF-8", Some(pane));
+                        self.wire.error(
+                            ErrorCode::BadRequest,
+                            "b64 must decode to valid UTF-8",
+                            Some(pane),
+                        );
                         return;
                     }
                 }
@@ -496,7 +536,7 @@ impl Session {
         };
         if key.is_empty() || key.chars().count() > 2 {
             self.wire.error(
-                "bad_request",
+                ErrorCode::BadRequest,
                 "an answer key is one or two characters",
                 Some(pane),
             );
@@ -543,10 +583,25 @@ impl Session {
         let rid = value.get("rid").cloned();
         let raw = value.clone();
         let Ok(op) = serde_json::from_value::<ManageOp>(value) else {
-            self.wire.error("bad_request", "unreadable manage op", None);
+            self.refuse(
+                raw["op"].as_str().unwrap_or_default(),
+                None,
+                ErrorCode::BadRequest,
+                "unreadable manage op",
+                rid.as_ref(),
+            );
             return;
         };
-        if !self.may_write(op.at.as_deref()) {
+        // A refused op is acknowledged too: a client that clears its in-flight state on the ack —
+        // which is what the protocol tells it to do — hangs forever on an `error` alone.
+        if !self.device.role.writes() {
+            self.refuse(
+                &op.op,
+                op.at.as_deref(),
+                ErrorCode::NotWriter,
+                "this device is read-only",
+                rid.as_ref(),
+            );
             return;
         }
         // `op` and a label say that something ran. `cwd`, `env`, `args`, `path` and `branch` are
@@ -571,7 +626,12 @@ impl Session {
         };
         match manager.run(&op).await {
             Ok(reply) => {
-                let id = manage::created_id(&reply).map(|id| session.global_pane(&id));
+                // A session is named rather than addressed, so its name is the id; everything
+                // else herdr creates is a container this node qualifies with its own id.
+                let id = match reply["session"].as_str() {
+                    Some(name) => Some(name.to_string()),
+                    None => manage::created_id(&reply).map(|id| session.global_pane(&id)),
+                };
                 let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
                 if let Some(id) = id {
                     ack["id"] = json!(id);
@@ -584,18 +644,20 @@ impl Session {
                 }
                 self.wire.send_json(&ack);
             }
-            Err(e) => {
-                let mut ack = json!({
-                    "t": "managed", "op": op.op, "ok": false,
-                    "code": e.code(), "message": e.to_string()
-                });
-                if let Some(rid) = rid {
-                    ack["rid"] = rid;
-                }
-                self.wire.send_json(&ack);
-                self.wire.error(e.code(), &e.to_string(), op.at.as_deref());
-            }
+            Err(e) => self.refuse(&op.op, op.at.as_deref(), e.code(), &e.to_string(), rid.as_ref()),
         }
+    }
+
+    /// The `managed` ack and the `error` frame that follows it, in the order the protocol names
+    /// them, with the caller's correlation token on the ack wherever there is one.
+    fn refuse(&self, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
+        let mut ack = json!({ "t": "managed", "op": op, "ok": false,
+                              "code": code, "message": message });
+        if let Some(rid) = rid {
+            ack["rid"] = rid.clone();
+        }
+        self.wire.send_json(&ack);
+        self.wire.error(code, message, at);
     }
 
     /// A structural op against a pane on another host. Unlike input this one has an answer, so
@@ -609,19 +671,17 @@ impl Session {
             Ok(reply) => reply,
             Err(kampr_mesh::RelayError::Unknown(_)) => {
                 let message = format!("{target} is not on a node this herd serves");
-                self.wire.send_json(&json!({
-                    "t": "managed", "op": op.op, "ok": false,
-                    "code": "unknown_pane", "message": message
-                }));
-                self.wire.error("unknown_pane", &message, op.at.as_deref());
+                self.refuse(
+                    &op.op,
+                    op.at.as_deref(),
+                    ErrorCode::UnknownPane,
+                    &message,
+                    rid.as_ref(),
+                );
                 return;
             }
             Err(e) => {
-                self.wire.send_json(&json!({
-                    "t": "managed", "op": op.op, "ok": false,
-                    "code": e.code(), "message": e.to_string()
-                }));
-                self.wire.error(e.code(), &e.to_string(), op.at.as_deref());
+                self.refuse(&op.op, op.at.as_deref(), e.code(), &e.to_string(), rid.as_ref());
                 return;
             }
         };
@@ -647,7 +707,8 @@ impl Session {
             return;
         }
         let Some(title) = value["title"].as_str().map(str::trim).filter(|t| !t.is_empty()) else {
-            self.wire.error("bad_request", "notify needs a title", pane);
+            self.wire
+                .error(ErrorCode::BadRequest, "notify needs a title", pane);
             return;
         };
         let session = pane
@@ -680,29 +741,48 @@ impl Session {
     /// and the blob has to fit. Otherwise any device, of any role, fills the disk one arbitrary
     /// pane id at a time.
     async fn prefs(&self, value: &Value) {
-        let store = self.node.auth.store();
-        if let (Some(pane), Some(prefs)) = (value["pane"].as_str(), value.get("prefs"))
-            && !prefs.is_null()
-        {
+        if let (Some(pane), Some(Value::Object(incoming))) = (value["pane"].as_str(), value.get("prefs")) {
             if self.node.herd().pane(pane).is_none() {
                 self.wire
-                    .error("unknown_pane", "no such pane on this node", Some(pane));
+                    .error(ErrorCode::UnknownPane, "no such pane on this node", Some(pane));
                 return;
             }
-            if prefs.to_string().len() > MAX_PREFS_BYTES {
+            let stored = self.stored_prefs().await;
+            let mut merged = match &stored["panes"][pane] {
+                Value::Object(existing) => existing.clone(),
+                _ => serde_json::Map::new(),
+            };
+            // A write names the keys it is changing and nothing else — a client that sets zoom
+            // must not thereby forget the view. `null` is how one key is cleared, since a merge
+            // leaves no other way back.
+            for (key, value) in incoming {
+                match value {
+                    Value::Null => {
+                        merged.remove(key);
+                    }
+                    value => {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            let merged = Value::Object(merged);
+            // The bound is on what is stored, not on what arrived: merging is what can grow it.
+            if merged.to_string().len() > MAX_PREFS_BYTES {
                 self.wire.error(
-                    "bad_request",
+                    ErrorCode::BadRequest,
                     "preferences for one pane must fit in 2 KiB",
                     Some(pane),
                 );
                 return;
             }
-            let _ = store
-                .set_pane_prefs(&self.device.id, pane, prefs, kampr_auth::now())
+            let _ = self
+                .node
+                .auth
+                .store()
+                .set_pane_prefs(&self.device.id, pane, &merged, kampr_auth::now())
                 .await;
         }
-        let all = store.pane_prefs(&self.device.id).await.unwrap_or(json!({}));
-        self.wire.send_json(&json!({ "t": "prefs", "panes": all }));
+        self.wire.send_json(&self.stored_prefs().await);
     }
 }
 
@@ -801,13 +881,13 @@ async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
                 wire.send(&current.message())
             } else {
                 wire.error(
-                    "herdr_unavailable",
+                    ErrorCode::HerdrUnavailable,
                     &current
                         .node(&id)
                         .and_then(|n| n.detail.clone())
                         .unwrap_or_else(|| format!("{id} is not reachable")),
                     None,
-                ) && wire.error("node_offline", &format!("{id} is offline"), None)
+                ) && wire.error(ErrorCode::NodeOffline, &format!("{id} is offline"), None)
             };
             if !sent {
                 return;
@@ -823,11 +903,11 @@ async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
 }
 
 /// A write that failed while the session is down is the herd being unreachable, not a bad pane.
-fn offline_code(session: &crate::sessions::SessionNode) -> &'static str {
+fn offline_code(session: &crate::sessions::SessionNode) -> ErrorCode {
     if session.online() {
-        "herdr_unavailable"
+        ErrorCode::HerdrUnavailable
     } else {
-        "node_offline"
+        ErrorCode::NodeOffline
     }
 }
 
@@ -862,7 +942,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     let mut watcher = match registry.watch(&local).await {
         Ok(w) => w,
         Err(e) => {
-            wire.error("herdr_unavailable", &e.to_string(), Some(&global));
+            wire.error(ErrorCode::HerdrUnavailable, &e.to_string(), Some(&global));
             return;
         }
     };
@@ -1019,7 +1099,20 @@ fn submit_key(agent: Option<&str>) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::submit_key;
+    use super::{CLIENT_VERBS, submit_key};
+
+    /// The list gates the tagged enum, so a verb added to one and not the other either goes
+    /// unanswered or reintroduces the refusal of an unknown `t`. Serde names the variants it
+    /// knows in its own error, which is the only source that cannot drift.
+    #[test]
+    fn the_verb_list_is_exactly_what_the_enum_decodes() {
+        let error =
+            serde_json::from_value::<kampr_core::wire::ClientMsg>(serde_json::json!({ "t": "no.such.verb" }))
+                .expect_err("an unknown variant")
+                .to_string();
+        let listed: Vec<String> = error.split('`').skip(3).step_by(2).map(str::to_string).collect();
+        assert_eq!(listed, CLIENT_VERBS, "{error}");
+    }
 
     #[test]
     fn only_the_harnesses_that_need_a_submit_key_get_one() {

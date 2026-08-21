@@ -16,6 +16,11 @@ use tracing::{info, warn};
 /// takes effect without a restart — and a `kampr mesh leave` drops the link.
 const HUB_POLL: Duration = Duration::from_secs(10);
 
+/// How long an inbound handshake may take before the socket is hung up. It holds one of the
+/// handshake permits for exactly this long, so a socket that opens and then says nothing costs a
+/// bounded wait rather than a permit forever.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Aborts a task when this guard is dropped, including when the task holding it is itself
 /// cancelled.
 ///
@@ -78,7 +83,12 @@ pub fn split(socket: WebSocket) -> Link<WsOut, WsIn> {
 /// The refusal path is deliberately as loud as the acceptance path in the audit log. An
 /// unenrolled node reaching a hub is either an operator halfway through a join or somebody
 /// knocking, and both are worth a line.
-pub async fn accept(socket: WebSocket, node: Arc<Node>, peer: String) {
+pub async fn accept(
+    socket: WebSocket,
+    node: Arc<Node>,
+    peer: String,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) {
     let identity = match node.identity() {
         Ok(identity) => identity,
         Err(e) => {
@@ -88,16 +98,36 @@ pub async fn accept(socket: WebSocket, node: Arc<Node>, peer: String) {
     };
     let mut link = split(socket);
     let presence = node.presence();
-    let accepted = kampr_mesh::accept(
-        &mut link,
-        &identity,
-        &presence,
-        node.auth.store(),
-        kampr_auth::now(),
+    let accepted = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        kampr_mesh::accept(
+            &mut link,
+            &identity,
+            &presence,
+            node.auth.store(),
+            kampr_auth::now(),
+        ),
     )
     .await;
+    // The permit bounds argon2, and the handshake is done with it either way. A link that is up
+    // holds nothing: a handful of settled peers must not close the door on the next one.
+    drop(permit);
+    let accepted = match accepted {
+        Ok(accepted) => accepted,
+        Err(_) => {
+            warn!(%peer, "a mesh handshake never finished; hanging up");
+            node.auth.audit().record(
+                &Entry::new("mesh.refused").peer(&peer).detail(
+                    serde_json::json!({ "code": "timeout", "reason": "the handshake did not finish" }),
+                ),
+            );
+            link.out.close().await;
+            return;
+        }
+    };
     match accepted {
         Ok(accepted) => {
+            node.auth.mesh_settled(&peer);
             node.auth
                 .audit()
                 .record(&Entry::new("mesh.joined").peer(&peer).detail(serde_json::json!({

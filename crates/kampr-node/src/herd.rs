@@ -140,7 +140,7 @@ mod tests {
                         "01J",
                         &PaneInfo {
                             pane_id: (*id).to_string(),
-                            cols: *cols,
+                            cols: Some(*cols),
                             rows: 30,
                             agent_status: AgentStatus::Unknown,
                             ..PaneInfo::default()

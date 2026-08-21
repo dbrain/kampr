@@ -43,6 +43,17 @@ fn osc8_hyperlinks_are_interned_per_run() {
 }
 
 #[test]
+fn a_hyperlink_longer_than_vtes_osc_buffer_survives_whole() {
+    // vte caps OSC payloads at 1024 bytes when built without `std`; with it the buffer grows.
+    // A truncated URI is silent — the run still renders, it just points somewhere else.
+    let uri = format!("https://herdr.dev/{}", "a".repeat(2000));
+    let mut t = Emulator::new(40, 1);
+    t.feed(format!("\x1b]8;;{uri}\x1b\\LINK\x1b]8;;\x1b\\").as_bytes());
+    assert_eq!(t.grid().links, [uri]);
+    assert_eq!(t.grid().row(0)[0].link, Some(0));
+}
+
+#[test]
 fn erase_in_display_and_line() {
     let mut t = Emulator::new(10, 3);
     t.feed(b"aaaaaaaaaa\r\nbbbbbbbbbb\r\ncccccccccc");

@@ -222,7 +222,7 @@ fn a_herd_patch_carries_the_same_shape_as_herd() {
         "01J",
         &PaneInfo {
             pane_id: "w3:p2".into(),
-            cols: 74,
+            cols: Some(74),
             rows: 30,
             agent_status: AgentStatus::Blocked,
             ..PaneInfo::default()

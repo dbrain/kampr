@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, COOKIE, HeaderMap, HeaderName, ORIGIN,
-    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, HeaderMap, HeaderName, ORIGIN, REFERRER_POLICY,
+    STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri};
@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 /// `'wasm-unsafe-eval'` is what a Compose Multiplatform wasm bundle needs and is strictly weaker
@@ -44,7 +45,21 @@ const CSP: &str = "default-src 'self'; \
      frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'";
 
 const TOKEN_PROTOCOL: &str = "kampr.token.";
-const SESSION_COOKIE: &str = "kampr_session";
+
+/// The largest client message the node will read. The wire protocol's biggest legitimate one is a
+/// `prefs` blob, capped at 2 KiB by the store; tungstenite's own default is 64 MiB, and every
+/// message is parsed into a `serde_json::Value` before anything looks at what it is.
+const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// The same bound for `/mesh`, which cannot be the same number.
+///
+/// A mesh link is the client protocol backwards, so the hub *reads* a peer's **server** frames —
+/// including a scrollback document, sized at roughly 4 MB for a pane deep enough to fill the ring
+/// (`kampr_core::scrollback::DEFAULT_MAX_ROWS`). 16 MiB is what tungstenite already enforced per
+/// *frame*, so it is the real ceiling on anything a peer can send today; applying it as the
+/// message ceiling too cuts that from 64 MiB and changes nothing that works. What bounds the
+/// anonymous half of this endpoint is the handshake semaphore, not this.
+const MAX_MESH_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn router(node: Arc<Node>) -> Router {
     let secured = |name: HeaderName, value: &'static str| {
@@ -80,6 +95,12 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/auth/webauthn/authenticate/start", post(authenticate_start))
         .route("/auth/webauthn/authenticate/finish", post(authenticate_finish))
         .fallback(get(static_asset))
+        // The wasm bundle is ~12 MB of the ~13 MB first load, it is content-hashed so every
+        // release is a fresh URL, and `application/wasm` is in no reverse proxy's default
+        // `gzip_types` — so nothing downstream compresses it if this does not. Brotli and gzip
+        // only: `zstd` buys a few per cent over brotli on a bundle no browser asks for it on.
+        // The layer is outside the WebSocket routes' concern by construction — a 101 has no body.
+        .layer(CompressionLayer::new().br(true).gzip(true))
         .layer(secured(CONTENT_SECURITY_POLICY, CSP))
         .layer(secured(X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(secured(X_FRAME_OPTIONS, "DENY"))
@@ -227,20 +248,7 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
     {
         return Some(token.trim().to_string());
     }
-    if let Some(token) = subprotocol_token(headers) {
-        return Some(token);
-    }
-    cookie_token(headers)
-}
-
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(COOKIE)
-        .and_then(|v| v.to_str().ok())?
-        .split(';')
-        .filter_map(|c| c.trim().split_once('='))
-        .find(|(name, _)| *name == SESSION_COOKIE)
-        .map(|(_, value)| value.to_string())
+    subprotocol_token(headers)
 }
 
 /// A browser cannot set headers on a WebSocket handshake, so the token rides in the subprotocol —
@@ -261,6 +269,11 @@ fn subprotocol_token(headers: &HeaderMap) -> Option<String> {
 /// The list comes from the bind address and `extra_origins`, never from the request's own `Host`:
 /// a DNS-rebinding attacker who points a domain at this node's address controls both headers, so
 /// reflecting `Host` lets them satisfy the gate with their own claim.
+///
+/// `GET` outside `/ws` is deliberately exempt, and that is only safe because **no credential this
+/// node accepts is ambient**: a bearer header and a WebSocket subprotocol both have to be set by
+/// the caller, and a cross-origin page cannot set either. Reintroducing a cookie credential would
+/// turn every un-gated `GET` into a CSRF read, so it would have to gate them too.
 fn same_origin(node: &Node, headers: &HeaderMap, method: &Method, uri: &Uri) -> bool {
     let guarded = uri.path() == "/ws" || !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
     if !guarded {
@@ -268,10 +281,8 @@ fn same_origin(node: &Node, headers: &HeaderMap, method: &Method, uri: &Uri) -> 
     }
     match headers.get(ORIGIN).and_then(|v| v.to_str().ok()) {
         Some(origin) => node.allowed_origins.iter().any(|a| a == origin),
-        // No `Origin` is a non-browser client, which cannot be tricked into making the request —
-        // unless the credential is the session cookie, which a browser attaches by itself. Then
-        // the absence is the attack rather than the absence of one.
-        None => cookie_token(headers).is_none(),
+        // No `Origin` is a non-browser client, which cannot be tricked into making the request.
+        None => true,
     }
 }
 
@@ -282,6 +293,14 @@ async fn websocket(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     let Authenticated { device, peer } = auth;
+    // One token opens as many sockets as its holder likes and each is a session with its own
+    // queue and its own pane pumps, so the bound is on live sessions rather than on the rate.
+    let Ok(permit) = node.sockets.clone().try_acquire_owned() else {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this node is serving all the sessions it will",
+        );
+    };
     let upgrade = match headers
         .get("sec-websocket-protocol")
         .and_then(|v| v.to_str().ok())
@@ -293,7 +312,16 @@ async fn websocket(
         Some(protocol) => upgrade.protocols([protocol.to_string()]),
         None => upgrade,
     };
-    upgrade.on_upgrade(move |socket| session::run(socket, node, device, peer))
+    bounded(upgrade, MAX_MESSAGE_BYTES).on_upgrade(move |socket| async move {
+        let _permit = permit;
+        session::run(socket, node, device, peer).await;
+    })
+}
+
+/// Both halves of the size bound. `max_message_size` alone leaves a single 16 MiB frame readable,
+/// and a frame is buffered whole before the message it belongs to is assembled.
+fn bounded(upgrade: WebSocketUpgrade, max: usize) -> WebSocketUpgrade {
+    upgrade.max_message_size(max).max_frame_size(max)
 }
 
 /// A peer node dialling in. **No device token and no `Origin` check**, deliberately: mesh
@@ -304,7 +332,21 @@ async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: W
     if !node.config.mesh.accept {
         return refuse(StatusCode::NOT_FOUND, "this node does not accept mesh links");
     }
-    upgrade.on_upgrade(move |socket| crate::mesh::accept(socket, node, peer))
+    // Both gates run *before* the upgrade, for the reason `/auth/pair` runs its limiter before
+    // `claim_pairing`: past this point an anonymous caller has bought an argon2id pass at 19 MiB
+    // and an attempt charged against every outstanding invite. The limiter bounds one address;
+    // the semaphore bounds the memory when addresses rotate.
+    if !node.auth.check_mesh(&peer) {
+        return refuse(StatusCode::TOO_MANY_REQUESTS, "too many attempts");
+    }
+    let Ok(permit) = node.handshakes.clone().try_acquire_owned() else {
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this node is busy; try again shortly",
+        );
+    };
+    bounded(upgrade, MAX_MESH_MESSAGE_BYTES)
+        .on_upgrade(move |socket| crate::mesh::accept(socket, node, peer, permit))
 }
 
 /// The herd's own membership list: who may join, who is joined, and how far away they are.
@@ -351,6 +393,12 @@ async fn mesh_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Respo
 async fn create_mesh_invite(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
     if let Some(response) = auth.refused() {
         return response;
+    }
+    if !node.config.mesh.accept {
+        return refuse(
+            StatusCode::CONFLICT,
+            "this node is not a hub: set `accept = true` under `[mesh]` in config.toml and restart it",
+        );
     }
     let now = kampr_auth::now();
     let ttl = node.auth.policy().pairing_ttl.as_secs() as i64;

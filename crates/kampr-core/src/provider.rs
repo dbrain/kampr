@@ -30,7 +30,11 @@ pub struct PaneInfo {
     /// whether scrollback may be read at all.
     pub agent: Option<String>,
     pub agent_status: AgentStatus,
-    pub cols: u16,
+    /// `None` until the width has been *proven*. In a headless session the PTY does not follow
+    /// the layout rect — a pane whose rect reads 47 is really 93 wide — so the rect is a number
+    /// no row was ever wrapped at, and an unmeasured pane has nothing honest to report.
+    pub cols: Option<u16>,
+    /// Herdr's own `scroll.viewport_rows`, which is the PTY's, not the rect's.
     pub rows: u16,
     /// Rows of history *above* the viewport, and zero whenever reading them would be unsafe.
     pub scrollback_rows: u32,

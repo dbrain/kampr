@@ -1,7 +1,7 @@
 use crate::outbox::{Frame, Outbox};
 use kampr_core::registry::PaneUpdate;
 use kampr_core::scrollback::ScrollbackDoc;
-use kampr_core::wire::{Encoder, ServerMsg};
+use kampr_core::wire::{Encoder, ErrorCode, ServerMsg};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -76,12 +76,12 @@ impl Wire {
         true
     }
 
-    /// `code` is a string rather than an enum because the protocol's `manage` section adds
-    /// `unsupported`, which the v1 error-code list does not carry.
-    pub fn error(&self, code: &str, message: &str, pane: Option<&str>) -> bool {
-        self.send_json(&serde_json::json!({
-            "t": "error", "code": code, "message": message, "pane": pane
-        }))
+    pub fn error(&self, code: ErrorCode, message: &str, pane: Option<&str>) -> bool {
+        self.send(&ServerMsg::Error {
+            code,
+            message: message.to_string(),
+            pane: pane.map(str::to_string),
+        })
     }
 }
 
@@ -194,10 +194,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_error_can_carry_a_code_the_v1_enum_does_not_have() {
+    async fn an_error_carries_the_documented_spelling_of_its_code() {
         let outbox = Arc::new(Outbox::new(4));
         let wire = Wire::new(outbox.clone());
-        wire.error("unsupported", "this node does not do that", None);
+        wire.error(ErrorCode::Unsupported, "this node does not do that", None);
         let frames = drain(&outbox);
         assert_eq!(frames[0]["t"], "error");
         assert_eq!(frames[0]["code"], "unsupported");

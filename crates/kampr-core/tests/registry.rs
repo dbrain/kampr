@@ -50,7 +50,7 @@ impl Provider for Scripted {
     async fn list_panes(&self) -> Result<Vec<PaneInfo>> {
         Ok(vec![PaneInfo {
             pane_id: "p".into(),
-            cols: 20,
+            cols: Some(20),
             rows: 3,
             ..PaneInfo::default()
         }])

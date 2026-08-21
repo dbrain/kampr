@@ -16,6 +16,10 @@ const MAX_CANDIDATES: usize = 64;
 const HEAD_LINES: usize = 40;
 const HEAD_BYTES: usize = 256 * 1024;
 
+/// How much of a transcript's *end* to read for its latest timestamp. The same bound in the other
+/// direction, and enough for many records even where one is large.
+const TAIL_BYTES: u64 = 256 * 1024;
+
 pub fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -58,6 +62,34 @@ pub fn newest_first(mut files: Vec<PathBuf>) -> Vec<PathBuf> {
     files
 }
 
+/// The newest timestamp anywhere in the last [`TAIL_BYTES`] of a transcript.
+///
+/// **This, not the head, is when a conversation last happened.** Ranking on the head asks when a
+/// session *opened*, so a long-running one that started yesterday lost to a five-minute one
+/// started this morning — and the long-running one is the conversation the pane is still sitting
+/// in. Measured against a real pane: a 12-hour-dead 20 KB transcript served in preference to the
+/// 9.9 MB one on screen.
+pub fn latest_stamp(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let from = len.saturating_sub(TAIL_BYTES);
+    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(from)).ok()?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).ok()?;
+    let text = String::from_utf8_lossy(&buffer);
+    // A mid-file seek lands inside a record, and half a record is not JSON.
+    let lines = text.lines().skip(usize::from(from > 0));
+    lines
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|record| {
+            record
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .max()
+}
+
 pub fn head(path: &Path) -> Vec<Value> {
     let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
@@ -80,6 +112,9 @@ pub fn head(path: &Path) -> Vec<Value> {
 /// copied or checked out carries a modification time that says when it was written to this disk,
 /// not when the conversation happened. mtime still bounds the *search*, so a machine with
 /// thousands of sessions does not read them all.
+///
+/// The head decides *whether* a transcript belongs to this directory; the tail decides *how
+/// recent* it is. Reading only the head answers the second question with the first one's data.
 pub fn newest_declaring(
     candidates: Vec<PathBuf>,
     cwd: &Path,
@@ -90,16 +125,10 @@ pub fn newest_declaring(
     let mut matches: Vec<(String, SystemTime, PathBuf)> = newest_first(candidates)
         .into_iter()
         .filter_map(|path| {
-            let head = head(&path);
-            if !head.iter().any(|r| declared(r).as_deref() == Some(wanted)) {
+            if !head(&path).iter().any(|r| declared(r).as_deref() == Some(wanted)) {
                 return None;
             }
-            let stamp = head
-                .iter()
-                .filter_map(|r| r.get("timestamp").and_then(Value::as_str))
-                .max()
-                .unwrap_or_default()
-                .to_string();
+            let stamp = latest_stamp(&path).unwrap_or_default();
             Some((stamp, modified(&path), path))
         })
         .collect();

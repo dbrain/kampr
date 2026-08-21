@@ -3,15 +3,17 @@ use crate::herd::HerdModel;
 use crate::sessions::{SessionNode, Sessions};
 use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
+use kampr_core::provider::PaneInfo;
 use kampr_core::wire::{NodeEntry, PaneEntry};
 use kampr_herdr::Herdr;
 use kampr_journal::Registry as Journals;
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
 pub const BUILD: &str = match option_env!("KAMPR_BUILD") {
@@ -36,6 +38,12 @@ pub struct Node {
     pub peers: Arc<Peers>,
     pub auth: Arc<Auth>,
     pub push: Arc<crate::push::Push>,
+    /// Client sessions in flight. A permit is held for the life of a socket, so this is a bound
+    /// on live sessions rather than on the rate they are opened at.
+    pub sockets: Arc<Semaphore>,
+    /// Mesh handshakes in flight. Held only across the handshake — an accepted link releases its
+    /// permit before it starts serving, or a handful of peers would close the door behind them.
+    pub handshakes: Arc<Semaphore>,
     journals: watch::Sender<Arc<Journals>>,
     caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
@@ -86,6 +94,10 @@ impl Node {
         let node = Arc::new(Self {
             origin: config.origin(),
             allowed_origins: config.allowed_origins(),
+            // A configured zero would be a node that answers nothing, which is never what an
+            // operator editing a limit meant.
+            sockets: Arc::new(Semaphore::new(config.limits.sockets.max(1))),
+            handshakes: Arc::new(Semaphore::new(config.limits.mesh_handshakes.max(1))),
             config,
             sessions,
             peers,
@@ -243,9 +255,10 @@ async fn refresh_herd(
 ) {
     let mut previous = Arc::new(HerdModel::default());
     let mut mesh = peers.subscribe();
+    let conversations = Conversations::default();
     loop {
         let journal = journals.borrow().clone();
-        let mut model = build_model(&sessions, &journal).await;
+        let mut model = build_model(&sessions, &journal, &conversations).await;
         // One herd, whatever host a pane is on. A peer's own nodes arrive already marked `peer`
         // and stamped with the link's measured round trip, so a pane two hops away *looks* two
         // hops away rather than quietly lagging.
@@ -290,9 +303,81 @@ async fn wait_for_change(sessions: &Sessions) {
     futures_util::future::select_all(waits).await;
 }
 
-async fn build_model(sessions: &Sessions, journals: &Journals) -> HerdModel {
+/// How long a pane that resolved to no transcript is left alone before the directories are
+/// searched again. Deriving a transcript from a working directory is a `read_dir` and up to 64
+/// file heads, and the herd is rebuilt every three seconds — so the miss is what needs a floor.
+/// A hit needs none: the answer stays true for as long as the file is there, which is a `stat`.
+const CONVERSATION_RETRY: Duration = Duration::from_secs(5);
+
+/// Whether a pane has a conversation, which is whether a transcript resolves — not whether the
+/// harness is one Kampr knows. The distinction is the whole defect: a `claude` started a minute
+/// ago has no transcript, and a pane that claimed one opened on a blank Conversation view whose
+/// `convo.load` answered `not_found`.
+#[derive(Default)]
+struct Conversations {
+    seen: Mutex<HashMap<ConversationKey, Resolved>>,
+}
+
+type ConversationKey = (String, String, String);
+
+struct Resolved {
+    path: Option<PathBuf>,
+    at: Instant,
+}
+
+impl Conversations {
+    /// `live` collects every key this round touched; [`Self::keep`] then drops the rest, so the
+    /// cache cannot outlive the herd it describes.
+    fn resolves(
+        &self,
+        journals: &Journals,
+        session: &SessionNode,
+        info: &PaneInfo,
+        live: &mut HashSet<ConversationKey>,
+    ) -> bool {
+        if !journals.serves(info.agent.as_deref()) {
+            return false;
+        }
+        let announced = crate::convo::announced(&session.provider, &info.pane_id);
+        let key = (
+            info.agent.clone().unwrap_or_default(),
+            info.cwd.clone().unwrap_or_default(),
+            announced.as_ref().map(|a| a.value.clone()).unwrap_or_default(),
+        );
+        live.insert(key.clone());
+        match self.seen.lock().unwrap().get(&key) {
+            Some(Resolved { path: Some(path), .. }) if path.is_file() => return true,
+            Some(Resolved { path: None, at }) if at.elapsed() < CONVERSATION_RETRY => return false,
+            _ => {}
+        }
+        let path = journals
+            .locate(
+                info.agent.as_deref(),
+                announced.as_ref(),
+                info.cwd.as_deref().map(Path::new),
+            )
+            .unwrap_or_default();
+        let found = path.is_some();
+        self.seen.lock().unwrap().insert(
+            key,
+            Resolved {
+                path,
+                at: Instant::now(),
+            },
+        );
+        found
+    }
+
+    /// Working directories churn and a node runs for weeks.
+    fn keep(&self, live: &HashSet<ConversationKey>) {
+        self.seen.lock().unwrap().retain(|key, _| live.contains(key));
+    }
+}
+
+async fn build_model(sessions: &Sessions, journals: &Journals, conversations: &Conversations) -> HerdModel {
     let mut nodes = Vec::new();
     let mut panes = Vec::new();
+    let mut live = HashSet::new();
     for session in sessions.all() {
         let health = session.provider.health();
         nodes.push(NodeEntry {
@@ -312,10 +397,11 @@ async fn build_model(sessions: &Sessions, journals: &Journals) -> HerdModel {
         // offline and leaves the last-known panes standing rather than emptying the herd under a
         // client that is about to get them all back.
         for info in session.registry.list_panes().await.unwrap_or_default() {
-            let has_conversation = journals.has_conversation(info.agent.as_deref());
+            let has_conversation = conversations.resolves(journals, &session, &info, &mut live);
             panes.push(PaneEntry::new(&session.node_id, &info, has_conversation));
         }
     }
+    conversations.keep(&live);
     HerdModel { nodes, panes }
 }
 

@@ -35,7 +35,7 @@ fn a_pane_entry_carries_the_node_qualified_id() {
         cwd: Some("/home/dbrain/dev/kampr".into()),
         agent: Some("claude".into()),
         agent_status: AgentStatus::Blocked,
-        cols: 74,
+        cols: Some(74),
         rows: 30,
         scrollback_rows: 0,
         ..PaneInfo::default()

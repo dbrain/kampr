@@ -162,3 +162,55 @@ fn pages_backwards_from_the_newest_turn() {
     assert_eq!(oldest.turns.len(), 1);
     assert!(!oldest.more);
 }
+
+/// A conversation's recency is when it was **last** written, not when it opened.
+///
+/// Ranking by the head meant a long session that started yesterday lost to a five-minute one
+/// started this morning — and it is precisely the long session that a pane is still sitting in.
+/// Measured against a real pane: a 12-hour-dead 20 KB transcript was served in preference to the
+/// 9.9 MB one the operator was watching.
+#[test]
+fn the_newest_transcript_is_the_last_written_not_the_first_opened() {
+    let home = scratch_dir("recency");
+    let project = home.join("projects/-home-u-live");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let record = |at: &str, text: &str| {
+        serde_json::json!({
+            "type": "user", "uuid": text, "timestamp": at, "cwd": "/home/u/live",
+            "message": { "content": text }
+        })
+        .to_string()
+            + "\n"
+    };
+
+    // Opened yesterday, still being written into a minute ago. Every record the old ranking read
+    // — the first forty — is yesterday's; the ones after it are today's.
+    let long = project.join("9f1c0b2e-0000-4000-8000-0000000000aa.jsonl");
+    let mut body = String::new();
+    for n in 0..60 {
+        body += &record(&format!("2026-08-20T08:{n:02}:00Z"), &format!("long-open-{n}"));
+    }
+    for n in 0..60 {
+        body += &record(&format!("2026-08-21T10:{n:02}:00Z"), &format!("long-live-{n}"));
+    }
+    std::fs::write(&long, &body).unwrap();
+
+    // Opened this morning, dead since. Newer head, older tail.
+    let short = project.join("9f1c0b2e-0000-4000-8000-0000000000bb.jsonl");
+    std::fs::write(
+        &short,
+        record("2026-08-21T09:00:00Z", "short-open") + &record("2026-08-21T09:05:00Z", "short-last"),
+    )
+    .unwrap();
+
+    let adapter = ClaudeAdapter::new(TranscriptRoot::new(&home).unwrap());
+    let found = adapter
+        .locate_by_cwd(std::path::Path::new("/home/u/live"))
+        .expect("a transcript for the cwd");
+    assert_eq!(
+        found,
+        long.canonicalize().unwrap(),
+        "the live conversation lost to a dead one because only its first records were read"
+    );
+}

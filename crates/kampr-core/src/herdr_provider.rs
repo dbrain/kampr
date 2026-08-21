@@ -281,6 +281,17 @@ impl Inner {
             _ => rect,
         }
     }
+
+    /// The width a wrap has actually proved, or nothing. [`Self::known_cols`] falls back to the
+    /// rect because an observe stream has to be sized at *something*; the herd model does not,
+    /// and reporting the rect there is reporting a width the PTY never had.
+    fn proven_cols(&self, pane_id: &str, rect: u16) -> Option<u16> {
+        let widths = self.widths.lock().unwrap();
+        widths
+            .get(pane_id)
+            .filter(|m| m.rect == rect)
+            .and_then(|m| m.exact)
+    }
 }
 
 /// Resolves one pair of reads into a width.
@@ -372,10 +383,12 @@ impl Provider for HerdrProvider {
 }
 
 fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> PaneInfo {
-    let (rect, rows) = snapshot.geometry(&pane.pane_id).unwrap_or((0, 0));
-    // A watched pane has a measured width; an unwatched one has only the rect, which is what
-    // `herd` has always carried.
-    let cols = inner.known_cols(&pane.pane_id, rect as u16);
+    let (rect, rect_rows) = snapshot.geometry(&pane.pane_id).unwrap_or((0, 0));
+    // The rect is the desk's idea of the pane; the PTY is what the program inside it writes to,
+    // and headless the two disagree. Rows herdr reports honestly, so they are taken from it and
+    // the rect is only the fallback; a width nothing has proved is reported as unknown.
+    let cols = inner.proven_cols(&pane.pane_id, rect as u16);
+    let rows = pane.scroll.map_or(rect_rows, |s| s.viewport_rows as u32);
     let workspace = snapshot
         .workspaces
         .iter()

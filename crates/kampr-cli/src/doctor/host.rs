@@ -1,6 +1,6 @@
 use super::Check;
 use crate::report::Local;
-use crate::service;
+use crate::service::{self, Supervisor};
 use kampr_node::Config;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -18,6 +18,7 @@ pub fn files(config_dir: &Path, state_dir: &Path) -> Vec<Check> {
         (db.clone(), 0o600),
         (Config::audit_path(state_dir), 0o600),
         (Config::node_key_path(config_dir), 0o600),
+        (Config::vapid_path(state_dir), 0o600),
     ];
     wanted.extend(["-wal", "-shm"].into_iter().map(|suffix| {
         let mut path = db.as_os_str().to_os_string();
@@ -36,7 +37,8 @@ pub fn files(config_dir: &Path, state_dir: &Path) -> Vec<Check> {
         return vec![Check::ok(
             "permissions",
             format!(
-                "{} and {} are private, and so are the database, its two sidecars and node.key",
+                "{} and {} are private, and so are the database, its two sidecars, node.key and \
+                 vapid.pem",
                 state_dir.display(),
                 config_dir.display()
             ),
@@ -90,11 +92,20 @@ pub fn bundle() -> Check {
     .fix("build the client and stage it into crates/kampr-node/dist/ before cargo build")
 }
 
-pub async fn service(config: &Config) -> Check {
-    let state = service::details();
+pub async fn service(config: &Config, state: &service::State) -> Check {
     let listening = crate::report::reachable(&config.origin()).await;
     let where_ = format!("{} at {}", config.server.bind, config.origin());
     if !state.installed {
+        if Supervisor::detect() == Supervisor::Unsupported {
+            return Check::warn(
+                "service",
+                format!(
+                    "this host has no systemd, so there is no user unit to install and nothing \
+                     restarts the node ({where_})"
+                ),
+            )
+            .fix("run `kampr serve` under whatever already supervises this box");
+        }
         return Check::warn(
             "service",
             format!("no supervised unit is installed, so nothing restarts the node ({where_})"),
@@ -126,6 +137,55 @@ pub async fn service(config: &Config) -> Check {
         .fix("KAMPR_LOG=debug systemctl --user restart kampr.service");
     }
     Check::ok("service", detail)
+}
+
+/// Enabled is not the same as surviving. A `systemd --user` manager is torn down with the user's
+/// last session and is not started at boot without lingering, so an installed unit on a
+/// non-lingering user is a node that dies at logout and never comes back.
+pub fn linger(state: &service::State) -> Check {
+    if !state.installed {
+        return Check::ok(
+            "linger",
+            "no unit is installed, so there is nothing yet for a reboot to lose",
+        );
+    }
+    match Supervisor::detect() {
+        Supervisor::Launchd => Check::warn(
+            "linger",
+            "the agent is loaded into gui/$(id -u), a domain that only exists once someone logs \
+             in at the screen — a Mac that reboots to the login window does not start the node \
+             until you do",
+        )
+        .fix("for a headless Mac, run it as a LaunchDaemon in /Library/LaunchDaemons instead"),
+        Supervisor::Unsupported => Check::warn(
+            "linger",
+            "a unit file is here but this host has no systemd to read it",
+        )
+        .fix("run `kampr serve` under whatever already supervises this box"),
+        Supervisor::Systemd => {
+            let user = service::username();
+            match service::linger(&user) {
+                Some(true) => Check::ok(
+                    "linger",
+                    format!("lingering is on for {user}, so systemd starts the user manager at boot"),
+                ),
+                Some(false) => Check::fail(
+                    "linger",
+                    format!(
+                        "the unit is installed but lingering is off for {user}: systemd tears the \
+                         user manager down when your last session ends and does not start it at \
+                         boot, so the node dies at logout and does not come back after a reboot"
+                    ),
+                )
+                .fix(format!("loginctl enable-linger {user}")),
+                None => Check::warn(
+                    "linger",
+                    format!("could not tell whether lingering is on for {user}"),
+                )
+                .fix(format!("loginctl enable-linger {user}")),
+            }
+        }
+    }
 }
 
 pub async fn access(local: &Local) -> Vec<Check> {
@@ -214,5 +274,29 @@ mod tests {
         assert_eq!(check.status, Status::Fail);
         assert!(check.detail.contains("kampr.db-wal"), "{}", check.detail);
         assert!(check.fix.as_ref().unwrap().contains("chmod"));
+    }
+
+    /// `vapid.pem` is the private key every push subscription is bound to, and it lives beside the
+    /// files this check already guards.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_loosened_push_key_is_caught() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let config = dir.path().join("config");
+        kampr_auth::private_dir(&state).unwrap();
+        kampr_auth::private_dir(&config).unwrap();
+        let store = kampr_auth::Store::open(&Config::state_db(&state)).await.unwrap();
+        store.issue_recovery(0).await.unwrap();
+        let vapid = Config::vapid_path(&state);
+        std::fs::write(&vapid, "x").unwrap();
+        std::fs::set_permissions(&vapid, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(files(&config, &state)[0].status, Status::Ok);
+
+        std::fs::set_permissions(&vapid, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let check = &files(&config, &state)[0];
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("vapid.pem"), "{}", check.detail);
     }
 }
