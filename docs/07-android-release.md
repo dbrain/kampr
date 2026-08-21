@@ -57,11 +57,11 @@ lower floor. It costs about 2% of live devices.
 make android-keystore
 ```
 
-Generates `~/.android-keystores/kampr-release.jks` (PKCS12, RSA 4096, 30 years, alias `kampr`) with
+Generates `../kampr-android-keys/kampr-release.jks` (PKCS12, RSA 4096, 30 years, alias `kampr`) with
 a random password, and appends the four properties to `~/.gradle/gradle.properties`:
 
 ```properties
-kamprReleaseStoreFile=/home/you/.android-keystores/kampr-release.jks
+kamprReleaseStoreFile=/home/you/dev/kampr-android-keys/kampr-release.jks
 kamprReleaseStorePassword=…
 kamprReleaseKeyAlias=kampr
 kamprReleaseKeyPassword=…
@@ -75,7 +75,7 @@ property wins when both are set. The target refuses to overwrite an existing key
 
 Two things, off this machine, in whatever you use for secrets:
 
-1. `~/.android-keystores/kampr-release.jks`
+1. `../kampr-android-keys/kampr-release.jks`
 2. the store/key password
 
 **Losing either is terminal.** Android identifies an app by `(packageName, signing certificate)`.

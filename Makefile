@@ -2,7 +2,9 @@ GRADLE := env -u GRADLE_HOME ./gradlew
 CLIENT := client
 APK := $(CLIENT)/androidApp/build/outputs/apk/release/androidApp-release.apk
 AAB := $(CLIENT)/androidApp/build/outputs/bundle/release/androidApp-release.aab
-KEYSTORE := $(HOME)/.android-keystores/kampr-release.jks
+# Beside the repo rather than hidden in $HOME, because this file is the one thing here that cannot
+# be regenerated: lose it and no device that has installed Kampr can ever be updated again.
+KEYSTORE := $(CURDIR)/../kampr-android-keys/kampr-release.jks
 
 .PHONY: android-release android-bundle android-install android-test android-publish android-clean android-keystore
 

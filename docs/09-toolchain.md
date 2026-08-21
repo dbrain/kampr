@@ -155,7 +155,8 @@ once against a real phone.
 
 ## The release keystore
 
-`~/.android-keystores/kampr-release.jks`, with its passwords in `~/.gradle/gradle.properties`.
+`../kampr-android-keys/kampr-release.jks` — beside the repo rather than hidden in `$HOME`, so it
+is visible to whatever backs this machine up — with its passwords in `~/.gradle/gradle.properties`.
 `make android-keystore` creates it and **refuses to overwrite an existing one**, because replacing it
 orphans every device that has ever installed Kampr — no update path, by kobup or by hand, short of
 uninstalling everywhere. Back up both the keystore and its password, off the machine.
