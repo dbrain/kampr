@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -32,7 +31,6 @@ import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.net.SetupStatus
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.wallClockMillis
-import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.KamprTheme
 import dev.kampr.shared.theme.ThemeId
@@ -199,7 +197,9 @@ private fun AppScaffold(
     val hello by state.store.hello.collectAsState()
     val localRtt by state.store.localRttMs.collectAsState()
     val security = hello?.security ?: Security()
-    val readOnly = hello?.role == "readonly"
+    // Off the store, not off `hello`: the role can move on a live socket and every affordance
+    // below has to move with it.
+    val readOnly = state.store.readOnly
     val failure by state.store.failure.collectAsState()
     // The triage list, at last wired: `KamprStore.blocked()` had no callers, and this is what the
     // roadmap called the one Collie product idea worth stealing wholesale.
@@ -260,6 +260,7 @@ private fun AppScaffold(
         if (state.screen is Screen.Mosaic) {
             mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
             failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+            state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
             ManageLayer(state, herd, breakpoint)
             return@Box
         }
@@ -274,7 +275,9 @@ private fun AppScaffold(
                             triage = triage,
                             activePaneId = (state.screen as? Screen.Pane)?.paneId,
                             deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
-                            deviceDetail = hello?.let { "${it.role} access · ${it.build}" } ?: "not connected",
+                            // The role off the store, not off the greeting: this caption is the
+                            // only place the desktop says what this device may do.
+                            deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
                             onOpenPane = { state.openPane(it, PaneView.Split) },
                             onSettings = { state.go(Screen.Setup) },
                         )
@@ -445,6 +448,9 @@ private fun AppScaffold(
         failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
         state.passkeyNote?.let { NoteStrip(it, state::dismissPasskeyNote) }
+        // A demotion or a promotion that landed on this socket. Nothing the operator did caused
+        // it, so it is said here rather than discovered by pressing a control that has gone.
+        state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
         ManageLayer(state, herd, breakpoint)
     }
 }
@@ -464,57 +470,6 @@ internal fun Modifier.screenInset(screen: Screen): Modifier {
     if (screen is Screen.Pane) return this
     val safe = LocalSafeArea.current
     return absolutePadding(left = safe.left, top = safe.top, right = safe.right)
-}
-
-// error.code is an open string: an unrecognised code still shows its message.
-@Composable
-private fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () -> Unit) {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
-    val spoken = "${message.ifBlank { code }} ($code). Activate to dismiss."
-    Row(
-        Modifier
-            .align(Alignment.TopCenter)
-            .padding(12.dp)
-            .background(tokens.color.blockedBg, shape)
-            .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
-            .announce(spoken, urgent = true)
-            .touchable()
-            .action(spoken, onDismiss, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
-    ) {
-        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
-        KText(message.ifBlank { code }, tokens.type.caption, tokens.color.text)
-        KText(code, tokens.type.meta, tokens.color.mute)
-    }
-}
-
-// The same shape as the error strip in a tone that is not a refusal: enrolling a passkey succeeds
-// silently otherwise, which on the one screen about credentials is indistinguishable from nothing
-// having happened.
-@Composable
-private fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit) {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
-    val spoken = "$message Activate to dismiss."
-    Row(
-        Modifier
-            .align(Alignment.TopCenter)
-            .padding(12.dp)
-            .background(tokens.color.surface2, shape)
-            .edge(BorderSpec(1.dp, tokens.color.done), shape)
-            .announce(spoken)
-            .touchable()
-            .action(spoken, onDismiss, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
-    ) {
-        Mark(tokens.color.done, MarkShape.Bar, 7.dp)
-        KText(message, tokens.type.caption, tokens.color.text, maxLines = 3)
-    }
 }
 
 @Composable

@@ -209,13 +209,24 @@ impl Session {
 
     /// `readonly` receives every server → client message and is refused every write. The refusal
     /// is here rather than at the transport, so a read-only device keeps its stream.
-    fn may_write(&self, pane: Option<&str>) -> bool {
+    fn may_write(&self, verb: &str, pane: Option<&str>) -> bool {
         if self.device.role.writes() {
             return true;
         }
+        self.audit_refused(verb, pane, ErrorCode::NotWriter, json!({}));
         self.wire
             .error(ErrorCode::NotWriter, "this device is read-only", pane);
         false
+    }
+
+    /// A device that is refused used to leave no trace at all — not what it tried, not on what,
+    /// not that it tried again (probe #125). The loop rule lives in [`kampr_auth::Refusals`], so
+    /// a client retrying forever costs a line per doubling rather than a line per attempt.
+    fn audit_refused(&self, verb: &str, pane: Option<&str>, code: ErrorCode, mut detail: Value) {
+        detail["code"] = serde_json::to_value(code).expect("an error code serialises");
+        self.node
+            .auth
+            .record_refusal(&self.device, &self.peer, verb, pane, detail);
     }
 
     /// Re-reads this session's device. `false` means the socket must close: the row is gone,
@@ -233,6 +244,13 @@ impl Session {
             Some(device) => {
                 if device.role != self.device.role {
                     self.device = device;
+                    // Enforcement alone leaves a demoted device holding affordances that no
+                    // longer work, and a promoted one waiting for a reconnect it has no reason
+                    // to make. `hello` is the first message on a connection, so the change
+                    // travels on its own frame.
+                    self.wire.send(&ServerMsg::RoleChanged {
+                        role: wire_role(self.device.role),
+                    });
                     self.audit(
                         "session.role_changed",
                         None,
@@ -464,7 +482,7 @@ impl Session {
         b64: Option<String>,
         keys: Option<Vec<String>>,
     ) {
-        if !self.may_write(Some(pane)) {
+        if !self.may_write("input", Some(pane)) {
             return;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
@@ -524,7 +542,7 @@ impl Session {
     }
 
     async fn answer(&mut self, pane: &str, key: &str) {
-        if !self.may_write(Some(pane)) {
+        if !self.may_write("answer", Some(pane)) {
             return;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
@@ -595,6 +613,12 @@ impl Session {
         // A refused op is acknowledged too: a client that clears its in-flight state on the ack —
         // which is what the protocol tells it to do — hangs forever on an `error` alone.
         if !self.device.role.writes() {
+            self.audit_refused(
+                "manage",
+                op.at.as_deref(),
+                ErrorCode::NotWriter,
+                json!({ "op": op.op }),
+            );
             self.refuse(
                 &op.op,
                 op.at.as_deref(),
@@ -703,7 +727,7 @@ impl Session {
     /// and there is no desk to show it on (probe #77).
     async fn notify(&mut self, value: &Value) {
         let pane = value["pane"].as_str();
-        if !self.may_write(pane) {
+        if !self.may_write("notify", pane) {
             return;
         }
         let Some(title) = value["title"].as_str().map(str::trim).filter(|t| !t.is_empty()) else {
@@ -810,16 +834,20 @@ fn manage_detail(op: &ManageOp) -> Value {
     detail
 }
 
+fn wire_role(role: Role) -> kampr_core::wire::Role {
+    match role {
+        Role::Full => kampr_core::wire::Role::Full,
+        Role::Readonly => kampr_core::wire::Role::Readonly,
+    }
+}
+
 fn hello(node: &Node, device: &Device) -> Value {
     let hello = ServerMsg::Hello(kampr_core::wire::Hello {
         protocol: PROTOCOL,
         node_id: node.config.node_id.clone(),
         node_name: node.config.node_name.clone(),
         build: BUILD.to_string(),
-        role: match device.role {
-            Role::Full => kampr_core::wire::Role::Full,
-            Role::Readonly => kampr_core::wire::Role::Readonly,
-        },
+        role: wire_role(device.role),
         caps: kampr_core::wire::Caps {
             // Reality, not intent. Push needs a secure context *and* a VAPID key, and a client
             // that trusts this to hide the control must never see it claimed where it cannot

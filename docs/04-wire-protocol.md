@@ -65,6 +65,32 @@ it without a socket.
 **The greeting is three frames, in this order: `hello`, `herd`, `prefs`.** The third is pushed
 unasked so a client can restore per-pane zoom and view before it paints — see `prefs` below.
 
+### `role` — this device's role changed mid-connection
+
+```jsonc
+{ "t": "role", "role": "readonly" }        // "full" | "readonly", the same two `hello` uses
+```
+
+The node re-reads the device behind every live socket, so a demotion or a promotion — from
+`kampr setup`, from `POST /api/devices/{id}/role`, or from any other process holding the same
+store — lands on the connection that is already open. **This frame is how the client is told.**
+Without it a demoted device keeps every write affordance drawn — the key row, the New sheet, the
+manage actions — and discovers the truth by pressing something and getting `error{not_writer}`;
+a promoted one waits for a reconnect it has no reason to make.
+
+- **It is not a second `hello`.** `hello` is the *first* message on a connection and stays that
+  way. Nothing else in the greeting has changed, and a client that re-ran everything a greeting
+  means would throw away its herd and its preferences over a permission change.
+- **It carries only the role.** The device's id, name and expiry are as `hello` gave them; a
+  change to those closes the socket instead (see `revoked`, below).
+- **Sent on the change, not on a timer**, and only when the effective role actually moved. A
+  client that never sees one is a client whose role never changed.
+- **A client that does not know this `t` ignores it** and behaves exactly as it does today, which
+  is the same forward-compatibility rule the whole protocol runs on.
+
+Effective immediately in both directions: the node is already enforcing the new role by the time
+this arrives, so a client must gate on it rather than on the role it was greeted with.
+
 ### `herd` — the whole model; sent after `hello` and on any reconnect
 ```jsonc
 { "t": "herd",
@@ -305,8 +331,9 @@ a node that is down is refused with `node_offline` rather than left to time out.
 
 `code` is an open string, not a closed enum: a client must handle an unrecognised code by showing
 `message` rather than failing. `revoked` is one such: the node re-reads the device behind a live
-socket, so a revocation, a demotion to `readonly` or a Tier 0 expiry lands on the connection that
-is already open rather than at the next handshake. `revoked` is followed by a close.
+socket, so a revocation or a Tier 0 expiry lands on the connection that is already open rather
+than at the next handshake. `revoked` is followed by a close. A demotion to `readonly` is read on
+the same path but is **not** an error and does not close anything — it arrives as `role`.
 
 ## Client → server
 

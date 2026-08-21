@@ -140,6 +140,11 @@ sealed interface ServerMsg {
         val security: Security,
     ) : ServerMsg
 
+    // A device demoted or promoted while its socket is open. Not a second `hello`: that is
+    // defined as the first message on a connection, and a client reading it as a greeting would
+    // re-run everything a greeting means.
+    data class RoleChanged(val role: String) : ServerMsg
+
     data class Herd(val nodes: List<NodeInfo>, val panes: List<PaneInfo>) : ServerMsg
 
     data class HerdPatch(

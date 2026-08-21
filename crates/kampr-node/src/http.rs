@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use kampr_auth::{AuthError, Delivery, Device, Role};
+use kampr_core::wire::ErrorCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -197,8 +198,23 @@ impl FromRequestParts<Arc<Node>> for Authenticated {
 
 impl Authenticated {
     /// `Some` is the refusal to return; `None` means the device may write.
-    fn refused(&self) -> Option<Response> {
-        (!self.device.role.writes()).then(|| refuse(StatusCode::FORBIDDEN, "this device is read-only"))
+    ///
+    /// Recorded, because this is the same gap the socket had (probe #125): the device inventory
+    /// and the pairing surface are exactly what a half-trusted device probes, and a 403 that
+    /// leaves no line behind is a probe nobody can see. `verb` names the surface, and it is what
+    /// the loop rule counts.
+    fn refused(&self, node: &Node, verb: &str) -> Option<Response> {
+        if self.device.role.writes() {
+            return None;
+        }
+        node.auth.record_refusal(
+            &self.device,
+            &self.peer,
+            verb,
+            None,
+            json!({ "code": ErrorCode::NotWriter }),
+        );
+        Some(refuse(StatusCode::FORBIDDEN, "this device is read-only"))
     }
 }
 
@@ -362,7 +378,7 @@ async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: W
 
 /// The herd's own membership list: who may join, who is joined, and how far away they are.
 async fn mesh_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.mesh") {
         return response;
     }
     let mesh = node.auth.store().mesh();
@@ -402,7 +418,7 @@ async fn mesh_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Respo
 /// A single-use join code. Separate from a device pairing code on purpose: one enrols a browser,
 /// the other enrols a node, and neither is redeemable for the other.
 async fn create_mesh_invite(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.mesh.invite") {
         return response;
     }
     if !node.config.mesh.accept {
@@ -436,7 +452,7 @@ async fn revoke_mesh_node(
     auth: Authenticated,
     Path(id): Path<String>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.mesh.revoke") {
         return response;
     }
     match node.auth.store().mesh().revoke(&id, kampr_auth::now()).await {
@@ -738,7 +754,7 @@ async fn create_pairing(
     auth: Authenticated,
     body: Option<Json<RoleRequest>>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.pairing.create") {
         return response;
     }
     let role = body.map_or(Role::Full, |b| b.0.role);
@@ -755,7 +771,7 @@ async fn create_pairing(
 /// The inventory names every enrolled device, when it was last seen and what it may do. A
 /// read-only device is one you half-trust; that is not the list to hand it.
 async fn devices(State(node): State<Arc<Node>>, auth: Authenticated) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.devices") {
         return response;
     }
     match node.auth.devices().await {
@@ -769,7 +785,7 @@ async fn revoke_device(
     auth: Authenticated,
     Path(id): Path<String>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.device.revoke") {
         return response;
     }
     match node.auth.revoke(&id, &auth.device).await {
@@ -785,7 +801,7 @@ async fn set_role(
     Path(id): Path<String>,
     Json(body): Json<RoleRequest>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.device.role") {
         return response;
     }
     match node.auth.set_role(&id, body.role, &auth.device).await {
@@ -800,7 +816,7 @@ async fn renew_device(
     auth: Authenticated,
     Path(id): Path<String>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.device.renew") {
         return response;
     }
     match node.auth.renew(&id, &auth.device).await {
@@ -825,7 +841,7 @@ async fn register_start(
     auth: Authenticated,
     Json(body): Json<RegisterStart>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.passkey.register.start") {
         return response;
     }
     let name = body.device_name.unwrap_or_else(|| auth.device.name.clone());
@@ -854,7 +870,7 @@ async fn register_finish(
     headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Response {
-    if let Some(response) = auth.refused() {
+    if let Some(response) = auth.refused(&node, "api.passkey.register.finish") {
         return response;
     }
     let Ok(credential) = serde_json::from_value(body.credential) else {

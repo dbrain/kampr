@@ -1,8 +1,10 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -169,6 +171,83 @@ fn open_private(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
+/// A quiet gap this long makes the next refusal a fresh incident rather than more of the last
+/// one, so an occasional refusal is never the one that goes unrecorded.
+pub const REFUSAL_INCIDENT: Duration = Duration::from_secs(60);
+
+/// Incidents held at once. A refusal is keyed by device and verb and **never by pane** — the pane
+/// is the client's to choose, and a key per pane is a key per request.
+const MAX_INCIDENTS: usize = 1024;
+
+/// Which refusals reach the log.
+///
+/// A refusal is exactly what an audit log exists to notice, and a client retrying in a loop is
+/// exactly what would bury it: forty thousand identical lines are a flood, and one line for all
+/// of them is a count nobody can read off the log. So an incident is recorded on attempts 1, 2,
+/// 4, 8 … with the running total on the line — a loop costs a line per doubling, and the log
+/// still says how many times it happened.
+#[derive(Debug)]
+pub struct Refusals {
+    incident: Duration,
+    seen: Mutex<HashMap<String, Attempt>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Attempt {
+    count: u64,
+    at: Instant,
+}
+
+impl Default for Refusals {
+    fn default() -> Self {
+        Self::new(REFUSAL_INCIDENT)
+    }
+}
+
+impl Refusals {
+    pub fn new(incident: Duration) -> Self {
+        Self {
+            incident,
+            seen: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// `Some(n)` means record this refusal and say it is the `n`th of its incident.
+    pub fn attempt(&self, key: &str) -> Option<u64> {
+        self.attempt_at(key, Instant::now())
+    }
+
+    pub fn attempt_at(&self, key: &str, now: Instant) -> Option<u64> {
+        let mut seen = self.seen.lock().unwrap();
+        if seen.len() >= MAX_INCIDENTS && !seen.contains_key(key) {
+            evict_oldest(&mut seen);
+        }
+        let attempt = seen
+            .entry(key.to_string())
+            .or_insert(Attempt { count: 0, at: now });
+        if now.duration_since(attempt.at) >= self.incident {
+            attempt.count = 0;
+        }
+        attempt.at = now;
+        attempt.count += 1;
+        attempt.count.is_power_of_two().then_some(attempt.count)
+    }
+
+    pub fn len(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn evict_oldest(seen: &mut HashMap<String, Attempt>) {
+    if let Some(key) = seen.iter().min_by_key(|(_, a)| a.at).map(|(k, _)| k.clone()) {
+        seen.remove(&key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +302,46 @@ mod tests {
     #[test]
     fn a_disabled_log_writes_nothing_and_does_not_panic() {
         AuditLog::disabled().record(&Entry::new("input"));
+    }
+
+    #[test]
+    fn a_retry_loop_costs_a_line_per_doubling_and_the_line_carries_the_count() {
+        let r = Refusals::default();
+        let t = Instant::now();
+        let recorded: Vec<u64> = (0..40).filter_map(|_| r.attempt_at("d1\u{1f}input", t)).collect();
+        assert_eq!(recorded, vec![1, 2, 4, 8, 16, 32]);
+    }
+
+    #[test]
+    fn a_quiet_minute_makes_the_next_refusal_its_own_incident() {
+        let r = Refusals::default();
+        let t = Instant::now();
+        for _ in 0..40 {
+            r.attempt_at("d1\u{1f}input", t);
+        }
+        assert_eq!(
+            r.attempt_at("d1\u{1f}input", t + REFUSAL_INCIDENT),
+            Some(1),
+            "an occasional refusal must never be the one that goes unrecorded"
+        );
+    }
+
+    #[test]
+    fn verbs_and_devices_do_not_share_an_incident() {
+        let r = Refusals::default();
+        let t = Instant::now();
+        assert_eq!(r.attempt_at("d1\u{1f}input", t), Some(1));
+        assert_eq!(r.attempt_at("d1\u{1f}manage", t), Some(1));
+        assert_eq!(r.attempt_at("d2\u{1f}input", t), Some(1));
+    }
+
+    #[test]
+    fn a_client_choosing_fresh_keys_cannot_grow_the_map_without_bound() {
+        let r = Refusals::new(Duration::from_secs(3600));
+        let t = Instant::now();
+        for n in 0..(MAX_INCIDENTS * 3) {
+            r.attempt_at(&format!("device-{n}\u{1f}input"), t);
+        }
+        assert!(r.len() <= MAX_INCIDENTS, "the map grew to {}", r.len());
     }
 }

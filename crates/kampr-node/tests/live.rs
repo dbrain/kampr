@@ -364,6 +364,12 @@ async fn recv(socket: &mut Socket, timeout: Duration) -> Option<Value> {
 }
 
 async fn until(socket: &mut Socket, tag: &str, seconds: u64) -> Value {
+    until_seen(socket, tag, seconds).await.0
+}
+
+/// [`until`], plus every `t` that arrived before it — for the claims that are about what the node
+/// did *not* send.
+async fn until_seen(socket: &mut Socket, tag: &str, seconds: u64) -> (Value, Vec<String>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let mut seen = Vec::new();
     while tokio::time::Instant::now() < deadline {
@@ -371,7 +377,7 @@ async fn until(socket: &mut Socket, tag: &str, seconds: u64) -> Value {
             continue;
         };
         if message["t"] == tag {
-            return message;
+            return (message, seen);
         }
         seen.push(message["t"].as_str().unwrap_or("?").to_string());
     }
@@ -820,6 +826,140 @@ async fn a_demotion_and_an_expiry_both_land_on_the_open_socket() {
     assert!(
         closed(&mut socket, 15).await,
         "an expired device kept its live socket"
+    );
+}
+
+/// Enforcement without an announcement is half a fix: a demoted device keeps every write
+/// affordance drawn and finds out by being refused. The change has to reach the client on the
+/// socket it is already holding — in both directions, because a promotion is the same problem in
+/// reverse — and `hello` has to stay the *first* message on a connection rather than quietly
+/// becoming one a node re-sends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_demotion_and_a_promotion_are_both_announced_on_the_open_socket() {
+    let h = harness!("role-frame");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    assert_eq!(until(&mut socket, "hello", 10).await["role"], "full");
+
+    let device = h.node.auth.devices().await.unwrap().pop().unwrap();
+    h.node
+        .auth
+        .set_role(&device.id, Role::Readonly, &device)
+        .await
+        .unwrap();
+    let (demoted, before) = until_seen(&mut socket, "role", 10).await;
+    assert_eq!(demoted["role"], "readonly", "{demoted}");
+    assert!(
+        !before.contains(&"hello".to_string()),
+        "a role change re-sent `hello`, which the protocol defines as the first message on a \
+         connection: {before:?}"
+    );
+
+    h.node
+        .auth
+        .set_role(&device.id, Role::Full, &device)
+        .await
+        .unwrap();
+    let (promoted, between) = until_seen(&mut socket, "role", 10).await;
+    assert_eq!(promoted["role"], "full", "{promoted}");
+    assert!(!between.contains(&"hello".to_string()), "{between:?}");
+
+    // And the promotion is real, not just announced.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": h.pane_id(), "text": "" }),
+    )
+    .await;
+    send(&mut socket, json!({ "t": "ping", "n": 1 })).await;
+    let (_, seen) = until_seen(&mut socket, "pong", 10).await;
+    assert!(
+        !seen.contains(&"error".to_string()),
+        "a promoted device was still refused: {seen:?}"
+    );
+}
+
+/// Probe #125. A read-only device probing what it can reach is precisely the thing an audit log
+/// exists to notice, and it left no trace at all — not on the socket, and not over HTTP. A buggy
+/// client retrying in a loop must not be able to write the log full with the answer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_write_is_audited_and_a_retry_loop_does_not_flood_the_log() {
+    let h = harness!("refused");
+    let pane = h.pane_id();
+    let viewer = h.token(Role::Readonly).await;
+    let mut socket = h.connect(&viewer).await;
+    until(&mut socket, "hello", 10).await;
+
+    send(&mut socket, json!({ "t": "input", "pane": pane, "text": "x" })).await;
+    assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
+    send(&mut socket, json!({ "t": "answer", "pane": pane, "key": "1" })).await;
+    assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
+    send(&mut socket, json!({ "t": "notify", "title": "taking this pane" })).await;
+    assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.close", "at": pane, "rid": "r1" }),
+    )
+    .await;
+    assert_eq!(until(&mut socket, "managed", 10).await["ok"], false);
+
+    // The same gate, the same silence, on the other surface: the device inventory is one a
+    // half-trusted device is refused, and that refusal was unlogged too.
+    assert!(
+        get(&format!("{}/api/devices", h.origin), Some(&viewer))
+            .await
+            .0
+            .contains("403")
+    );
+
+    for _ in 0..40 {
+        send(&mut socket, json!({ "t": "input", "pane": pane, "text": "x" })).await;
+    }
+    send(&mut socket, json!({ "t": "ping", "n": 7 })).await;
+    until(&mut socket, "pong", 15).await;
+
+    let text = std::fs::read_to_string(Config::audit_path(h._state.path())).unwrap();
+    let refusals: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|e| e["action"] == "refused")
+        .collect();
+    let verb =
+        |name: &str| -> Vec<&Value> { refusals.iter().filter(|e| e["detail"]["verb"] == name).collect() };
+    for name in ["input", "answer", "notify", "manage", "api.devices"] {
+        assert!(
+            !verb(name).is_empty(),
+            "a refused {name} left no audit line at all; the log holds {text}"
+        );
+    }
+    let first = verb("input")[0];
+    assert_eq!(first["role"], "readonly", "{first}");
+    assert_eq!(
+        first["pane"],
+        pane.as_str(),
+        "a refusal that does not say on what: {first}"
+    );
+    assert_eq!(first["detail"]["code"], "not_writer", "{first}");
+    assert!(
+        first["device"].is_string() && first["device_name"] == "integration",
+        "{first}"
+    );
+    assert_eq!(verb("manage")[0]["detail"]["op"], "pane.close");
+
+    // 41 refused inputs. Every one of them on its own line is a log a loop can fill; one line for
+    // all of them is a count nobody can read off the log.
+    let lines = verb("input").len();
+    assert!(
+        (2..=8).contains(&lines),
+        "41 refusals of one verb wrote {lines} lines"
+    );
+    let highest = verb("input")
+        .iter()
+        .filter_map(|e| e["detail"]["attempt"].as_u64())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        highest >= 16,
+        "the suppressed refusals were never counted; highest attempt was {highest}"
     );
 }
 

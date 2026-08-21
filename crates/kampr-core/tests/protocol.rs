@@ -26,6 +26,24 @@ fn hello_matches_the_documented_shape() {
     assert_eq!(v["caps"]["scrollback"], true);
 }
 
+/// The one thing `role` must never become is a second greeting: a client that re-ran everything
+/// `hello` means would throw away its herd and its preferences over a permission change.
+#[test]
+fn a_role_change_is_its_own_frame_and_carries_only_the_role() {
+    let v = serde_json::to_value(ServerMsg::RoleChanged { role: Role::Readonly }).unwrap();
+    assert_eq!(v["t"], "role");
+    assert_eq!(v["role"], "readonly");
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        2,
+        "a role frame that grew fields is one a client has to inspect: {v}"
+    );
+    assert_eq!(
+        serde_json::to_value(ServerMsg::RoleChanged { role: Role::Full }).unwrap()["role"],
+        "full"
+    );
+}
+
 #[test]
 fn a_pane_entry_carries_the_node_qualified_id() {
     let info = PaneInfo {

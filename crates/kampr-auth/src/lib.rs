@@ -19,7 +19,7 @@ pub mod secret;
 pub mod store;
 pub mod tier;
 
-pub use audit::{AuditLog, Entry};
+pub use audit::{AuditLog, Entry, Refusals};
 pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
 pub use mesh::{Mesh, MeshNode, MeshRole};
@@ -132,6 +132,7 @@ pub struct Auth {
     pairing_limiter: RateLimiter,
     auth_limiter: RateLimiter,
     mesh_limiter: RateLimiter,
+    refusals: Refusals,
     changes: broadcast::Sender<String>,
 }
 
@@ -168,6 +169,7 @@ impl Auth {
             pairing_limiter: RateLimiter::new(policy.pairing_attempts),
             auth_limiter: RateLimiter::new(policy.auth_attempts),
             mesh_limiter: RateLimiter::new(policy.mesh_attempts),
+            refusals: Refusals::default(),
             changes: broadcast::channel(64).0,
         })
     }
@@ -189,6 +191,35 @@ impl Auth {
 
     pub fn audit(&self) -> &AuditLog {
         &self.audit
+    }
+
+    /// One refusal, recorded unless this device is already mid-loop on the same verb (probe
+    /// #125). Everything else this node does is audited thoroughly, which is what made the one
+    /// unrecorded thing — a half-trusted device finding out what it can reach — invisible.
+    ///
+    /// The incident is keyed by device and verb rather than by pane, so a client cannot mint a
+    /// fresh key per request and defeat the bound; the pane it actually named rides on the line.
+    pub fn record_refusal(
+        &self,
+        device: &Device,
+        peer: &str,
+        verb: &str,
+        pane: Option<&str>,
+        mut detail: serde_json::Value,
+    ) {
+        let Some(attempt) = self.refusals.attempt(&format!("{}\u{1f}{verb}", device.id)) else {
+            return;
+        };
+        detail["verb"] = serde_json::json!(verb);
+        detail["attempt"] = serde_json::json!(attempt);
+        let mut entry = Entry::new("refused")
+            .device(&device.id, &device.name, device.role.as_str())
+            .peer(peer)
+            .detail(detail);
+        if let Some(pane) = pane {
+            entry = entry.pane(pane);
+        }
+        self.audit.record(&entry);
     }
 
     pub fn passkeys(&self) -> Option<&Arc<Passkeys>> {

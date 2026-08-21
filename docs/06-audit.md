@@ -17,6 +17,13 @@ execution** or **by reading**. The rule that governs this file is unchanged: **a
 list only when the fix has a test proving it** — so where a fix is claimed, the test is named and
 was run.
 
+**Amended later the same day.** Two entries below were re-decided after a fix pass that closed both:
+**M1** (a refused write leaves no audit line) and the decision section *A mid-session demotion is
+announced*. Both were the same defect wearing two hats — a device whose permissions changed, or which
+is probing what it can do, was invisible — and both now carry named tests that were written first and
+run red. Nothing else in this file moved; the counts in the table above are from the second pass and
+have not been re-measured.
+
 ## The commands this pass ran
 
 | | |
@@ -129,7 +136,7 @@ that sets `authFailure` — that assertion lives only in the live test.
 
 | # | Defect | Verdict | What decided it |
 |---|---|---|---|
-| M1 | **A refused write leaves no audit line.** `may_write` (`session.rs:210-219`) emits `error{not_writer}` and records nothing, and the `manage` path audits *after* the role gate, so a refused op is unaudited too. Everything else in this node is audited thoroughly — which is exactly what makes this the one invisible thing | **OPEN — execution** | A read-only device on a live socket sent `input` and `manage{pane.close}`. Both were refused correctly (`error{not_writer}`, and a `managed{ok:false,code:"not_writer",rid:"r1"}` ack). `audit.jsonl` afterwards held `pairing.created`, `recovery.issued`, `pairing.redeemed` ×2, `session.opened`, `session.closed` — **and nothing at all for either refusal**. A device probing what it is allowed to do is precisely the thing an audit log exists to notice |
+| M1 | **A refused write leaves no audit line.** `may_write` emitted `error{not_writer}` and recorded nothing, and the `manage` path audited *after* the role gate, so a refused op was unaudited too. The same gate on the HTTP surface — the device inventory, the pairing and mesh surfaces, passkey registration — returned 403 and wrote nothing either | **FIXED — execution** | Every one of those paths now records a `refused` line carrying the verb, the pane, the device, its role, the peer and the error code, bounded by `kampr_auth::audit::Refusals` so a retry loop costs a line per doubling (attempts 1, 2, 4, 8 …) rather than a line per attempt, with a quiet minute starting a fresh incident. Test: `live.rs::a_refused_write_is_audited_and_a_retry_loop_does_not_flood_the_log` drives a read-only device through `input`, `answer`, `notify`, `manage` and `GET /api/devices` on a **live node** and asserts on the real `audit.jsonl`, then sends 41 refused inputs and asserts both that the log did not flood and that the count survived. Written first and run red against the old code — it reproduced probe #125 exactly, the log holding only `pairing.*` and `session.opened`. Plus four unit tests on the bound in `kampr-auth::audit` |
 | M2 | **The outermost mosaic cell's close button can fall under a side navigation bar.** `MosaicCell.kt` never reads `LocalSafeArea` at all — its header `Row`'s only padding is `start = 4.dp, end = 4.dp` — and its parent `MosaicGrid` applies no horizontal inset either. (`MosaicCell.kt` is under active edit, so this cites the composable rather than a line.) On a tablet in landscape with three-button navigation, the right-hand cell's cross sits under the bar | **OPEN — reading, and a test gap** | The switcher's own close button *is* inset — its bar `Row` carries `absolutePadding(left = safe.left, …, right = safe.right)` in both orientations — and `MosaicScreen.kt`'s bar and status row read `LocalSafeArea` too. The cell does not. `MosaicSafeAreaTest`'s only fixture is `SafeArea(top = 32.dp, bottom = 46.dp)` — `left` and `right` are never set, so the case cannot fail there. Side bars *are* exercised elsewhere (`SafeAreaTest.SIDE_BARS`, `KeyRowSafeAreaTest`), which is what makes the mosaic's omission a gap rather than a policy |
 | M3 | `KamprConnection.heartbeat()` still discards the result of `outbox.trySend(ClientMsg.Ping(n))` | **OPEN — reading, and harmless** | Every keystroke path now checks it (see the flaky-link bullet). A dropped ping costs a heartbeat, not a character. Recorded so the next reader does not think it was missed |
 
@@ -244,21 +251,50 @@ being written as this is:
 
 ## The three items the file flagged as decisions
 
-### A mid-session demotion is still not announced — **confirmed open, and now half-measured**
+### A mid-session demotion is announced — **decided, built and tested**
 
-**Enforcement is proved.** `live.rs::a_demotion_and_an_expiry_both_land_on_the_open_socket` (green)
-demotes a device straight in the store while its socket is open, and the very next `input` comes back
-`error{not_writer}`; an expiry set past `now()` closes the socket within 15 s. `session.rs:224-249`'s
-`refresh` picks the change up on the 2 s `DEVICE_RECHECK` and audits `session.role_changed`.
+**Enforcement was already proved.** `live.rs::a_demotion_and_an_expiry_both_land_on_the_open_socket`
+(green) demotes a device straight in the store while its socket is open, and the very next `input`
+comes back `error{not_writer}`; an expiry set past `now()` closes the socket within 15 s. `refresh`
+picks the change up on the 2 s `DEVICE_RECHECK`.
 
-**The announcement is not.** That audit line is the only place the change goes. Nothing is sent to the
-client, there is no `role` case in `Codec.decodeElement`, and `KamprStore.readOnly` is
-`_hello.value?.role == "readonly"` — read once, at connect. So a demoted device keeps every write
-affordance drawn until it reconnects, and finds out by being refused.
+**The announcement now exists.** The decision was a **new server → client message**, not a re-sent
+`hello`: `04-wire-protocol.md` defines `hello` as the *first* message on a connection, and quietly
+making it re-sendable would break that contract for every future reader, while a dedicated `t` is
+additive and the node already ignores unknown `t` values in both directions.
 
-The decision is unchanged and the reason for making it is sharper: `KamprStore.kt:52-53` already
-states the intent — *"the affordances must be absent, not present-and-failing"* — and the wire gives
-it no way to hold. Either a `role` frame, or the comment should stop claiming it.
+```jsonc
+{ "t": "role", "role": "readonly" }        // "full" | "readonly", the same two `hello` uses
+```
+
+Sent from `Session::refresh` whenever the effective role moves, in **both** directions — a promotion
+is the same problem in reverse, and a device upgraded to full gains its affordances without
+reconnecting. Documented under
+[`role`](./04-wire-protocol.md#role--this-devices-role-changed-mid-connection).
+
+On the client, `KamprStore.readOnly` is no longer `_hello.value?.role`: the store holds `role` as
+Compose snapshot state, so `readOnly`, `canManage` and every surface gating on them recompose when it
+moves — the key row, the New sheet, the pane manage actions, the pending bar, the read-only badge.
+`hello` is left exactly as the connection was greeted. A change nobody announced is one that gets
+discovered by pressing something that no longer works, so the store also raises `roleNote`, drawn
+through the same dismissible strip the passkey note uses and announced as a **polite** live region —
+the vocabulary `Accessibility.kt` already reserves urgent for a blocked agent and a command about to
+run, and this is neither. `ErrorStrip` and `NoteStrip` moved out of `KamprApp.kt` into `ui/Strips.kt`
+so the notice reuses them rather than growing a second one.
+
+Tests, both written first and run red:
+`live.rs::a_demotion_and_a_promotion_are_both_announced_on_the_open_socket` asserts the frames on a
+real socket, that no `hello` precedes either of them, and that the promotion is real and not just
+announced; `RoleChangeTest.aRoleChangeOnALiveSocketReachesTheStore` pushes the same bytes down a real
+WebSocket into the real store, and `…theWriteAffordancesFollowTheRoleWithoutAReconnect` renders
+`PaneScreenMobile` and asserts the New action leaves and the read-only badge and the spoken notice
+arrive. Non-vacuity was measured three ways: with the codec case removed both client tests fail; with
+`readOnly` restored to `_hello.value?.role` both fail; and with `role` held as a plain field rather
+than snapshot state the socket test passes and the affordance test still fails — which is the whole
+reason the store uses snapshot state and not a `StateFlow`.
+
+`KamprStore.kt`'s own comment — *"the affordances must be absent, not present-and-failing"* — now has
+a wire that lets it hold.
 
 ### The VT-emulator payoff is still not collected — **confirmed, by reading**
 
@@ -312,7 +348,8 @@ Checked against code on 2026-08-21, second pass.
 - WebAuthn ceremony hygiene, and the Android asset-links work around it (`tests/android_passkeys.rs`,
   10 green) — everything short of an actual credential.
 - JSONL audit injection is impossible and the 0600 is real (re-verified on a fresh state dir). The log
-  covers failed auth, watch and full manage detail, and rotates. It does not cover refusals (M1).
+  covers failed auth, watch, full manage detail and — since M1 — every role refusal on both the socket
+  and the HTTP surface, and rotates.
 - The same-origin gate (#13), the revocation path (#1) and the herd-outage path (#17) behave under
   attacker-shaped probes, not just under their tests.
 - **New to this list:** the read-only role holds on every verb tried against a live socket, and the

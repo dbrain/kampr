@@ -33,7 +33,7 @@ In rough order of what an attacker actually wants:
 | **Pairing / mesh join codes** | SQLite as argon2id digests; **cleartext on a screen while in use** | A short-lived path to a full-role device |
 | **The node's identity key** | `node.key`, 0600, in a 0700 config dir | It *is* the node's mesh credential; holding it is being that node |
 | **The VAPID private key** | beside the database, 0600 in a 0700 dir | Signing pushes as this node to its subscribers |
-| **The audit log** | `audit.jsonl`, 0600 | Reads back what was answered and what was run; also the only forensic record |
+| **The audit log** | `audit.jsonl`, 0600 | Reads back what was answered, what was run, and what was refused; also the only forensic record |
 
 ---
 
@@ -272,7 +272,14 @@ process and only writes SQLite, so a broadcast alone would not reach it. A revoc
 sends `error{revoked}` and closes.
 
 **Roles are enforced at the verb, not at the connection.** A `readonly` device keeps its stream and is
-refused `input`, `answer` and `manage` with `not_writer`. `prefs` is *allowed* for read-only, because
+refused `input`, `answer`, `notify` and `manage` with `not_writer`, and the same role gate refuses it
+the device inventory, the pairing surface, the mesh surface and passkey registration over HTTP with a
+403. **Every one of those refusals is now recorded** as a `refused` audit line naming the verb, the
+pane, the device and how many times it has happened in this incident — a half-trusted device probing
+what it can reach was the one thing this node did not write down. The line rate is bounded by
+construction: an incident is logged on attempts 1, 2, 4, 8 … so a client retrying in a loop costs a
+line per doubling rather than a line per attempt, and a quiet minute starts a fresh incident so an
+occasional refusal is never the one that goes unrecorded. `prefs` is *allowed* for read-only, because
 bounding the write is the right control rather than gating the role — a full device could fill a disk
 just as easily. So prefs are bounded for everyone: the pane must exist, the blob is capped at 2 KiB,
 and a device keeps at most 256 panes' preferences, least-recently-updated evicted first.
@@ -375,18 +382,26 @@ as an attempted theft rather than as a typo, and audit your device list.
 checks only for active *Kampr* devices. A local user, or anyone already attached to the Herdr
 session, can read that pane regardless.
 
-### 7.2 A mid-session demotion is enforced but not announced
+### 7.2 A mid-session demotion is announced — decided and closed
 
-Demoting a device from `full` to `readonly` takes effect within two seconds and is audited. **The
-client is not told.** It still holds the `hello` that said `role: full`, and it learns only when its
-next write comes back `not_writer`. So a demoted device keeps offering write affordances until
-somebody uses one.
+Demoting a device from `full` to `readonly` takes effect within two seconds, is audited, and **is
+now sent to the client** on the socket it is already holding, as
+[`role`](./04-wire-protocol.md#role--this-devices-role-changed-mid-connection). A promotion travels
+the same way, so a device upgraded to full gains its affordances without reconnecting.
 
-This is a deliberate gap rather than a bug. Announcing it needs either a re-sent `hello` or a new
-`role` message, and the protocol says `hello` is the *first* message on a connection — so inventing
-one unilaterally was the wrong move. **Decide it before any client UI trusts `hello.role` for
-anything that matters.** Revocation and expiry do not have this problem: both send `error{revoked}`
-and close.
+The decision the previous revision of this section asked for was made this way: a **new message**,
+not a re-sent `hello`. `hello` is defined as the first message on a connection, and quietly making
+it re-sendable would have broken that contract for every future reader; a dedicated `t` is additive,
+and the node ignores unknown `t` values in both directions, so an older client carries on exactly
+as before. Tests: `live.rs::a_demotion_and_a_promotion_are_both_announced_on_the_open_socket`
+asserts the frames on a real socket *and* that no second `hello` precedes them, and the client's
+`RoleChangeTest` drives the same bytes through a real WebSocket into the real store and asserts the
+write affordances leave and come back without a reconnect.
+
+What is left is inherent rather than a gap: the frame is a courtesy to the UI, never the control.
+Enforcement is at the verb and the node re-reads the device row before every write, so a client
+that ignores `role` is refused all the same. Revocation and expiry are still different: both send
+`error{revoked}` and close.
 
 ### 7.3 Pane output is attacker-influenceable
 

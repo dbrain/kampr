@@ -37,6 +37,7 @@ object Wire {
                 caps = obj.decode("caps") ?: Caps(),
                 security = obj.decode("security") ?: Security(),
             )
+            "role" -> ServerMsg.RoleChanged(role = obj.str("role") ?: return null)
             "herd" -> ServerMsg.Herd(
                 nodes = obj.decodeList<NodeInfo>("nodes"),
                 panes = obj.decodeList<PaneInfo>("panes"),

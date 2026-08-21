@@ -211,6 +211,11 @@ pub enum PendingSource {
 pub enum ServerMsg {
     #[serde(rename = "hello")]
     Hello(Hello),
+    /// A mid-connection role change. `hello` is defined as the first message on a connection and
+    /// stays that way, so a demotion or a promotion travels on its own frame rather than as a
+    /// second greeting.
+    #[serde(rename = "role")]
+    RoleChanged { role: Role },
     #[serde(rename = "herd")]
     Herd {
         nodes: Vec<NodeEntry>,

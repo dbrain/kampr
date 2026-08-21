@@ -1,6 +1,9 @@
 package dev.kampr.shared.model
 
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Security
@@ -47,7 +50,19 @@ class KamprStore {
     private val paneStates = mutableStateMapOf<String, PaneState>()
     val styles = StyleTable()
 
-    val readOnly: Boolean get() = _hello.value?.role == "readonly"
+    // The role moves under a live socket — the node sends `role` on any mid-session demotion or
+    // promotion — so this is snapshot state rather than a field of `hello` read once at connect.
+    // Every affordance that gates on it recomposes when it moves; a StateFlow read would not.
+    // `hello` itself stays the greeting this connection was given.
+    var role: String by mutableStateOf("full")
+        private set
+
+    // What the operator is told. A device that silently loses its buttons is nearly as bad as one
+    // that keeps buttons which no longer work.
+    var roleNote: String? by mutableStateOf(null)
+        private set
+
+    val readOnly: Boolean get() = role == "readonly"
 
     // A node that does not implement the ops says so, and a read-only device is refused every one
     // of them with not_writer — either way the affordances must be absent, not present-and-failing.
@@ -72,6 +87,10 @@ class KamprStore {
 
     fun dismissFailure() {
         _failure.value = null
+    }
+
+    fun dismissRoleNote() {
+        roleNote = null
     }
 
     fun pane(id: String): PaneState = paneStates.getOrPut(id) { PaneState(id, styles) }
@@ -114,6 +133,15 @@ class KamprStore {
         when (msg) {
             is ServerMsg.Hello -> {
                 _hello.value = msg
+                role = msg.role
+                roleNote = null
+                _status.value = ConnectionStatus.Live(msg.role)
+            }
+            is ServerMsg.RoleChanged -> {
+                if (msg.role != role) {
+                    role = msg.role
+                    roleNote = roleNoteFor(msg.role)
+                }
                 _status.value = ConnectionStatus.Live(msg.role)
             }
             is ServerMsg.Herd -> _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
@@ -133,4 +161,9 @@ class KamprStore {
             is ServerMsg.Pong -> Unit
         }
     }
+}
+
+private fun roleNoteFor(role: String): String = when (role) {
+    "readonly" -> "This device is now read-only. It still sees every pane; it can no longer type into one."
+    else -> "This device can write again. Typing and pane actions are back."
 }

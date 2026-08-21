@@ -1,6 +1,7 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -67,6 +68,12 @@ fun PaneManageAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Mo
 fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
     val outcome by state.store.managed.collectAsState()
     val caps by state.store.nodeCaps.collectAsState()
+    // A sheet already up when the role moved is a write affordance like any other. `openSheet`
+    // refuses to open one for a read-only device; a demotion has to reach the one already open.
+    if (!state.store.canManage) {
+        LaunchedEffect(Unit) { state.closeSheet() }
+        return
+    }
     when (val sheet = state.sheet) {
         null -> Unit
         is Sheet.New -> {
