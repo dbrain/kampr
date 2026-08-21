@@ -11,14 +11,19 @@ import dev.kampr.terminal.bench.TerminalBenchApp
 import kotlinx.browser.document
 import kotlinx.browser.window
 
-private fun query(name: String): String? {
-    val search = window.location.search.removePrefix("?")
-    if (search.isEmpty()) return null
-    return search.split('&')
+private fun param(source: String, name: String): String? {
+    if (source.isEmpty()) return null
+    return source.split('&')
         .mapNotNull { it.split('=', limit = 2).takeIf { parts -> parts.size == 2 } }
         .firstOrNull { it[0] == name }
         ?.get(1)
 }
+
+private fun query(name: String): String? = param(window.location.search.removePrefix("?"), name)
+
+// A pairing code rides in the fragment, never the query: a fragment is not sent to the node, so
+// it cannot land in its access log or in the reverse proxy's.
+private fun fragment(name: String): String? = param(window.location.hash.removePrefix("#"), name)
 
 // ConversationSurfaces wraps: it renders the transcript and delegates the terminal and the
 // key row to its base, so both halves of the pane are live.
@@ -28,7 +33,10 @@ private val mosaic = MosaicSurfaces()
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     val bench = query("bench") != null
-    val deepLink = DeepLink(query("theme"), query("mode"), query("screen"), query("view"), query("pane"))
+    val deepLink = DeepLink(
+        query("theme"), query("mode"), query("screen"), query("view"), query("pane"),
+        fragment("pair"),
+    )
     ComposeViewport(document.body!!) {
         if (bench) TerminalBenchApp() else KamprApp(surfaces, deepLink, mosaic)
     }

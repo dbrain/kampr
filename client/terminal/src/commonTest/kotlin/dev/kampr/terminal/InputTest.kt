@@ -4,6 +4,8 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.CapKind
+import dev.kampr.terminal.input.capHold
+import dev.kampr.terminal.input.capPress
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.KeyLayouts
@@ -11,6 +13,7 @@ import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private class Recorder : PaneIo {
@@ -34,6 +37,49 @@ private fun allCaps() = (KeyLayouts.portrait + KeyLayouts.portraitFn + KeyLayout
     .flatMap { listOfNotNull(it, it.alternate) }
 
 class InputTest {
+    // Probe: a pointer down anywhere on the canvas blurs the browser's offscreen input, so a cap
+    // that sends its key and stops has also closed the keyboard, and everything typed next is
+    // eaten with no signal.
+    @Test
+    fun everyCapKeepsTheKeyboardItsTapJustBlurred() {
+        for (cap in allCaps().filter { it.kind != CapKind.Keyboard }) {
+            val (_, keys) = sink()
+            val session = PaneSession("n/w1:p1")
+            session.openKeyboard()
+            val before = session.focusRequests
+            capPress(cap, session, keys)
+            assertTrue(session.keyboardOpen, "${'$'}{cap.label} closed the keyboard")
+            assertTrue(session.focusRequests > before, "${'$'}{cap.label} never claimed focus back")
+            val held = session.focusRequests
+            capHold(cap, session, keys)
+            assertTrue(session.focusRequests > held, "holding ${'$'}{cap.label} never claimed focus back")
+        }
+    }
+
+    @Test
+    fun aClosedKeyboardStaysClosedWhenACapIsPressed() {
+        val (_, keys) = sink()
+        val session = PaneSession("n/w1:p1")
+        val slash = allCaps().first { it.label == "/" }
+        capPress(slash, session, keys)
+        assertFalse(session.keyboardOpen, "a cap must not raise a keyboard nobody asked for")
+    }
+
+    // The only affordance that names the keyboard is the one that has to be able to bring it back.
+    @Test
+    fun theKeyboardCapToggles() {
+        val (_, keys) = sink()
+        val session = PaneSession("n/w1:p1")
+        val kbd = allCaps().first { it.kind == CapKind.Keyboard }
+        session.openKeyboard()
+        capPress(kbd, session, keys)
+        assertFalse(session.keyboardOpen)
+        val before = session.focusRequests
+        capPress(kbd, session, keys)
+        assertTrue(session.keyboardOpen, "there is no other way back to the keyboard")
+        assertTrue(session.focusRequests > before, "reopening has to re-request focus")
+    }
+
     @Test
     fun everyKeyHerdrRejectsGoesOutAsAnEscapeSequence() {
         val (recorder, keys) = sink()

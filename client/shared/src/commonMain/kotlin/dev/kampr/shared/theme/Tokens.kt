@@ -83,3 +83,11 @@ data class ThemeFamily(val dark: ThemeSpec, val light: ThemeSpec) {
     val id: ThemeId get() = dark.id
     fun on(ground: Ground): ThemeSpec = if (ground == Ground.Light) light else dark
 }
+
+// The one surface in Kampr that is not the operator's to skin: a camera reads contrast, not a
+// palette, and plenty of scanners refuse an inverted symbol outright. So a QR is drawn in these
+// two and never in the theme's.
+object Scan {
+    val ink: Color = Color.Black
+    val paper: Color = Color.White
+}

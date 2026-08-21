@@ -33,6 +33,16 @@ class PaneSession(val paneId: String) {
     fun closeKeyboard() {
         keyboardOpen = false
     }
+
+    fun toggleKeyboard() {
+        if (keyboardOpen) closeKeyboard() else openKeyboard()
+    }
+
+    // A browser blurs the offscreen input on any pointer down on the canvas, the key row included,
+    // so focus is claimed back once the gesture is over or the next keystrokes go nowhere.
+    fun reclaimKeyboard() {
+        if (keyboardOpen) focusRequests++
+    }
 }
 
 class PaneSessions {

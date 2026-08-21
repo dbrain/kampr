@@ -26,6 +26,9 @@ kotlin {
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
         compilerOptions { jvmTarget.set(JvmTarget.JVM_21) }
+        // Without this the Android actuals are the one set nothing in `allTests` ever runs, which
+        // is how `defaultEndpoint()` shipped pointing at the emulator's alias for its own host.
+        withHostTest {}
     }
 
     jvm()
@@ -55,11 +58,13 @@ kotlin {
         }
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
-            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
-            implementation(compose.uiTest)
+            implementation(libs.compose.ui.test)
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            // A distributor's endpoint is an RFC 8291 endpoint, so the node's sender is unchanged:
+            // no Google project, no `google-services.json`, no per-app secret (docs/08-notifications.md).
+            api(libs.unifiedpush.connector)
         }
         jvmMain.dependencies {
             implementation(libs.ktor.client.cio)

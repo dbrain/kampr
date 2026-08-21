@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- From targetSdk 37 a node on the phone's own subnet is unreachable without this, and the
+         refusal is a silent connect() timeout rather than a permission error. Ignored below 37. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <application
         android:label="Kampr"
         android:hardwareAccelerated="true"
@@ -14,5 +18,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- UnifiedPush: a distributor the user already runs delivers the same RFC 8291 payload
+             the browser gets, so the node's sender is unchanged (docs/08-notifications.md). -->
+        <service android:name=".KamprPushService" android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

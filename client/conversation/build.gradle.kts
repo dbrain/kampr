@@ -38,8 +38,7 @@ kotlin {
         }
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
-            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
-            implementation(compose.uiTest)
+            implementation(libs.compose.ui.test)
         }
     }
 }

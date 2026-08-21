@@ -88,7 +88,9 @@ data class PaneInfo(
     val label: String? = null,
     val agent: String? = null,
     @SerialName("agent_status") val agentStatus: String = "unknown",
-    val cols: Int = 80,
+    // Absent until something has measured the PTY: a soft wrap proves a width and the layout rect
+    // does not, so an unwatched pane carries no width rather than a wrong one.
+    val cols: Int? = null,
     val rows: Int = 24,
     @SerialName("scrollback_rows") val scrollbackRows: Int = 0,
     @SerialName("has_conversation") val hasConversation: Boolean = false,

@@ -87,7 +87,10 @@ private fun status(info: PaneInfo?): AgentStatus = info?.let(::statusOf) ?: Agen
 
 fun cellPlace(info: PaneInfo?, node: NodeInfo?, pane: PaneState): String {
     val where = node?.let { "${it.host} / ${it.session}" } ?: info?.nodeId ?: "—"
-    val size = if (info != null) "${info.cols}×${info.rows}" else "${pane.cells.cols}×${pane.cells.rows}"
+    // A pane nobody has watched has no measured width, and the node omits `cols` rather than
+    // reporting the layout rect, which is a width no row was ever wrapped at.
+    val size = info?.let { "${it.cols?.toString() ?: "—"}×${it.rows}" }
+        ?: "${pane.cells.cols}×${pane.cells.rows}"
     return "$where · $size"
 }
 

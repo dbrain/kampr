@@ -51,6 +51,9 @@ data class DeepLink(
     val screen: String? = null,
     val view: String? = null,
     val pane: String? = null,
+    // Carried in the fragment of a scanned pairing link, so it never reaches the node's logs or
+    // any proxy in front of it. It arms the field; redeeming it is still a deliberate tap.
+    val pair: String? = null,
 )
 
 @Composable
@@ -65,32 +68,77 @@ fun KamprApp(
     LaunchedEffect(deepLink) {
         deepLink?.theme?.let { key -> ThemeId.entries.firstOrNull { it.key == key }?.let(state::selectTheme) }
         deepLink?.mode?.let { key -> state.selectMode(modeOf(key)) }
+        if (deepLink?.pair != null) state.go(Screen.Setup)
     }
 
-    var now by remember { mutableStateOf(wallClockMillis()) }
+    var deviceClock by remember { mutableStateOf(wallClockMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
-            now = wallClockMillis()
+            deviceClock = wallClockMillis()
             delay(20_000)
         }
     }
+    val now = deviceClock + state.clockOffsetMs
 
     var setup by remember { mutableStateOf<SetupStatus?>(null) }
     var devices by remember { mutableStateOf<List<DeviceRecord>>(emptyList()) }
+    var pairingCode by remember { mutableStateOf<String?>(null) }
+    var authFailure by remember { mutableStateOf<String?>(null) }
     var deviceRefresh by remember { mutableStateOf(0) }
     val connectionStatus by state.store.status.collectAsState()
     val live = connectionStatus is ConnectionStatus.Live
-    LaunchedEffect(state.endpoint.baseUrl, live, deviceRefresh) {
-        if (!live) return@LaunchedEffect
+    // Not gated on a live socket: `/api/node` needs no token, and a device that has none yet is
+    // exactly the one that has to be told this node takes a passkey.
+    LaunchedEffect(state.endpoint?.baseUrl, live, deviceRefresh) {
+        val target = state.endpoint
+        if (target == null) {
+            setup = null
+            devices = emptyList()
+            return@LaunchedEffect
+        }
         val client = createHttpClient()
         try {
-            val api = AuthApi(client, state.endpoint)
+            val api = AuthApi(client, target)
             setup = api.status()
-            devices = api.devices()
+            devices = if (live) api.devices() else emptyList()
         } finally {
             client.close()
         }
     }
+
+    // Every one of these ran through `runCatching{}.getOrNull()` against a route the node has
+    // never had, so a refusal and a success looked identical. They do not any more.
+    suspend fun <T> withApi(block: suspend (AuthApi) -> T): T? {
+        val target = state.endpoint ?: return null
+        val client = createHttpClient()
+        return try {
+            block(AuthApi(client, target))
+        } finally {
+            client.close()
+        }
+    }
+
+    val auth = AuthSurface(
+        setup = setup,
+        devices = devices,
+        currentDeviceId = state.deviceId,
+        pairingCode = pairingCode,
+        failure = authFailure,
+        onPairingCode = {
+            scope.launch {
+                val code = withApi { it.pairingCode() }
+                pairingCode = code
+                if (code == null) authFailure = "This node refused to mint a pairing code."
+            }
+        },
+        onRevoke = { id ->
+            scope.launch {
+                if (withApi { it.revoke(id) } != true) authFailure = "That device was not revoked."
+                deviceRefresh++
+            }
+        },
+        onDismissFailure = { authFailure = null },
+    )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val breakpoint = breakpointOf(maxWidth, maxHeight)
@@ -104,24 +152,24 @@ fun KamprApp(
                 },
                 LocalKamprStore provides state.store,
             ) {
-                AppScaffold(
-                    state, breakpoint, surfaces, mosaic, now, setup, devices, connectionStatus, deepLink,
-                    onRevoke = { id ->
-                        scope.launch {
-                            val client = createHttpClient()
-                            try {
-                                AuthApi(client, state.endpoint).revoke(id)
-                            } finally {
-                                client.close()
-                            }
-                            deviceRefresh++
-                        }
-                    },
-                )
+                AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
             }
         }
     }
 }
+
+// The node's auth surface as one screen sees it. Eight parameters threaded through two layouts
+// was the alternative, and every one of them is about the same three HTTP calls.
+private class AuthSurface(
+    val setup: SetupStatus?,
+    val devices: List<DeviceRecord>,
+    val currentDeviceId: String?,
+    val pairingCode: String?,
+    val failure: String?,
+    val onPairingCode: () -> Unit,
+    val onRevoke: (String) -> Unit,
+    val onDismissFailure: () -> Unit,
+)
 
 private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun send(msg: ClientMsg) = state.connection.send(msg)
@@ -138,11 +186,9 @@ private fun AppScaffold(
     surfaces: PaneSurfaces,
     mosaic: MosaicHost,
     now: Double,
-    setup: SetupStatus?,
-    devices: List<DeviceRecord>,
+    auth: AuthSurface,
     connectionStatus: ConnectionStatus,
     deepLink: DeepLink?,
-    onRevoke: (String) -> Unit,
 ) {
     val tokens = Kampr.tokens
     val herd by state.store.herd.collectAsState()
@@ -155,6 +201,16 @@ private fun AppScaffold(
     // roadmap called the one Collie product idea worth stealing wholesale.
     val triage = state.store.triage()
     val blocked = triage.firstOrNull()?.pane
+    // Two independent answers, both required: this origin can carry a WebAuthn RP ID, and this
+    // platform has an authenticator at all. Absent rather than present-and-failing.
+    val offersPasskeys = (security.passkeys || auth.setup?.passkeys == true) && state.passkeysUsable
+    val passkeys = if (offersPasskeys) state::enrolPasskey else null
+    val passkeySignIn = if (offersPasskeys) state::signInWithPasskey else null
+    val install = if ((security.installable || auth.setup?.installable == true) && state.installable) {
+        state::install
+    } else {
+        null
+    }
 
     LaunchedEffect(breakpoint, herd.known, deepLink) {
         val target = when (deepLink?.screen) {
@@ -213,10 +269,10 @@ private fun AppScaffold(
                             localRtt = localRtt,
                             triage = triage,
                             activePaneId = (state.screen as? Screen.Pane)?.paneId,
-                            deviceName = devices.firstOrNull { it.current }?.name ?: "this device",
+                            deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
                             deviceDetail = hello?.let { "${it.role} access · ${it.build}" } ?: "not connected",
                             onOpenPane = { state.openPane(it, PaneView.Split) },
-                            onSettings = { state.go(Screen.Appearance) },
+                            onSettings = { state.go(Screen.Setup) },
                         )
                         Box(Modifier.weight(1f).fillMaxSize()) {
                             when (val screen = state.screen) {
@@ -229,10 +285,33 @@ private fun AppScaffold(
                                     onView = state::setPaneView,
                                     onAnswer = { answer(screen.paneId, it) },
                                 )
-                                Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                                Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
+                                Screen.Setup -> SetupScreen(
+                                    auth.setup,
+                                    security,
+                                    connectionStatus is ConnectionStatus.Live,
+                                    state.endpoint,
+                                    herd.nodes,
+                                    auth.pairingCode,
+                                    state.pairingError,
+                                    state::useEndpoint,
+                                    auth.onPairingCode,
+                                    { state.go(Screen.Herd) },
+                                    { state.go(Screen.Devices) },
+                                    { state.go(Screen.Appearance) },
+                                    { state.go(Screen.Notifications) },
+                                    passkeys,
+                                    passkeySignIn,
+                                    install,
+                                    state.recentAddresses,
+                                    deepLink?.pair,
+                                    wide = true,
+                                )
+                                Screen.Devices -> DevicesScreen(
+                                    auth.devices, auth.currentDeviceId, now,
+                                    { state.go(Screen.Setup) }, auth.onRevoke,
+                                )
+                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                                 Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                             }
                         }
@@ -240,23 +319,63 @@ private fun AppScaffold(
                     StatusStrip(state, connectionStatus, localRtt, hello?.build)
                 }
 
-                Breakpoint.Landscape -> when (val screen = state.screen) {
-                    is Screen.Pane -> PaneScreenMobile(
-                        pane = state.store.pane(screen.paneId),
-                        info = state.store.paneInfo(screen.paneId),
-                        view = screen.view,
-                        surfaces = surfaces,
-                        landscape = true,
-                        readOnly = readOnly,
-                        onBack = state::back,
-                        onView = state::setPaneView,
-                        onAnswer = { answer(screen.paneId, it) },
-                    )
-                    Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                    Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Herd) }, onRevoke)
-                    Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Herd) })
-                    Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Herd) })
-                    Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
+                // The nav lived in the Portrait branch alone, so a phone held sideways — a
+                // first-class layout — could reach Setup, Devices, Appearance and Notifications
+                // from nowhere at all. It stays off a pane, where every row of height is the
+                // terminal's and `onBack` already leads out.
+                Breakpoint.Landscape -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        when (val screen = state.screen) {
+                            is Screen.Pane -> PaneScreenMobile(
+                                pane = state.store.pane(screen.paneId),
+                                info = state.store.paneInfo(screen.paneId),
+                                view = screen.view,
+                                surfaces = surfaces,
+                                landscape = true,
+                                readOnly = readOnly,
+                                onBack = state::back,
+                                onView = state::setPaneView,
+                                onAnswer = { answer(screen.paneId, it) },
+                            )
+                            Screen.Setup -> SetupScreen(
+                                auth.setup,
+                                security,
+                                connectionStatus is ConnectionStatus.Live,
+                                state.endpoint,
+                                herd.nodes,
+                                auth.pairingCode,
+                                state.pairingError,
+                                state::useEndpoint,
+                                auth.onPairingCode,
+                                { state.go(Screen.Herd) },
+                                { state.go(Screen.Devices) },
+                                { state.go(Screen.Appearance) },
+                                { state.go(Screen.Notifications) },
+                                passkeys,
+                                passkeySignIn,
+                                install,
+                                state.recentAddresses,
+                                deepLink?.pair,
+                                wide = false,
+                            )
+                            Screen.Devices -> DevicesScreen(
+                                auth.devices, auth.currentDeviceId, now,
+                                { state.go(Screen.Setup) }, auth.onRevoke,
+                            )
+                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                            Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
+                        }
+                    }
+                    if (state.screen !is Screen.Pane) {
+                        BottomNav(
+                            when (state.screen) {
+                                Screen.Herd, Screen.Mosaic -> Tab.Herd
+                                else -> Tab.Nodes
+                            },
+                            state::selectTab,
+                        )
+                    }
                 }
 
                 Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
@@ -273,8 +392,31 @@ private fun AppScaffold(
                                 onView = state::setPaneView,
                                 onAnswer = { answer(screen.paneId, it) },
                             )
-                            Screen.Setup -> SetupScreen(setup, security, connectionStatus is ConnectionStatus.Live, state.endpoint, state::useEndpoint, { state.go(Screen.Herd) }, { state.go(Screen.Devices) }, { state.go(Screen.Notifications) })
-                            Screen.Devices -> DevicesScreen(devices, { state.go(Screen.Setup) }, onRevoke)
+                            Screen.Setup -> SetupScreen(
+                                auth.setup,
+                                security,
+                                connectionStatus is ConnectionStatus.Live,
+                                state.endpoint,
+                                herd.nodes,
+                                auth.pairingCode,
+                                state.pairingError,
+                                state::useEndpoint,
+                                auth.onPairingCode,
+                                { state.go(Screen.Herd) },
+                                { state.go(Screen.Devices) },
+                                { state.go(Screen.Appearance) },
+                                { state.go(Screen.Notifications) },
+                                passkeys,
+                                passkeySignIn,
+                                install,
+                                state.recentAddresses,
+                                deepLink?.pair,
+                                wide = false,
+                            )
+                            Screen.Devices -> DevicesScreen(
+                                auth.devices, auth.currentDeviceId, now,
+                                { state.go(Screen.Setup) }, auth.onRevoke,
+                            )
                             Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                             Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                             Screen.Herd, Screen.Mosaic -> HerdPortrait(
@@ -297,6 +439,8 @@ private fun AppScaffold(
         }
 
         failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+        auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
+        state.passkeyNote?.let { NoteStrip(it, state::dismissPasskeyNote) }
         ManageLayer(state, herd, breakpoint)
     }
 }
@@ -323,6 +467,32 @@ private fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () -> 
         IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
         KText(message.ifBlank { code }, tokens.type.caption, tokens.color.text)
         KText(code, tokens.type.meta, tokens.color.mute)
+    }
+}
+
+// The same shape as the error strip in a tone that is not a refusal: enrolling a passkey succeeds
+// silently otherwise, which on the one screen about credentials is indistinguishable from nothing
+// having happened.
+@Composable
+private fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    val spoken = "$message Activate to dismiss."
+    Row(
+        Modifier
+            .align(Alignment.TopCenter)
+            .padding(12.dp)
+            .background(tokens.color.surface2, shape)
+            .edge(BorderSpec(1.dp, tokens.color.done), shape)
+            .announce(spoken)
+            .touchable()
+            .action(spoken, onDismiss, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
+    ) {
+        Mark(tokens.color.done, MarkShape.Bar, 7.dp)
+        KText(message, tokens.type.caption, tokens.color.text, maxLines = 3)
     }
 }
 

@@ -14,8 +14,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneState
@@ -60,19 +68,32 @@ fun PaneScreenMobile(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val density = LocalDensity.current
+    // The terminal paints edge to edge and insets its scrollable content by whatever the chrome
+    // above it takes. A guessed constant is a row of the grid hidden behind the bar with no
+    // scroll left to reach it, so the number comes off the bar's own layout.
+    var chrome by remember { mutableStateOf<Dp?>(null) }
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
-        when (view) {
-            PaneView.Conversation -> surfaces.Conversation(
-                pane,
-                info,
-                Modifier.fillMaxSize().padding(top = if (landscape) 44.dp else 108.dp),
-            )
-            else -> surfaces.Terminal(pane, info, Modifier.fillMaxSize())
+        CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
+            when (view) {
+                PaneView.Conversation -> surfaces.Conversation(
+                    pane,
+                    info,
+                    Modifier.fillMaxSize().padding(top = chrome ?: if (landscape) 44.dp else 108.dp),
+                )
+                else -> surfaces.Terminal(pane, info, Modifier.fillMaxSize())
+            }
         }
 
         // The surface is painted first and the chrome floats over it, so composition order and
         // reading order disagree: without this a reader lands in the grid before the title.
-        Column(Modifier.align(Alignment.TopStart).fillMaxWidth().readingOrder(-1f)) {
+        Column(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .readingOrder(-1f)
+                .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } },
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -92,6 +113,7 @@ fun PaneScreenMobile(
                     }
                 }
                 if (pane.stale) StaleBadge()
+                if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
                 if (readOnly) {
                     StatusBadge(
                         "read-only", tokens.color.dim, tokens.color.surface,
@@ -102,6 +124,12 @@ fun PaneScreenMobile(
                 NewAction(pane.id)
                 PaneManageAction(pane.id)
                 StatusChip(info)
+                // Landscape has no second row to hang these off, and an agent pane opens in
+                // Conversation: without them here the terminal is unreachable without rotating.
+                if (landscape) {
+                    ViewSwitch(view, onView, Modifier.width(210.dp))
+                    surfaces.Zoom(pane, Modifier)
+                }
             }
             if (!landscape) {
                 Row(
@@ -113,13 +141,7 @@ fun PaneScreenMobile(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Segmented(
-                        listOf("Terminal", "Conversation"),
-                        if (view == PaneView.Conversation) 1 else 0,
-                        { onView(if (it == 1) PaneView.Conversation else PaneView.Terminal) },
-                        Modifier.weight(1f),
-                        what = "view",
-                    )
+                    ViewSwitch(view, onView, Modifier.weight(1f))
                     surfaces.Zoom(pane, Modifier)
                 }
             }
@@ -136,6 +158,17 @@ fun PaneScreenMobile(
     }
 }
 
+@Composable
+private fun ViewSwitch(view: PaneView, onView: (PaneView) -> Unit, modifier: Modifier) {
+    Segmented(
+        listOf("Terminal", "Conversation"),
+        if (view == PaneView.Conversation) 1 else 0,
+        { onView(if (it == 1) PaneView.Conversation else PaneView.Terminal) },
+        modifier,
+        what = "view",
+    )
+}
+
 // A frame that has stopped arriving is a fact about what is on the screen, and the eye gets it
 // from a badge that a reader had no way to hear.
 @Composable
@@ -146,10 +179,29 @@ private fun StaleBadge() {
     }
 }
 
+// Stale is about the inbound stream. Nothing said the other half — that what is being typed is
+// going nowhere — and silence there is what let 136 keystrokes vanish unnoticed.
+@Composable
+private fun UnsentBadge(count: Int) {
+    val tokens = Kampr.tokens
+    val what = if (count == 1) "1 keystroke" else "$count keystrokes"
+    Box(
+        Modifier.announce(
+            "$what did not reach this pane — nothing you type is being delivered",
+            urgent = true,
+        )
+    ) {
+        StatusBadge("Not sent · $count", tokens.color.blocked, tokens.color.blockedBg)
+    }
+}
+
 private fun geometryLine(info: PaneInfo?, pane: PaneState): String {
     val node = info?.id?.substringBefore('/')?.take(8) ?: ""
     val local = info?.id?.substringAfter('/') ?: pane.id
-    val size = if (info != null) "${info.cols}×${info.rows}" else "${pane.cells.cols}×${pane.cells.rows}"
+    // A pane nobody has watched has no measured width, and the layout rect is not one — the node
+    // omits `cols` rather than reporting a number no row was ever wrapped at.
+    val size = info?.let { "${it.cols?.toString() ?: "—"}×${it.rows}" }
+        ?: "${pane.cells.cols}×${pane.cells.rows}"
     return listOf(node, local, size, "observing").filter { it.isNotEmpty() }.joinToString(" · ")
 }
 
@@ -204,19 +256,23 @@ fun PaneScreenDesktop(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val density = LocalDensity.current
+    var chrome by remember { mutableStateOf<Dp?>(null) }
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
-        Row(Modifier.fillMaxSize()) {
-            if (view != PaneView.Conversation) {
-                val terminalModifier =
-                    if (view == PaneView.Split) Modifier.width(690.dp).fillMaxHeight() else Modifier.weight(1f).fillMaxHeight()
-                surfaces.Terminal(pane, info, terminalModifier)
-            }
-            if (view != PaneView.Terminal) {
-                surfaces.Conversation(
-                    pane,
-                    info,
-                    Modifier.weight(1f).fillMaxHeight().padding(top = 56.dp),
-                )
+        CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
+            Row(Modifier.fillMaxSize()) {
+                // Split shares the width rather than pinning the terminal to a fixed one: on a
+                // wide monitor a fixed width crops the grid and leaves the other half empty.
+                if (view != PaneView.Conversation) {
+                    surfaces.Terminal(pane, info, Modifier.weight(1f).fillMaxHeight())
+                }
+                if (view != PaneView.Terminal) {
+                    surfaces.Conversation(
+                        pane,
+                        info,
+                        Modifier.weight(1f).fillMaxHeight().padding(top = chrome ?: 56.dp),
+                    )
+                }
             }
         }
 
@@ -227,6 +283,7 @@ fun PaneScreenDesktop(
                 .background(tokens.color.bar)
                 .edgeBottom()
                 .readingOrder(-1f)
+                .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } }
                 .padding(horizontal = 18.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -236,6 +293,7 @@ fun PaneScreenDesktop(
                 KText(geometryLine(info, pane), tokens.type.meta, tokens.color.mute)
             }
             if (pane.stale) StaleBadge()
+            if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
             StatusChip(info)
             NewAction(pane.id)
             PaneManageAction(pane.id)

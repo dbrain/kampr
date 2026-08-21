@@ -129,8 +129,8 @@ private fun RowScope.Cap(
                 if (!enabled) Modifier.named("$spoken, unavailable on a read-only device")
                 else Modifier.gestureAction(
                     label = spoken,
-                    onClick = { press(cap, session, sink) },
-                    onLongClick = { hold(cap, session, sink) },
+                    onClick = { capPress(cap, session, sink) },
+                    onLongClick = { capHold(cap, session, sink) },
                     state = when {
                         state == LatchState.Locked -> "locked"
                         state == LatchState.Armed -> "armed for the next key"
@@ -148,8 +148,8 @@ private fun RowScope.Cap(
             .pointerInput(cap, enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(
-                    onTap = { press(cap, session, sink) },
-                    onLongPress = { hold(cap, session, sink) },
+                    onTap = { capPress(cap, session, sink) },
+                    onLongPress = { capHold(cap, session, sink) },
                 )
             }
             .defaultMinSize(minHeight = 44.dp)
@@ -167,21 +167,31 @@ private fun holdLabel(latch: Latch): String = when (latch) {
     Latch.Alt -> "alt"
 }
 
-private fun press(cap: KeyCap, session: PaneSession, sink: InputSink) {
+internal fun capPress(cap: KeyCap, session: PaneSession, sink: InputSink) {
     when (cap.kind) {
         CapKind.Latch -> {
             val riding = cap.hold?.takeIf { session.latches[it].active() }
             if (riding != null) session.latches.tap(riding) else cap.latch?.let(session.latches::tap)
+            session.reclaimKeyboard()
         }
-        CapKind.Keyboard -> session.closeKeyboard()
-        CapKind.Text -> sink.press(cap)
+        CapKind.Keyboard -> session.toggleKeyboard()
+        CapKind.Text -> {
+            sink.press(cap)
+            session.reclaimKeyboard()
+        }
     }
 }
 
-private fun hold(cap: KeyCap, session: PaneSession, sink: InputSink) {
+internal fun capHold(cap: KeyCap, session: PaneSession, sink: InputSink) {
     when (cap.kind) {
-        CapKind.Latch -> cap.hold?.let(session.latches::tap) ?: cap.latch?.let(session.latches::lock)
-        CapKind.Keyboard -> session.closeKeyboard()
-        CapKind.Text -> sink.press(cap.alternate ?: cap)
+        CapKind.Latch -> {
+            cap.hold?.let(session.latches::tap) ?: cap.latch?.let(session.latches::lock)
+            session.reclaimKeyboard()
+        }
+        CapKind.Keyboard -> session.toggleKeyboard()
+        CapKind.Text -> {
+            sink.press(cap.alternate ?: cap)
+            session.reclaimKeyboard()
+        }
     }
 }

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kampr — no node</title>
+    <link rel="stylesheet" href="/kampr.css">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; overflow: auto;
+               font: 15px/1.55 ui-sans-serif, system-ui, sans-serif; color: #8b8f9a; }
+        main { max-width: 30rem; padding: 2rem; }
+        h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 .6rem; color: #c9ccd4; }
+        p { margin: 0 0 .8rem; }
+        button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor;
+                 border-radius: .5rem; padding: .5rem 1rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Kampr cannot reach your node</h1>
+    <p>The app itself is fine — it is the machine your herd runs on that is not answering. Nothing
+        was lost; a terminal with no socket behind it is not much use either way.</p>
+    <p>Check the node is running (<code>kampr status</code>), or that this device is on a network
+        that can see it.</p>
+    <button onclick="location.reload()">Try again</button>
+</main>
+</body>
+</html>

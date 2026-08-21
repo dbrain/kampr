@@ -60,26 +60,29 @@ fun NotificationsScreen(
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     val capability = remember { state.push.capability() }
+    val nodeClock = wallClockMillis() + state.clockOffsetMs
 
     suspend fun reload() {
+        val target = state.endpoint ?: return
         val client = createHttpClient()
         try {
-            server = PushApi(client, state.endpoint).state()
+            server = PushApi(client, target).state()
         } finally {
             client.close()
         }
     }
 
-    LaunchedEffect(state.endpoint.baseUrl) { reload() }
+    LaunchedEffect(state.endpoint?.baseUrl) { reload() }
 
     fun act(run: suspend (PushApi) -> Unit) {
         if (busy) return
+        val target = state.endpoint ?: return
         busy = true
         scope.launch {
             val client = createHttpClient()
             try {
-                run(PushApi(client, state.endpoint))
-                server = PushApi(client, state.endpoint).state()
+                run(PushApi(client, target))
+                server = PushApi(client, target).state()
             } finally {
                 client.close()
                 busy = false
@@ -162,8 +165,9 @@ fun NotificationsScreen(
                     title = "Every agent",
                     subtitle = "Mute or snooze the whole herd on this device",
                     rule = server?.rules?.firstOrNull { it.paneId == ALL_PANES },
+                    now = nodeClock,
                     onMute = { muted -> act { it.rule(PushRule(ALL_PANES, muted = muted)) } },
-                    onSnooze = { act { it.rule(PushRule(ALL_PANES, snoozeUntil = snoozeUntil())) } },
+                    onSnooze = { act { it.rule(PushRule(ALL_PANES, snoozeUntil = snoozeUntil(nodeClock))) } },
                 )
 
                 val agents = panes.filter { it.agent != null }
@@ -180,8 +184,9 @@ fun NotificationsScreen(
                         title = paneTitle(pane),
                         subtitle = pane.cwd ?: pane.id,
                         rule = server?.rules?.firstOrNull { it.paneId == pane.id },
+                        now = nodeClock,
                         onMute = { muted -> act { it.rule(PushRule(pane.id, muted = muted)) } },
-                        onSnooze = { act { it.rule(PushRule(pane.id, snoozeUntil = snoozeUntil())) } },
+                        onSnooze = { act { it.rule(PushRule(pane.id, snoozeUntil = snoozeUntil(nodeClock))) } },
                     )
                 }
             }
@@ -195,12 +200,13 @@ private fun RuleRow(
     title: String,
     subtitle: String,
     rule: PushRule?,
+    now: Double,
     onMute: (Boolean) -> Unit,
     onSnooze: () -> Unit,
 ) {
     val tokens = Kampr.tokens
     val muted = rule?.muted == true
-    val snoozing = rule?.snoozeUntil?.let { it * 1000.0 > wallClockMillis() } == true
+    val snoozing = rule?.snoozeUntil?.let { it * 1000.0 > now } == true
     Surface(Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 15.dp, vertical = 12.dp),
@@ -235,7 +241,9 @@ private fun RuleRow(
     }
 }
 
-private fun snoozeUntil(): Long = (wallClockMillis() / 1000).toLong() + SNOOZE_MINUTES * 60L
+// The node filters a snooze on its own clock (`kampr-auth/src/push.rs`), so a deadline taken from
+// the device's is wrong by exactly the skew, in whichever direction hurts.
+private fun snoozeUntil(nodeClock: Double): Long = (nodeClock / 1000).toLong() + SNOOZE_MINUTES * 60L
 
 // The single place that decides whether a subscribe control may exist at all. Each branch says
 // what would unlock it rather than leaving the user to guess, which is the whole of findings §3.7
@@ -250,6 +258,12 @@ private fun blocker(capability: PushCapability, server: PushState?): Pair<String
         "This address cannot do notifications",
         "Notifications need a secure context, and plain HTTP on an IP address is not one. Point a " +
             "hostname at this machine and give it a certificate — the same step that unlocks passkeys.",
+    )
+    capability is PushCapability.NeedsDistributor -> Pair(
+        "Install a UnifiedPush distributor",
+        "Android has no push service that does not go through Google, so Kampr uses UnifiedPush: " +
+            "a small app you install once and point wherever you like — ntfy is the usual choice, " +
+            "and it can talk to your own ntfy server. Install one, then come back.",
     )
     capability is PushCapability.Unsupported -> Pair(
         "This build has no notification channel",

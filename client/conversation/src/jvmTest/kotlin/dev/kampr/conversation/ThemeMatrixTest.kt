@@ -78,14 +78,14 @@ private val herd = Herd(
 )
 
 private val devices = listOf(
-    DeviceRecord("d1", "Pixel 9", "android", "full", "2026-08-01T10:00:00Z", "2026-08-20T08:00:00Z", true),
-    DeviceRecord("d2", "MacBook", "browser", "full", "2026-07-11T10:00:00Z", "2026-08-19T21:04:00Z"),
-    DeviceRecord("d3", "shared iPad", "browser", "view", "2026-06-02T10:00:00Z", "2026-08-02T13:00:00Z"),
+    DeviceRecord("d1", "Pixel 9", "full", createdAt = 1_786_000_000, lastSeenAt = 1_787_269_000),
+    DeviceRecord("d2", "MacBook", "full", createdAt = 1_785_000_000, lastSeenAt = 1_787_100_000),
+    DeviceRecord("d3", "shared iPad", "readonly", createdAt = 1_784_000_000, lastSeenAt = 1_786_500_000),
 )
 
 private val triage = listOf(TriageItem(herd.panes.first(), "Do you want to make this edit?"))
 
-private val setup = SetupStatus("http://192.168.1.24:8790", "4821-9930", 3, "0.5.0")
+private val setup = SetupStatus("http://192.168.1.24:8790", 3, "0.5.0", passkeys = true, installable = true)
 
 // Renders the same screen once per theme, side by side, under one ground. Four narrow columns
 // is what makes a token that quietly stopped resolving visible: it shows up as the one column
@@ -167,10 +167,16 @@ class ThemeMatrixTest {
                 security = Security(tier = 1, encrypted = false, passkeys = true, installable = true),
                 running = true,
                 endpoint = Endpoint("http://192.168.1.24:8790", "token"),
+                nodes = herd.nodes,
+                pairingCode = "4821-9930",
+                pairingError = null,
                 onConnect = {},
+                onPairingCode = {},
                 onOpenHerd = {},
                 onDevices = {},
+                onAppearance = {},
                 onNotifications = {},
+                onPasskeys = {},
             )
         }
     }
@@ -178,7 +184,7 @@ class ThemeMatrixTest {
     @Test
     fun devicesSheet() = eachGround { ground ->
         sheet(phone.first, phone.second, ground, TypeScale.Phone, "devices") {
-            DevicesScreen(devices, {}, {})
+            DevicesScreen(devices, "d1", NOW, {}, {})
         }
     }
 

@@ -53,7 +53,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         // and never reaches the pan loop below — waiting for another event would hang it.
         if (currentEvent.changes.none { it.pressed }) {
             onTap(down.position)
-            if (session.keyboardOpen) session.openKeyboard()
+            session.reclaimKeyboard()
             return@awaitEachGesture
         }
 
@@ -89,8 +89,6 @@ internal suspend fun PointerInputScope.terminalGestures(
                 view.fling()
             }
         }
-        // A browser blurs the offscreen input on any pointer down on the canvas, so a pan would
-        // drop the keyboard unless focus is claimed back once the gesture is over.
-        if (session.keyboardOpen) session.openKeyboard()
+        session.reclaimKeyboard()
     }
 }

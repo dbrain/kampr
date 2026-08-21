@@ -19,15 +19,15 @@ import dev.kampr.shared.res.instrumentsans_600
 import dev.kampr.shared.res.jetbrainsmono_400
 import dev.kampr.shared.res.jetbrainsmono_500
 import dev.kampr.shared.res.jetbrainsmono_700
-import dev.kampr.shared.res.jetbrainsmononl_bold
-import dev.kampr.shared.res.jetbrainsmononl_bolditalic
-import dev.kampr.shared.res.jetbrainsmononl_italic
-import dev.kampr.shared.res.jetbrainsmononl_regular
 import dev.kampr.shared.res.manrope_400
 import dev.kampr.shared.res.manrope_500
 import dev.kampr.shared.res.manrope_600
 import dev.kampr.shared.res.manrope_700
 import dev.kampr.shared.res.manrope_800
+import dev.kampr.shared.res.terminalmono_bold
+import dev.kampr.shared.res.terminalmono_bolditalic
+import dev.kampr.shared.res.terminalmono_italic
+import dev.kampr.shared.res.terminalmono_regular
 
 @Immutable
 data class KamprFonts(val ui: FontFamily, val mono: FontFamily, val terminal: FontFamily)
@@ -63,11 +63,17 @@ private fun faces(id: FamilyId): List<FontFace> = when (id) {
 }
 
 // Probe #66: the ligature cut collapses two cells into one glyph inside a shaped run.
+// JetBrains Mono NL, with the symbols it does not carry cut in from Noto Sans Symbols 2 (both
+// OFL 1.1): a browser has no system font behind Skia, and a FontFamily of loaded fonts resolves
+// to exactly one typeface, so a codepoint the face lacks — U+23F5 and U+273B are both in Claude's
+// own status line — is tofu and nothing else can supply it. The cut-in glyphs are scaled to the
+// 600/1000 advance and carry JetBrains Mono's vertical metrics, so no symbol widens a cell or
+// grows a line.
 private val terminalFaces = listOf(
-    FontFace("jbmnl-regular", Res.font.jetbrainsmononl_regular, FontWeight.W400),
-    FontFace("jbmnl-bold", Res.font.jetbrainsmononl_bold, FontWeight.W700),
-    FontFace("jbmnl-italic", Res.font.jetbrainsmononl_italic, FontWeight.W400, FontStyle.Italic),
-    FontFace("jbmnl-bolditalic", Res.font.jetbrainsmononl_bolditalic, FontWeight.W700, FontStyle.Italic),
+    FontFace("kmono-regular", Res.font.terminalmono_regular, FontWeight.W400),
+    FontFace("kmono-bold", Res.font.terminalmono_bold, FontWeight.W700),
+    FontFace("kmono-italic", Res.font.terminalmono_italic, FontWeight.W400, FontStyle.Italic),
+    FontFace("kmono-bolditalic", Res.font.terminalmono_bolditalic, FontWeight.W700, FontStyle.Italic),
 )
 
 @Composable

@@ -106,7 +106,7 @@ fun PanePicker(
                                 icon = statusIcon(status),
                                 iconTint = statusColor(status),
                                 title = paneTitle(pane),
-                                subtitle = listOfNotNull(pane.cwd, "${pane.cols}×${pane.rows}")
+                                subtitle = listOfNotNull(pane.cwd, "${pane.cols?.toString() ?: "—"}×${pane.rows}")
                                     .joinToString(" · "),
                                 subtitleMono = true,
                                 selected = already,

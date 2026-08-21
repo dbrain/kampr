@@ -23,13 +23,17 @@ private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
 
 fun relativeTime(updatedAt: String?, nowMillis: Double): String {
     val at = parseIsoMillis(updatedAt) ?: return "—"
-    val seconds = ((nowMillis - at) / 1000.0).toLong()
-    return when {
-        seconds < 45 -> "now"
-        seconds < 3600 -> "${seconds / 60}m"
-        seconds < 86_400 -> "${seconds / 3600}h"
-        else -> "${seconds / 86_400}d"
-    }
+    return elapsed(((nowMillis - at) / 1000.0).toLong())
+}
+
+fun relativeSeconds(epochSeconds: Long, nowMillis: Double): String =
+    elapsed((nowMillis / 1000.0).toLong() - epochSeconds)
+
+private fun elapsed(seconds: Long): String = when {
+    seconds < 45 -> "now"
+    seconds < 3600 -> "${seconds / 60}m"
+    seconds < 86_400 -> "${seconds / 3600}h"
+    else -> "${seconds / 86_400}d"
 }
 
 fun formatLatency(ms: Double?): String {
@@ -37,4 +41,21 @@ fun formatLatency(ms: Double?): String {
     val tenths = (ms * 10).toLong()
     if (ms >= 10 || tenths % 10L == 0L) return "${ms.toLong()} ms"
     return "${tenths / 10}.${tenths % 10} ms"
+}
+
+private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+// RFC 9110's preferred form: "Thu, 20 Aug 2026 23:21:08 GMT". Every HTTP response carries one, and
+// it is the only reading of the node's clock a client gets without a new field on `hello` — which
+// matters because a snooze is computed here and filtered there, and a pane's age is stamped there
+// and rendered here. A phone two minutes fast reported every pane as "now".
+fun parseHttpDateMillis(text: String?): Double? {
+    val parts = text?.trim()?.split(' ')?.filter { it.isNotEmpty() } ?: return null
+    if (parts.size < 5) return null
+    val day = parts[1].toIntOrNull() ?: return null
+    val month = MONTHS.indexOf(parts[2]).takeIf { it >= 0 }?.plus(1) ?: return null
+    val year = parts[3].toIntOrNull() ?: return null
+    val hms = parts[4].split(':').mapNotNull { it.toIntOrNull() }
+    if (hms.size != 3) return null
+    return (daysFromCivil(year, month, day) * 86_400.0 + hms[0] * 3_600.0 + hms[1] * 60.0 + hms[2]) * 1000.0
 }

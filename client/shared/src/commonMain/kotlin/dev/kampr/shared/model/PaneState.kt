@@ -82,11 +82,28 @@ class PaneState(val id: String, val styles: StyleTable) {
     var revision by mutableIntStateOf(0)
         private set
 
+    // Keystrokes that never left the device. Counted rather than flagged, because "nothing you
+    // typed for the last thirty seconds arrived" is a different fact from "one key was lost".
+    var undelivered by mutableIntStateOf(0)
+        private set
+
+    fun noteUndelivered() {
+        undelivered++
+    }
+
+    fun noteDelivered() {
+        if (undelivered != 0) undelivered = 0
+    }
+
     fun applyReset(msg: ServerMsg.GridReset) {
         cells.resize(msg.cols, msg.rows)
         cells.clear()
         for (row in msg.rowsData) cells.apply(row)
         cursor = msg.cursor
+        // A reset carries the pane's whole link table from index 0, because a full repaint clears
+        // herdr's; only a patch carries the suffix. Appending here is what makes a post-reset id
+        // resolve to a URL some earlier program printed.
+        links.clear()
         links += msg.links
         painted = true
         stale = false

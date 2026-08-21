@@ -6,8 +6,12 @@ import io.ktor.client.plugins.websocket.WebSockets
 
 actual fun createHttpClient(): HttpClient = HttpClient(CIO) { install(WebSockets) }
 
-actual fun defaultEndpoint(): Endpoint =
+actual fun defaultEndpoint(): Endpoint? =
     Endpoint(System.getenv("KAMPR_NODE") ?: "http://127.0.0.1:8790", System.getenv("KAMPR_TOKEN"))
+
+actual fun deviceName(): String =
+    runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: "desktop"
 
 actual fun nowMillis(): Double = System.nanoTime() / 1_000_000.0
 

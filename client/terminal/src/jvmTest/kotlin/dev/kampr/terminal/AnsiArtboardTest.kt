@@ -128,10 +128,10 @@ private fun terminalFamily(): FontFamily {
     fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) =
         Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
     return FontFamily(
-        face("jetbrainsmononl_regular", FontWeight.W400),
-        face("jetbrainsmononl_bold", FontWeight.W700),
-        face("jetbrainsmononl_italic", FontWeight.W400, FontStyle.Italic),
-        face("jetbrainsmononl_bolditalic", FontWeight.W700, FontStyle.Italic),
+        face("terminalmono_regular", FontWeight.W400),
+        face("terminalmono_bold", FontWeight.W700),
+        face("terminalmono_italic", FontWeight.W400, FontStyle.Italic),
+        face("terminalmono_bolditalic", FontWeight.W700, FontStyle.Italic),
     )
 }
 

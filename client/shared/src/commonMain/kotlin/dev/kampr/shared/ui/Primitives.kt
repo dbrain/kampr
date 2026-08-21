@@ -174,6 +174,7 @@ fun QuietAction(
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.buttonSmall,
     vertical: Dp = 10.dp,
+    enabled: Boolean = true,
     label: String? = null,
 ) {
     val tokens = Kampr.tokens
@@ -183,11 +184,11 @@ fun QuietAction(
             .background(tokens.color.raise, shape)
             .edge(tokens.card, shape)
             .touchable()
-            .action(label ?: text, onClick, shape)
+            .action(label ?: text, onClick, shape, enabled = enabled)
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
-        KText(text, style, tokens.color.text)
+        KText(text, style, if (enabled) tokens.color.text else tokens.color.mute)
     }
 }
 

@@ -19,10 +19,23 @@ const TAG = 'kampr.blocked';
 // The only two URLs this worker caches or serves. Anything else goes straight to the network.
 const WARM = ['/api/node', '/api/warm'];
 
+// The one page it does hold: what an installed icon opens when the node is asleep. The bundle
+// itself is still never cached here — it is served `immutable` and the browser's own cache is the
+// offline shell, and a caching fetch handler in front of that is how you serve a stale bundle
+// after a node upgrade. This is a dinosaur replaced by a sentence, not a second cache.
+const OFFLINE = '/offline.html';
+
 self.addEventListener('install', (event) => {
   // A new worker takes over at once. The alternative is a node upgrade whose new push payload is
   // handled by the old worker until every tab happens to close.
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil((async () => {
+    try {
+      const cache = await caches.open(CACHE);
+      await cache.add(new Request(OFFLINE, { cache: 'reload' }));
+    } catch (_) {
+    }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -145,8 +158,17 @@ async function warm(note) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (!WARM.includes(url.pathname)) return;
-  event.respondWith(warmFirst(event.request));
+  if (WARM.includes(url.pathname)) {
+    event.respondWith(warmFirst(event.request));
+    return;
+  }
+  // Network first and always: the page is never served from cache. The fallback is reached only
+  // when the network has already failed, which is the case the dinosaur was covering.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => (await caches.match(OFFLINE)) || Response.error()),
+    );
+  }
 });
 
 // Cache first, network behind it. The cached copy is at most a notification old and the page

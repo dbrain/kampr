@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.SetupStatus
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.util.joinLink
+import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.Security
 
 private data class Rung(
@@ -31,6 +33,7 @@ private data class Rung(
     val detail: String,
     val unlocks: List<String> = emptyList(),
     val lead: Boolean = false,
+    val onClick: (() -> Unit)? = null,
 )
 
 private val unlockCopy = mapOf(
@@ -41,14 +44,35 @@ private val unlockCopy = mapOf(
 
 // The ladder is built from hello.security, never from the URL: a rung whose affordance cannot
 // work on this node is absent rather than present-and-failing.
-private fun ladderFor(security: Security): List<Rung> = buildList {
-    if (security.passkeys) {
+private fun ladderFor(
+    security: Security,
+    onPasskeys: (() -> Unit)?,
+    onInstall: (() -> Unit)?,
+): List<Rung> = buildList {
+    // Offered only when the browser has actually deferred a prompt. `security.installable` alone
+    // said yes at tier 0 with nothing behind it, which is the checklist promising a capability
+    // the client did not have.
+    if (onInstall != null) {
+        add(
+            Rung(
+                KamprIcons.nodes,
+                "Install to the home screen",
+                "It opens without browser chrome, and on iOS it is the only way notifications work.",
+                lead = true,
+                onClick = onInstall,
+            )
+        )
+    }
+    // `onPasskeys` is the effective answer: the socket may not be up yet, and `/api/node` says the
+    // same thing without a token.
+    if (security.passkeys || onPasskeys != null) {
         add(
             Rung(
                 KamprIcons.lock,
                 "Add a passkey",
                 "This node is reachable at a name with a certificate, so WebAuthn works here.",
                 lead = true,
+                onClick = onPasskeys,
             )
         )
     } else {
@@ -85,11 +109,22 @@ fun SetupScreen(
     status: SetupStatus?,
     security: Security,
     running: Boolean,
-    endpoint: Endpoint,
+    endpoint: Endpoint?,
+    nodes: List<NodeInfo>,
+    pairingCode: String?,
+    pairingError: String?,
     onConnect: (Endpoint) -> Unit,
+    onPairingCode: () -> Unit,
     onOpenHerd: () -> Unit,
     onDevices: () -> Unit,
+    onAppearance: () -> Unit,
     onNotifications: () -> Unit,
+    onPasskeys: (() -> Unit)? = null,
+    onPasskeySignIn: ((Endpoint) -> Unit)? = null,
+    onInstall: (() -> Unit)? = null,
+    recentAddresses: List<String> = emptyList(),
+    offeredCode: String? = null,
+    wide: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -130,9 +165,16 @@ fun SetupScreen(
                 )
             }
 
-            if (!running) {
+            if (!running || pairingError != null) {
                 Box(Modifier.widthIn(max = 520.dp).padding(start = 18.dp, top = 16.dp, end = 18.dp)) {
-                    ConnectPanel(endpoint, onConnect)
+                    ConnectPanel(
+                        endpoint,
+                        pairingError,
+                        onConnect,
+                        onPasskeySignIn,
+                        recentAddresses,
+                        offeredCode,
+                    )
                 }
             }
 
@@ -149,16 +191,44 @@ fun SetupScreen(
                             PairingMark()
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 KText(
-                                    status?.address ?: "not paired",
+                                    status?.address ?: endpoint?.baseUrl ?: "no node yet",
                                     tokens.type.meta.copy(fontSize = tokens.type.cardTitle.fontSize),
                                     tokens.color.text,
+                                    maxLines = 2,
                                 )
                                 KText(
-                                    status?.pairingCode?.let { "pair with $it" } ?: "no pairing code offered",
+                                    pairingCode?.let { "pair with $it" }
+                                        ?: "type this address on the other device",
                                     tokens.type.captionSmall,
-                                    tokens.color.mute,
+                                    if (pairingCode != null) tokens.color.done else tokens.color.mute,
                                 )
                             }
+                            if (running) {
+                                QuietAction(
+                                    if (pairingCode != null) "New code" else "Pair a device",
+                                    onPairingCode,
+                                    Modifier.widthIn(min = 104.dp),
+                                    label = "Print a pairing code another device can redeem",
+                                )
+                            }
+                        }
+                        // The QR is for the *other* device: this one already has the address in
+                        // its own address bar. A phone-width portrait layout is that other device,
+                        // so it gets the code as text and no picture of where it already is.
+                        val origin = status?.address ?: endpoint?.baseUrl
+                        if (wide && origin != null) {
+                            PairingQr(joinLink(origin, pairingCode), pairingCode != null)
+                        }
+                        // A code this device asked for is armed by construction, unlike one
+                        // printed at a console — which is the whole reason this is worth having.
+                        if (pairingCode != null) {
+                            KText(
+                                "Good for ten minutes and one device. It works as it stands: " +
+                                    "you asked for it from a device that is already trusted.",
+                                tokens.type.captionSmall,
+                                tokens.color.dim,
+                                maxLines = 3,
+                            )
                         }
                         if (security.unencryptedBanner) {
                             val shape = RoundedCornerShape(tokens.radii.sm)
@@ -195,7 +265,26 @@ fun SetupScreen(
                 Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                for (rung in ladderFor(security)) RungCard(rung)
+                for (rung in ladderFor(security, onPasskeys, onInstall)) RungCard(rung)
+            }
+
+            Box(Modifier.padding(start = 22.dp, top = 20.dp, end = 22.dp, bottom = 9.dp)) {
+                LabelText("Machines in this herd", tokens.type.captionSmall, tokens.color.mute)
+            }
+            Column(
+                Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                if (nodes.isEmpty()) {
+                    KText(
+                        "No machines yet. `kampr mesh invite` on this one, `kampr mesh join` on the other.",
+                        tokens.type.captionSmall,
+                        tokens.color.mute,
+                        Modifier.padding(horizontal = 4.dp),
+                        maxLines = 3,
+                    )
+                }
+                for (machine in nodes) MachineCard(machine)
             }
 
             Box(Modifier.padding(start = 22.dp, top = 20.dp, end = 22.dp, bottom = 9.dp)) {
@@ -216,6 +305,22 @@ fun SetupScreen(
                                 tokens.type.captionSmall,
                                 tokens.color.dim,
                             )
+                        }
+                        IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
+                    }
+                }
+            }
+            Box(Modifier.widthIn(max = 520.dp).padding(horizontal = 18.dp, vertical = 9.dp)) {
+                Surface(Modifier.fillMaxWidth().touchable().action("Appearance — themes and ground", onAppearance)) {
+                    Row(
+                        Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Badge(34.dp, 17.dp, KamprIcons.gear, tokens.color.dim)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            KText("Appearance", tokens.type.bodyStrong, tokens.color.text)
+                            KText("Four skins, light or dark ground", tokens.type.captionSmall, tokens.color.dim)
                         }
                         IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
                     }
@@ -257,7 +362,8 @@ fun SetupScreen(
 @Composable
 private fun RungCard(rung: Rung) {
     val tokens = Kampr.tokens
-    Surface(Modifier.fillMaxWidth()) {
+    val clickable = rung.onClick?.let { Modifier.touchable().action(rung.title, it) } ?: Modifier
+    Surface(Modifier.fillMaxWidth().then(clickable)) {
         Row(
             Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -279,7 +385,43 @@ private fun RungCard(rung: Rung) {
                     }
                 }
             }
-            IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute, Modifier.padding(top = 4.dp))
+            if (rung.onClick != null) {
+                IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute, Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MachineCard(node: NodeInfo) {
+    val tokens = Kampr.tokens
+    Surface(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Mark(
+                if (node.online) tokens.color.done else tokens.color.blocked,
+                if (node.online) MarkShape.Bar else MarkShape.Ring,
+                9.dp,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                KText(node.name, tokens.type.bodyStrong, tokens.color.text)
+                // Version skew across a herd is invisible unless somebody prints it, and a herd
+                // is exactly where two releases meet.
+                KText(
+                    listOfNotNull(
+                        if (node.kind == "local") "this machine" else "peer",
+                        node.build?.let { "kampr $it" },
+                        node.herdrVersion?.let { "herdr $it" },
+                        node.detail,
+                    ).joinToString(" · "),
+                    tokens.type.meta,
+                    tokens.color.mute,
+                    maxLines = 2,
+                )
+            }
         }
     }
 }

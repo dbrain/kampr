@@ -81,6 +81,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 onManage = state::manage,
                 onNodePicker = { state.go(Screen.Setup) },
                 onDismiss = state::closeSheet,
+                agentArgs = state.agentArgs,
             )
         }
         is Sheet.Actions -> {

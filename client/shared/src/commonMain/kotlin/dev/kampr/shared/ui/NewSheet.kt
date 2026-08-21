@@ -1,5 +1,6 @@
 package dev.kampr.shared.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,6 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.util.bypassesSafety
+import dev.kampr.shared.util.commandLine
+import dev.kampr.shared.util.parseArgs
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
@@ -41,6 +46,20 @@ private val RATIOS = listOf("⅓" to 0.33, "½" to 0.5, "⅔" to 0.67)
 // the name; refusing it here means the operator sees why instead of eating a `bad_request`.
 private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 
+// A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
+// shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
+// `--dangerously-skip-permissions` wants it every launch, so it is kept per harness rather than
+// retyped; the sheet prints the resulting command line so a remembered flag is never a silent one.
+interface AgentArgs {
+    fun get(kind: String): String
+    fun remember(kind: String, text: String?)
+}
+
+object NoAgentArgs : AgentArgs {
+    override fun get(kind: String): String = ""
+    override fun remember(kind: String, text: String?) = Unit
+}
+
 @Composable
 fun NewSheet(
     breakpoint: Breakpoint,
@@ -52,6 +71,7 @@ fun NewSheet(
     onManage: (ManageOp) -> Unit,
     onNodePicker: () -> Unit,
     onDismiss: () -> Unit,
+    agentArgs: AgentArgs = NoAgentArgs,
 ) {
     val tokens = Kampr.tokens
     var step by remember { mutableStateOf(Step.Menu) }
@@ -68,6 +88,8 @@ fun NewSheet(
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentName by remember { mutableStateOf(TextFieldValue()) }
+    var agentFlags by remember { mutableStateOf(TextFieldValue()) }
+    var keepFlags by remember { mutableStateOf(true) }
     val env = remember { mutableStateListOf<Pair<String, String>>() }
     var inFlight by remember { mutableStateOf<String?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -75,6 +97,11 @@ fun NewSheet(
     val kinds = caps?.agentKinds.orEmpty()
     LaunchedEffect(kinds) {
         if (kind == null) kind = kinds.firstOrNull()
+    }
+    LaunchedEffect(kind) {
+        val chosen = kind ?: return@LaunchedEffect
+        agentFlags = TextFieldValue(agentArgs.get(chosen))
+        keepFlags = true
     }
 
     // The node is authoritative: the sheet closes on its ack, and the herd redraws from the
@@ -107,7 +134,19 @@ fun NewSheet(
             })
             Pick.Agent -> "Start ${kind ?: "an agent"}" to (
                 if (pane != null && kind != null) {
-                    { run(ManageOp.AgentStart(pane.id, kind!!, agentName.text.trim().ifEmpty { null })) }
+                    {
+                        val chosen = kind!!
+                        val typed = agentFlags.text.trim()
+                        agentArgs.remember(chosen, if (keepFlags) typed.ifEmpty { null } else null)
+                        run(
+                            ManageOp.AgentStart(
+                                pane.id,
+                                chosen,
+                                agentName.text.trim().ifEmpty { null },
+                                parseArgs(typed),
+                            )
+                        )
+                    }
                 } else null
                 )
         }
@@ -167,6 +206,10 @@ fun NewSheet(
                     onMoreKinds = { allKinds = true },
                     agentName = agentName,
                     onAgentName = { agentName = it },
+                    agentFlags = agentFlags,
+                    onAgentFlags = { agentFlags = it },
+                    keepFlags = keepFlags,
+                    onKeepFlags = { keepFlags = it },
                     onNodePicker = onNodePicker,
                 )
                 Step.Workspace -> Fields {
@@ -279,13 +322,18 @@ private fun Menu(
     onMoreKinds: () -> Unit,
     agentName: TextFieldValue,
     onAgentName: (TextFieldValue) -> Unit,
+    agentFlags: TextFieldValue,
+    onAgentFlags: (TextFieldValue) -> Unit,
+    keepFlags: Boolean,
+    onKeepFlags: (Boolean) -> Unit,
     onNodePicker: () -> Unit,
 ) {
     val compact = breakpoint == Breakpoint.Landscape
+    val agent = AgentPick(kinds, allKinds, kind, agentName, onAgentName, agentFlags, onAgentFlags, keepFlags, onKeepFlags, onKind, onMoreKinds)
     if (breakpoint == Breakpoint.Portrait) {
         Column {
             Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
-            Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, agentName, onAgentName, onNodePicker)
+            Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
@@ -293,11 +341,26 @@ private fun Menu(
                 Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             }
             Column(Modifier.weight(1f)) {
-                Elsewhere(compact, pane, peers, kinds, allKinds, kind, pick, sessions, onStep, onKind, onMoreKinds, agentName, onAgentName, onNodePicker)
+                Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
             }
         }
     }
 }
+
+// Eleven parameters about one card, threaded through two layouts, was the alternative.
+private class AgentPick(
+    val kinds: List<String>,
+    val allKinds: Boolean,
+    val kind: String?,
+    val name: TextFieldValue,
+    val onName: (TextFieldValue) -> Unit,
+    val flags: TextFieldValue,
+    val onFlags: (TextFieldValue) -> Unit,
+    val keep: Boolean,
+    val onKeep: (Boolean) -> Unit,
+    val onKind: (String) -> Unit,
+    val onMoreKinds: () -> Unit,
+)
 
 @Composable
 private fun Structure(
@@ -369,16 +432,10 @@ private fun Elsewhere(
     compact: Boolean,
     pane: PaneInfo?,
     peers: List<NodeInfo>,
-    kinds: List<String>,
-    allKinds: Boolean,
-    kind: String?,
     pick: Pick,
     sessions: List<SessionInfo>,
     onStep: (Step) -> Unit,
-    onKind: (String) -> Unit,
-    onMoreKinds: () -> Unit,
-    agentName: TextFieldValue,
-    onAgentName: (TextFieldValue) -> Unit,
+    agent: AgentPick,
     onNodePicker: () -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -389,25 +446,27 @@ private fun Elsewhere(
                 Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
                 verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                if (kinds.isEmpty()) {
+                if (agent.kinds.isEmpty()) {
                     KText("The node has offered no agent kinds.", tokens.type.captionSmall, tokens.color.mute)
                 } else {
-                    val shown = if (allKinds) kinds else kinds.take(AGENT_CHIPS)
+                    val shown = if (agent.allKinds) agent.kinds else agent.kinds.take(AGENT_CHIPS)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         shown.forEach { k ->
-                            Chip(k, k == kind && pick == Pick.Agent, { onKind(k) }, label = "Start a $k agent")
+                            Chip(k, k == agent.kind && pick == Pick.Agent, { agent.onKind(k) }, label = "Start a $k agent")
                         }
-                        val rest = kinds.size - shown.size
+                        val rest = agent.kinds.size - shown.size
                         if (rest > 0) {
-                            Chip("+$rest more", false, onMoreKinds, quiet = true, label = "Show $rest more agent kinds")
+                            Chip("+$rest more", false, agent.onMoreKinds, quiet = true, label = "Show $rest more agent kinds")
                         }
                     }
                 }
-                if (pane != null && pick == Pick.Agent) {
-                    KField("name it, or take the harness's own", agentName, onChange = onAgentName)
+                val chosen = agent.kind
+                if (pane != null && pick == Pick.Agent && chosen != null) {
+                    KField("name it, or take the harness's own", agent.name, onChange = agent.onName)
+                    AgentLaunch(chosen, agent)
                 }
                 KText(
                     if (pane == null) "Open a pane first — an agent starts in one."
@@ -454,6 +513,58 @@ private fun Elsewhere(
             compact = compact,
             onClick = onNodePicker,
         )
+    }
+}
+
+// The launch, printed. A flag kept per harness is invisible by the second time it is used unless
+// something says what is about to run — and one of these flags removes the confirmation an agent
+// would otherwise ask for, which is not a thing to leave to memory.
+@Composable
+private fun AgentLaunch(kind: String, agent: AgentPick) {
+    val tokens = Kampr.tokens
+    val argv = parseArgs(agent.flags.text)
+    val line = commandLine(kind, argv)
+    val risky = argv.filter(::bypassesSafety)
+    KField(
+        "--flags for $kind",
+        agent.flags,
+        label = "Arguments for $kind",
+        onChange = agent.onFlags,
+    )
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        KText(
+            line,
+            tokens.type.meta,
+            if (risky.isEmpty()) tokens.color.text else tokens.color.blocked,
+            Modifier.weight(1f).named("Starts $line"),
+            maxLines = 3,
+        )
+        Chip(
+            "remember",
+            agent.keep,
+            { agent.onKeep(!agent.keep) },
+            quiet = true,
+            label = "Remember these arguments for $kind",
+        )
+    }
+    if (risky.isNotEmpty()) {
+        val warning = risky.joinToString(" ") +
+            " removes a confirmation step — this agent will act without asking"
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(tokens.color.blockedBg, RoundedCornerShape(tokens.radii.sm))
+                .announce(warning)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            IconGlyph(KamprIcons.warning, 13.dp, tokens.color.blocked)
+            KText(warning, tokens.type.captionSmall, tokens.color.dim, maxLines = 3)
+        }
     }
 }
 

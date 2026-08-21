@@ -98,6 +98,13 @@ class KamprStore {
         _localRttMs.value = ms
     }
 
+    // Only for a pane that is actually on screen: creating one here would announce a lost
+    // keystroke against a pane nobody is looking at.
+    fun noteInput(paneId: String, delivered: Boolean) {
+        val pane = paneStates[paneId] ?: return
+        if (delivered) pane.noteDelivered() else pane.noteUndelivered()
+    }
+
     fun markStale() {
         _herd.value = _herd.value.copy(stale = true)
         paneStates.values.forEach { it.markStale() }

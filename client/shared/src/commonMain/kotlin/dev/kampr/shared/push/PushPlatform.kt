@@ -14,6 +14,11 @@ sealed interface PushCapability {
     // The origin is not a secure context. Nothing a client does can change that; a hostname can.
     data object InsecureContext : PushCapability
 
+    // Android has no push service of its own that does not go through Google. UnifiedPush's
+    // distributor is a separate app the user installs and points wherever they like, and until
+    // one is there there is nothing to register with — which is a thing to say, not to swallow.
+    data object NeedsDistributor : PushCapability
+
     data class Ready(val permission: PushPermission) : PushCapability
 }
 
@@ -46,9 +51,8 @@ interface PushPlatform {
 
 expect fun createPushPlatform(): PushPlatform
 
-// The shape every non-browser target takes until it grows its own transport. Android's native
-// client cannot use Web Push at all — it needs UnifiedPush or FCM, which is a distributor on the
-// device rather than anything this interface can reach (docs/08-notifications.md).
+// The shape a target with no push channel at all takes: the desktop JVM build, which is already on
+// the screen the herd is running on.
 class NoPush(private val why: PushCapability = PushCapability.Unsupported) : PushPlatform {
     override fun capability(): PushCapability = why
     override fun prepare(token: String?) = Unit

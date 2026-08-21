@@ -161,7 +161,9 @@ fun TerminalView(
 
         // Nothing is adopted before the first grid.reset: the placeholder buffer is 80x24 and a
         // zoom taken against it sticks for the life of the pane.
-        LaunchedEffect(pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, stored) {
+        // insetTop arrives a frame late — the chrome above this surface has to be laid out before
+        // it can be measured — and a scroll clamped against the guess stays clamped there.
+        LaunchedEffect(pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored) {
             if (!pane.painted || view.chosen) return@LaunchedEffect
             val fill = defaultZoom(
                 paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
