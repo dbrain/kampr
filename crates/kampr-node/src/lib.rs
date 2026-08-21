@@ -5,6 +5,7 @@
 //! phone on a bad link must not be able to grow the node's memory. And the style table is per
 //! connection, because the protocol only promises id stability for the life of a socket.
 
+pub mod assetlinks;
 pub mod assets;
 pub mod caps;
 pub mod config;

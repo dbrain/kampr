@@ -7,6 +7,7 @@
 //! [`Tier`] decides what the configured origin can actually support and the surface hides the
 //! rest.
 
+pub mod android;
 pub mod audit;
 pub mod files;
 pub mod identity;
@@ -22,7 +23,7 @@ pub use audit::{AuditLog, Entry};
 pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
 pub use mesh::{Mesh, MeshNode, MeshRole};
-pub use passkey::{PasskeyError, Passkeys};
+pub use passkey::{Client, PasskeyError, Passkeys};
 pub use push::{ALL_PANES, PushRule, PushSubscription};
 pub use ratelimit::{Policy as RatePolicy, RateLimiter};
 pub use store::{Credential, Device, Role, Store, StoreError};
@@ -147,8 +148,17 @@ pub fn now() -> i64 {
 }
 
 impl Auth {
-    pub fn new(store: Store, tier: Tier, audit: AuditLog, policy: Policy) -> Result<Self, AuthError> {
-        let passkeys = Passkeys::for_tier(&tier, policy.challenge_ttl)?.map(Arc::new);
+    /// `android` is the signing certificates of the Android apps this node publishes an asset
+    /// link for. It widens nothing else: a certificate is only ever an origin a passkey ceremony
+    /// may come from, never a way in.
+    pub fn new(
+        store: Store,
+        tier: Tier,
+        audit: AuditLog,
+        policy: Policy,
+        android: &[String],
+    ) -> Result<Self, AuthError> {
+        let passkeys = Passkeys::for_tier(&tier, policy.challenge_ttl, android)?.map(Arc::new);
         Ok(Self {
             store,
             tier,
@@ -385,10 +395,11 @@ impl Auth {
     pub async fn start_passkey_registration(
         &self,
         device_name: &str,
+        client: Client,
     ) -> Result<(String, CreationChallengeResponse), AuthError> {
         let engine = self.engine()?;
         let existing = self.enrolled_passkeys(engine.rp_id()).await?;
-        Ok(engine.start_registration(Uuid::new_v4(), device_name, &existing)?)
+        Ok(engine.start_registration(Uuid::new_v4(), device_name, &existing, client)?)
     }
 
     /// Enrolment mints the device *and* the credential together, so a passkey is never orphaned
@@ -576,6 +587,7 @@ mod tests {
             Tier::detect(origin).unwrap(),
             AuditLog::disabled(),
             Policy::default(),
+            &[],
         )
         .unwrap()
     }
@@ -644,6 +656,7 @@ mod tests {
             Tier::detect("http://192.168.1.24:8790").unwrap(),
             AuditLog::open(&path).unwrap(),
             Policy::default(),
+            &[],
         )
         .unwrap();
         for _ in 0..40 {
@@ -743,7 +756,7 @@ mod tests {
         let a = auth("http://192.168.1.24:8790").await;
         assert!(a.passkeys().is_none());
         assert!(matches!(
-            a.start_passkey_registration("phone").await,
+            a.start_passkey_registration("phone", Client::Browser).await,
             Err(AuthError::Passkey(PasskeyError::Unavailable))
         ));
     }
@@ -751,9 +764,21 @@ mod tests {
     #[tokio::test]
     async fn a_hostname_node_offers_a_registration_challenge() {
         let a = auth("https://kampr.example.com").await;
-        let (id, challenge) = a.start_passkey_registration("phone").await.unwrap();
+        let (id, challenge) = a
+            .start_passkey_registration("phone", Client::Browser)
+            .await
+            .unwrap();
         assert!(!id.is_empty());
         assert_eq!(challenge.public_key.rp.id, "kampr.example.com");
+
+        // Both ceremonies are the same node, the same relying party and the same verification;
+        // only the option set differs, which is the whole reason the phone can perform one.
+        let (_, phone) = a
+            .start_passkey_registration("phone", Client::CredentialManager)
+            .await
+            .unwrap();
+        assert_eq!(phone.public_key.rp.id, "kampr.example.com");
+        assert_ne!(phone.public_key.challenge, challenge.public_key.challenge);
     }
 
     #[tokio::test]
@@ -817,6 +842,7 @@ mod tests {
             Tier::detect("http://192.168.1.24:8790").unwrap(),
             AuditLog::open(&path).unwrap(),
             Policy::default(),
+            &[],
         )
         .unwrap();
         let code = a.issue_recovery().await.unwrap();

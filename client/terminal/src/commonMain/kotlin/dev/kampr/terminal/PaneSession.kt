@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.input.Latches
+import dev.kampr.terminal.review.ReviewState
 import dev.kampr.terminal.view.TerminalViewState
 
 // The terminal surface and the key row are separate composables in separate subtrees, so the
@@ -14,6 +15,7 @@ import dev.kampr.terminal.view.TerminalViewState
 @Stable
 class PaneSession(val paneId: String) {
     val view = TerminalViewState()
+    val review = ReviewState()
     val latches = Latches()
     val confirm = ConfirmState()
 

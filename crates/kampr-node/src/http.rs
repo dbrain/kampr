@@ -1,3 +1,4 @@
+use crate::assetlinks;
 use crate::assets;
 use crate::session;
 use crate::state::{BUILD, Node};
@@ -5,8 +6,8 @@ use anyhow::{Context, Result};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, HeaderMap, HeaderName, ORIGIN, REFERRER_POLICY,
-    STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HeaderMap, HeaderName, ORIGIN,
+    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri};
@@ -65,6 +66,9 @@ pub fn router(node: Arc<Node>) -> Router {
     let secured = |name: HeaderName, value: &'static str| {
         SetResponseHeaderLayer::overriding(name, HeaderValue::from_static(value))
     };
+    // Built here rather than per request: the one endpoint that has to answer a stranger is the
+    // one that must not do work for one.
+    let asset_links = assetlinks::document(&node.config.android);
     let hsts = node
         .config
         .server
@@ -73,6 +77,13 @@ pub fn router(node: Arc<Node>) -> Router {
         .then(|| secured(STRICT_TRANSPORT_SECURITY, "max-age=31536000; includeSubDomains"));
     Router::new()
         .route("/ws", get(websocket))
+        // Unauthenticated by necessity: Android reads this to decide whether the app asking for a
+        // passkey is the app this node delegates to, which is a question that arises before any
+        // credential exists.
+        .route(
+            "/.well-known/assetlinks.json",
+            get(move || std::future::ready(asset_links_response(asset_links.clone()))),
+        )
         .route("/mesh", get(mesh_socket))
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/node", get(node_info))
@@ -803,6 +814,10 @@ async fn renew_device(
 struct RegisterStart {
     #[serde(default)]
     device_name: Option<String>,
+    /// Which authenticator API is going to run this ceremony. Only ever chooses between two
+    /// option sets the node states; it grants nothing and is verified no differently.
+    #[serde(default)]
+    platform: Option<String>,
 }
 
 async fn register_start(
@@ -814,7 +829,8 @@ async fn register_start(
         return response;
     }
     let name = body.device_name.unwrap_or_else(|| auth.device.name.clone());
-    match node.auth.start_passkey_registration(&name).await {
+    let client = kampr_auth::Client::from_platform(body.platform.as_deref());
+    match node.auth.start_passkey_registration(&name, client).await {
         Ok((challenge_id, options)) => {
             Json(json!({ "challenge_id": challenge_id, "options": options })).into_response()
         }
@@ -919,6 +935,20 @@ fn passkey_rejection(error: AuthError) -> Response {
         AuthError::RateLimited => refuse(StatusCode::TOO_MANY_REQUESTS, "too many attempts"),
         AuthError::UnknownCredential => refuse(StatusCode::NOT_FOUND, "no passkey is enrolled"),
         other => refuse(StatusCode::UNAUTHORIZED, &other.to_string()),
+    }
+}
+
+fn asset_links_response(document: Option<String>) -> Response {
+    match document {
+        Some(body) => (
+            [
+                (CONTENT_TYPE, "application/json"),
+                (CACHE_CONTROL, "public, max-age=300"),
+            ],
+            body,
+        )
+            .into_response(),
+        None => refuse(StatusCode::NOT_FOUND, "this node delegates to no Android app"),
     }
 }
 

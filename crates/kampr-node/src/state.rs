@@ -243,7 +243,13 @@ async fn build_auth(config: &Config, state_dir: &Path) -> Result<Auth> {
             .then(|| Duration::from_secs(config.auth.token_days * 86_400)),
         ..kampr_auth::Policy::default()
     };
-    Ok(Auth::new(store, tier, audit, policy)?)
+    Ok(Auth::new(
+        store,
+        tier,
+        audit,
+        policy,
+        &config.android.fingerprints,
+    )?)
 }
 
 async fn refresh_herd(

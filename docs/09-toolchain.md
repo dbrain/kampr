@@ -91,10 +91,32 @@ outside the app (probe #102).
 | `cross` | aarch64 release builds |
 | `cosign` | verifies a release signature at install time; the installer says so rather than pretending when it is missing |
 | `adb` | `make android-install`, `make android-test` |
+| `apksigner` / `keytool` | the asset-links test reads the **release certificate's** SHA-256 off the built APK (falling back to the keystore) and asserts the node would name it. Absent, the test skips loudly; `KAMPR_ANDROID_CERT=1` turns that skip into a failure |
 
 `make android-test` takes an optional `KAMPR_NODE=http://…` — with it, the suite additionally proves
 the app reaches a plain-http node on a private address, which is the `ACCESS_LOCAL_NETWORK` path
 above. Without it that test skips rather than failing on a machine with no node.
+
+## Android passkeys need the node to name this build
+
+Credential Manager will not create a passkey unless the relying party — the node, at the operator's
+own domain — serves a Digital Asset Links file naming the app's package and signing certificate. The
+node does that at `/.well-known/assetlinks.json`, defaulting to the release certificate, so an
+operator installing the kobup APK configures nothing.
+
+**A debug build or a build-from-source is signed with a different key and will be refused.** The app
+reads its own certificate off `PackageManager` and, when a ceremony fails, fetches the node's
+asset-links file; if this build is not named there, it replaces the error with the `[android]`
+config lines to paste. So the failure is self-describing rather than mysterious — but it is a
+failure, and it is expected on any build the operator did not install from a release.
+
+Two things the file alone does not buy, both recorded as probes: Credential Manager signs an
+`android:apk-key-hash:` origin rather than an `https://` one (#113), and `webauthn-rs`' generic
+passkey options describe a ceremony Android cannot perform (#114). Both are handled node-side.
+
+Note that **passkey creation cannot be verified on a stock emulator** — an AVD with no Google
+account has no credential provider at all (#116). It has therefore never been done anywhere; run it
+once against a real phone.
 
 ## The release keystore
 

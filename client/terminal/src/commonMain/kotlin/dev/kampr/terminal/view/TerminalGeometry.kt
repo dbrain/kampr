@@ -41,12 +41,15 @@ fun terminalGeometry(
     cellHeight: Float,
     panX: Float,
     scrollY: Float,
+    // Room above row 0 for the mark that says where the record stops. Without it the top row sits
+    // flush under the header at full scroll and there is nowhere for the mark to be.
+    topPad: Float = 0f,
 ): TerminalGeometry {
     val gridWidth = cols * cellWidth
     val surfaceHeight = totalRows * cellHeight
     val minPanX = min(0f, paint.width - gridWidth)
     val clampedPan = panX.coerceIn(minPanX, 0f)
-    val maxScroll = max(0f, surfaceHeight - paint.contentHeight)
+    val maxScroll = max(0f, surfaceHeight - paint.contentHeight + topPad)
     val clampedScroll = scrollY.coerceIn(0f, maxScroll)
     return TerminalGeometry(
         originX = clampedPan,

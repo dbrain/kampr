@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -71,6 +72,7 @@ fun MosaicScreen(
 @Composable
 private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfaces: PaneSurfaces) {
     val nodes = herd.nodes.associateBy { it.id }
+    val drag = remember { MosaicDrag() }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val shape = mosaicShape(mosaic.panes.size, maxWidth)
         var index = 0
@@ -78,7 +80,8 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
             for (row in shape.perRow) {
                 Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GAP)) {
                     repeat(row) {
-                        val paneId = mosaic.panes[index++]
+                        val at = index++
+                        val paneId = mosaic.panes[at]
                         val info = herd.panes.firstOrNull { it.id == paneId }
                         MosaicCell(
                             pane = store.pane(paneId),
@@ -89,6 +92,10 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
                             onFocus = { mosaic.focus(paneId) },
                             onRemove = { mosaic.remove(paneId) },
                             modifier = Modifier.weight(1f).fillMaxSize(),
+                            drag = drag,
+                            place = "cell ${at + 1} of ${mosaic.panes.size}",
+                            onDrop = { onto -> mosaic.move(paneId, mosaic.panes.indexOf(onto)) },
+                            onMove = { delta -> mosaic.moveBy(paneId, delta) },
                         )
                     }
                 }

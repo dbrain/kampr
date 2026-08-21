@@ -32,6 +32,7 @@ fun ConnectPanel(
     onPasskey: ((Endpoint) -> Unit)? = null,
     recent: List<String> = emptyList(),
     offeredCode: String? = null,
+    onScan: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -76,6 +77,17 @@ fun ConnectPanel(
                     IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
                     KText(error, tokens.type.captionSmall, tokens.color.text, maxLines = 4)
                 }
+            }
+            // The camera is offered above the buttons rather than instead of them: a phone whose
+            // owner refuses the camera has to be able to finish here, by typing.
+            if (onScan != null) {
+                QuietAction(
+                    "Scan a pairing code",
+                    onScan,
+                    Modifier.fillMaxWidth(),
+                    vertical = 12.dp,
+                    label = "Scan a pairing code with the camera",
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PrimaryAction(

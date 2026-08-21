@@ -43,3 +43,7 @@
 -keep class org.jetbrains.compose.resources.** { *; }
 -keep class dev.kampr.shared.res.** { *; }
 -dontwarn org.jetbrains.compose.resources.**
+
+# Credential Manager loads its Play-services provider by class name out of a resource string, so
+# R8 sees nothing referencing it and strips the only authenticator on the device.
+-keep class androidx.credentials.playservices.** { *; }

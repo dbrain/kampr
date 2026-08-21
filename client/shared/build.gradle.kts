@@ -62,6 +62,17 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.androidx.activity.compose)
+            // Credential Manager is the only authenticator API Android has. `-play-services-auth`
+            // is what carries it below API 34, where the framework has no provider of its own.
+            implementation(libs.androidx.credentials)
+            implementation(libs.androidx.credentials.play.services)
+            // CameraX for the preview and the frame pump; zxing-core reads the frames. `core` is
+            // pure Java, so it adds no `.so` to a universal APK — see docs/07-android-release.md.
+            implementation(libs.androidx.camera.camera2)
+            implementation(libs.androidx.camera.lifecycle)
+            implementation(libs.androidx.camera.view)
+            implementation(libs.zxing.core)
             // A distributor's endpoint is an RFC 8291 endpoint, so the node's sender is unchanged:
             // no Google project, no `google-services.json`, no per-app secret (docs/08-notifications.md).
             api(libs.unifiedpush.connector)

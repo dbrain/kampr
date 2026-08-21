@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
@@ -145,6 +146,9 @@ fun KamprApp(
         val scale = if (breakpoint == Breakpoint.Desktop) TypeScale.Desk else TypeScale.Phone
         KamprTheme(state.theme, scale, groundOf(state.themeMode)) {
             CompositionLocalProvider(
+                // Provided once, here, so a screen cannot forget it — and so a test can put the
+                // system bars back, which is the only way this suite can see them at all.
+                LocalSafeArea provides systemSafeArea(),
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
                 LocalManage provides remember(state) { AppManage(state) },
                 LocalMosaic provides remember(state, mosaic) {
@@ -261,7 +265,7 @@ private fun AppScaffold(
         }
         Box(Modifier.fillMaxSize().behindSheet()) {
             when (breakpoint) {
-                Breakpoint.Desktop -> Column(Modifier.fillMaxSize()) {
+                Breakpoint.Desktop -> Column(Modifier.fillMaxSize().padding(top = LocalSafeArea.current.top)) {
                     Row(Modifier.weight(1f)) {
                         HerdSidebar(
                             herd = herd,
@@ -324,7 +328,7 @@ private fun AppScaffold(
                 // from nowhere at all. It stays off a pane, where every row of height is the
                 // terminal's and `onBack` already leads out.
                 Breakpoint.Landscape -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f)) {
+                    Box(Modifier.weight(1f).padding(top = contentInsetTop(state.screen))) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -379,7 +383,7 @@ private fun AppScaffold(
                 }
 
                 Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f)) {
+                    Box(Modifier.weight(1f).padding(top = contentInsetTop(state.screen))) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -444,6 +448,15 @@ private fun AppScaffold(
         ManageLayer(state, herd, breakpoint)
     }
 }
+
+// The status bar's strip, kept off every screen but the pane.
+//
+// The terminal paints to the edges on purpose and its own chrome decides where its controls sit,
+// so padding it here would take that away; it reads `LocalSafeArea` itself. Everything else is a
+// scrolling column of text that has no business under the clock.
+@Composable
+private fun contentInsetTop(screen: Screen): Dp =
+    if (screen is Screen.Pane) 0.dp else LocalSafeArea.current.top
 
 // error.code is an open string: an unrecognised code still shows its message.
 @Composable

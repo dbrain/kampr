@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.edge
 
 data class ColumnWindow(
     val firstCol: Int,
@@ -25,7 +27,13 @@ data class ColumnWindow(
 )
 
 @Composable
-fun ColumnIndicator(window: ColumnWindow, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+fun ColumnIndicator(
+    window: ColumnWindow,
+    reviewing: Boolean,
+    onOpen: () -> Unit,
+    onReview: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.pill)
     val cols = window.cols.coerceAtLeast(1)
@@ -39,34 +47,58 @@ fun ColumnIndicator(window: ColumnWindow, onOpen: () -> Unit, modifier: Modifier
         modifier
             .fillMaxWidth()
             .background(tokens.color.surface2)
-            .action(spoken, onOpen)
-            .padding(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 6.dp),
+            .padding(start = 12.dp, top = 4.dp, end = 8.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        Box(
-            Modifier
-                .weight(1f)
-                .height(3.dp)
-                .background(tokens.color.raise, shape),
+        // The bar and the review button are two controls, not one: merging them would leave the
+        // way into review reachable only by opening a sheet about zoom.
+        Row(
+            Modifier.weight(1f).action(spoken, onOpen),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth(span)
+                    .weight(1f)
                     .height(3.dp)
-                    .layout { measurable, constraints ->
-                        val placeable = measurable.measure(constraints)
-                        layout(placeable.width, placeable.height) {
-                            placeable.place((constraints.maxWidth * start).toInt(), 0)
+                    .background(tokens.color.raise, shape),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(span)
+                        .height(3.dp)
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            layout(placeable.width, placeable.height) {
+                                placeable.place((constraints.maxWidth * start).toInt(), 0)
+                            }
                         }
-                    }
-                    .background(tokens.color.dim, shape),
+                        .background(tokens.color.dim, shape),
+                )
+            }
+            KText(
+                "col ${window.firstCol + 1}–${window.lastCol} of ${window.cols}$trailer",
+                tokens.type.metaSmall,
+                tokens.color.mute,
             )
         }
-        KText(
-            "col ${window.firstCol + 1}–${window.lastCol} of ${window.cols}$trailer",
-            tokens.type.metaSmall,
-            tokens.color.mute,
-        )
+
+        // The strip that review puts up carries its own way out, and two controls with the same
+        // name is a worse thing to meet with a screen reader than one control that goes away.
+        if (!reviewing) {
+            val pill = RoundedCornerShape(tokens.radii.pill)
+            Row(
+                Modifier
+                    .defaultMinSize(minHeight = 26.dp)
+                    .background(tokens.color.raise, pill)
+                    .edge(tokens.card, pill)
+                    .action("Review this pane row by row", onReview, pill)
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KText("review", tokens.type.metaSmall, tokens.color.dim)
+            }
+        }
     }
 }

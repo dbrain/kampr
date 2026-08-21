@@ -1,6 +1,7 @@
 package dev.kampr.shared.net
 
 import io.ktor.client.HttpClient
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -31,12 +32,24 @@ class PasskeyApi(
 
     val available: Boolean get() = passkeys.available
 
-    suspend fun enrol(deviceName: String): Enrolment? {
-        val started = post("/auth/webauthn/register/start", buildJsonObject { put("device_name", deviceName) })
-            ?: return null
-        val challengeId = started["challenge_id"]?.jsonPrimitive?.content ?: return null
-        val options = started["options"]?.toString() ?: return null
-        val credential = passkeys.create(options) ?: return null
+    suspend fun enrol(deviceName: String): PasskeyOutcome {
+        val started = post(
+            "/auth/webauthn/register/start",
+            buildJsonObject {
+                put("device_name", deviceName)
+                // Which of the node's two option sets to state. Credential Manager cannot perform
+                // the one a browser gets, and a phone sent it is offered a security key it has not
+                // got.
+                passkeys.platform?.let { put("platform", it) }
+            },
+        ) ?: return PasskeyOutcome.Refused("This node would not start a passkey registration.")
+        val challengeId = started["challenge_id"]?.jsonPrimitive?.content ?: return MALFORMED
+        val options = started["options"]?.toString() ?: return MALFORMED
+        val credential = when (val result = passkeys.create(options)) {
+            is PasskeyResult.Ok -> result.json
+            PasskeyResult.Cancelled -> return PasskeyOutcome.Cancelled
+            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason))
+        }
         val finished = post(
             "/auth/webauthn/register/finish",
             buildJsonObject {
@@ -44,33 +57,52 @@ class PasskeyApi(
                 put("credential", json.parseToJsonElement(credential))
                 put("device_name", deviceName)
             },
-        ) ?: return null
+        ) ?: return PasskeyOutcome.Refused("This node did not accept that passkey. Nothing changed on it.")
         return enrolmentOf(finished)
     }
 
-    suspend fun signIn(): Enrolment? {
-        val started = post("/auth/webauthn/authenticate/start", buildJsonObject { }) ?: return null
-        val challengeId = started["challenge_id"]?.jsonPrimitive?.content ?: return null
-        val options = started["options"]?.toString() ?: return null
-        val credential = passkeys.get(options) ?: return null
+    suspend fun signIn(): PasskeyOutcome {
+        val started = post("/auth/webauthn/authenticate/start", buildJsonObject { })
+            ?: return PasskeyOutcome.Refused("This node has no passkey enrolled to sign in with.")
+        val challengeId = started["challenge_id"]?.jsonPrimitive?.content ?: return MALFORMED
+        val options = started["options"]?.toString() ?: return MALFORMED
+        val credential = when (val result = passkeys.get(options)) {
+            is PasskeyResult.Ok -> result.json
+            PasskeyResult.Cancelled -> return PasskeyOutcome.Cancelled
+            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason))
+        }
         val finished = post(
             "/auth/webauthn/authenticate/finish",
             buildJsonObject {
                 put("challenge_id", challengeId)
                 put("credential", json.parseToJsonElement(credential))
             },
-        ) ?: return null
+        ) ?: return PasskeyOutcome.Refused("That passkey was not accepted by this node.")
         return enrolmentOf(finished)
     }
 
-    private fun enrolmentOf(body: JsonObject): Enrolment? {
-        val token = body["token"]?.jsonPrimitive?.content ?: return null
+    // The authenticator says what it refused; only the node can say *why* it was ever going to.
+    // A node that does not name this build of the app in its asset links refuses every ceremony,
+    // and that is the one cause the phone can diagnose and the operator can fix in one line.
+    private suspend fun explain(reason: String): String {
+        val identity = passkeys.identity ?: return reason
+        val document = runCatching {
+            val response = client.get("${endpoint.httpBase}$ASSET_LINKS_PATH")
+            if (response.status.isSuccess()) response.bodyAsText() else null
+        }.getOrNull()
+        return assetLinkComplaint(document, identity) ?: reason
+    }
+
+    private fun enrolmentOf(body: JsonObject): PasskeyOutcome {
+        val token = body["token"]?.jsonPrimitive?.content ?: return MALFORMED
         val device = body["device"] as? JsonObject
-        return Enrolment(
-            token = token,
-            deviceId = device?.get("id")?.jsonPrimitive?.content,
-            name = device?.get("name")?.jsonPrimitive?.content,
-            role = device?.get("role")?.jsonPrimitive?.content,
+        return PasskeyOutcome.Enrolled(
+            Enrolment(
+                token = token,
+                deviceId = device?.get("id")?.jsonPrimitive?.content,
+                name = device?.get("name")?.jsonPrimitive?.content,
+                role = device?.get("role")?.jsonPrimitive?.content,
+            )
         )
     }
 
@@ -82,4 +114,18 @@ class PasskeyApi(
         }
         if (response.status.isSuccess()) json.parseToJsonElement(response.bodyAsText()).jsonObject else null
     }.getOrNull()
+
+    private companion object {
+        val MALFORMED = PasskeyOutcome.Refused("This node answered with something that is not a WebAuthn ceremony.")
+    }
+}
+
+// Three endings, and only one of them is worth a message: a cancelled ceremony is somebody
+// changing their mind, and an error strip for that is noise about a decision they made.
+sealed interface PasskeyOutcome {
+    data class Enrolled(val enrolment: Enrolment) : PasskeyOutcome
+
+    data object Cancelled : PasskeyOutcome
+
+    data class Refused(val reason: String) : PasskeyOutcome
 }

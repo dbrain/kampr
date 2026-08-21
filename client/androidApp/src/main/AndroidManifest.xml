@@ -5,6 +5,12 @@
     <!-- From targetSdk 37 a node on the phone's own subnet is unreachable without this, and the
          refusal is a silent connect() timeout rather than a permission error. Ignored below 37. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Scanning the desktop's pairing QR. An Android app link cannot do this job — a link names
+         its hosts at build time and every operator's node is at a different one — so the camera is
+         how a scanned code reaches the installed app. Asked for at the moment of scanning, and
+         refusing it leaves the typed address and code working exactly as before. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <application
         android:label="Kampr"
         android:hardwareAccelerated="true"

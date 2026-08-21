@@ -72,6 +72,19 @@ class LogicalText(private val rows: SurfaceRows) {
         return builder.toString()
     }
 
+    // One row's own cells, trailing blanks trimmed. Review walks the grid a row at a time
+    // rather than a logical line at a time: a full-screen TUI's rows are what is on the screen,
+    // and joining them across a wrap would interleave two columns of a split layout.
+    fun rowAt(index: Int): String {
+        val cols = rows.cols
+        if (cols == 0 || !read(index)) return ""
+        var end = cols - 1
+        while (end >= 0 && chars[end] == ' ') end--
+        val builder = StringBuilder(end + 1)
+        for (i in 0..end) builder.append(chars[i])
+        return builder.toString()
+    }
+
     // The logical line through a row, plus the offset at which that row's own cells begin.
     fun lineAt(index: Int): Pair<String, Int> {
         val cols = rows.cols

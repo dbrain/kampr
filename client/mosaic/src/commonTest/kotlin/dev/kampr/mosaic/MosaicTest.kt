@@ -200,3 +200,96 @@ class WatchOwnerTest {
         assertEquals(emptySet(), connection.observedPanes())
     }
 }
+
+class MosaicOrderTest {
+    private fun four(): MosaicState {
+        val (mosaic, _) = state()
+        mosaic.attach()
+        for (i in 1..4) mosaic.add("n$i/p$i")
+        return mosaic
+    }
+
+    @Test
+    fun aPaneMovesToAPositionAndTheRestCloseUpBehindIt() {
+        val mosaic = four()
+        mosaic.move("n4/p4", 0)
+        assertEquals(listOf("n4/p4", "n1/p1", "n2/p2", "n3/p3"), mosaic.panes)
+        mosaic.move("n4/p4", 2)
+        assertEquals(listOf("n1/p1", "n2/p2", "n4/p4", "n3/p3"), mosaic.panes)
+
+        // Out of range is a clamp, not a crash: a drag ends wherever the finger left the window.
+        mosaic.move("n1/p1", 99)
+        assertEquals(listOf("n2/p2", "n4/p4", "n3/p3", "n1/p1"), mosaic.panes)
+        mosaic.move("n1/p1", -3)
+        assertEquals(listOf("n1/p1", "n2/p2", "n4/p4", "n3/p3"), mosaic.panes)
+        mosaic.move("nobody/p9", 0)
+        assertEquals(listOf("n1/p1", "n2/p2", "n4/p4", "n3/p3"), mosaic.panes)
+    }
+
+    // The keyboard and screen-reader path: one step at a time, and the ends are a stop rather than
+    // a wrap — wrapping a four-cell grid is disorienting when you cannot see it move.
+    @Test
+    fun aPaneStepsOnePlaceAtATimeAndStopsAtTheEnds() {
+        val mosaic = four()
+        assertTrue(mosaic.moveBy("n1/p1", 1))
+        assertEquals(listOf("n2/p2", "n1/p1", "n3/p3", "n4/p4"), mosaic.panes)
+        assertFalse(mosaic.moveBy("n2/p2", -1), "the first cell cannot move earlier")
+        assertFalse(mosaic.moveBy("n4/p4", 1), "the last cell cannot move later")
+        assertEquals(listOf("n2/p2", "n1/p1", "n3/p3", "n4/p4"), mosaic.panes)
+    }
+
+    // Reordering watches nothing new and drops nothing: the streams belong to the set of panes,
+    // and the order is only how they are laid out.
+    @Test
+    fun reorderingChangesNoStreamsAndKeepsTheFocus() {
+        val mosaic = four()
+        mosaic.focus("n3/p3")
+        mosaic.move("n3/p3", 0)
+        assertEquals("n3/p3", mosaic.focused)
+        assertEquals(4, mosaic.observers)
+    }
+
+    @Test
+    fun aReorderedLayoutSavesAndRestores() {
+        val prefs = MemoryPrefs()
+        val connection = KamprConnection(CoroutineScope(Job()), KamprStore())
+        val mosaic = MosaicState(prefs, connection)
+        for (i in 1..3) mosaic.add("n$i/p$i")
+        mosaic.save()
+        mosaic.move("n3/p3", 0)
+        assertFalse(mosaic.saved, "a reorder is a change to the layout like any other")
+        mosaic.save()
+
+        val restored = MosaicState(prefs, KamprConnection(CoroutineScope(Job()), KamprStore()))
+        restored.restore()
+        assertEquals(listOf("n3/p3", "n1/p1", "n2/p2"), restored.panes)
+    }
+}
+
+class MosaicDragTest {
+    private fun laidOut(): MosaicDrag {
+        val drag = MosaicDrag()
+        drag.place("a", 0f, 0f, 100f, 50f)
+        drag.place("b", 100f, 0f, 200f, 50f)
+        drag.place("c", 0f, 50f, 100f, 100f)
+        return drag
+    }
+
+    @Test
+    fun theCellUnderTheFingerIsTheOneItLandsOn() {
+        val drag = laidOut()
+        assertEquals("a", drag.at(10f, 10f))
+        assertEquals("b", drag.at(150f, 20f))
+        assertEquals("c", drag.at(50f, 90f))
+        assertEquals(null, drag.at(500f, 500f), "a finger outside every cell drops nowhere")
+    }
+
+    // A cell that has left the mosaic must not keep its rectangle, or the next drag lands on a
+    // pane that is no longer there.
+    @Test
+    fun aRemovedCellStopsBeingATarget() {
+        val drag = laidOut()
+        drag.forget("b")
+        assertEquals(null, drag.at(150f, 20f))
+    }
+}

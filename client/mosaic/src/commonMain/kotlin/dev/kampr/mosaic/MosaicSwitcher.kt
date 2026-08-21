@@ -1,6 +1,7 @@
 package dev.kampr.mosaic
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -15,11 +16,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
@@ -134,6 +145,18 @@ private fun Trailing(mosaic: MosaicState, herd: Herd, onAdd: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         node?.rttMs?.let { KText(formatLatency(it), tokens.type.meta, tokens.color.mute) }
+        // Only while there is something to keep. The desktop bar has carried this since the
+        // mosaic shipped; the switcher had no way to keep a layout a thumb had rearranged.
+        if (!mosaic.saved) {
+            GlyphAction(
+                KamprIcons.done,
+                "Save this layout on this device",
+                tokens.color.accent,
+                34.dp,
+                chip = 22.dp,
+                onClick = mosaic::save,
+            )
+        }
         if (paneId != null) {
             val title = info?.let(::paneTitle) ?: paneId
             GlyphAction(KamprIcons.cross, "Remove $title from the mosaic", tokens.color.mute, 34.dp, chip = 22.dp) {
@@ -148,6 +171,7 @@ private fun Trailing(mosaic: MosaicState, herd: Herd, onAdd: () -> Unit) {
 private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val scroll = rememberScrollState()
+    val drag = remember { MosaicDrag() }
     Row(
         modifier
             .horizontalScroll(scroll)
@@ -168,16 +192,57 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
             val status = info?.let(::statusOf) ?: AgentStatus.Unknown
             val active = mosaic.focused == paneId
             val shape = RoundedCornerShape(tokens.radii.sm)
+            val at = mosaic.panes.indexOf(paneId)
+            var origin by remember(paneId) { mutableStateOf(Offset.Zero) }
             Row(
                 Modifier
-                    .background(if (active) tokens.color.raise else tokens.color.surface, shape)
+                    .onGloballyPositioned {
+                        origin = it.positionInWindow()
+                        val rect = it.boundsInWindow()
+                        drag.place(paneId, rect.left, rect.top, rect.right, rect.bottom)
+                    }
+                    .background(
+                        when {
+                            drag.held == paneId -> tokens.color.accentSoft
+                            active -> tokens.color.raise
+                            else -> tokens.color.surface
+                        },
+                        shape,
+                    )
                     .edge(if (active) selectedEdge() else tokens.card, shape)
                     .action(
                         "Show ${info?.let(::paneTitle) ?: paneId}",
                         { mosaic.focus(paneId) },
                         shape,
                         selected = active,
+                        state = "cell ${at + 1} of ${mosaic.panes.size}",
                     )
+                    .semantics {
+                        customActions = listOf(
+                            CustomAccessibilityAction("Move this pane earlier") {
+                                mosaic.moveBy(paneId, -1)
+                            },
+                            CustomAccessibilityAction("Move this pane later") {
+                                mosaic.moveBy(paneId, 1)
+                            },
+                        )
+                    }
+                    // The strip already swipes to change pane and scrolls sideways, so rearranging
+                    // waits for a hold: three horizontal gestures on one row need one of them to
+                    // announce itself first.
+                    .pointerInput(paneId, mosaic.panes) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { drag.start(paneId) },
+                            onDragEnd = { drag.end() },
+                            onDragCancel = { drag.end() },
+                        ) { change, _ ->
+                            change.consume()
+                            val point = origin + change.position
+                            drag.drag(point.x, point.y)?.let {
+                                if (it != paneId) mosaic.move(paneId, mosaic.panes.indexOf(it))
+                            }
+                        }
+                    }
                     .padding(horizontal = 11.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),

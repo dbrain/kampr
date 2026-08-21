@@ -1,6 +1,9 @@
 package dev.kampr.mosaic
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,17 +11,39 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
@@ -28,6 +53,7 @@ import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.GlyphAction
+import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LocalPaneIo
@@ -105,19 +131,41 @@ fun MosaicCell(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
     header: Dp = CELL_HEADER,
+    drag: MosaicDrag? = null,
+    place: String = "",
+    onDrop: (String) -> Unit = {},
+    onMove: (Int) -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     val base = LocalPaneIo.current
     val io = remember(base, focused) { CellIo(base, focused) }
     val offline = node != null && !node.online
+    val held = drag?.held == pane.id
+
+    DisposableEffect(drag, pane.id) { onDispose { drag?.forget(pane.id) } }
 
     Box(
         modifier
             // The surface is taller and wider than the cell by design, and a graphicsLayer does
             // not clip: without this a cell paints over its neighbour and over the chrome.
             .clipToBounds()
+            // A drag needs to know where the cells actually landed, and only the layout does.
+            .onGloballyPositioned {
+                val rect = it.boundsInWindow()
+                drag?.place(pane.id, rect.left, rect.top, rect.right, rect.bottom)
+            }
             .background(tokens.color.surface2)
-            .edge(BorderSpec(FOCUS_EDGE, if (focused) tokens.color.accent else tokens.color.surface2), RectangleShape)
+            .edge(
+                BorderSpec(
+                    FOCUS_EDGE,
+                    when {
+                        held -> tokens.color.accentHi
+                        focused -> tokens.color.accent
+                        else -> tokens.color.surface2
+                    },
+                ),
+                RectangleShape,
+            )
             // Initial pass, unconsumed: focus follows the touch that the terminal underneath is
             // also entitled to act on.
             .pointerInput(Unit) {
@@ -140,7 +188,10 @@ fun MosaicCell(
         // Under the header, not over it: the cell is unreachable, its controls are not.
         if (offline) CellUnavailable(node.name, node.detail ?: "${node.name} is not connected")
 
-        CellHeader(pane, info, node, focused, onRemove, Modifier.align(Alignment.TopStart).height(header))
+        CellHeader(
+            pane, info, node, focused, onRemove, drag, place, onDrop, onMove,
+            Modifier.align(Alignment.TopStart).height(header),
+        )
     }
 }
 
@@ -151,6 +202,10 @@ private fun CellHeader(
     node: NodeInfo?,
     focused: Boolean,
     onRemove: () -> Unit,
+    drag: MosaicDrag?,
+    place: String,
+    onDrop: (String) -> Unit,
+    onMove: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -162,10 +217,13 @@ private fun CellHeader(
             .fillMaxWidth()
             .background(tokens.color.bar)
             .readingOrder(-1f)
-            .padding(start = 12.dp, end = 4.dp),
+            .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
+        // The header is the handle, never the surface: dragging the grid itself would be the same
+        // gesture as panning it, and the pan is what a terminal is for.
+        DragGrip(title, place, drag, pane.id, onDrop, onMove)
         StatusMark(status, 7.dp)
         KText(
             title,
@@ -217,6 +275,66 @@ private fun CellUnavailable(name: String, detail: String) {
                 KText("recovers on its own", tokens.type.micro, tokens.color.mute)
             }
         }
+    }
+}
+
+// Three ways in, because a drag is one and the readers this mosaic also has to serve reach none of
+// it: a pointer drags it, Tab-and-arrows moves it, and a screen reader lists the two moves.
+@Composable
+private fun DragGrip(
+    title: String,
+    place: String,
+    drag: MosaicDrag?,
+    paneId: String,
+    onDrop: (String) -> Unit,
+    onMove: (Int) -> Unit,
+) {
+    val tokens = Kampr.tokens
+    var origin by remember(paneId) { mutableStateOf(Offset.Zero) }
+    var focused by remember { mutableStateOf(false) }
+    val tint = if (drag?.held == paneId) tokens.color.accent else tokens.color.mute
+    Column(
+        Modifier
+            .size(width = 20.dp, height = CELL_HEADER)
+            .then(if (focused) Modifier.border(2.dp, tokens.color.accentHi) else Modifier)
+            .onGloballyPositioned { origin = it.positionInWindow() }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Reorder $title"
+                role = Role.Button
+                if (place.isNotEmpty()) stateDescription = place
+                customActions = listOf(
+                    CustomAccessibilityAction("Move this pane earlier") { onMove(-1); true },
+                    CustomAccessibilityAction("Move this pane later") { onMove(1); true },
+                )
+            }
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val delta = when (event.key) {
+                    Key.DirectionLeft, Key.DirectionUp -> -1
+                    Key.DirectionRight, Key.DirectionDown -> 1
+                    else -> return@onPreviewKeyEvent false
+                }
+                onMove(delta)
+                true
+            }
+            .pointerInput(paneId, drag) {
+                if (drag == null) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { drag.start(paneId) },
+                    onDragEnd = { drag.end() },
+                    onDragCancel = { drag.end() },
+                ) { change, _ ->
+                    change.consume()
+                    val point = origin + change.position
+                    drag.drag(point.x, point.y)?.let { if (it != paneId) onDrop(it) }
+                }
+            },
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        repeat(2) { IconGlyph(KamprIcons.ellipsis, 11.dp, tint) }
     }
 }
 

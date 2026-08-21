@@ -335,13 +335,15 @@ fun BlockedNotice(
 @Composable
 fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
     val tokens = Kampr.tokens
+    // The bar's *ground* still runs to the bottom of the screen — it is what the gesture handle
+    // needs something behind it — but its labels stop above the strip the system draws in.
     Row(
         Modifier
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
             .readingOrder(1f)
-            .padding(top = 5.dp, bottom = 10.dp),
+            .padding(top = 5.dp, bottom = 10.dp + LocalSafeArea.current.bottom),
     ) {
         NavItem(Tab.Herd, "Herd", KamprIcons.herd, selected, onSelect)
         NavItem(Tab.Pane, "Pane", KamprIcons.pane, selected, onSelect)

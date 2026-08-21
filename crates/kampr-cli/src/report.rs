@@ -38,7 +38,7 @@ impl Local {
         };
         Ok(Self {
             identity: NodeIdentity::load(&Config::node_key_path(config_dir))?,
-            auth: Auth::new(store, tier, audit, policy)?,
+            auth: Auth::new(store, tier, audit, policy, &config.android.fingerprints)?,
             config,
             state_dir,
         })

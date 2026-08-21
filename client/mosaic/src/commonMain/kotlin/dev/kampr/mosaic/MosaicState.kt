@@ -70,6 +70,30 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
         if (paneId in panes) focused = paneId
     }
 
+    // Order is layout and nothing else: no watch starts, none stops, and the focus travels with
+    // the cell rather than with the position it used to occupy.
+    fun move(paneId: String, toIndex: Int) {
+        val from = panes.indexOf(paneId)
+        if (from < 0) return
+        val to = toIndex.coerceIn(0, panes.size - 1)
+        if (from == to) return
+        val next = panes.toMutableList()
+        next.removeAt(from)
+        next.add(to, paneId)
+        panes = next
+    }
+
+    // One place at a time, and the ends stop rather than wrap. Wrapping is disorienting when the
+    // grid it happens in cannot be seen, which is the path this exists for.
+    fun moveBy(paneId: String, delta: Int): Boolean {
+        val from = panes.indexOf(paneId)
+        if (from < 0) return false
+        val to = from + delta
+        if (to !in panes.indices) return false
+        move(paneId, to)
+        return true
+    }
+
     fun step(delta: Int) {
         if (panes.isEmpty()) return
         val at = panes.indexOf(focused).coerceAtLeast(0)

@@ -13,8 +13,11 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.filterToOne
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
@@ -42,6 +45,8 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
 import dev.kampr.terminal.view.ConfirmSheet
 import dev.kampr.terminal.view.TerminalView
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -177,5 +182,126 @@ class GridAccessibilityTest {
             onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty(),
             "the confirm sheet opened without taking focus",
         )
+    }
+}
+
+private fun SemanticsNodeInteraction.customAction(label: String): CustomAccessibilityAction {
+    val actions = fetchSemanticsNode().config
+        .getOrElseNullable(SemanticsActions.CustomActions) { null }
+        .orEmpty()
+    return actions.firstOrNull { it.label == label }
+        ?: error("no custom action \"$label\" — the grid offers ${actions.map { it.label }}")
+}
+
+private fun scrolledPane(complete: Boolean, capped: Boolean, fromTop: Int = 0): PaneState {
+    val pane = gridPane()
+    pane.applyScrollback(
+        ServerMsg.Scrollback(
+            pane = GRID_PANE,
+            fromTop = fromTop,
+            rows = (0 until 6).map { RowDiff(fromTop + it, listOf(Run(0, "history row $it"))) },
+            totalRows = 6,
+            complete = complete,
+            capped = capped,
+        ),
+    )
+    return pane
+}
+
+// ADR 0010 named review as the piece it did not solve. This is that piece: a reader-owned cursor,
+// reachable without a finger, that a repaint underneath can never silently move.
+@OptIn(ExperimentalTestApi::class)
+class GridReviewTest {
+    @Test
+    fun theGridOffersReviewAndReviewOffersACursorOfItsOwn() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
+
+        val grid = onNodeWithContentDescription("Terminal grid", substring = true)
+        grid.customAction("Review this pane row by row").action()
+        waitForIdle()
+
+        for (name in listOf(
+            "Read the previous row", "Read the next row",
+            "Read the previous word", "Read the next word",
+            "Read this row again", "Back to the live cursor", "Leave review",
+        )) {
+            onNodeWithContentDescription(name, substring = true).assertExists()
+        }
+        onNodeWithContentDescription("row 24 of 24", substring = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+    }
+
+    // Review is the one place the pane must stop talking: the cursor-line region and a reader
+    // walking the grid would speak over each other, and the reader did not ask for the pane.
+    @Test
+    fun enteringReviewSilencesTheLiveCursorLine() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
+        waitUntil(timeoutMillis = 4_000) {
+            onAllNodesWithContentDescription(LINES.last()).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        onNodeWithContentDescription("Terminal grid", substring = true)
+            .customAction("Review this pane row by row").action()
+        waitForIdle()
+        onAllNodesWithContentDescription(LINES.last()).assertCountEquals(0)
+
+        onNodeWithContentDescription("Leave review", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitUntil(timeoutMillis = 4_000) {
+            onAllNodesWithContentDescription(LINES.last()).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    @Test
+    fun steppingUpFromTheTopSaysWhereTheRecordStopsAndWhy() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(scrolledPane(complete = false, capped = true, fromTop = 1200), PaneSession(GRID_PANE), io) } }
+        onNodeWithContentDescription("Terminal grid", substring = true)
+            .customAction("Review this pane row by row").action()
+        waitForIdle()
+        repeat(30) {
+            onNodeWithContentDescription("Read the previous row", substring = true)
+                .performSemanticsAction(SemanticsActions.OnClick)
+        }
+        onAllNodesWithContentDescription("1200 rows above this were discarded", substring = true)
+            .filterToOne(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+            .assertExists()
+    }
+}
+
+// The node reports both halves of the truth about history and the surface said neither, so a
+// reader was shown a terminal that simply lacked lines.
+@OptIn(ExperimentalTestApi::class)
+class ScrollbackHonestyTest {
+    @Test
+    fun anIntactRecordSaysNothingAndABrokenOneSaysWhatBroke() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(scrolledPane(complete = true, capped = false), PaneSession(GRID_PANE), io) } }
+        onAllNodesWithContentDescription("history is", substring = true).assertCountEquals(0)
+        onNodeWithContentDescription("6 rows of history above", substring = true).assertExists()
+    }
+
+    @Test
+    fun aClippedRecordSaysHerdrCannotBeAskedForMore() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(scrolledPane(complete = true, capped = true), PaneSession(GRID_PANE), io) } }
+        onNodeWithContentDescription("history is clipped", substring = true).assertExists()
+        onNodeWithText("older output is unreachable").assertExists()
+
+        // And in words, for anyone who never scrolls to the top of a 20,000-row ring.
+        onNodeWithContentDescription("Opens the zoom sheet", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitForIdle()
+        onNodeWithContentDescription("The scrollback: history is clipped", substring = true).assertExists()
+    }
+
+    @Test
+    fun aBrokenRecordCountsTheRowsItLost() = runComposeUiTest {
+        val io = GridIo(conversation = false)
+        setContent { Themed(io) { TerminalView(scrolledPane(complete = false, capped = true, fromTop = 1200), PaneSession(GRID_PANE), io) } }
+        onNodeWithContentDescription("1200 rows were discarded", substring = true).assertExists()
+        onNodeWithText("1200 rows lost here").assertExists()
     }
 }

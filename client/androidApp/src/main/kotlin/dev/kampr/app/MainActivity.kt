@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.shared.net.KamprHost
 import dev.kampr.shared.platform.KamprAndroid
 import dev.kampr.shared.ui.DeepLink
 import dev.kampr.shared.ui.KamprApp
@@ -29,12 +30,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         KamprAndroid.attach(applicationContext)
+        // Credential Manager and the camera both raise UI, and an application context has no task
+        // to raise it into.
+        KamprHost.attach(this)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val bench = intent?.getBooleanExtra("bench", false) == true
         link = linkOf(intent)
         askForPermissions()
         setContent { if (bench) TerminalBenchApp() else KamprApp(surfaces, link, mosaic) }
+    }
+
+    override fun onDestroy() {
+        KamprHost.detach(this)
+        super.onDestroy()
     }
 
     // The activity is `singleTop` from the notification, so a tap on a second blocked agent

@@ -501,7 +501,7 @@ async fn topology(inner: Arc<Inner>) {
                 }
             }
             // A pane that closed between the snapshot and the subscribe answers `pane_not_found`
-            // and takes the whole call with it (probe #92). That is a race, not a fault, and the
+            // and takes the whole call with it (probe #107). That is a race, not a fault, and the
             // next pass re-derives the set from a fresh snapshot.
             Err(e) => debug!(error = %e, "events.subscribe failed"),
         }

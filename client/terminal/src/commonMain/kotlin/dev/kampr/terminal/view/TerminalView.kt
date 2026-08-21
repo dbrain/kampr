@@ -3,6 +3,7 @@ package dev.kampr.terminal.view
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -60,6 +63,10 @@ import dev.kampr.terminal.render.TargetKind
 import dev.kampr.terminal.render.detectTarget
 import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.TextCache
+import dev.kampr.terminal.review.ReviewSurface
+import dev.kampr.terminal.review.historyEdgeLabel
+import dev.kampr.terminal.review.historyEdgeSpoken
+import dev.kampr.terminal.review.historyWarning
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -80,6 +87,10 @@ private const val SPEECH_SETTLE_MS = 450L
 // Mirrors the header PaneScreen floats over this surface and the answer strip it shows while a
 // prompt is outstanding. Chrome insets the scrollable content; it never insets the paint.
 private const val PENDING_BAR_DP = 52f
+
+// The review strip is chrome like any other: without insetting for it the row the reader is
+// being read is the row sitting behind the controls that read it.
+private const val REVIEW_BAR_DP = 52f
 
 private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
     Breakpoint.Desktop -> 56f
@@ -108,6 +119,7 @@ fun TerminalView(
     val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
     val logical = remember(rows) { LogicalText(rows) }
     val probe = remember(pane.id) { GridProbe() }
+    val review = session.review
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
     @Suppress("DEPRECATION")
@@ -129,14 +141,25 @@ fun TerminalView(
         }
     }
 
-    // ADR 0010: what a screen reader is given instead of 74x30 cells.
+    fun reviewSurface() = ReviewSurface(rows, logical, rows.historyRows + pane.cursor.row)
+
+    // ADR 0010: what a screen reader is given instead of 74x30 cells. Review turns it off — the
+    // reader walking the grid and the pane reading its caret line would speak over each other, and
+    // only one of the two was asked for.
     var spokenLine by remember(pane.id) { mutableStateOf("") }
-    LaunchedEffect(pane, logical, rows) {
+    LaunchedEffect(pane, logical, rows, review.active) {
+        if (review.active) return@LaunchedEffect
         snapshotFlow { pane.revision to pane.cursor }.collectLatest {
             delay(SPEECH_SETTLE_MS)
             val line = logical.lineAt(rows.historyRows + pane.cursor.row).first.trim()
             spokenLine = if (line.isEmpty()) "blank line" else line
         }
+    }
+
+    // Resolving the anchor against the surface as it is now is how a reader learns that the row
+    // they were on has been repainted, or discarded outright. It never moves them.
+    LaunchedEffect(pane, logical, rows) {
+        snapshotFlow { pane.revision }.collect { review.sync(reviewSurface()) }
     }
 
     BoxWithConstraints(modifier.fillMaxSize().background(ground)) {
@@ -150,7 +173,9 @@ fun TerminalView(
             width = with(density) { maxWidth.toPx() },
             height = with(density) { maxHeight.toPx() },
             insetTop = with(density) { chromeTop.toPx() },
-            insetBottom = chromeBottom + with(density) { INDICATOR_HEIGHT_DP.dp.toPx() },
+            insetBottom = chromeBottom + with(density) {
+                (INDICATOR_HEIGHT_DP + if (review.active) REVIEW_BAR_DP else 0f).dp.toPx()
+            },
         )
 
         var fontEpoch by remember(cache) { mutableIntStateOf(0) }
@@ -182,11 +207,29 @@ fun TerminalView(
             }
         }
 
+        val edgeLabel = historyEdgeLabel(reviewSurface())
+        val edgePad = if (edgeLabel == null) 0f else with(density) { HISTORY_EDGE_DP.toPx() }
         val geometry = terminalGeometry(
-            paint, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY,
+            paint, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY, edgePad,
         )
         view.minPanX = geometry.minPanX
         view.maxScroll = geometry.maxScroll
+
+        // The review cursor is the reader's; the viewport follows it rather than the other way
+        // round, so what is spoken and what is painted are the same row.
+        LaunchedEffect(review.active, review.row, review.reads, geometry.originY) {
+            if (!review.active) return@LaunchedEffect
+            val top = geometry.originY + review.row * metrics.height
+            // Row 0 reveals the mark that says where the record stops, rather than stopping flush
+            // against the header with it still above the fold.
+            val wanted = paint.insetTop + if (review.row == 0) edgePad else 0f
+            val shift = when {
+                top < wanted -> wanted - top
+                top + metrics.height > paint.contentBottom -> paint.contentBottom - top - metrics.height
+                else -> 0f
+            }
+            if (shift != 0f) view.scrollY = (view.scrollY + shift).coerceIn(0f, view.maxScroll)
+        }
 
         LaunchedEffect(pane.cursor, view.followCursor, geometry.pinned) {
             if (view.followCursor && geometry.pinned && !view.pinching) {
@@ -252,6 +295,7 @@ fun TerminalView(
             append("Terminal grid, $cols columns by ${rows.liveRows} rows")
             append(", cursor on row ${pane.cursor.row + 1}, column ${pane.cursor.col + 1}")
             if (rows.historyRows > 0) append(", ${rows.historyRows} rows of history above")
+            historyWarning(reviewSurface())?.let { append(", $it") }
             if (pane.stale) append(", stale — frames have stopped arriving")
             if (io.readOnly) append(", read-only")
             append(
@@ -272,6 +316,11 @@ fun TerminalView(
                     onClick = { session.openKeyboard() },
                     clickLabel = "Type into this pane",
                     actions = buildList {
+                        if (review.active) {
+                            add("Leave review" to { review.leave() })
+                        } else {
+                            add("Review this pane row by row" to { session.closeKeyboard(); review.enter(reviewSurface()) })
+                        }
                         if (transcript) add("Open the Conversation view" to { io.show(PaneView.Conversation) })
                     },
                 )
@@ -307,6 +356,14 @@ fun TerminalView(
                             selectionWash = palette.selectionWash,
                             linkInk = palette.linkInk,
                         )
+                        if (review.active) {
+                            val top = geometry.originY + review.row * metrics.height
+                            drawRect(
+                                tokens.color.accentSoft,
+                                topLeft = Offset(0f, top),
+                                size = androidx.compose.ui.geometry.Size(size.width, metrics.height),
+                            )
+                        }
                         if (pane.stale) drawRect(tokens.color.bg.copy(alpha = 0.45f), size = size)
                     },
             )
@@ -314,13 +371,33 @@ fun TerminalView(
 
         // A one-dp strip carrying the cursor line: nothing to look at, and the only thing on this
         // surface a screen reader can follow as the pane writes.
-        Box(
-            Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .height(1.dp)
-                .announce(spokenLine),
-        )
+        if (!review.active) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .announce(spokenLine),
+            )
+        }
+
+        // Where the record stops, laid out at the top of the scrollable surface so it is seen by
+        // scrolling to it rather than worn as a badge.
+        if (edgeLabel != null) {
+            HistoryEdgeMark(
+                label = edgeLabel,
+                spoken = historyEdgeSpoken(reviewSurface()),
+                broken = historyWarning(reviewSurface()) != null,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        layout(placeable.width, placeable.height) {
+                            placeable.place(IntOffset(0, (geometry.originY - edgePad).toInt()))
+                        }
+                    },
+            )
+        }
 
         PaneTextInput(
             session = session,
@@ -333,13 +410,28 @@ fun TerminalView(
         val lastCol = min(cols, firstCol + (paint.width / metrics.width).toInt() + 1)
         val window = ColumnWindow(firstCol, lastCol, cols, rows.historyRows)
 
-        ColumnIndicator(
-            window = window,
-            onOpen = { view.sheetOpen = true },
-            modifier = Modifier
+        Column(
+            Modifier
                 .align(Alignment.BottomStart)
+                .fillMaxWidth()
                 .padding(bottom = with(density) { chromeBottom.toDp() }),
-        )
+        ) {
+            if (review.active) {
+                ReviewStrip(
+                    review = review,
+                    total = rows.total,
+                    warning = historyWarning(reviewSurface()),
+                    onMove = { review.step(reviewSurface(), it) },
+                    onLeave = { review.leave() },
+                )
+            }
+            ColumnIndicator(
+                window = window,
+                reviewing = review.active,
+                onOpen = { view.sheetOpen = true },
+                onReview = { session.closeKeyboard(); review.enter(reviewSurface()) },
+            )
+        }
 
         view.selection?.let { selection ->
             SelectionLayer(
@@ -407,6 +499,7 @@ fun TerminalView(
                 window = window,
                 totalRows = rows.total,
                 visibleRows = visibleRows,
+                historyNote = historyWarning(reviewSurface()),
                 remembered = view.remembered,
                 followCursor = view.followCursor,
                 confirmRisky = guard.wanted(),

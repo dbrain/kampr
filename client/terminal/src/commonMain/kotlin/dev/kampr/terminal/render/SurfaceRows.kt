@@ -11,6 +11,12 @@ class SurfaceRows(private val pane: PaneState) {
     val historyRows: Int get() = pane.scrollback.historyRows
     val total: Int get() = historyRows + liveRows
 
+    // The ring's own coordinates, not the surface's. History rows keep their absolute index
+    // when more history arrives, which is what a reader parked on one can be anchored to.
+    val fromTop: Int get() = pane.scrollback.fromTop
+    val capped: Boolean get() = pane.scrollback.capped
+    val complete: Boolean get() = pane.scrollback.complete
+
     fun into(index: Int, chars: CharArray, styleIds: IntArray, linkIds: IntArray? = null): Boolean {
         val width = cols
         if (width == 0) return false

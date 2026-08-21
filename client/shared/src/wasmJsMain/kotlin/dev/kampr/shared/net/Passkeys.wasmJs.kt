@@ -93,11 +93,25 @@ private fun jsGet(optionsJson: String): Promise<JsString?> = js(
 private class BrowserPasskeys : Passkeys {
     override val available: Boolean get() = runCatching { jsAvailable() }.getOrDefault(false)
 
-    override suspend fun create(optionsJson: String): String? =
-        runCatching { jsCreate(optionsJson).await() }.getOrNull()?.toString()
+    override suspend fun create(optionsJson: String): PasskeyResult =
+        outcome(runCatching { jsCreate(optionsJson).await() })
 
-    override suspend fun get(optionsJson: String): String? =
-        runCatching { jsGet(optionsJson).await() }.getOrNull()?.toString()
+    override suspend fun get(optionsJson: String): PasskeyResult =
+        outcome(runCatching { jsGet(optionsJson).await() })
+
+    // `navigator.credentials` throws `NotAllowedError` both for a refusal and for a timeout, and
+    // the browser's own sheet has already said which. Neither is worth a second message.
+    private fun outcome(result: Result<JsString?>): PasskeyResult {
+        val json = result.getOrElse { failure ->
+            val message = failure.message.orEmpty()
+            return if ("NotAllowedError" in message || "AbortError" in message) {
+                PasskeyResult.Cancelled
+            } else {
+                PasskeyResult.Failed(message.ifBlank { "The browser refused the passkey." })
+            }
+        }
+        return json?.toString()?.let(PasskeyResult::Ok) ?: PasskeyResult.Cancelled
+    }
 }
 
 actual fun createPasskeys(): Passkeys = BrowserPasskeys()

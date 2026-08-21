@@ -11,6 +11,7 @@ import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.net.InstallPrompt
 import dev.kampr.shared.net.NodeApi
 import dev.kampr.shared.net.PasskeyApi
+import dev.kampr.shared.net.PasskeyOutcome
 import dev.kampr.shared.net.createPasskeys
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.createInstallPrompt
@@ -206,13 +207,15 @@ class AppState(
     fun enrolPasskey() {
         scope.launch {
             val target = endpoint ?: return@launch
-            val result = withPasskeys(target) { it.enrol(deviceName()) }
-            if (result == null) {
-                passkeyNote = "That passkey was not enrolled. Nothing changed on this node."
-                return@launch
+            when (val outcome = withPasskeys(target) { it.enrol(deviceName()) }) {
+                // Backing out of the system sheet is a decision, not a failure to report.
+                PasskeyOutcome.Cancelled -> {}
+                is PasskeyOutcome.Refused -> passkeyNote = outcome.reason
+                is PasskeyOutcome.Enrolled -> {
+                    adopt(target.copy(token = outcome.enrolment.token), outcome.enrolment.deviceId)
+                    passkeyNote = "Passkey enrolled. This device now signs in with it."
+                }
             }
-            adopt(target.copy(token = result.token), result.deviceId)
-            passkeyNote = "Passkey enrolled. This device now signs in with it."
         }
     }
 
@@ -221,12 +224,12 @@ class AppState(
     fun signInWithPasskey(target: Endpoint) {
         scope.launch {
             pairingError = null
-            val result = withPasskeys(target.copy(token = null)) { it.signIn() }
-            if (result == null) {
-                pairingError = "That passkey was not accepted by this node."
-                return@launch
+            when (val outcome = withPasskeys(target.copy(token = null)) { it.signIn() }) {
+                PasskeyOutcome.Cancelled -> {}
+                is PasskeyOutcome.Refused -> pairingError = outcome.reason
+                is PasskeyOutcome.Enrolled ->
+                    adopt(target.copy(token = outcome.enrolment.token), outcome.enrolment.deviceId)
             }
-            adopt(target.copy(token = result.token), result.deviceId)
         }
     }
 

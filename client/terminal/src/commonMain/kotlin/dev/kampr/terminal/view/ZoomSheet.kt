@@ -46,6 +46,7 @@ fun ZoomSheet(
     window: ColumnWindow,
     totalRows: Int,
     visibleRows: Int,
+    historyNote: String?,
     remembered: Boolean,
     followCursor: Boolean,
     confirmRisky: Boolean,
@@ -102,6 +103,17 @@ fun ZoomSheet(
                                 tokens.color.mute,
                             )
                             KText("of ${window.cols} wide", tokens.type.metaSmall, tokens.color.mute)
+                        }
+                        // Only when there is a hole to own up to. A pane whose ring is intact says
+                        // nothing here, which is what stops this becoming furniture.
+                        if (historyNote != null) {
+                            KText(
+                                historyNote.replaceFirstChar(Char::uppercase),
+                                tokens.type.metaSmall,
+                                tokens.color.working,
+                                Modifier.named("The scrollback: $historyNote"),
+                                maxLines = 3,
+                            )
                         }
                     }
                 }

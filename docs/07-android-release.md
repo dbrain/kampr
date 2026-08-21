@@ -89,6 +89,46 @@ if you still hold the current key.
 The keystore is never in the repository. `.gitignore` covers `*.jks`, `*.keystore`, `.env` and
 `local.properties`.
 
+### The signing certificate is also the app's identity to a passkey
+
+Android's Credential Manager runs no WebAuthn ceremony for a native app unless the relying party —
+your own node, at your own domain — publishes a Digital Asset Links file naming the app. So the node
+serves one at **`/.well-known/assetlinks.json`**, unauthenticated (it has to be readable before any
+credential exists) and built once at startup, delegating exactly one relation:
+`delegate_permission/common.get_login_creds`. It is deliberately *not* an app-links file: an app link
+declares its hosts in the manifest at build time and every operator's node is at a different one, so
+Kampr claims no URL and enrolls through the in-app scanner instead.
+
+What it names comes from `[android]` in `config.toml`:
+
+```toml
+[android]
+package = "dev.kampr.app"
+fingerprints = ["A0:8A:21:84:…"]   # SHA-256 of the signing certificate
+```
+
+The default is the release keystore's own certificate — the one every APK kobup ships is signed
+with — so an operator who installed Kampr configures nothing. It is a *default* rather than a
+constant because two other builds exist and neither is signed with it: a **debug** build carries the
+machine's own `~/.android/debug.keystore`, and a build from source carries whatever keystore made it.
+Both are refused by a stock node, and the refusal is otherwise a shrug, so the app reads its own
+certificate off `PackageManager` and prints the line to paste:
+
+> This node names dev.kampr.app but not the certificate this build is signed with. Add it to
+> `[android] fingerprints` in its config.toml: "18:77:9D:…"
+
+Two more things follow from the same certificate. Credential Manager does not sign an `https://`
+origin into its client data — it signs `android:apk-key-hash:<base64url of that SHA-256>` — so the
+node adds that origin to the WebAuthn engine, derived from the same configured fingerprints
+(`kampr-auth/src/android.rs`). And `webauthn-rs`'s general passkey options are a ceremony Android
+cannot perform, so `/auth/webauthn/register/start` takes `{"platform":"android"}` and answers with a
+discoverable platform credential and no `credProtect`, which is what the crate's
+`workaround-google-passkey-specific-issues` feature exists for. A browser's options are unchanged.
+
+`cargo test -p kampr-node --test android_passkeys` reads the fingerprint back out of the built APK
+with `apksigner` (or out of the keystore with `keytool`) and fails if the default no longer matches;
+absent both it skips loudly, and `KAMPR_ANDROID_CERT=1` turns that skip into a failure.
+
 ## Building
 
 ```bash
@@ -106,9 +146,12 @@ only useful if Kampr ever goes to a store.
 
 ### Tests
 
-`client/androidApp/src/androidTest` holds the only Android tests in the repo. The one there opens
-every `composeResources` font out of the installed APK's `AssetManager` and checks the sfnt magic —
-the runtime half of probe #64, where `verifyReleaseApkResources` is the artefact half.
+`client/androidApp/src/androidTest` holds the device-side tests. One opens every `composeResources`
+font out of the installed APK's `AssetManager` and checks the sfnt magic — the runtime half of probe
+#64, where `verifyReleaseApkResources` is the artefact half. The others cover what only a device can
+answer: that Credential Manager is reachable once an Activity is attached, what certificate this
+build is signed with, that `CAMERA` is declared, and that the QR the desktop draws decodes on the
+device. With `KAMPR_NODE=https://…` the asset-links check runs against that node as well.
 
 Instrumented tests run against the **debug** variant. `testBuildType = "release"` was tried and
 abandoned: the instrumentation APK deliberately does not duplicate classes the app under test

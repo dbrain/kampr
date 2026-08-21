@@ -32,6 +32,36 @@ pub struct Config {
     pub mesh: Mesh,
     #[serde(default)]
     pub push: Push,
+    #[serde(default)]
+    pub android: Android,
+}
+
+/// The Android app this node will let hold a passkey for it.
+///
+/// Credential Manager runs no WebAuthn ceremony for a native app until the relying party — this
+/// node, at the operator's own domain — publishes `/.well-known/assetlinks.json` naming that app's
+/// package and signing certificate. The defaults are the app kobup ships, so an operator who
+/// installs the release APK configures nothing.
+///
+/// It is configurable because two other builds exist and neither is signed with the release key: a
+/// debug build carries the machine's own `~/.android/debug.keystore`, and a build from source
+/// carries whatever keystore made it. Kampr on such a phone prints its own fingerprint when the
+/// node does not name it, and it goes here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Android {
+    #[serde(rename = "package")]
+    pub package_name: String,
+    pub fingerprints: Vec<String>,
+}
+
+impl Default for Android {
+    fn default() -> Self {
+        Self {
+            package_name: "dev.kampr.app".into(),
+            fingerprints: vec![crate::assetlinks::RELEASE_FINGERPRINT.into()],
+        }
+    }
 }
 
 /// The hub role, which is configuration rather than a build.
@@ -229,6 +259,7 @@ impl Config {
             journals: Journals::default(),
             mesh: Mesh::default(),
             push: Push::default(),
+            android: Android::default(),
         }
     }
 
