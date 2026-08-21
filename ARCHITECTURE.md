@@ -98,6 +98,14 @@ that only lives as long as a terminal pane dies while you are away from the desk
 entire scenario. So the node runs as a `systemd --user` service (a launchd agent on macOS) and
 outlives Herdr, and the plugin manifest is a launcher around it.
 
+Outliving Herdr is not the same as outliving a reboot, and the difference is one command. A
+`systemd --user` manager lives inside the user's login session: it is torn down when the last
+session ends and it is not started at boot unless that user lingers. So `kampr service install`
+runs `loginctl enable-linger` and, when it cannot, prints the command as a required next step
+rather than a suggestion — and `kampr doctor` fails on a unit installed without it. The launchd
+half has the same shape for a different reason: a `gui/$UID` agent needs someone to log in at the
+screen, so a headless Mac needs a LaunchDaemon instead, which `doctor` says rather than implying.
+
 Herdr's plugin host makes three of these choices for us and they are worth knowing:
 
 - **`[[startup]]` hooks are one-shot, not supervised.** They fire after session restore and again
@@ -484,9 +492,37 @@ a tighter landscape row is that the 44 dp touch-target guideline assumes a one-h
 landscape key row is a two-thumb posture at the screen edges where 44 dp costs a quarter of the
 screen. **What ships is not what is written down**, though: the wire protocol document specifies
 36 dp in landscape, and the caps keep a 44 dp minimum height in both orientations and take the
-saving out of vertical padding instead. One of the two should move.
+saving out of vertical padding instead. One of the two should move. Measured on a 411 dp portrait
+emulator a cap is 42 × 44 dp — 44 tall as written, and 42 wide because eight caps and their gaps do
+not fit at 44 each across 411 dp, which is a fact about the screen rather than a decision anyone
+made.
 
-### 5.4 Four themes, one token layer
+### 5.4 One place a control can be made, and therefore one place it can be named
+
+Nothing in the client uses `Modifier.clickable` directly. Every interactive control goes through
+`Modifier.action` (or `Modifier.gestureAction`, where a raw gesture detector is doing the work),
+which is a single seam carrying four things a control needs and none of which survives being
+remembered per call site: a **name for the action rather than the glyph** — "Zoom, currently 1.6×",
+never "magnifier" — a role, a focus ring, and a semantics click. That last one is not cosmetic: a
+screen reader's activation dispatches the *semantic* click, so the key row's caps were reachable,
+unnamed and impossible to press at the same time until they had one (probe #92).
+
+Status is a shape as well as a colour — a square, a disc, a bar and a ring at 7 dp — because a
+coloured dot is one channel and roughly one reader in twelve does not have it. Anything that
+appears without the operator acting is a live region: the "Needs you" list, a pending answer, the
+destructive-command sheet, a stale pane, a node dropping off the mesh. Sheets clear the semantics
+of the screen behind them rather than trapping focus, which buys the same thing without turning a
+sheet into a platform dialog, and Escape closes one.
+
+`prefers-reduced-motion` is read per platform — Android's animator scales, the browser's media
+query, GNOME's `Gtk/EnableAnimations` over XSETTINGS — and gates the cursor blink, the momentum-pan
+fling and the transcript's animated scroll. A test fails the build on a bare `clickable`, on a
+screen with no heading, and on an animation added without consulting it.
+
+The terminal grid is the one surface where the obvious answer is wrong, and it has its own decision
+record: [ADR 0010](./docs/adr/0010-the-grid-is-described-not-read-out.md).
+
+### 5.5 Four themes, one token layer
 
 Every colour, font family and radius goes through a token layer, with four themes defined against it.
 The rule that keeps the other three one attribute away is the one most likely to erode, so it is

@@ -9,12 +9,12 @@ license = "MIT"
 repository = "https://github.com/dbrain/kampr"
 
 [workspace.dependencies]
-anyhow = "1"
+anyhow = "1.0.104"
 argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
-base64 = "0.22"
+base64 = "0.23.1"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 ed25519-dalek = { version = "3.0.0", default-features = false }
 futures-util = "0.3.34"
@@ -25,26 +25,28 @@ openssl-sys = { version = "0.9.117", features = ["vendored"] }
 qrcode = { version = "0.14.1", default-features = false }
 rust-embed = "8.12.0"
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
-thiserror = "2"
+thiserror = "2.0.20"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time", "signal", "fs"] }
-tokio-stream = "0.1"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time", "signal", "fs"] }
+tokio-stream = "0.1.19"
 toml = "1.1.4"
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["set-header", "trace"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http = { version = "0.7.0", features = ["compression-br", "compression-gzip", "set-header", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ulid = "3.0.0"
 url = "2.5.8"
 web-push = { version = "0.11.0", default-features = false }
 webauthn-rs = "0.5.5"
-# The ES256 keypair generator. Already in the tree as web-push's own JWT signer, so pinning the
-# same major keeps one copy rather than two.
-jwt-simple = { version = "0.12.11", default-features = false, features = ["pure-rust"] }
+# The ES256 keypair generator. Held at 0.12 because web-push 0.11 requires `^0.12.11`, so 0.13
+# cannot unify — it would put two jwt-simple trees (and two of p256, k256, rand) in the binary.
+# Safe to hold: this crate only ever calls `ES256KeyPair::generate()`, never verifies a token, so
+# the 0.13 `exp` validation fixes are not on any path Kampr takes.
+jwt-simple = { version = "0.12.17", default-features = false, features = ["pure-rust"] }
 
 # dev
 # `ring` rather than the default aws-lc, so the tree carries one crypto backend and it is

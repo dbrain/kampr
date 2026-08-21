@@ -770,12 +770,19 @@ uninstall, `[[panes]]` with `placement = "popup"` opens the setup ladder in a He
 **Standalone**, for people not using the plugin surface:
 
 ```bash
-curl -fsSL https://kampr.dev/install.sh | sh
+curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
+sh install.sh
 kampr init            # config, node keypair, URL + pairing code, QR
-kampr service install # systemd --user unit (launchd on macOS)
+kampr service install # systemd --user unit (launchd on macOS), plus loginctl enable-linger
 ```
 
-**From source**, `cargo install --path .` plus a Gradle build for the web bundle.
+Fetched to a file, not piped: `curl -fsSL … | sh` pipes nothing into `sh` when the URL 404s and
+the pipeline still exits 0, so a release that does not exist yet fails silently. Nothing is
+published at the time of writing, so this path has nothing to fetch — build from source instead.
+
+**From source**, a Gradle build for the web bundle and then
+`KAMPR_REQUIRE_BUNDLE=1 cargo build --release -p kampr-cli`. Not `cargo install --path .`: the
+workspace root is a virtual manifest with no binary of its own.
 
 First run works immediately at Tier 0 — LAN bind, pairing code, no certificate, no account. Everything
 above that is an optional rung on §3.7's ladder, offered from the setup screen and never demanded.

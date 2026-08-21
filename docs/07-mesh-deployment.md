@@ -60,12 +60,25 @@ origin = "https://kampr.example.com"
 trust_proxy = true
 
 [mesh]
-# The hub role. On by default; enrolment decides who may join, this decides whether the door
-# exists at all.
+# The hub role, and the one line here the hub cannot skip. Off by default — enrolment decides who
+# may join, this decides whether the door exists at all — so without it `kampr mesh invite`
+# refuses and `POST /api/mesh/invite` answers 409.
 accept = true
 ```
 
-Start it (`kampr service install` writes the user unit) and pair your phone as usual.
+Those comments are yours, not the tool's: re-running `kampr init` rewrites `config.toml` through
+the TOML serialiser and every comment in it goes. The *values* survive — `--force` carries the
+identity, the bind, the origin, `trust_proxy`, `extra_origins` and `[mesh]` forward and prints what
+it keeps — but the annotations do not.
+
+Then `kampr service install`, which writes the user unit **and** turns on lingering for your user.
+That second half is not optional: a `systemd --user` manager is torn down when your last session
+ends and is not started at boot without it, so a unit installed on a non-lingering user dies at
+logout and does not come back after a reboot. If the install cannot do it — no privilege, no
+logind — it prints `loginctl enable-linger <you>` as a required next step, and `kampr doctor`
+fails on the `linger` check until you run it.
+
+Then pair your phone as usual.
 
 ---
 
@@ -108,27 +121,37 @@ the client reconnects in a visible flicker. Add this in **Advanced → Custom Ng
 
 ```nginx
 location /ws {
-    proxy_pass http://127.0.0.1:8790;
+    proxy_pass $forward_scheme://$server:$port;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
 }
 
 location /mesh {
-    proxy_pass http://127.0.0.1:8790;
+    proxy_pass $forward_scheme://$server:$port;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
 }
 ```
+
+When the Proxy Host is saved, `kampr doctor` on the node will tell you whether any of this
+actually worked: its `origin` check fetches `{origin}/api/node` and compares the node id it gets
+back against this node's own. A port open at the hostname proves nothing — a wrong Forward Port, a
+Docker-bridge address that is not your host, and NPM's own default page all leave 443 listening —
+so that one request is the difference between "the DNS is right" and "the proxy leads here".
 
 `/mesh` is the peer transport and needs exactly the same treatment as `/ws`. It is on the same
 hostname on purpose: one proxy host, one certificate, one thing to get right.
@@ -136,11 +159,52 @@ hostname on purpose: one proxy host, one certificate, one thing to get right.
 A mesh link pings every five seconds, so it survives a 60 s timeout on its own — but a *client*
 socket watching a quiet pane does not, and both deserve the same setting.
 
+### Three things about that block that are not optional
+
+**`X-Forwarded-For $remote_addr` is the line that keeps `trust_proxy` honest.** nginx passes a
+client request header straight through when the config does not set it, and the node reads
+`X-Forwarded-For` and nothing else — never `X-Real-IP`. Without that line, a request arriving from
+the internet with its own `X-Forwarded-For: 203.0.113.7` is recorded and rate-limited as
+`203.0.113.7`, which hands every attacker a fresh bucket per guess: exactly the forgery the
+warning at the top of §1 is about, re-opened by the snippet meant to fix a timeout. The whole block
+above was run against a real nginx replicating what NPM generates: with these two lines the node's
+audit log records `peer 127.0.0.1`, without them it records `peer 203.0.113.7` — the value the
+client chose — and either way the upgrade itself returns `101 Switching Protocols`.
+
+Use `$remote_addr`, **not** `$proxy_add_x_forwarded_for`. Appending preserves the forged value and
+leaves the node to guess which entry is real; replacing is what makes the header un-forgeable, and
+replacing is what NPM's own `proxy.conf` does for `location /`. Matching it is the point.
+
+**`proxy_pass` must name the same upstream the Proxy Host form does.** `$forward_scheme`,
+`$server` and `$port` are set by NPM at server scope, so the block above follows the form
+automatically. If you write a literal address instead, write the *same* one you put in the form —
+a hardcoded `http://127.0.0.1:8790` inside an NPM Docker container is the container's own
+loopback, not your host, so `/ws` and `/mesh` break while every other path keeps working. That
+failure looks like "the page loads and the terminal never connects".
+
+**A custom `location` bypasses everything attached to the Proxy Host.** Block Common Exploits, an
+Access List, HTTP basic auth: those are configured on `location /`, and these two blocks are not
+`location /`. The two endpoints that carry the terminal and the mesh are therefore the two with no
+NPM-level protection in front of them — which is fine, because the node authenticates both itself,
+but it is not what an access list on the Proxy Host looks like it is doing. If you rely on an
+access list, repeat its `allow`/`deny` lines inside both blocks.
+
 ---
 
 ## 3. Join the other hosts
 
-On the hub:
+Each peer is a Kampr node in its own right, so start by giving it a config and an identity:
+
+```bash
+kampr init --name laptop
+```
+
+The defaults are correct for a peer — loopback bind, no origin, no certificate, and no `[mesh]`
+section to write, because `accept = false` is already the default and a peer dials out rather than
+accepting anything. `kampr mesh join` opens the same device database `init` creates, so without
+this step it fails with *"run `kampr init` first"*.
+
+Then, on the hub:
 
 ```console
 $ kampr mesh invite
@@ -169,8 +233,10 @@ joined front (01JB2K…)
 `kampr serve` keeps the link up from here, and reconnects on its own.
 ```
 
-The peer needs **no** `origin`, no certificate, no open port, and no reachable address. It needs to
-be able to make an outbound HTTPS connection, which is the same thing as being able to browse.
+The peer needs **no** `origin`, no certificate, no open port, and no reachable address — it does
+need the `kampr init` above, because the mesh key and the peer's device database live in the
+directories `init` creates. It needs to be able to make an outbound HTTPS connection, which is the
+same thing as being able to browse.
 
 Check it from the hub:
 

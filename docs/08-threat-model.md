@@ -151,19 +151,19 @@ Defended by:
 - **A same-origin gate on `/ws` and on every non-GET request.** The allowlist is built from the
   configured origin and the bind address, never from the request's own `Host` — reflecting `Host`
   makes `Origin == Host` true for a DNS-rebinding attacker, which is the whole trick.
-- **A cookie credential arriving with no `Origin` is refused.** A missing `Origin` from a non-browser
-  client is fine; a missing `Origin` alongside a browser cookie is the attack, not the absence of
-  one.
-- **Tokens are not ambient by default.** The primary credential travels as a WebSocket subprotocol
-  (`kampr.token.<token>`) or an `Authorization` header, neither of which a cross-origin page can set
-  without a preflight the node will fail.
+- **No credential this node accepts is ambient.** A token travels as a WebSocket subprotocol
+  (`kampr.token.<token>`) or an `Authorization` header, and a cross-origin page can set neither
+  without a preflight the node will fail. The node once also accepted a `kampr_session` cookie as a
+  fallback for a cookie-based client that was never built; that path is **gone**, because a cookie is
+  the one credential a browser attaches by itself and keeping it left every un-gated `GET` one
+  deployment decision away from being a CSRF read.
 
 **Weaker than it looks:** the gate exempts `GET`/`HEAD`/`OPTIONS` on every path except `/ws`, so
-`GET /api/devices` — the whole device inventory — has no origin check of its own. A cross-origin page
-with an ambient session cookie can *issue* that request; only the browser's own CORS rules stop it
-reading the reply, and the node contributes nothing. `POST /auth/webauthn/authenticate/start` is
-likewise unauthenticated and un-gated; it is bounded by a 128-entry challenge cap and the auth
-limiter, and it is the one endpoint an unauthenticated caller can make the node do work in.
+`GET /api/devices` — the whole device inventory — has no origin check of its own. That is only safe
+because of the bullet above: a cross-origin page cannot attach a credential, so the request it can
+issue is an unauthenticated one. **Reintroducing any ambient credential would have to gate those
+`GET`s at the same time.** `POST /auth/webauthn/authenticate/start` is likewise unauthenticated and
+un-gated; it is bounded by a 128-entry challenge cap and the auth limiter.
 
 ### 3.5 Another uid on the same host
 
@@ -410,19 +410,48 @@ device's existing token stays dead — the device must re-pair. The endpoint's s
 achieved. Harmless in the fail-safe direction; misleading, and worth fixing before anyone relies on
 it.
 
-### 7.6 An unparseable role in the database reads as `full`
+### 7.6 An unparseable role in the database reads as read-only
 
-The `devices.role` column is `TEXT NOT NULL` with no `CHECK` constraint, and the parse falls back to
-the type's default, which is `Full`. Corruption or a future migration that writes an unexpected
-string therefore fails **open**. Reaching it requires write access to a 0600 database inside a 0700
-directory — i.e. an attacker who has already won — but the direction of the failure is wrong.
+The `devices.role` column is `TEXT NOT NULL` with no `CHECK` constraint, so corruption or a future
+migration could write a string nothing parses. It fails **closed**: `Role` derives
+`#[default] Readonly` and `device_from_row` uses `.parse().unwrap_or_default()`, so an unreadable
+role is the least privilege rather than the most. The missing `CHECK` constraint is still worth
+adding — a column that can hold nonsense is a column that will — but the failure direction is right.
 
 ### 7.7 The unauthenticated surface does real work
 
-`POST /auth/pair` runs one argon2id pass at 19 MiB per attempt. The per-peer limiter runs first and
-bounds a single source, but there is no global concurrency bound and the SQLite pool is four
-connections. `POST /auth/webauthn/authenticate/start` is unauthenticated, un-origin-checked, and parks
-ceremony state. Neither is a large lever; both are levers.
+Two endpoints do memory-hard work for a caller who has proved nothing, and both run one argon2id
+pass at 19 MiB per attempt:
+
+- `POST /auth/pair`, where the per-peer limiter runs *before* the digest.
+- `GET /mesh`, where an anonymous caller signs the handshake with its own freshly generated key and
+  presents any string as a join code. It is guarded by three things: `mesh.accept` is **off by
+  default**, so a node that never meshes does not answer at all; a per-peer limiter runs before the
+  upgrade, exactly as `/auth/pair` does, and a miss is audited as `mesh.rate_limited`; and a
+  semaphore caps handshakes in flight, which is what bounds the memory when an attacker rotates
+  source addresses past the limiter. A handshake that stalls is hung up after fifteen seconds so it
+  cannot hold a permit indefinitely. Without the limiter a stranger could also burn every
+  outstanding join code, because a miss charges each one an attempt and ten kills them.
+
+  **The residual is availability, deliberately.** Someone rotating addresses can hold every
+  handshake permit and keep a genuine peer from joining for as long as they keep it up. That is the
+  trade the cap buys: an attacker who can delay a join, instead of one who can exhaust the host's
+  memory and take the herd down with it. It costs nothing while `mesh.accept` is off.
+
+The SQLite pool is four connections, which is the next bound behind both. `POST
+/auth/webauthn/authenticate/start` is unauthenticated, un-origin-checked, and parks ceremony state
+behind a 128-entry cap. None is a large lever; all are levers.
+
+Live sockets and inbound message size are bounded too: `limits.sockets` client sessions at once,
+`limits.mesh_handshakes` handshakes, 1 MiB per message and per frame on `/ws`, and 16 MiB on
+`/mesh` — against tungstenite's 64 MiB/16 MiB defaults. The two differ because a mesh link is the
+client protocol backwards, so a hub *reads* a peer's server frames, and a scrollback document runs
+to several megabytes on a pane deep enough to fill the ring.
+
+**Connection-rate and per-IP limiting are still the reverse proxy's job.** A publicly exposed node
+is expected to sit behind nginx with `limit_conn` and `limit_req`; nothing in Kampr replaces those,
+and the bounds above are a floor for the case where the proxy is misconfigured, not a substitute
+for one.
 
 ### 7.8 The install path grants RCE by construction
 

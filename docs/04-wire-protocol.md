@@ -62,6 +62,9 @@ on a LAN IP is not. `caps.push` says whether this *node* can actually send one: 
 path most likely to be interrupted. `GET /api/push` carries the same value for clients that want
 it without a socket.
 
+**The greeting is three frames, in this order: `hello`, `herd`, `prefs`.** The third is pushed
+unasked so a client can restore per-pane zoom and view before it paints — see `prefs` below.
+
 ### `herd` — the whole model; sent after `hello` and on any reconnect
 ```jsonc
 { "t": "herd",
@@ -75,9 +78,10 @@ it without a socket.
                "label": null,
                "agent": "claude",                    // null on a shell pane — picks the default view
                "agent_status": "blocked",            // idle|working|blocked|done|unknown
-               "cols": 74, "rows": 30,               // native: the PTY's own size, not the rect
+               "cols": 74, "rows": 30,               // rows: the PTY's own viewport, not the rect.
+                                                     // cols: ABSENT until measured — see below
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
-               "has_conversation": true,             // a journal adapter exists for this harness
+               "has_conversation": true,             // a transcript for this pane resolves on disk
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -114,9 +118,21 @@ Style `0` is always the default pen. Ids are stable for the life of the connecti
 **`cols` is the pane's real PTY width, which is not always its layout rect.** In a *headless*
 session — what the plugin and the systemd unit both produce — the PTY does not follow the rect: a
 split halves the rect and leaves the PTY alone (probe #68), and even unsplit the rect is a column
-wider (#69). The node measures the width from `pane.read` rather than trusting the rect (#84/#85)
-and both `herd.panes[].cols` and `grid.reset.cols` carry the measurement. A client renders the
-`cols` it is given and never derives geometry of its own.
+wider (#69). The node measures the width from `pane.read` rather than trusting the rect (#84/#85),
+and `grid.reset.cols` always carries that measurement.
+
+**`herd.panes[].cols` is therefore optional and is omitted when nothing has measured it.** A width
+is proved by a soft wrap, and a pane nobody is watching has produced no proof — so an unwatched
+pane carries no `cols` at all rather than the rect, which is a width no row was ever wrapped at
+(measured: rect 47, PTY 93). A client shows the width it is given and shows nothing when there is
+none; it never derives geometry of its own and never falls back to the rect. `rows` is always
+present, because herdr reports the PTY's own viewport.
+
+**`has_conversation` is "a transcript for this pane resolves", not "this harness has an
+adapter".** A `claude` started a minute ago has written nothing yet, and a pane that claimed a
+conversation it could not produce opened on a blank Conversation view whose `convo.load` answered
+`not_found`. It can still never outrun `hello.caps.conversation`: a node with no adapter for a
+harness resolves nothing for it.
 
 ### `grid.reset` — full repaint; drop any prior state for this pane
 ```jsonc
@@ -141,9 +157,16 @@ cells may be omitted, and the client pads with blanks.
 `row` is `u32`, not `u16`: on `grid.*` it is a viewport row, but on `scrollback` it is an absolute
 ring index, and a deep ring overflows 16 bits.
 
-**`links` is a delta, and it may appear on `grid.patch`.** A hyperlink can first be seen mid-stream,
-so a client that only reads `links` from `grid.reset` will render link ids it was never given.
-Append each message's `links` to the pane's table in arrival order; ids are indices into it.
+**`links` may appear on `grid.patch` as well as `grid.reset`, and the two carry different things.**
+A hyperlink can first be seen mid-stream, so a client that only reads `links` from `grid.reset` will
+render link ids it was never given. But the two messages are not the same shape:
+
+- **`grid.reset` carries the whole table.** Replace the pane's table with it.
+- **`grid.patch` carries only the suffix** — the entries discovered since the last message. Append it.
+
+Ids are indices into the resulting table. Treating a reset as an append is not a cosmetic bug: after
+the second reset every id is off by the length of the previous table, so links silently resolve to
+the **wrong URL** rather than failing visibly.
 
 Measured compression against per-cell JSON: **61×** at 124×50 with 49 distinct pens (4,205 vs
 257,985 bytes) and **44×** at 74×30 with light colour (1,769 vs 78,471). The ratio holds; the
@@ -242,8 +265,14 @@ A client that reports "told the desk" without checking is reporting something th
 ```jsonc
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
 ```
-Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `rate_limited` ·
-`bad_request` · `unsupported` (the node does not implement that op) · `not_found`.
+Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `bad_request` ·
+`not_found` · `revoked` · `unsupported` (the node does not implement that op).
+
+There is no `rate_limited` error code. Toast throttling answers `notified{ok:false,
+reason:"rate_limited"}` on its own frame and pairing throttling is an HTTP **429**, so nothing ever
+emitted one and a client written to expect it was written against a code that does not exist.
+Relayed errors are the one exception to this list being closed: a hub forwards a peer's `code`
+verbatim, so a newer peer's code reaches a client unchanged rather than being dropped.
 
 `herdr_unavailable` and `node_offline` are both emitted for a herd outage: the first names the
 cause on the connection, the second says which node went with it, and an op addressed at a pane on
@@ -281,9 +310,10 @@ is already open rather than at the next handshake. `revoked` is followed by a cl
 // against the device, so they follow you between browsers on the same enrolled device.
 { "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
 //   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "zoom": 1.6, "view": "terminal" } } }
-// `pane` must be a pane this node is serving (`unknown_pane` otherwise) and `prefs` must fit in
-// 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the role,
-// so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
+// A write with no `pane` (or no `prefs`) stores nothing and just asks for the current set.
+// `pane` must be a pane this node is serving (`unknown_pane` otherwise) and the *stored* blob must
+// fit in 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the
+// role, so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
 // preferences per device and drops the least recently updated first.
 
 // A toast on the *operator's desktop* (probe #50). `title` is required; `pane` picks which herdr
@@ -299,6 +329,27 @@ is already open rather than at the next handshake. `revoked` is followed by a cl
 ```
 
 There is **no resize message and there will not be one.** The node cannot reshape a pane.
+
+**A `prefs` write is a merge, not a replacement.** It names the keys it is changing and leaves the
+rest of that pane's blob alone, so a client that stores a zoom does not thereby forget the view.
+`null` as a value **removes** that key — with a merge there is no other way back. Two writes:
+
+```jsonc
+{ "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "view": "conversation" } }
+{ "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": "2" } }
+//   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "view": "conversation", "zoom": "2" } } }
+{ "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "view": null } }
+//   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "zoom": "2" } } }
+```
+
+**The node pushes `prefs` unasked, as the third frame of the greeting** — after `hello` and `herd`,
+on every connection, whether or not anything is stored (`{"panes":{}}` when nothing is). There is no
+other way for a client to learn the zoom it left a pane at, and a client that has to ask has already
+painted the pane at the wrong size. A client must therefore expect a `prefs` frame it did not
+request, and must not treat the first one on a socket as the answer to its own write.
+
+Values are opaque to the node: it stores and returns whatever JSON it is given, so `"1.6"` and
+`1.6` both round-trip and a client should read either.
 
 ## Ordering and recovery
 
@@ -416,10 +467,18 @@ a hub relaying several clients' ops down one link does. A node that receives no 
 
 A refused op is acknowledged too: `{"t":"managed","op":…,"ok":false,"code":…,"message":…}`, followed
 by the ordinary `error` frame. A client waiting on an ack must therefore watch `ok`, not just arrival.
+**Every** refusal is acknowledged, including the ones the node decides before it looks at the op —
+a read-only device's `not_writer`, an unreadable op's `bad_request`, and a target on a node this
+herd does not serve — and each carries the `rid` it was sent with. A refusal that arrived as an
+`error` alone left a client's in-flight state set forever.
 `layout.export` puts the exported tree on its ack as `layout`.
 
 Every `manage` op is acknowledged with `{"t":"managed","op":…,"ok":true,"id":"<new id, when one was created>"}`
-and the resulting structure change arrives as an ordinary `herd.patch`. Clients must not
+and the resulting structure change arrives as an ordinary `herd.patch`. `id` is a **node-qualified
+container id** — a workspace, tab or pane — for every op that creates one. The two exceptions are
+`session.create` and `session.stop`, whose `id` is the bare session **name**: a session is named
+rather than addressed, and dressing its name up as `<node_id>/<name>` produced something shaped
+exactly like a pane id that no client can watch. Clients must not
 optimistically mutate their herd model — wait for the patch, so the node stays authoritative.
 
 `readonly` devices are refused every `manage` op with `not_writer`.
@@ -465,7 +524,7 @@ local one — `"<node_id>/<pane_id>"` was already the id, so the routing was alr
 - **Peers dial outbound to a hub.** Only the hub needs an address, so a laptop behind NAT joins
   with no port forwarding and an operator points one reverse proxy at one hostname. A peer that
   cannot be reached inbound is fully usable.
-- **Hub is a role, not a build.** `[mesh] accept = true` (the default) is the entire difference.
+- **Hub is a role, not a build.** `[mesh] accept = true` — **off by default** — is the entire difference.
   Any node can hold peers, dial hubs, or both; a hub may itself be a peer of another hub.
 - **The link carries this protocol, backwards.** After the handshake the *hub* is the client: it
   sends `watch` / `unwatch` / `input` / `answer` / `manage` / `ping` and receives `hello` / `herd` /
@@ -669,7 +728,7 @@ before the socket is up, which is exactly when a body that says something useful
 ## Auth
 
 The WebSocket carries a device token as a `Sec-WebSocket-Protocol` subprotocol of the exact form
-**`kampr.token.<token>`**, echoed back verbatim by the server, or as a `kampr_session` cookie. The
+**`kampr.token.<token>`**, echoed back verbatim by the server. The
 node resolves it to a device and a role before `hello`. A client that sends any other subprotocol
 spelling fails the handshake. `readonly` devices get every server → client
 message and are refused `input` / `answer` with `not_writer`. HTTP endpoints for enrolment
