@@ -3,6 +3,7 @@ package dev.kampr.conversation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.IconGlyph
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.TOUCH
 import dev.kampr.shared.ui.action
@@ -41,6 +43,11 @@ fun replyMessages(paneId: String, text: String): List<ClientMsg> =
 @Composable
 fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
+    // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
+    // the scaffold does not pad — so in landscape, where no tab bar sits under it, the reply box was
+    // the thing the gesture handle landed on and the send button the thing a rotated navigation bar
+    // covered. Zero on a portrait phone, where the tabs below already hold the edge.
+    val safe = LocalSafeArea.current
     var value by remember { mutableStateOf(TextFieldValue()) }
     val pill = RoundedCornerShape(tokens.radii.pill)
     val ready = enabled && value.text.isNotBlank()
@@ -57,7 +64,12 @@ fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifie
             .background(tokens.color.bar)
             .edgeTop()
             .readingOrder(1f)
-            .padding(start = 12.dp, top = 10.dp, end = 12.dp, bottom = 14.dp),
+            .absolutePadding(
+                left = 12.dp + safe.left,
+                top = 10.dp,
+                right = 12.dp + safe.right,
+                bottom = 14.dp + safe.bottom,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {

@@ -30,6 +30,7 @@ import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.theme.typography
+import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.BottomSheet
 import dev.kampr.shared.ui.Breakpoint
@@ -39,11 +40,13 @@ import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.HerdLandscape
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Screen
+import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.ui.screenInset
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.named
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 // A gesture handle's worth of system furniture, and a status bar's. Real values on the API 37
@@ -52,6 +55,11 @@ private val BARS = SafeArea(top = 32.dp, bottom = 46.dp)
 
 private const val PANE_ID = "01JNODE/w1:p1"
 private const val SHEET_FLOOR = "Sheet floor"
+
+// Gboard on a 1080x2400 phone, roughly half the window. `bottom` stays: the navigation bar is
+// still reported while the keyboard is drawn over it, which is what made the arithmetic that
+// tried to reconcile the two get it wrong.
+private val KEYBOARD = SafeArea(top = 32.dp, bottom = 24.dp, ime = 300.dp)
 
 // Rotated, with three-button navigation: the status bar thins, the gesture area goes to whichever
 // side the rotation put it on, and the bottom of the window is no longer where the system draws.
@@ -164,6 +172,89 @@ class SafeAreaTest {
             "the scaffold inset the pane to ${inner.top}..${inner.bottom} of " +
                 "${screen.top}..${screen.bottom}, letterboxing the grid",
         )
+    }
+
+    // The keyboard covers the window instead of resizing it, so nothing under the root inset may
+    // reach past where the keys start. The bottom navigation is the app's own floor and the key
+    // row is the pane's; both were measured against a window that had stopped being the truth.
+    @Test
+    fun nothingUnderTheRootReachesPastTheKeyboard() = runComposeUiTest {
+        setContent {
+            Bars(KEYBOARD) {
+                Box(Modifier.fillMaxSize().keyboardInset()) {
+                    Column(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(1f)) { PaneScreen(landscape = false) }
+                        BottomNav(Tab.Pane, {})
+                    }
+                }
+            }
+        }
+        val screen = onRoot().getUnclippedBoundsInRoot()
+        val floor = screen.bottom - KEYBOARD.ime
+        for (label in listOf("Herd tab", "Pane tab", "Nodes tab")) {
+            val bounds = onNodeWithContentDescription(label).getUnclippedBoundsInRoot()
+            assertTrue(
+                bounds.bottom <= floor,
+                "$label reaches ${bounds.bottom}, past the $floor where the keyboard starts",
+            )
+        }
+    }
+
+    // The row docks *on* the keys, not a navigation bar above them: the gap the operator saw was
+    // one bottom inset tall, paid twice.
+    @Test
+    fun theBottomOfTheAppSitsOnTheKeyboardAndNotAboveIt() = runComposeUiTest {
+        setContent {
+            Bars(KEYBOARD) {
+                Box(Modifier.fillMaxSize().keyboardInset()) {
+                    Column(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(1f))
+                        Box(Modifier.fillMaxWidth().height(48.dp).named(SHEET_FLOOR))
+                    }
+                }
+            }
+        }
+        val screen = onRoot().getUnclippedBoundsInRoot()
+        val floor = onNodeWithContentDescription(SHEET_FLOOR).getUnclippedBoundsInRoot()
+        assertTrue(
+            floor.bottom == screen.bottom - KEYBOARD.ime,
+            "the app's floor is at ${floor.bottom}, and the keys start at " +
+                "${screen.bottom - KEYBOARD.ime}",
+        )
+    }
+
+    // With no keyboard the inset is nothing at all, or every screen loses a strip to a keyboard
+    // that is not there.
+    @Test
+    fun aClosedKeyboardCostsNothing() = runComposeUiTest {
+        setContent {
+            Bars {
+                Box(Modifier.fillMaxSize().keyboardInset()) {
+                    Box(Modifier.fillMaxSize().named(SHEET_FLOOR))
+                }
+            }
+        }
+        val screen = onRoot().getUnclippedBoundsInRoot()
+        val inner = onNodeWithContentDescription(SHEET_FLOOR).getUnclippedBoundsInRoot()
+        assertTrue(inner.bottom == screen.bottom, "the closed keyboard took ${screen.bottom - inner.bottom}")
+    }
+
+    // Who owes the gesture handle is the container's answer, not the child's: a screen with the
+    // app's own chrome under it owes nothing at its own bottom edge, and one with nothing under it
+    // owes the handle. Both directions, or a rule that always answered zero would pass.
+    @Test
+    fun onlyTheContainerKnowsWhetherAScreenEndsAtTheWindow() = runComposeUiTest {
+        var held: SafeArea? = null
+        var alone: SafeArea? = null
+        setContent {
+            Bars {
+                BottomEdgeHeldBelow(held = true) { held = LocalSafeArea.current }
+                BottomEdgeHeldBelow(held = false) { alone = LocalSafeArea.current }
+            }
+        }
+        assertEquals(0.dp, held?.bottom, "a screen with chrome below it pays for the handle twice")
+        assertEquals(BARS.bottom, alone?.bottom, "a screen that ends at the window owes the handle")
+        assertEquals(BARS.top, held?.top, "the bottom edge is the only side a container may take")
     }
 
     // A sheet is the bottom of the window by definition, so it is where the gesture handle lands.

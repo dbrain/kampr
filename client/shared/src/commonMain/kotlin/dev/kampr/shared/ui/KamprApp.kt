@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
@@ -193,6 +194,7 @@ private fun AppScaffold(
     deepLink: DeepLink?,
 ) {
     val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
     val herd by state.store.herd.collectAsState()
     val hello by state.store.hello.collectAsState()
     val localRtt by state.store.localRttMs.collectAsState()
@@ -254,7 +256,15 @@ private fun AppScaffold(
     val modal = state.sheet != null
     fun Modifier.behindSheet(): Modifier = if (modal) clearAndSetSemantics { } else this
 
-    Box(Modifier.fillMaxSize().background(tokens.color.bg)) {
+    // Paid for once, at the root, because the keyboard covers the window rather than resizing it:
+    // `enableEdgeToEdge` means `adjustResize` no longer moves anything, so every surface that ends
+    // at the bottom of the window ends up underneath the keys. The conversation's reply box did.
+    //
+    // Here rather than per screen: this box is the only thing in the app that reaches the bottom
+    // of the window, so the inset applies without a subtraction, and everything inside — the
+    // bottom navigation, a sheet's fields, the pane's own key row — is measured against a window
+    // that already stops at the keyboard.
+    Box(Modifier.fillMaxSize().background(tokens.color.bg).keyboardInset()) {
         // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
         // and this screen is about four.
         if (state.screen is Screen.Mosaic) {
@@ -264,6 +274,7 @@ private fun AppScaffold(
             ManageLayer(state, herd, breakpoint)
             return@Box
         }
+        val chrome = bottomChrome(breakpoint, state.screen, safe.ime)
         Box(Modifier.fillMaxSize().behindSheet()) {
             when (breakpoint) {
                 Breakpoint.Desktop -> Column(Modifier.fillMaxSize().screenInset(state.screen)) {
@@ -281,7 +292,7 @@ private fun AppScaffold(
                             onOpenPane = { state.openPane(it, PaneView.Split) },
                             onSettings = { state.go(Screen.Setup) },
                         )
-                        Box(Modifier.weight(1f).fillMaxSize()) {
+                        ScreenBody(Modifier.weight(1f).fillMaxSize(), chrome) {
                             when (val screen = state.screen) {
                                 is Screen.Pane -> PaneScreenDesktop(
                                     pane = state.store.pane(screen.paneId),
@@ -331,7 +342,7 @@ private fun AppScaffold(
                 // from nowhere at all. It stays off a pane, where every row of height is the
                 // terminal's and `onBack` already leads out.
                 Breakpoint.Landscape -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).screenInset(state.screen)) {
+                    ScreenBody(Modifier.weight(1f).screenInset(state.screen), chrome) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -374,7 +385,7 @@ private fun AppScaffold(
                             Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
                         }
                     }
-                    if (state.screen !is Screen.Pane) {
+                    if (chrome) {
                         BottomNav(
                             when (state.screen) {
                                 Screen.Herd, Screen.Mosaic -> Tab.Herd
@@ -386,7 +397,7 @@ private fun AppScaffold(
                 }
 
                 Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).screenInset(state.screen)) {
+                    ScreenBody(Modifier.weight(1f).screenInset(state.screen), chrome) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -433,14 +444,16 @@ private fun AppScaffold(
                             )
                         }
                     }
-                    BottomNav(
-                        when (state.screen) {
-                            is Screen.Pane -> Tab.Pane
-                            Screen.Herd, Screen.Mosaic -> Tab.Herd
-                            else -> Tab.Nodes
-                        },
-                        state::selectTab,
-                    )
+                    if (chrome) {
+                        BottomNav(
+                            when (state.screen) {
+                                is Screen.Pane -> Tab.Pane
+                                Screen.Herd, Screen.Mosaic -> Tab.Herd
+                                else -> Tab.Nodes
+                            },
+                            state::selectTab,
+                        )
+                    }
                 }
             }
         }
@@ -453,6 +466,27 @@ private fun AppScaffold(
         state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
         ManageLayer(state, herd, breakpoint)
     }
+}
+
+// Whether the app's own chrome sits under a screen at the bottom of the window — which is the one
+// fact that decides who owes the gesture handle, and on a phone is also whether the tab bar is
+// drawn at all.
+//
+// The desktop always ends in its status strip. Landscape keeps the tabs off a pane, where every
+// row of height is the terminal's and `onBack` already leads out. Portrait stands them down while
+// the keyboard is up, for the same reason: the key row and the reply box are meant to sit on the
+// keys, and a tab bar between them is a strip of chrome nobody is reaching for mid-sentence.
+internal fun bottomChrome(breakpoint: Breakpoint, screen: Screen, ime: Dp): Boolean = when (breakpoint) {
+    Breakpoint.Desktop -> true
+    Breakpoint.Landscape -> screen !is Screen.Pane
+    Breakpoint.Portrait -> screen !is Screen.Pane || ime == 0.dp
+}
+
+// Where a screen goes, and what it is told about the bottom of the window. The scaffold is the one
+// thing that can see whether its own chrome is under the screen, so it is the thing that says so.
+@Composable
+private fun ScreenBody(modifier: Modifier, chrome: Boolean, content: @Composable () -> Unit) {
+    Box(modifier) { BottomEdgeHeldBelow(chrome, content) }
 }
 
 // What the system draws over, kept off every screen but the pane.

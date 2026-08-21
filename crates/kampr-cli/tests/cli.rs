@@ -62,6 +62,7 @@ impl Cli {
             .env("XDG_RUNTIME_DIR", self.nowhere.join("run"))
             .env("DBUS_SESSION_BUS_ADDRESS", self.bus())
             .env("DBUS_SYSTEM_BUS_ADDRESS", self.bus())
+            .env("KAMPR_LINGER_DIR", self.nowhere.join("linger"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

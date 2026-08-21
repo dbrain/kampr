@@ -36,6 +36,7 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
@@ -95,8 +96,16 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
             last >= turns.lastIndex + (if (pane.convoMore) 1 else 0) - 1
         }
     }
-    LaunchedEffect(turns.size) {
-        if (atBottom && turns.isNotEmpty()) listState.scrollToItem(turns.lastIndex + leading)
+    // Keyed on the keyboard as well as the turn count: it takes half the viewport, and a lazy list
+    // anchors on its first visible item — so without this the turn you are replying to slides off
+    // the bottom at the moment you start replying.
+    //
+    // `requestScrollToItem`, not `scrollToItem`: the suspending one waits for the list's first
+    // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
+    // this suite surfaces as an uncaught exception charged to whichever test runs next.
+    val keyboardOpen = LocalSafeArea.current.ime > 0.dp
+    LaunchedEffect(turns.size, keyboardOpen) {
+        if (atBottom && turns.isNotEmpty()) listState.requestScrollToItem(turns.lastIndex + leading)
     }
 
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {

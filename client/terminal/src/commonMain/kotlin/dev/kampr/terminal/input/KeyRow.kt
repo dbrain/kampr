@@ -15,17 +15,9 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
@@ -36,7 +28,6 @@ import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.ui.group
 import dev.kampr.shared.ui.named
 import dev.kampr.terminal.PaneSession
-import kotlin.math.max
 
 @Composable
 fun PaneKeyRow(
@@ -47,40 +38,31 @@ fun PaneKeyRow(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    val density = LocalDensity.current
     val fn = session.latches.fn.active()
     val rows = KeyLayouts.rows(compact, fn)
 
-    // The on-screen keyboard's inset is measured from the bottom of the window, but this row sits
-    // inside a container that may already stop short of it — a bottom navigation bar, for one. Pad
-    // by the difference or the row floats exactly one nav bar above the keys, which is the gap.
+    // No docking arithmetic here. The keyboard is paid for once, at the app root, by the only
+    // surface that reaches the window's bottom edge. Reconciling `WindowInsets.ime` against a
+    // slack derived from `containerSize` and `positionInWindow` looked right on an emulator with
+    // no display cutout and left exactly the cutout's height as a gap on every phone that has one.
     //
-    // The gesture handle is the same kind of fact as the keyboard — something the system draws
-    // across the bottom of the window — so it goes through the same subtraction rather than a
-    // padding of its own. Whichever is taller wins: the keyboard's inset already covers the
-    // handle, and on the pane screen the bottom navigation covers it too, so this adds nothing
-    // there and everything in the mosaic switcher, which has no navigation under it at all.
+    // What is left is a value, not a measurement: `bottom` is the gesture handle when this row is
+    // what ends at the window, and zero when it is not — the pane screen's bottom navigation is
+    // already holding the handle off, and it says so by taking the edge off what it holds. Which
+    // is why this row does *not* pay on the pane screen, and why paying anyway put 46 dp of dead
+    // strip between the last key and a navigation bar.
     val safe = LocalSafeArea.current
-    val windowHeight = LocalWindowInfo.current.containerSize.height.toFloat()
-    var slack by remember { mutableFloatStateOf(0f) }
-    val osk = with(density) { rememberOskInset().toPx() }
-    val floor = with(density) { max(osk, safe.bottom.toPx()) }
-    val dock = with(density) { (floor - slack).coerceAtLeast(0f).toDp() }
 
     Column(
         modifier
-            .onGloballyPositioned { coordinates ->
-                slack = (windowHeight - coordinates.positionInWindow().y - coordinates.size.height)
-                    .coerceAtLeast(0f)
-            }
             .background(tokens.color.bar)
             .edgeTop()
             .group()
-            .padding(bottom = dock)
             .absolutePadding(
                 left = 8.dp + safe.left,
                 top = if (compact) 6.dp else 10.dp,
                 right = 8.dp + safe.right,
+                bottom = safe.bottom,
             ),
         verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
     ) {

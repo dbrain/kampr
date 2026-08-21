@@ -3,10 +3,13 @@ package dev.kampr.terminal
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -16,6 +19,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.theme.KamprFonts
@@ -24,8 +28,12 @@ import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.typography
+import dev.kampr.shared.ui.BottomEdgeHeldBelow
+import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.SafeArea
+import dev.kampr.shared.ui.Tab
+import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.PanePrefs
@@ -44,9 +52,9 @@ private val SIDE_BARS = listOf(
     SafeArea(top = 24.dp, bottom = 0.dp, left = 0.dp, right = 48.dp),
 )
 
-// Taller than the gesture handle on purpose: a bottom navigation bar is what actually sits under
-// the key row on the pane screen, and it already keeps its own labels clear of the handle.
-private val NAV = 70.dp
+// Gboard on a 1080x2400 phone. `bottom` is zero because an open keyboard is drawn over the
+// navigation bar and `safeAreaOf` has already taken it — SafeAreaValueTest is what pins that.
+private val KEYBOARD = SafeArea(top = 32.dp, bottom = 0.dp, ime = 300.dp)
 
 private const val PANE = "01JNODE/w1:p1"
 
@@ -66,20 +74,52 @@ private fun ComposeUiTest.lowestCap(): Dp = LAST_ROW
     .also { assertTrue(it.isNotEmpty(), "no key caps on screen, so nothing was measured") }
     .maxOf { with(density) { it.boundsInRoot.bottom.toDp() } }
 
+// The shape the phone actually stacks, whichever way round: the app root pays the keyboard once,
+// the screen sits inside it, and the bottom navigation — when there is one — sits under the screen
+// and takes the bottom edge off it. `nav` is the only thing that moves between the two containers
+// this row lives in: the pane screen wears one, the mosaic switcher wears nothing at all.
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.keyRow(compact: Boolean, below: Dp, bars: SafeArea = BARS) {
+private fun ComposeUiTest.keyRow(
+    compact: Boolean,
+    bars: SafeArea = BARS,
+    nav: Boolean = false,
+): MutableState<Dp> {
     val pane = PaneState(PANE, StyleTable())
     val session = PaneSession(PANE)
+    val navTop = mutableStateOf(Dp.Unspecified)
     setContent {
         CompositionLocalProvider(LocalTokens provides testTokens(), LocalSafeArea provides bars) {
-            Column(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f))
-                PaneKeyRow(session, InputSink(pane.id, SilentIo, session.latches), compact, enabled = true)
-                if (below > 0.dp) Box(Modifier.height(below))
+            Box(Modifier.fillMaxSize().keyboardInset()) {
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        BottomEdgeHeldBelow(nav) {
+                            Column(Modifier.fillMaxSize()) {
+                                Box(Modifier.weight(1f))
+                                PaneKeyRow(
+                                    session,
+                                    InputSink(pane.id, SilentIo, session.latches),
+                                    compact,
+                                    enabled = true,
+                                )
+                            }
+                        }
+                    }
+                    if (nav) {
+                        val density = LocalDensity.current
+                        Box(
+                            Modifier.onGloballyPositioned {
+                                navTop.value = with(density) { it.positionInRoot().y.toDp() }
+                            },
+                        ) {
+                            BottomNav(Tab.Pane, {})
+                        }
+                    }
+                }
             }
         }
     }
     waitForIdle()
+    return navTop
 }
 
 // The key row docks above whatever the system is drawing at the bottom of the window — and above
@@ -91,7 +131,7 @@ class KeyRowSafeAreaTest {
     fun theKeyRowClearsTheGestureHandleWhenItIsTheLastThingInTheWindow() {
         for (compact in listOf(false, true)) {
             runComposeUiTest {
-                keyRow(compact, below = 0.dp)
+                keyRow(compact)
                 val screen = onRoot().getUnclippedBoundsInRoot()
                 assertTrue(
                     lowestCap() <= screen.bottom - BARS.bottom,
@@ -106,7 +146,7 @@ class KeyRowSafeAreaTest {
     fun theKeyRowClearsTheBarsThatMoveToTheSideInLandscape() {
         for (bars in SIDE_BARS) {
             runComposeUiTest {
-                keyRow(compact = true, below = 0.dp, bars = bars)
+                keyRow(compact = true, bars = bars)
                 val screen = onRoot().getUnclippedBoundsInRoot()
                 val caps = LAST_ROW
                     .flatMap { onAllNodesWithContentDescription(it, substring = true).fetchSemanticsNodes() }
@@ -126,17 +166,39 @@ class KeyRowSafeAreaTest {
         }
     }
 
+    // The other half, and the one a fix for the first half breaks: on the pane screen the bottom
+    // navigation is under the key row and is already holding the handle off, so a row that pays
+    // again leaves a dead strip between the last key and the tabs.
     @Test
-    fun theKeyRowAddsNothingWhenSomethingElseAlreadyCoversTheHandle() {
+    fun theKeyRowAddsNothingWhenTheBottomNavigationAlreadyCoversTheHandle() {
         for (compact in listOf(false, true)) {
             runComposeUiTest {
-                keyRow(compact, below = NAV)
-                val screen = onRoot().getUnclippedBoundsInRoot()
-                val gap = screen.bottom - NAV - lowestCap()
+                val navTop = keyRow(compact, nav = true)
+                assertTrue(navTop.value.isSpecified, "the bottom navigation never laid out")
+                val gap = navTop.value - lowestCap()
                 assertTrue(
                     abs(gap.value) < 1f,
-                    "compact=$compact: $gap of dead strip between the last key and the $NAV of " +
-                        "navigation bar that is already holding the handle off",
+                    "compact=$compact: $gap of dead strip between the last key and the bottom " +
+                        "navigation at ${navTop.value}, which is already holding the handle off",
+                )
+            }
+        }
+    }
+
+    // The report, verbatim: "keyboard opens up on terminal, there's a space between keyboard and
+    // the ctrl/pgdown/pgend keys". The keys are what the row docks on, and the tabs stand down
+    // while it is up, so the row is the last thing in the window again.
+    @Test
+    fun theKeyRowLandsOnTheKeysWithTheKeyboardUp() {
+        for (compact in listOf(false, true)) {
+            runComposeUiTest {
+                keyRow(compact, bars = KEYBOARD)
+                val screen = onRoot().getUnclippedBoundsInRoot()
+                val gap = screen.bottom - KEYBOARD.ime - lowestCap()
+                assertTrue(
+                    abs(gap.value) < 1f,
+                    "compact=$compact: $gap between the last key and the keys, which start at " +
+                        "${screen.bottom - KEYBOARD.ime} of ${screen.bottom}",
                 )
             }
         }

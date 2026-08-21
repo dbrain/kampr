@@ -30,6 +30,7 @@ import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.terminal.TerminalSurfaces
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -43,10 +44,12 @@ private fun testTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, 
 // out. A stub surface would prove the bar moved and nothing about the grid the bar sits on.
 private class ChromeProbe(private val inner: PaneSurfaces = TerminalSurfaces()) : PaneSurfaces {
     var top: Dp? = null
+    var bottom: Dp? = null
 
     @Composable
     override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) {
         top = LocalPaneChrome.current?.top
+        bottom = LocalSafeArea.current.bottom
         inner.Terminal(pane, info, modifier)
     }
 
@@ -172,6 +175,44 @@ class MosaicSafeAreaTest {
             "the mosaic status row reaches $bottom of ${screen.bottom}, inside the ${BARS.bottom} " +
                 "the system draws its gesture handle in",
         )
+    }
+
+    // A cell is not the bottom of the window — the status row is — so a terminal in one owes
+    // nothing at its own bottom edge, and the switcher, which has no status row, owes the handle.
+    // Both, or "the mosaic never pays" and "the mosaic always pays" would each pass half of it.
+    @Test
+    fun aDesktopCellLeavesTheHandleToTheStatusRowAndTheSwitcherPaysItItself() {
+        runComposeUiTest {
+            val probe = ChromeProbe()
+            val fixture = Fixture().apply { fourPanes() }
+            setContent {
+                CompositionLocalProvider(
+                    LocalTokens provides testTokens(),
+                    LocalPaneIo provides ArtboardIo,
+                    LocalSafeArea provides BARS,
+                ) {
+                    Box(Modifier.fillMaxSize()) {
+                        MosaicScreen(
+                            store = fixture.store,
+                            mosaic = fixture.mosaic,
+                            herd = fixture.store.herd.value,
+                            connectionStatus = ConnectionStatus.Live("full"),
+                            build = "0.1.0",
+                            surfaces = probe,
+                            onHerd = {},
+                            onAdd = {},
+                        )
+                    }
+                }
+            }
+            waitForIdle()
+            assertEquals(0.dp, probe.bottom, "a cell above the status row was told to pay the handle")
+        }
+        runComposeUiTest {
+            val probe = ChromeProbe()
+            switcher(landscape = false, probe = probe)
+            assertEquals(BARS.bottom, probe.bottom, "the switcher has nothing under it and must pay")
+        }
     }
 
     @Test

@@ -97,7 +97,13 @@ pub fn install(
 /// `/var/lib/systemd/linger/<user>` is the file logind reads at boot, so it answers even when the
 /// bus is out of reach — which is exactly the case on the hosts where this matters most.
 pub fn linger(user: &str) -> Option<bool> {
-    let dir = Path::new("/var/lib/systemd/linger");
+    // Overridable because it is the one input a test cannot sandbox: `XDG_*` and the bus addresses
+    // redirect everything else, and this absolute path made the result depend on whether the host
+    // running the suite happened to have lingering on.
+    let dir = std::env::var_os("KAMPR_LINGER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/systemd/linger"));
+    let dir = dir.as_path();
     if dir.is_dir() {
         return Some(dir.join(user).exists());
     }

@@ -23,6 +23,7 @@ import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.Icon
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
@@ -61,10 +62,15 @@ fun MosaicScreen(
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         MosaicBar(mosaic, herd, onHerd, onAdd)
         Box(Modifier.weight(1f).fillMaxWidth().background(tokens.color.line)) {
-            if (mosaic.panes.isEmpty()) {
-                EmptyMosaic(onAdd)
-            } else {
-                MosaicGrid(store, mosaic, herd, surfaces)
+            // The status row below is what ends at the window, so a cell owes nothing at its own
+            // bottom edge — and a terminal that paid anyway floated its controls a gesture
+            // handle's worth above the grid it belongs to.
+            BottomEdgeHeldBelow(held = true) {
+                if (mosaic.panes.isEmpty()) {
+                    EmptyMosaic(onAdd)
+                } else {
+                    MosaicGrid(store, mosaic, herd, surfaces)
+                }
             }
         }
         MosaicStatus(mosaic, herd, connectionStatus, build)

@@ -3,14 +3,8 @@ package dev.kampr.terminal.input
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import dev.kampr.terminal.PaneSession
 import kotlin.js.ExperimentalWasmJsInterop
 
@@ -38,7 +32,7 @@ private fun installInput() {
                 'background:transparent;overflow:hidden;z-index:-1;';
             document.body.appendChild(el);
 
-            var state = { el: el, queue: [], osk: 0 };
+            var state = { el: el, queue: [] };
             globalThis.__kamprInput = state;
 
             var composed = '';
@@ -151,16 +145,6 @@ private fun installInput() {
                 }
             });
 
-            function measure() {
-                var v = window.visualViewport;
-                state.osk = v ? Math.max(0, window.innerHeight - v.height - v.offsetTop) : 0;
-            }
-            measure();
-            if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', measure);
-                window.visualViewport.addEventListener('scroll', measure);
-            }
-            window.addEventListener('resize', measure);
         })()
         """
     )
@@ -184,10 +168,6 @@ private fun focusInput(open: Boolean) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
-private fun oskCssPx(): Double =
-    js("(globalThis.__kamprInput ? globalThis.__kamprInput.osk : 0)")
-
 @Composable
 actual fun PaneTextInput(
     session: PaneSession,
@@ -208,18 +188,4 @@ actual fun PaneTextInput(
         }
     }
     Box(modifier)
-}
-
-@Composable
-actual fun rememberOskInset(): Dp {
-    var inset by remember { mutableStateOf(0.dp) }
-    LaunchedEffect(Unit) {
-        installInput()
-        while (true) {
-            withFrameNanos { }
-            val next = oskCssPx().dp
-            if (next != inset) inset = next
-        }
-    }
-    return inset
 }
