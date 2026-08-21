@@ -770,7 +770,7 @@ uninstall, `[[panes]]` with `placement = "popup"` opens the setup ladder in a He
 **Standalone**, for people not using the plugin surface:
 
 ```bash
-curl -fsSL https://github.com/dbrain/campr/releases/latest/download/install.sh -o install.sh
+curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
 sh install.sh
 kampr init            # config, node keypair, URL + pairing code, QR
 kampr service install # systemd --user unit (launchd on macOS), plus loginctl enable-linger

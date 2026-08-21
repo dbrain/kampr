@@ -1,6 +1,6 @@
 #!/bin/sh
 # Downloads, verifies and installs the kampr binary for this host.
-#   curl -fsSL https://github.com/dbrain/campr/releases/latest/download/install.sh -o install.sh
+#   curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
 #   sh install.sh
 # Fetch to a file rather than piping into sh: `curl -fsSL ... | sh` pipes nothing into sh on a
 # 404 and the pipeline still reports success, so a missing release fails silently.
@@ -10,7 +10,7 @@
 #
 # Environment:
 #   KAMPR_PREFIX          where to put the binary (default ~/.local/bin)
-#   KAMPR_REPO            owner/repo (default dbrain/campr)
+#   KAMPR_REPO            owner/repo (default dbrain/kampr)
 #   KAMPR_VERSION         tag, or `latest` (default latest)
 #   KAMPR_BASE_URL        override the whole download base — a file:// URL works, for testing
 #   KAMPR_MODE            plugin | standalone (default standalone; plugin drops the epilogue)
@@ -18,7 +18,7 @@
 set -eu
 
 PREFIX="${KAMPR_PREFIX:-$HOME/.local/bin}"
-REPO="${KAMPR_REPO:-dbrain/campr}"
+REPO="${KAMPR_REPO:-dbrain/kampr}"
 VERSION="${KAMPR_VERSION:-latest}"
 MODE="${KAMPR_MODE:-standalone}"
 ISSUER="https://token.actions.githubusercontent.com"

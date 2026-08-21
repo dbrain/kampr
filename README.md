@@ -79,7 +79,7 @@ There is no published release yet, so the documented `curl | sh` installer and
 **embeds** the web client, so the bundle is staged before cargo runs.
 
 ```bash
-git clone https://github.com/dbrain/campr && cd campr
+git clone https://github.com/dbrain/kampr && cd kampr
 
 # Stage the web client into the node's embedded assets.
 # `env -u GRADLE_HOME` matters: a system GRADLE_HOME overrides the wrapper and
