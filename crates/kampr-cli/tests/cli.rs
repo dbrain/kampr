@@ -715,6 +715,12 @@ struct Upstream {
 
 impl Upstream {
     fn serving(body: &'static str) -> Self {
+        Self::routing(Box::leak(Box::new([("", body)])))
+    }
+
+    /// Path prefix to body, first match wins; `""` is the catch-all. Anything unmatched is a 404,
+    /// which is what a proxy that answers `/.well-known` itself does.
+    fn routing(routes: &'static [(&'static str, &'static str)]) -> Self {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port();
@@ -728,10 +734,20 @@ impl Upstream {
                 let Ok(mut stream) = stream else { return };
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
                 let mut scratch = [0u8; 2048];
-                let _ = stream.read(&mut scratch);
+                let read = stream.read(&mut scratch).unwrap_or(0);
+                let request = String::from_utf8_lossy(&scratch[..read]).into_owned();
+                let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let found = routes
+                    .iter()
+                    .find(|(prefix, _)| prefix.is_empty() || path.starts_with(prefix))
+                    .map(|(_, body)| *body);
+                let (status, body) = match found {
+                    Some(body) => ("200 OK", body),
+                    None => ("404 Not Found", "not found"),
+                };
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
             }
@@ -816,5 +832,81 @@ fn doctor_does_not_call_a_stopped_node_a_broken_proxy() {
     assert!(
         origin["detail"].as_str().unwrap().contains("nothing answers"),
         "{origin:#}"
+    );
+}
+
+/// Eleven checks and nothing said whether the one file Android reads before it will let the app
+/// hold a passkey is actually reachable. The node builds it correctly and a proxy eats it.
+#[test]
+fn doctor_says_when_the_well_known_path_never_reaches_the_node() {
+    let cli = Cli::new();
+    cli.init();
+    let node_id = field(&cli.config_text(), "node_id");
+    let body: &'static str = Box::leak(format!(r#"{{"node_id":"{node_id}"}}"#).into_boxed_str());
+    // Answers /api/node as this node and 404s everything else — a Proxy Host with its own
+    // /.well-known location block, which is the common shape of this.
+    let upstream = Upstream::routing(Box::leak(Box::new([("/api/node", body)])));
+    cli.run(&["init", "--origin", &upstream.origin()]);
+    force_a_registrable_origin(&cli, upstream.port);
+
+    let out = cli.run(&["doctor", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "fail", "{json:#}");
+    assert!(
+        check["fix"].as_str().unwrap().contains("/.well-known"),
+        "the fix has to name the path being eaten: {check:#}",
+    );
+}
+
+#[test]
+fn doctor_confirms_the_asset_links_file_when_the_origin_serves_the_node_s_own() {
+    let cli = Cli::new();
+    cli.init();
+    let node_id = field(&cli.config_text(), "node_id");
+    let node: &'static str = Box::leak(format!(r#"{{"node_id":"{node_id}"}}"#).into_boxed_str());
+    let links: &'static str = Box::leak(
+        format!(
+            r#"[{{"relation":["delegate_permission/common.get_login_creds"],"target":{{"namespace":"android_app","package_name":"dev.kampr.app","sha256_cert_fingerprints":["{}"]}}}}]"#,
+            kampr_node::assetlinks::RELEASE_FINGERPRINT
+        )
+        .into_boxed_str(),
+    );
+    let upstream = Upstream::routing(Box::leak(Box::new([
+        ("/.well-known/assetlinks.json", links),
+        ("", node),
+    ])));
+    cli.run(&["init", "--origin", &upstream.origin()]);
+    force_a_registrable_origin(&cli, upstream.port);
+
+    let json = cli.json(&["doctor", "--json"]);
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "ok", "{json:#}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("dev.kampr.app"),
+        "{check:#}"
+    );
+}
+
+/// A loopback *IP* is a secure context and still not a registrable domain, so the tier is 0 and
+/// the check is deliberately quiet. `localhost` is the one origin that is both.
+fn force_a_registrable_origin(cli: &Cli, port: u16) {
+    let text = cli.config_text().replace(
+        &format!("http://127.0.0.1:{port}"),
+        &format!("http://localhost:{port}"),
+    );
+    std::fs::write(cli.config.join("config.toml"), text).expect("config");
+}
+
+#[test]
+fn doctor_is_quiet_about_asset_links_on_a_node_that_cannot_do_passkeys_at_all() {
+    let cli = Cli::new();
+    cli.run(&["init", "--origin", "http://192.168.1.24:8790"]);
+    let json = cli.json(&["doctor", "--json"]);
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "ok", "{json:#}");
+    assert!(
+        check["fix"].is_null(),
+        "there is nothing to fix at tier 0: {check:#}"
     );
 }

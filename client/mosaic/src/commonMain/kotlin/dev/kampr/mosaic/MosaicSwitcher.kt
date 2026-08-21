@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,6 +49,7 @@ import dev.kampr.shared.ui.GlyphAction
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LocalPaneChrome
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.edge
@@ -76,8 +78,12 @@ fun MosaicSwitcher(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
     val paneId = mosaic.focused
-    val chrome: Dp = if (landscape) SWITCHER_LANDSCAPE else SWITCHER_PORTRAIT + SWITCHER_STRIP
+    // The one place in the app where the chrome over a terminal is a constant rather than a
+    // measured height, so the status bar has to be added here as well as to the bar itself: the
+    // grid keeps painting under the clock, and its scrollable content stops below the bar.
+    val chrome: Dp = safe.top + if (landscape) SWITCHER_LANDSCAPE else SWITCHER_PORTRAIT + SWITCHER_STRIP
 
     Box(modifier.fillMaxSize().clipToBounds().background(tokens.color.surface2)) {
         if (paneId == null) {
@@ -100,7 +106,12 @@ fun MosaicSwitcher(
         Column(Modifier.align(Alignment.TopStart).fillMaxWidth()) {
             if (landscape) {
                 Row(
-                    Modifier.fillMaxWidth().background(tokens.color.bar).edgeBottom().height(SWITCHER_LANDSCAPE),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(tokens.color.bar)
+                        .edgeBottom()
+                        .height(SWITCHER_LANDSCAPE + safe.top)
+                        .absolutePadding(left = safe.left, top = safe.top, right = safe.right),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BackAction("Back to the herd", onHerd, target = LANDSCAPE_TOUCH)
@@ -109,7 +120,11 @@ fun MosaicSwitcher(
                 }
             } else {
                 Row(
-                    Modifier.fillMaxWidth().background(tokens.color.bar).height(SWITCHER_PORTRAIT),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(tokens.color.bar)
+                        .height(SWITCHER_PORTRAIT + safe.top)
+                        .absolutePadding(left = safe.left, top = safe.top, right = safe.right),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BackAction("Back to the herd", onHerd)
@@ -123,7 +138,12 @@ fun MosaicSwitcher(
                     Trailing(mosaic, herd, onAdd)
                 }
                 Row(
-                    Modifier.fillMaxWidth().background(tokens.color.bar).edgeBottom().height(SWITCHER_STRIP),
+                    Modifier
+                        .fillMaxWidth()
+                        .background(tokens.color.bar)
+                        .edgeBottom()
+                        .height(SWITCHER_STRIP)
+                        .absolutePadding(left = safe.left, right = safe.right),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Strip(mosaic, herd, Modifier.weight(1f))

@@ -297,7 +297,7 @@ installed the app.
 | | |
 |---|---|
 | `kampr status` | What this node is, whether it is reachable, which tier, how many devices |
-| `kampr doctor` | 11 checks on everything that has to be true; `--json` for scripts |
+| `kampr doctor` | 12 checks on everything that has to be true; `--json` for scripts |
 | `kampr setup` | The interactive ladder — pair, list, revoke, install the service |
 | `kampr pair [--readonly]` | A pairing code, without the menu |
 | `kampr recover` | Get back in when no paired device is left |

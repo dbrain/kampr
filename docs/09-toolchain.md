@@ -114,6 +114,11 @@ Two things the file alone does not buy, both recorded as probes: Credential Mana
 `android:apk-key-hash:` origin rather than an `https://` one (#113), and `webauthn-rs`' generic
 passkey options describe a ceremony Android cannot perform (#114). Both are handled node-side.
 
+`kampr doctor` reports whether the origin actually serves the file, because the node always builds
+it correctly and the thing that breaks is the path to it — a proxy with its own `/.well-known`
+location block reads as a perfectly healthy node right up to the moment a ceremony is refused
+(#122). Below Tier 1 the check stays quiet: there is no ceremony to fail.
+
 Note that **passkey creation cannot be verified on a stock emulator** — an AVD with no Google
 account has no credential provider at all (#116). It has therefore never been done anywhere; run it
 once against a real phone.

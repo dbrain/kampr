@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,10 +103,20 @@ fun BottomSheet(
         ) {
             val wanted = if (breakpoint == Breakpoint.Portrait) SHEET_MAX_WIDTH else SHEET_WIDE_WIDTH
             val width = if (maxWidth < wanted) maxWidth else wanted
-            val tall = maxHeight * (if (breakpoint == Breakpoint.Portrait) 0.92f else 0.94f)
+            // The sheet is the bottom of the window, which is where the gesture handle is drawn,
+            // so it stops above it rather than putting its last button underneath it.
+            val safe = LocalSafeArea.current
+            val room = maxHeight - safe.top - safe.bottom
+            val tall = room * (if (breakpoint == Breakpoint.Portrait) 0.92f else 0.94f)
             val shape = RoundedCornerShape(tokens.radii.lg)
             Column(
                 Modifier
+                    .absolutePadding(
+                        left = safe.left,
+                        top = safe.top,
+                        right = safe.right,
+                        bottom = safe.bottom,
+                    )
                     .width(width)
                     .heightIn(max = tall)
                     .background(tokens.color.bar, shape)

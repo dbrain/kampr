@@ -3,6 +3,7 @@
 //! Every check answers three questions in this order: what is true, why that matters, and the
 //! command that changes it. A check with no fix to offer is a check that should not exist.
 
+mod assetlinks;
 mod cert;
 mod exposure;
 mod herd;
@@ -119,6 +120,7 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.extend(herd::checks(&config).await);
     checks.extend(exposure::checks(&config));
     checks.push(origin::check(&config).await);
+    checks.push(assetlinks::check(&config).await);
     checks.extend(host::files(&config_dir, &state_dir));
     checks.push(host::bundle());
     let service = crate::service::details();

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -42,6 +43,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalPaneChrome
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.PaneView
@@ -72,6 +74,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.max
 import kotlin.math.min
 
 private const val CURSOR_BLINK_MS = 530L
@@ -165,7 +168,12 @@ fun TerminalView(
     BoxWithConstraints(modifier.fillMaxSize().background(ground)) {
         val density = LocalDensity.current
         val breakpoint = breakpointOf(maxWidth, maxHeight)
-        val chromeBottom = session.keyRowHeight + pendingInsetPx(pane, density)
+        // The key row already stands off the gesture handle, so its measured height is normally
+        // the taller of the two. The floor is for the layouts that have no key row at all — the
+        // grid is still allowed under the handle, the controls floating over it are not.
+        val safe = LocalSafeArea.current
+        val chromeBottom =
+            max(session.keyRowHeight, with(density) { safe.bottom.toPx() }) + pendingInsetPx(pane, density)
         // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
         // from its own size is what would leave blank rows under the last line.
         val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
@@ -414,7 +422,11 @@ fun TerminalView(
             Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(bottom = with(density) { chromeBottom.toDp() }),
+                .absolutePadding(
+                    left = safe.left,
+                    right = safe.right,
+                    bottom = with(density) { chromeBottom.toDp() },
+                ),
         ) {
             if (review.active) {
                 ReviewStrip(

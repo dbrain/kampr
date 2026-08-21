@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -28,12 +29,14 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.ui.group
 import dev.kampr.shared.ui.named
 import dev.kampr.terminal.PaneSession
+import kotlin.math.max
 
 @Composable
 fun PaneKeyRow(
@@ -51,10 +54,18 @@ fun PaneKeyRow(
     // The on-screen keyboard's inset is measured from the bottom of the window, but this row sits
     // inside a container that may already stop short of it — a bottom navigation bar, for one. Pad
     // by the difference or the row floats exactly one nav bar above the keys, which is the gap.
+    //
+    // The gesture handle is the same kind of fact as the keyboard — something the system draws
+    // across the bottom of the window — so it goes through the same subtraction rather than a
+    // padding of its own. Whichever is taller wins: the keyboard's inset already covers the
+    // handle, and on the pane screen the bottom navigation covers it too, so this adds nothing
+    // there and everything in the mosaic switcher, which has no navigation under it at all.
+    val safe = LocalSafeArea.current
     val windowHeight = LocalWindowInfo.current.containerSize.height.toFloat()
     var slack by remember { mutableFloatStateOf(0f) }
     val osk = with(density) { rememberOskInset().toPx() }
-    val dock = with(density) { (osk - slack).coerceAtLeast(0f).toDp() }
+    val floor = with(density) { max(osk, safe.bottom.toPx()) }
+    val dock = with(density) { (floor - slack).coerceAtLeast(0f).toDp() }
 
     Column(
         modifier
@@ -66,7 +77,11 @@ fun PaneKeyRow(
             .edgeTop()
             .group()
             .padding(bottom = dock)
-            .padding(start = 8.dp, top = if (compact) 6.dp else 10.dp, end = 8.dp),
+            .absolutePadding(
+                left = 8.dp + safe.left,
+                top = if (compact) 6.dp else 10.dp,
+                right = 8.dp + safe.right,
+            ),
         verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
     ) {
         for (row in rows) {

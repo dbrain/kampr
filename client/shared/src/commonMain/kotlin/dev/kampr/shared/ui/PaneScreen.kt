@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -69,9 +70,15 @@ fun PaneScreenMobile(
 ) {
     val tokens = Kampr.tokens
     val density = LocalDensity.current
+    val safe = LocalSafeArea.current
     // The terminal paints edge to edge and insets its scrollable content by whatever the chrome
     // above it takes. A guessed constant is a row of the grid hidden behind the bar with no
     // scroll left to reach it, so the number comes off the bar's own layout.
+    //
+    // Which is also why the status bar is paid for *here*, inside the bar's own background, rather
+    // than by padding the screen: the bar's ground still runs under the clock so no grid shows
+    // through it, the bar grows by exactly the inset, and the number the terminal is handed grows
+    // with it. Padding the screen would letterbox the grid, which is the one thing it must not do.
     var chrome by remember { mutableStateOf<Dp?>(null) }
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
@@ -98,7 +105,12 @@ fun PaneScreenMobile(
                 Modifier
                     .fillMaxWidth()
                     .background(tokens.color.bar)
-                    .padding(start = 16.dp, top = if (landscape) 8.dp else 14.dp, end = 16.dp, bottom = if (landscape) 8.dp else 11.dp),
+                    .absolutePadding(
+                        left = 16.dp + safe.left,
+                        top = safe.top + if (landscape) 8.dp else 14.dp,
+                        right = 16.dp + safe.right,
+                        bottom = if (landscape) 8.dp else 11.dp,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
             ) {
@@ -137,7 +149,7 @@ fun PaneScreenMobile(
                         .fillMaxWidth()
                         .background(tokens.color.bar)
                         .edgeBottom()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 11.dp),
+                        .absolutePadding(left = 16.dp + safe.left, right = 16.dp + safe.right, bottom = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -257,6 +269,7 @@ fun PaneScreenDesktop(
 ) {
     val tokens = Kampr.tokens
     val density = LocalDensity.current
+    val safe = LocalSafeArea.current
     var chrome by remember { mutableStateOf<Dp?>(null) }
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
@@ -284,7 +297,7 @@ fun PaneScreenDesktop(
                 .edgeBottom()
                 .readingOrder(-1f)
                 .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } }
-                .padding(horizontal = 18.dp, vertical = 13.dp),
+                .absolutePadding(left = 18.dp + safe.left, top = 13.dp + safe.top, right = 18.dp + safe.right, bottom = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {

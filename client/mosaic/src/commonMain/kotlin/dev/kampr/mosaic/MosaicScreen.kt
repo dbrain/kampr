@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,7 @@ import dev.kampr.shared.ui.Icon
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.Pill
 import dev.kampr.shared.ui.Segmented
@@ -112,12 +114,18 @@ private fun MosaicBar(mosaic: MosaicState, herd: Herd, onHerd: () -> Unit, onAdd
     // both running `default` one session.
     val sessions = herd.nodes.size
     val hosts = herd.nodes.map { it.host }.toSet().size
+    val safe = LocalSafeArea.current
     Row(
         Modifier
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeBottom()
-            .padding(horizontal = 18.dp, vertical = 11.dp),
+            .absolutePadding(
+                left = 18.dp + safe.left,
+                top = 11.dp + safe.top,
+                right = 18.dp + safe.right,
+                bottom = 11.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -191,13 +199,19 @@ private fun MosaicStatus(
     val tokens = Kampr.tokens
     val hub = herd.nodes.firstOrNull { it.kind == "local" }
     val live = connectionStatus is ConnectionStatus.Live
+    val safe = LocalSafeArea.current
     Row(
         Modifier
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
             .readingOrder(1f)
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .absolutePadding(
+                left = 18.dp + safe.left,
+                top = 8.dp,
+                right = 18.dp + safe.right,
+                bottom = 8.dp + safe.bottom,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(18.dp),
     ) {

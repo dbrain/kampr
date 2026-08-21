@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -22,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
@@ -265,7 +265,7 @@ private fun AppScaffold(
         }
         Box(Modifier.fillMaxSize().behindSheet()) {
             when (breakpoint) {
-                Breakpoint.Desktop -> Column(Modifier.fillMaxSize().padding(top = LocalSafeArea.current.top)) {
+                Breakpoint.Desktop -> Column(Modifier.fillMaxSize().screenInset(state.screen)) {
                     Row(Modifier.weight(1f)) {
                         HerdSidebar(
                             herd = herd,
@@ -328,7 +328,7 @@ private fun AppScaffold(
                 // from nowhere at all. It stays off a pane, where every row of height is the
                 // terminal's and `onBack` already leads out.
                 Breakpoint.Landscape -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).padding(top = contentInsetTop(state.screen))) {
+                    Box(Modifier.weight(1f).screenInset(state.screen)) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -383,7 +383,7 @@ private fun AppScaffold(
                 }
 
                 Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).padding(top = contentInsetTop(state.screen))) {
+                    Box(Modifier.weight(1f).screenInset(state.screen)) {
                         when (val screen = state.screen) {
                             is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
@@ -449,14 +449,22 @@ private fun AppScaffold(
     }
 }
 
-// The status bar's strip, kept off every screen but the pane.
+// What the system draws over, kept off every screen but the pane.
 //
 // The terminal paints to the edges on purpose and its own chrome decides where its controls sit,
 // so padding it here would take that away; it reads `LocalSafeArea` itself. Everything else is a
-// scrolling column of text that has no business under the clock.
+// scrolling column of text that has no business under the clock — or, rotated with three-button
+// navigation, under the navigation bar that has moved to the side of the screen. Chrome that
+// carries the bar colour — the sidebar's title row, the desktop status strip, the bottom
+// navigation — pays for its own edge instead, so its ground still runs under what the system draws.
+//
+// Never the bottom: whatever is below this box is the thing that owes the gesture handle.
 @Composable
-private fun contentInsetTop(screen: Screen): Dp =
-    if (screen is Screen.Pane) 0.dp else LocalSafeArea.current.top
+internal fun Modifier.screenInset(screen: Screen): Modifier {
+    if (screen is Screen.Pane) return this
+    val safe = LocalSafeArea.current
+    return absolutePadding(left = safe.left, top = safe.top, right = safe.right)
+}
 
 // error.code is an open string: an unrecognised code still shows its message.
 @Composable
@@ -541,7 +549,7 @@ private fun StatusStrip(
             .fillMaxWidth()
             .background(tokens.color.bar)
             .edgeTop()
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(start = 18.dp, top = 8.dp, end = 18.dp, bottom = 8.dp + LocalSafeArea.current.bottom),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
     ) {

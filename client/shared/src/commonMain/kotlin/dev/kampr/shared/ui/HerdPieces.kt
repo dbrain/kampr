@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -335,6 +336,7 @@ fun BlockedNotice(
 @Composable
 fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
     val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
     // The bar's *ground* still runs to the bottom of the screen — it is what the gesture handle
     // needs something behind it — but its labels stop above the strip the system draws in.
     Row(
@@ -343,7 +345,12 @@ fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
             .background(tokens.color.bar)
             .edgeTop()
             .readingOrder(1f)
-            .padding(top = 5.dp, bottom = 10.dp + LocalSafeArea.current.bottom),
+            .absolutePadding(
+                left = safe.left,
+                top = 5.dp,
+                right = safe.right,
+                bottom = 10.dp + safe.bottom,
+            ),
     ) {
         NavItem(Tab.Herd, "Herd", KamprIcons.herd, selected, onSelect)
         NavItem(Tab.Pane, "Pane", KamprIcons.pane, selected, onSelect)
