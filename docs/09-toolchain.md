@@ -24,9 +24,27 @@ machine and useless on a fresh one. A dependency pass stalled for an afternoon o
 | AGP | 9.3.1 | |
 
 Gradle 9.7.1 turns toolchain auto-provisioning without a declared repository into a **Gradle 10
-error**, so `settings.gradle.kts` carries `org.gradle.toolchains.foojay-resolver-convention`. The
-remaining blocker for Gradle 10 is `co.uzzu.dotenv` 4.0.0 calling `Project.getProperties`; 4.0.0 is
-the latest release, so there is nothing to bump to yet.
+error**, so `settings.gradle.kts` carries `org.gradle.toolchains.foojay-resolver-convention`.
+
+### The one thing standing between here and Gradle 10
+
+`co.uzzu.dotenv` 4.0.0 calls `Project.getProperties`, which errors under Gradle 10. It is the latest
+release, so there is nothing to bump to.
+
+**Nothing in this repo uses it.** Release signing goes through `configValue` in
+`androidApp/build.gradle.kts`, which is `providers.gradleProperty(…).orElse(providers.environmentVariable(…))`
+— Gradle's own provider API, not the plugin's `env`. A search for `env.` across every `.kts` in the
+tree returns nothing.
+
+The one candidate consumer is the **kobup publish helper**, applied from outside the repo via
+`apply(from = …/publish-to-kobup.gradle)`, alongside a `.env.template` holding `KOBUP_TOKEN=`. The
+plugin is applied to the root project, so that helper would see an `env` extension. Whether it reads
+one is unknown here — the helper is not on this machine.
+
+So: if the kobup helper does not reference `env`, the plugin is dead weight and deleting the alias
+from `client/build.gradle.kts` clears the last Gradle 10 blocker. If it does, `KOBUP_TOKEN` needs to
+reach it another way first. **Check the helper before deleting the line** — silently breaking Android
+publishing to tidy a warning about a Gradle version that is not out yet is a bad trade.
 
 ## Android
 

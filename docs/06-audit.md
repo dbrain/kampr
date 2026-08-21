@@ -219,7 +219,7 @@ Checked against code on 2026-08-21.
 | PWA manifest + service worker (P6.10) | **Built** — `manifest.webmanifest` and `sw.js` both ship. No install prompt; no offline shell, deliberately |
 | Kampr split view / mosaic (P4.5.8/P4.5.9) | **Built** — `client/mosaic` with `MosaicCell`, `MosaicSwitcher`, `PanePicker`, `MosaicLiveTest` |
 | Mesh latency indicator (P4.9) | **Built** — drawn in four places |
-| Kampr on Android as a *provider* (Phase 8.5) | Not started |
+| Kampr on Android as a *provider* (Phase 8.5) | **Cut** 2026-08-21 — the app sandbox makes it a novelty; the phone is a window onto other machines. Reasoning in the roadmap |
 | ARCHITECTURE.md, ADRs, threat model (P3.1, P9.2, P9.3) | **Written** — `ARCHITECTURE.md`, ten ADRs, `docs/08-threat-model.md` |
 | Terminal find | **Absent on both sides**, and named in the VT-emulator argument as one of its three payoffs |
 | Release tag | **Never pushed** — `git tag` is empty |

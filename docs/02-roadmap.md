@@ -19,7 +19,7 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision, verified install path, `kampr doctor`. |
 | **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) is done for navigation and shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md); the terminal has no review mode and undersized touch targets remain, both listed in the audit. **PWA (P6.10) is not built**, yet `security.installable` advertises it. |
 | **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
-| **Phase 8.5** | ⚠️ **Not started.** Kampr as an Android *provider* — distinct from the Android client, which ships. |
+| **Phase 8.5** | ➖ **Cut**, 2026-08-21. Kampr as an Android *provider*. The sandbox makes it a novelty — see below. |
 | **Phase 9** | ⚠️ Release workflow written and never run: no tag has been pushed, so aarch64 cross-compilation and cosign signing are untested. |
 | **Phase 4.5** | Server complete — all 13 `manage` ops. Client in flight. |
 
@@ -275,15 +275,31 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 
 ---
 
-## Phase 8.5 — Kampr on Android *(optional, gated on the provider seam)*
+## Phase 8.5 — Kampr on Android — **cut, 2026-08-21**
 
-Only worth starting once P1.3b exists. iOS has no equivalent and will not get one — third-party apps
-cannot spawn processes (findings §3.10).
+The plan was a local-PTY provider in the app sandbox, the way Termux does it, so the phone joined the
+mesh as a peer and its shells appeared in the herd beside every other machine's.
 
-- [ ] P8.5.1 Local-PTY provider: fork/exec + PTY inside the app sandbox, the way Termux does it
-- [ ] P8.5.2 Android node packaging — the phone joins the mesh as a peer
-- [ ] P8.5.3 Be honest about scope: app-uid shell, app sandbox and shared storage, not root
-- [ ] P8.5.4 Decide native app vs PWA once push and background behaviour are measured in the field
+**Cut because P8.5.3 was the whole answer.** The honest scope was always "app-uid shell, app sandbox
+and shared storage, not root" — a shell that cannot see anything on the phone worth reaching. That
+makes it a novelty rather than a capability, and it is not what a phone is for here: the phone is a
+*window onto other machines*, which is the thing Kampr already does.
+
+The cost avoided is not small — the node cross-compiled for Android as a library, a PTY
+implementation, JNI, and a process that has to survive backgrounding under exactly the rules
+`targetSdk` 37 has just tightened.
+
+**The provider seam stays, and still earns its place.** `Provider` in `kampr-core` was justified
+partly by this phase, so it is worth saying plainly that it does not fall with it: the seam is what
+keeps every herdr method name in one file, what the registry and backpressure tests drive instead of
+a live herd, and what would absorb a second source if one ever mattered. Do not remove it on the
+grounds that its headline use case is gone.
+
+**What would justify revisiting:** Android permitting a shell outside the app sandbox, or the user
+finding they actually work *on* the phone rather than *through* it. Neither looks likely.
+
+iOS was never possible and this does not change that — third-party apps cannot spawn processes
+(findings §3.10).
 
 ---
 
