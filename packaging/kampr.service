@@ -9,10 +9,20 @@ Type=simple
 ExecStart=@BIN@ serve --config-dir @CONFIG_DIR@ --state-dir @STATE_DIR@
 Restart=on-failure
 RestartSec=5
-# The node can type into every terminal in the herd, so deny escalation and give it a private /tmp.
+# A herdr session created through `manage{session.create}` is a child of this process and holds
+# the operator's agents. `control-group` (the default) and `mixed` both SIGKILL the whole cgroup
+# on stop, so `systemctl --user restart kampr` killed every session the node had ever created —
+# measured, all three modes, on this machine. `process` signals the main process and nothing else,
+# which is the only mode under which those sessions survive a restart. The node detaches them into
+# their own process group as the other half of the same guarantee.
+KillMode=process
+# The node can type into every terminal in the herd, so deny escalation.
 # ProtectSystem is deliberately unset: the state directory may be anywhere the operator chose.
+# PrivateTmp is deliberately unset too: sessions the node creates inherit its mount namespace, so
+# a private /tmp would hand every agent in a node-created pane a /tmp the operator's own shell
+# cannot see, and that vanishes under them on restart. It bought nothing against a process that
+# already drives every pane on the machine.
 NoNewPrivileges=yes
-PrivateTmp=yes
 Environment=HERDR_SOCKET_PATH=@SOCKET@
 
 [Install]

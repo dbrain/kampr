@@ -1,6 +1,9 @@
 #!/bin/sh
 # Downloads, verifies and installs the kampr binary for this host.
-#   curl -fsSL https://kampr.dev/install.sh | sh
+#   curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
+#   sh install.sh
+# Fetch to a file rather than piping into sh: `curl -fsSL ... | sh` pipes nothing into sh on a
+# 404 and the pipeline still reports success, so a missing release fails silently.
 #
 # `fetch-binary.sh` re-enters this script with KAMPR_MODE=plugin, so this is the only place that
 # knows how to name, fetch and verify a release. Two copies of that logic would drift.
@@ -146,12 +149,36 @@ case ":$PATH:" in
   *":$PREFIX:"*) ;;
   *) echo "kampr: $PREFIX is not on your PATH — add it, or run $PREFIX/kampr directly" ;;
 esac
+
+# Upgrading replaces the binary and nothing else: the old one keeps running under its supervisor
+# until something restarts it. Only the unit that names *this* binary is ours to restart.
+unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/kampr.service"
+plist="$HOME/Library/LaunchAgents/dev.kampr.node.plist"
+if [ -f "$unit" ] && grep -q "^ExecStart=$PREFIX/kampr " "$unit"; then
+  if systemctl --user restart kampr.service >/dev/null 2>&1; then
+    echo "kampr: restarted kampr.service onto the new binary"
+  else
+    echo "kampr: run 'systemctl --user restart kampr.service' to move the running node onto it"
+  fi
+elif [ -f "$plist" ] && grep -q "<string>$PREFIX/kampr</string>" "$plist"; then
+  if launchctl kickstart -k "gui/$(id -u)/dev.kampr.node" >/dev/null 2>&1; then
+    echo "kampr: restarted dev.kampr.node onto the new binary"
+  else
+    echo "kampr: run 'launchctl kickstart -k gui/$(id -u)/dev.kampr.node' to move the node onto it"
+  fi
+fi
+
 cat <<'NEXT'
 
 Next:
   kampr init             set up config and print your URL and pairing code
-  kampr service install  keep it running across reboots
+  kampr service install  keep it running across reboots, and say what else that needs
+  kampr doctor           check everything that has to be true, and say what is not
 
 It works immediately on your LAN over plain HTTP. Certificates, passkeys,
-notifications and extra machines are optional and offered from the setup screen.
+notifications and extra machines are optional rungs, printed by `kampr status`
+and offered from the setup screen in the app on your phone.
+
+To remove it: kampr service uninstall, then delete the binary and the two
+directories `kampr status` names.
 NEXT

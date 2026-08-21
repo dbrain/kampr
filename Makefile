@@ -20,8 +20,11 @@ android-bundle:
 android-install: android-release
 	adb install -r $(APK)
 
+# KAMPR_NODE=http://10.0.2.2:8793 additionally proves the app can still reach a plain-http node
+# on a private address, which is what targetSdk 37 gates behind ACCESS_LOCAL_NETWORK.
 android-test:
-	cd $(CLIENT) && $(GRADLE) :androidApp:connectedAndroidTest
+	cd $(CLIENT) && $(GRADLE) :androidApp:connectedAndroidTest \
+	  $(if $(KAMPR_NODE),-Pandroid.testInstrumentationRunnerArguments.kamprNode=$(KAMPR_NODE))
 
 android-publish:
 	cd $(CLIENT) && $(GRADLE) :androidApp:publishToKobup

@@ -54,12 +54,55 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The QR is decoded by an independent decoder rather than asserted against the bitmap that
+      # produced it. Without zbar the test skips, and KAMPR_QR_DECODE makes that skip a failure.
+      - run: sudo apt-get install -y zbar-tools
+      - name: install herdr
+        run: |
+          set -eu
+          curl -fsSL https://herdr.dev/latest.json -o latest.json
+          url=$(jq -er '.assets["linux-x86_64"]' latest.json)
+          want=$(jq -er '.sha256["linux-x86_64"]' latest.json)
+          curl -fsSL "$url" -o herdr
+          echo "$want  herdr" | sha256sum -c -
+          chmod +x herdr
+          mkdir -p "$HOME/.local/bin"
+          mv herdr "$HOME/.local/bin/herdr"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: ./gradlew build
         working-directory: client
+        env:
+          KAMPR_QR_DECODE: '1'
       - name: the build staged a real bundle
         run: |
           test -s crates/kampr-node/dist/index.html
           ls crates/kampr-node/dist/*.wasm >/dev/null
+      - run: cargo build -p kampr-cli
+      # LiveNodeTest is the only real-client-against-real-node test in the repo and had never run
+      # once — which is precisely why the client called four `/auth/*` paths no node has ever
+      # routed. KAMPR_LIVE makes a skip a failure, the same rule the rust job already applies.
+      - name: live client-against-node tests — a skip is a failure, not a pass
+        env:
+          KAMPR_LIVE: '1'
+          KAMPR_CONFIG_DIR: ${{ runner.temp }}/kampr/config
+          KAMPR_STATE_DIR: ${{ runner.temp }}/kampr/state
+        run: |
+          set -euo pipefail
+          herdr server &
+          for _ in $(seq 1 60); do [ -S "$HOME/.config/herdr/herdr.sock" ] && break; sleep 1; done
+          ./target/debug/kampr init --bind 127.0.0.1:8794 --name ci
+          ./target/debug/kampr serve &
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8794/api/node >/dev/null && break; sleep 1; done
+          code=$(./target/debug/kampr pair | tr -d '[:space:]')
+          token=$(curl -fsS -X POST http://127.0.0.1:8794/auth/pair \
+            -H 'content-type: application/json' \
+            -d "{\"code\":\"$code\",\"device_name\":\"ci\"}" | jq -er .token)
+          KAMPR_URL=http://127.0.0.1:8794 KAMPR_TOKEN="$token" \
+            ./client/gradlew -p client :shared:jvmTest \
+              --tests 'dev.kampr.shared.LiveNodeTest.theClientReadsTheAuthSurfaceOfARealNode' \
+              --tests 'dev.kampr.shared.LiveNodeTest.preferencesWrittenOnOneConnectionComeBackOnTheNext'
       - uses: actions/upload-artifact@v7
         with:
           name: client-bundle
@@ -103,6 +146,8 @@ jobs:
         run: shellcheck --shell=sh packaging/*.sh
       - name: install path
         run: sh packaging/selftest.sh
+      - name: plugin dispatcher
+        run: sh packaging/kamprctl-selftest.sh
       - name: plugin manifest parses and declares a version floor
         run: |
           python3 - <<'PY'
