@@ -180,7 +180,7 @@ jobs:
           rm -f ./*.sha256
           sha256sum -c SHA256SUMS
           cat SHA256SUMS
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
       # Keyless: the signing identity is this workflow at this tag, attested by GitHub's OIDC and
       # logged in Rekor. There is no private key to store, rotate or leak — which for a project
       # with no key-management story is the only signing scheme that stays honest.
@@ -236,7 +236,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
       - name: curl | sh, as documented
         env:
           KAMPR_VERSION: ${{ github.ref_name }}
