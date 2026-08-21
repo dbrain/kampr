@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -80,7 +81,10 @@ import kotlin.math.max
 import kotlin.math.min
 
 private const val CURSOR_BLINK_MS = 530L
-private const val INDICATOR_HEIGHT_DP = 22f
+
+// What the strip is assumed to take for the one frame before it has been measured. The measured
+// height replaces it immediately; nothing but the first paint ever depends on this number.
+private const val INDICATOR_FLOOR_DP = 36f
 private const val DECAY = 0.94f
 private const val PREFS_DEBOUNCE_MS = 400L
 private const val FONT_SETTLE_FRAMES = 120
@@ -179,13 +183,18 @@ fun TerminalView(
         // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
         // from its own size is what would leave blank rows under the last line.
         val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
+        // The strip measures itself. It carries the review bar when review is on, a pill sized by
+        // the touch rule and text sized by the type scale, and every one of those moves it.
+        val strip = if (session.indicatorHeight > 0f) {
+            session.indicatorHeight
+        } else {
+            with(density) { (INDICATOR_FLOOR_DP + if (review.active) REVIEW_BAR_DP else 0f).dp.toPx() }
+        }
         val paint = PaintRect(
             width = with(density) { maxWidth.toPx() },
             height = with(density) { maxHeight.toPx() },
             insetTop = with(density) { chromeTop.toPx() },
-            insetBottom = chromeBottom + with(density) {
-                (INDICATOR_HEIGHT_DP + if (review.active) REVIEW_BAR_DP else 0f).dp.toPx()
-            },
+            insetBottom = chromeBottom + strip,
         )
 
         var fontEpoch by remember(cache) { mutableIntStateOf(0) }
@@ -338,9 +347,18 @@ fun TerminalView(
                         if (transcript) add("Open the Conversation view" to { io.show(PaneView.Conversation) })
                     },
                 )
-                .pointerInput(pane.id) {
-                    terminalGestures(session, presets, paint, probe, ::tapped)
-                },
+                // A sheet over this surface is modal, and the grid's detector consumes the
+                // release — so leaving it live is what let a tap meant for the scrim raise the
+                // keyboard instead of closing the sheet.
+                .then(
+                    if (view.sheetOpen || session.confirm.held != null) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(pane.id) {
+                            terminalGestures(session, presets, paint, probe, ::tapped)
+                        }
+                    },
+                ),
         ) {
             Box(
                 Modifier
@@ -432,7 +450,10 @@ fun TerminalView(
                     left = safe.left,
                     right = safe.right,
                     bottom = with(density) { chromeBottom.toDp() },
-                ),
+                )
+                // Inside the padding on purpose: the paint already insets for the chrome this
+                // stands off, and measuring the padded node would count that chrome twice.
+                .onSizeChanged { session.indicatorHeight = it.height.toFloat() },
         ) {
             if (review.active) {
                 ReviewStrip(
@@ -486,7 +507,7 @@ fun TerminalView(
                 onDismiss = { view.target = null },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = with(density) { (chromeBottom + INDICATOR_HEIGHT_DP.dp.toPx()).toDp() }),
+                    .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),
             )
         }
 

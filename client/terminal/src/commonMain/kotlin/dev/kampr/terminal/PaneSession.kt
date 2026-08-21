@@ -25,6 +25,10 @@ class PaneSession(val paneId: String) {
         private set
     var keyRowHeight by mutableStateOf(0f)
 
+    // Measured, not guessed: the strip grows with the review pill, the type scale and the
+    // review bar, and a constant that is short by any of them paints the prompt behind it.
+    var indicatorHeight by mutableStateOf(0f)
+
     // Tapping the grid is the only way in, the way every terminal emulator behaves. A pan or a
     // pinch must not count as a tap, or the keyboard flickers on every flick.
     fun openKeyboard() {

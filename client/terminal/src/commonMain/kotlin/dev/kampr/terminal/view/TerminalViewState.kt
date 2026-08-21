@@ -60,9 +60,15 @@ class TerminalViewState {
         if (!chosen) zoom = value
     }
 
+    // Pan and scroll are distances across the surface, not across the viewport, so a change of
+    // cell size has to carry them or the viewport lands on a different row than the one being read.
     fun setZoom(value: Float, presets: ZoomPresets) {
         chosen = true
-        zoom = value.coerceIn(presets.minimum, presets.maximum)
+        val target = value.coerceIn(presets.minimum, presets.maximum)
+        val applied = if (zoom > 0f) target / zoom else 1f
+        panX *= applied
+        scrollY *= applied
+        zoom = target
     }
 
     fun drag(dx: Float, dy: Float) {

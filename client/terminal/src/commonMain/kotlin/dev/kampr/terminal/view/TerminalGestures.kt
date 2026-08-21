@@ -2,12 +2,14 @@ package dev.kampr.terminal.view
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -34,7 +36,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         view.velocityX = 0f
         view.velocityY = 0f
 
-        val held = awaitLongPressOrCancellation(down.id)
+        val held = awaitStillLongPress(down)
         if (held != null) {
             val anchor = probe.cellAt(held.position)
             view.selection = Selection(anchor, anchor, view.blockSelect)
@@ -49,7 +51,7 @@ internal suspend fun PointerInputScope.terminalGestures(
             return@awaitEachGesture
         }
 
-        // awaitLongPressOrCancellation consumes the release, so a quick tap ends the gesture here
+        // awaitStillLongPress consumes the release, so a quick tap ends the gesture here
         // and never reaches the pan loop below — waiting for another event would hang it.
         if (currentEvent.changes.none { it.pressed }) {
             onTap(down.position)
@@ -91,4 +93,29 @@ internal suspend fun PointerInputScope.terminalGestures(
         }
         session.reclaimKeyboard()
     }
+}
+
+// A long press is a press that stayed still, and only that. Asking `awaitLongPressOrCancellation`
+// alone asks how long the finger has been down and nothing about where it went — so a pinch, which
+// is never over in the 500ms the platform allows, arrived as a selection and the zoom never moved.
+// Travel past the touch slop, or a second finger, means the gesture belongs to the pan loop.
+private suspend fun AwaitPointerEventScope.awaitStillLongPress(
+    down: PointerInputChange,
+): PointerInputChange? = try {
+    withTimeout(viewConfiguration.longPressTimeoutMillis) {
+        var last = down.position
+        var travel = 0f
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.changes.count { it.pressed } > 1) break
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            travel += (change.position - last).getDistance()
+            last = change.position
+            if (travel > viewConfiguration.touchSlop) break
+        }
+        null
+    }
+} catch (_: PointerEventTimeoutCancellationException) {
+    down
 }

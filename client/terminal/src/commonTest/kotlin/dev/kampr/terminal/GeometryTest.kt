@@ -5,6 +5,7 @@ import dev.kampr.terminal.view.defaultZoom
 import dev.kampr.terminal.view.followCursorPan
 import dev.kampr.terminal.view.initialScroll
 import dev.kampr.terminal.view.terminalGeometry
+import dev.kampr.terminal.view.TerminalViewState
 import dev.kampr.terminal.view.zoomPresets
 import kotlin.math.abs
 import kotlin.test.Test
@@ -115,5 +116,19 @@ class GeometryTest {
         assertTrue(presets.readable < presets.closeUp)
         assertTrue(presets.minimum < presets.fitWidth)
         assertTrue(presets.maximum > presets.closeUp)
+    }
+    // Picking a preset is the same move as finishing a pinch, and only one of the two used to
+    // carry the viewport with it: pan and scroll are distances across the surface, so they scale
+    // with the cell or the viewport lands on a different row than the one the operator was reading.
+    @Test
+    fun pickingAPresetKeepsTheRowTheOperatorWasReading() {
+        val presets = zoomPresets(390f, 94, CELL_W)
+        val view = TerminalViewState()
+        view.setZoom(0.7f, presets)
+        view.scrollY = 400f
+        view.panX = -120f
+        view.setZoom(1.4f, presets)
+        close(view.scrollY, 800f)
+        close(view.panX, -240f)
     }
 }

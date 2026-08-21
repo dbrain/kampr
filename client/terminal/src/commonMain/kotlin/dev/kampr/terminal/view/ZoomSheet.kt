@@ -1,6 +1,8 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -58,97 +61,110 @@ fun ZoomSheet(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    Box(Modifier.fillMaxSize().gestureAction("Close the zoom sheet", onDismiss))
-    Column(
-        modifier
-            .fillMaxWidth()
-            .modal(onDismiss)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-    ) {
-        Surface(Modifier.fillMaxWidth(), background = tokens.color.surface, radius = tokens.radii.lg) {
-            Column(
-                Modifier.padding(horizontal = 15.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(13.dp),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+    // One parent, the way `BottomSheet` builds it. The scrim covers the sheet as well as
+    // the screen, so the two have to be siblings under a Box of their own — otherwise the
+    // sheet's own controls are hit-tested against a scrim spread across the whole pane.
+    Box(Modifier.fillMaxSize()) {
+        // Both halves, the way `Scrim` does it: the semantic action is what TalkBack dispatches, and
+        // the clickable is what catches the finger. With only the first, a tap fell straight through to
+        // the grid underneath, which reads a tap as "raise the keyboard".
+        Box(
+            Modifier
+                .fillMaxSize()
+                .gestureAction("Close the zoom sheet", onDismiss)
+                .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        )
+        Column(
+            modifier
+                .fillMaxWidth()
+                .modal(onDismiss)
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+        ) {
+            Surface(Modifier.fillMaxWidth(), background = tokens.color.surface, radius = tokens.radii.lg) {
+                Column(
+                    Modifier.padding(horizontal = 15.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(13.dp),
                 ) {
-                    LabelText("Zoom", tokens.type.sectionLabel, tokens.color.mute)
-                    KText("pinch to adjust · ${format(zoom)}", tokens.type.metaSmall, tokens.color.mute)
-                }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LabelText("Zoom", tokens.type.sectionLabel, tokens.color.mute)
+                        KText("pinch to adjust · ${format(zoom)}", tokens.type.metaSmall, tokens.color.mute)
+                    }
 
-                Surface(
-                    Modifier.fillMaxWidth(),
-                    background = tokens.color.surface2,
-                    radius = tokens.radii.md,
-                ) {
-                    Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Minimap(
-                            window, totalRows, visibleRows,
-                            Modifier
-                                .fillMaxWidth()
-                                .height(74.dp)
-                                .named(
-                                    "Showing columns ${window.firstCol + 1} to ${window.lastCol} " +
-                                        "of ${window.cols}, and $visibleRows of $totalRows rows",
-                                ),
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            KText(
-                                "viewing col ${window.firstCol + 1}–${window.lastCol}, " +
-                                    "row ${visibleRows.coerceAtMost(totalRows)} of $totalRows",
-                                tokens.type.metaSmall,
-                                tokens.color.mute,
+                    Surface(
+                        Modifier.fillMaxWidth(),
+                        background = tokens.color.surface2,
+                        radius = tokens.radii.md,
+                    ) {
+                        Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Minimap(
+                                window, totalRows, visibleRows,
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(74.dp)
+                                    .named(
+                                        "Showing columns ${window.firstCol + 1} to ${window.lastCol} " +
+                                            "of ${window.cols}, and $visibleRows of $totalRows rows",
+                                    ),
                             )
-                            KText("of ${window.cols} wide", tokens.type.metaSmall, tokens.color.mute)
-                        }
-                        // Only when there is a hole to own up to. A pane whose ring is intact says
-                        // nothing here, which is what stops this becoming furniture.
-                        if (historyNote != null) {
-                            KText(
-                                historyNote.replaceFirstChar(Char::uppercase),
-                                tokens.type.metaSmall,
-                                tokens.color.working,
-                                Modifier.named("The scrollback: $historyNote"),
-                                maxLines = 3,
-                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                KText(
+                                    "viewing col ${window.firstCol + 1}–${window.lastCol}, " +
+                                        "row ${visibleRows.coerceAtMost(totalRows)} of $totalRows",
+                                    tokens.type.metaSmall,
+                                    tokens.color.mute,
+                                )
+                                KText("of ${window.cols} wide", tokens.type.metaSmall, tokens.color.mute)
+                            }
+                            // Only when there is a hole to own up to. A pane whose ring is intact says
+                            // nothing here, which is what stops this becoming furniture.
+                            if (historyNote != null) {
+                                KText(
+                                    historyNote.replaceFirstChar(Char::uppercase),
+                                    tokens.type.metaSmall,
+                                    tokens.color.working,
+                                    Modifier.named("The scrollback: $historyNote"),
+                                    maxLines = 3,
+                                )
+                            }
                         }
                     }
-                }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Preset("Fit width", presets.fitWidth, zoom, onZoom, Modifier.weight(1f))
-                    Preset("Readable", presets.readable, zoom, onZoom, Modifier.weight(1f))
-                    Preset("Close up", presets.closeUp, zoom, onZoom, Modifier.weight(1f))
-                }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Preset("Fit width", presets.fitWidth, zoom, onZoom, Modifier.weight(1f))
+                        Preset("Readable", presets.readable, zoom, onZoom, Modifier.weight(1f))
+                        Preset("Close up", presets.closeUp, zoom, onZoom, Modifier.weight(1f))
+                    }
 
-                Toggle(
-                    on = remembered,
-                    title = "Remember for this pane",
-                    detail = "Per device, stored on the node.",
-                    onChange = onRemember,
-                )
-                Toggle(
-                    on = followCursor,
-                    title = "Follow the cursor",
-                    detail = "Pans sideways to keep the caret in view.",
-                    onChange = onFollow,
-                )
-                Toggle(
-                    on = confirmRisky,
-                    title = "Check destructive commands",
-                    detail = "Holds Enter on rm -rf, sudo, force-push. Shell panes only.",
-                    onChange = onConfirmRisky,
-                )
-                KText(
-                    "Zoom is yours alone. The pane stays ${window.cols} columns for everyone — " +
-                        "Kampr never resizes a session.",
-                    tokens.type.captionSmall,
-                    tokens.color.mute,
-                    maxLines = 2,
-                )
+                    Toggle(
+                        on = remembered,
+                        title = "Remember for this pane",
+                        detail = "Per device, stored on the node.",
+                        onChange = onRemember,
+                    )
+                    Toggle(
+                        on = followCursor,
+                        title = "Follow the cursor",
+                        detail = "Pans sideways to keep the caret in view.",
+                        onChange = onFollow,
+                    )
+                    Toggle(
+                        on = confirmRisky,
+                        title = "Check destructive commands",
+                        detail = "Holds Enter on rm -rf, sudo, force-push. Shell panes only.",
+                        onChange = onConfirmRisky,
+                    )
+                    KText(
+                        "Zoom is yours alone. The pane stays ${window.cols} columns for everyone — " +
+                            "Kampr never resizes a session.",
+                        tokens.type.captionSmall,
+                        tokens.color.mute,
+                        maxLines = 2,
+                    )
+                }
             }
         }
     }
