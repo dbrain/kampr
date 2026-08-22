@@ -42,6 +42,16 @@ impl PaneProcess {
     }
 }
 
+/// Whether this host answers questions about a process at all.
+///
+/// A pid with no start time means two different things, and only one of them is a harness that
+/// has gone: with procfs it is a pid that is not there, and without procfs it is every pid there
+/// has ever been. Refusing them all on a host that can read none would be refusing every
+/// conversation on it.
+pub fn observable() -> bool {
+    Path::new("/proc/self/stat").is_file()
+}
+
 /// Field 22 of `/proc/<pid>/stat`, read past the comm field so a process named `a) b` cannot
 /// shift the count.
 fn start_ticks(pid: u32) -> Option<String> {

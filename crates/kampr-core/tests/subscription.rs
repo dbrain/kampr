@@ -5,9 +5,11 @@
 //! holds an `events.subscribe` stream open and can push events down it, which is the whole of the
 //! surface the topology loop uses — so the numbers below are calls a real herdr would have served.
 
+use kampr_core::provider::Provider;
 use kampr_core::registry::PaneRegistry;
 use kampr_core::{HerdrConfig, HerdrProvider};
 use kampr_herdr::Herdr;
+use kampr_journal::Harness;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +24,12 @@ struct FakeHerdr {
     subscribed: Mutex<Vec<String>>,
     events: Mutex<Vec<mpsc::UnboundedSender<Value>>>,
     subscribes: AtomicUsize,
+    /// Whether herdr calls this an agent pane, and which pid `pane.process_info` names as its
+    /// `claude`. **Two knobs, because herdr answers them from two different places**: the pane's
+    /// agent is a screen scrape that goes stale, and the process list is the truth. A real pid,
+    /// so that what the provider reads out of procfs is a real answer.
+    agent: Mutex<Option<String>>,
+    harness: Mutex<Option<u32>>,
     _dir: tempfile::TempDir,
     socket: std::path::PathBuf,
 }
@@ -36,6 +44,8 @@ impl FakeHerdr {
             subscribed: Mutex::default(),
             events: Mutex::default(),
             subscribes: AtomicUsize::new(0),
+            agent: Mutex::new(None),
+            harness: Mutex::new(None),
             _dir: dir,
             socket,
         });
@@ -56,6 +66,40 @@ impl FakeHerdr {
 
     fn count(&self, method: &str) -> usize {
         self.calls.lock().unwrap().get(method).copied().unwrap_or(0)
+    }
+
+    /// Makes the pane an agent pane running `claude` as `pid`.
+    fn runs_claude(&self, pid: u32) {
+        *self.agent.lock().unwrap() = Some("claude".into());
+        *self.harness.lock().unwrap() = Some(pid);
+    }
+
+    /// The harness exits and the scrape does not notice — the state herdr is actually in for as
+    /// long as it takes the screen to look like something else, and the one this all exists for.
+    fn harness_exited(&self) {
+        *self.harness.lock().unwrap() = None;
+    }
+
+    /// Takes the agent back off the pane too, the way the scrape does once the prompt is back.
+    fn runs_nothing(&self) {
+        *self.agent.lock().unwrap() = None;
+        *self.harness.lock().unwrap() = None;
+    }
+
+    fn snapshot(&self) -> Value {
+        let mut snapshot = snapshot();
+        if let Some(agent) = self.agent.lock().unwrap().as_deref() {
+            snapshot["panes"][0]["agent"] = json!(agent);
+        }
+        snapshot
+    }
+
+    fn process_info(&self) -> Value {
+        let processes = match *self.harness.lock().unwrap() {
+            Some(pid) => vec![json!({ "pid": pid, "name": "claude", "argv": ["claude"] })],
+            None => Vec::new(),
+        };
+        json!({ "process_info": { "foreground_processes": processes } })
     }
 
     /// Pushes one event to every live subscriber, the way a structural change would.
@@ -110,7 +154,8 @@ impl FakeHerdr {
         }
 
         let result = match method.as_str() {
-            "session.snapshot" => json!({ "snapshot": snapshot() }),
+            "session.snapshot" => json!({ "snapshot": self.snapshot() }),
+            "pane.process_info" => self.process_info(),
             "pane.read" => json!({ "read": { "text": "", "truncated": false } }),
             other => json!({ "ok": other }),
         };
@@ -322,4 +367,223 @@ fn every_subscribed_event_exists_in_herdrs_own_schema() {
             "herdr publishes no event called {kind:?}; subscribing to it refuses the whole list"
         );
     }
+}
+
+/// A real process to stand in for a harness. Its stdio is detached: a test that fails before
+/// killing it would otherwise leave the runner's output pipe held open by the orphan.
+fn spawn_harness() -> std::process::Child {
+    std::process::Command::new("sleep")
+        .arg("600")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("a real process to be the pane's harness")
+}
+
+/// Waits for procfs to lose the process, so what follows is asked of a pid that is really gone.
+async fn reaped(pid: u32) {
+    for _ in 0..400 {
+        if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{pid} never left procfs");
+}
+
+/// A harness that exits is the one change **nothing announces**.
+///
+/// Herdr reports panes, not the processes inside them, so the node's own record of which process
+/// a pane is running is what goes stale — and it was only ever re-checked while asking herdr for
+/// a snapshot, which is once every thirty seconds on a box nobody is watching. For all of that
+/// the pane went on naming a dead pid as its harness, and everything downstream — the
+/// conversation cache keyed on that process, the pane's `has_conversation`, the transcript a
+/// watcher was being sent — went on believing it. Whether a pid is still alive is a `stat`, not a
+/// socket, so both halves are asserted here: the answer is right the moment it is asked, and the
+/// change is published without herdr being spoken to at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_harness_that_exits_stops_being_the_panes_harness_without_asking_herdr() {
+    let fake = FakeHerdr::start();
+    let mut child = spawn_harness();
+    fake.runs_claude(child.id());
+    // Far longer than this test runs, in both cadences: whatever notices the exit, it is not the
+    // sweep and it is not a watcher arriving.
+    let provider = HerdrProvider::spawn(
+        fake.herdr(),
+        HerdrConfig {
+            sweep: Duration::from_secs(300),
+            sweep_watched: Duration::from_secs(300),
+            ..config()
+        },
+    );
+    online(&provider).await;
+    for _ in 0..200 {
+        if matches!(provider.agent_harness("w1:p1"), Harness::Running(_)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let Harness::Running(process) = provider.agent_harness("w1:p1") else {
+        panic!("the provider never took the pane's harness from herdr");
+    };
+    assert_eq!(process.pid, child.id());
+
+    let mut topology = provider.topology();
+    let asked = (fake.count("session.snapshot"), fake.count("pane.process_info"));
+    child.kill().expect("kill the harness");
+    child.wait().expect("reap the harness");
+    reaped(process.pid).await;
+
+    assert_eq!(
+        provider.agent_harness("w1:p1"),
+        Harness::Absent,
+        "the pane still names a pid that is gone"
+    );
+    tokio::time::timeout(Duration::from_secs(2), topology.changed())
+        .await
+        .expect("the harness exiting was never published, so nothing rebuilds the herd")
+        .expect("the provider went away");
+    assert_eq!(
+        (fake.count("session.snapshot"), fake.count("pane.process_info")),
+        asked,
+        "herdr was asked whether the process died; procfs already knew"
+    );
+}
+
+/// A pane this node has no record of is a pane it has not looked into, and on a host it *can*
+/// look into that is not the same thing as a host that cannot see processes at all.
+///
+/// [`Harness::Unknown`] means the second, and it is what licenses a search of the working
+/// directory — which serves whichever transcript in that directory was written last, somebody
+/// else's as often as this pane's. The record is dropped whenever herdr stops calling the pane an
+/// agent pane, and herdr calls it one by scraping the screen, so it comes and goes; every gap was
+/// a window in which the pane's conversation was resolved from the directory alone. Once this
+/// node has read one pane's processes it has proved it can, and "no record" means `Absent`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_with_no_record_is_absent_on_a_host_whose_processes_this_node_can_read() {
+    let fake = FakeHerdr::start();
+    let mut child = spawn_harness();
+    fake.runs_claude(child.id());
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    for _ in 0..200 {
+        if matches!(provider.agent_harness("w1:p1"), Harness::Running(_)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        matches!(provider.agent_harness("w1:p1"), Harness::Running(_)),
+        "the provider never read the pane's processes, so this proves nothing"
+    );
+
+    // The harness goes on running; it is only herdr that stops calling this an agent pane, which
+    // is what drops the record. A record that survived would read `Running` here, so the only way
+    // to `Absent` is the rule this test is about.
+    fake.runs_nothing();
+    let swept = fake.count("session.snapshot");
+    for _ in 0..400 {
+        if fake.count("session.snapshot") > swept + 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        provider.agent_harness("w1:p1"),
+        Harness::Absent,
+        "a pane this node holds no record of reported that nothing had looked into it"
+    );
+    child.kill().expect("kill the harness");
+    child.wait().expect("reap the harness");
+}
+
+/// A fresh agent in a pane that has just lost one is a different conversation, and **nothing in
+/// the snapshot says so**: herdr calls the pane an agent pane running `claude` before and after,
+/// with the same label, the same directory and the same status. The only thing that moved is the
+/// process, which is why the process is what movement is judged by — a pane going from no
+/// harness to a harness has to reach the herd, or the operator quits an agent, starts another,
+/// and the phone goes on showing the conversation of the run before it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_harness_in_a_pane_that_had_none_is_published() {
+    let fake = FakeHerdr::start();
+    let mut first = spawn_harness();
+    fake.runs_claude(first.id());
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    for _ in 0..200 {
+        if matches!(provider.agent_harness("w1:p1"), Harness::Running(_)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut topology = provider.topology();
+
+    first.kill().expect("kill the harness");
+    first.wait().expect("reap the harness");
+    fake.harness_exited();
+    for _ in 0..400 {
+        if provider.agent_harness("w1:p1") == Harness::Absent {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(provider.agent_harness("w1:p1"), Harness::Absent);
+    // Two clean sweeps over the empty pane, so everything the exit set in motion has landed and
+    // the next thing published is the arrival and nothing else.
+    let settled = fake.count("session.snapshot");
+    for _ in 0..400 {
+        if fake.count("session.snapshot") > settled + 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    topology.borrow_and_update();
+
+    let mut second = spawn_harness();
+    fake.runs_claude(second.id());
+    let arrived = tokio::time::timeout(Duration::from_secs(5), topology.changed()).await;
+    let harness = provider.agent_harness("w1:p1");
+    second.kill().expect("kill the harness");
+    second.wait().expect("reap the harness");
+    arrived
+        .expect("a harness starting in an empty pane never reached the herd")
+        .expect("the provider went away");
+    let Harness::Running(process) = harness else {
+        panic!("the pane still has no harness");
+    };
+    assert_eq!(process.pid, second.id());
+}
+
+/// Herdr looks into the pane, and this node asks it a moment later — so the pid it is handed can
+/// already be gone.
+///
+/// Believing one is worse than believing nothing: a process with no start time is a harness
+/// [`Running`] can never disprove, because there is nothing to compare a later look against, and
+/// a pane holding one searches its working directory with no lower bound at all. That serves
+/// whichever transcript in the directory was written last, which at the moment an agent has just
+/// been quit is exactly the wrong one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pid_that_is_already_gone_is_not_a_harness() {
+    let fake = FakeHerdr::start();
+    let mut ghost = spawn_harness();
+    let pid = ghost.id();
+    ghost.kill().expect("kill it");
+    ghost.wait().expect("reap it");
+    reaped(pid).await;
+    fake.runs_claude(pid);
+
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    for _ in 0..200 {
+        if provider.agent_harness("w1:p1") != Harness::Unknown {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        provider.agent_harness("w1:p1"),
+        Harness::Absent,
+        "a pid procfs does not have was taken for the pane's harness"
+    );
 }

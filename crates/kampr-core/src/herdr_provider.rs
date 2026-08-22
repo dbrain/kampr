@@ -6,6 +6,7 @@ use kampr_herdr::{Herdr, Observer, Snapshot, StreamEvent, Sub, rpc::Subscription
 use kampr_journal::{Harness, PaneProcess};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -92,6 +93,15 @@ pub struct HerdrConfig {
     /// truth, so collapsing a burst costs one interval of event latency on the new panes and
     /// nothing else.
     pub resubscribe_min: Duration,
+    /// How often the harness processes are checked for having exited.
+    ///
+    /// **Far shorter than the sweep, because it is a different question.** The sweep asks herdr
+    /// what the herd looks like and costs a socket round trip; this asks procfs whether a pid
+    /// this node already holds is still that process, and costs a `stat` per agent pane. Nothing
+    /// announces a harness exiting — and a pane whose agent was quit goes on advertising that
+    /// agent's conversation until something notices — so it is the one thing worth looking for
+    /// oftener than herdr is worth asking.
+    pub liveness: Duration,
 }
 
 impl Default for HerdrConfig {
@@ -104,6 +114,7 @@ impl Default for HerdrConfig {
             settle: Duration::from_millis(60),
             width_poll: Duration::from_secs(3),
             resubscribe_min: Duration::from_millis(500),
+            liveness: Duration::from_millis(100),
         }
     }
 }
@@ -131,6 +142,10 @@ struct Inner {
     /// because finding one costs a socket round trip, and because a pane's *identity* has to be
     /// as stable as the pane while the process behind it lives.
     processes: Mutex<HashMap<String, Running>>,
+    /// Whether this herdr has ever answered `pane.process_info`, which is the difference between
+    /// a pane nothing has looked into and a pane nothing *can* look into. See
+    /// [`Inner::agent_harness`].
+    probed: AtomicBool,
     /// Panes with a live stream. The sweep reads it to pick its cadence and waits on it, so the
     /// first watcher speeds the herd up without waiting out the slow interval it is parked in.
     watching: watch::Sender<usize>,
@@ -163,8 +178,16 @@ impl Running {
     fn new(agent: &str, pid: Option<u32>) -> Self {
         Self {
             agent: agent.to_string(),
-            harness: match pid {
-                Some(pid) => Harness::Running(PaneProcess::look_up(pid)),
+            harness: match pid.map(PaneProcess::look_up) {
+                // Herdr looked into the pane and this node asked it a moment later, so the pid it
+                // named can already be gone. Holding one is worse than holding nothing: with no
+                // start time there is nothing a later look can contradict, so the harness never
+                // dies — and a pane whose harness never dies searches its working directory with
+                // no lower bound, which serves whoever wrote in it last.
+                Some(process) if process.start.is_none() && kampr_journal::process::observable() => {
+                    Harness::Absent
+                }
+                Some(process) => Harness::Running(process),
                 None => Harness::Absent,
             },
         }
@@ -175,12 +198,35 @@ impl Running {
     /// found nothing is never held — the whole point of asking again is that a harness starting
     /// is what a pane is waiting for.
     fn is_still(&self, agent: &str) -> bool {
+        matches!(&self.harness, Harness::Running(p) if p.start.is_some())
+            && self.agent == agent
+            && self.alive()
+    }
+
+    /// Whether the process this entry names is still running.
+    ///
+    /// Procfs answers it without a socket, which is what lets it be asked at every read rather
+    /// than once a sweep. An entry with no start time is one procfs never answered for, and
+    /// nothing has been disproved: refusing every conversation on a host with no procfs would be
+    /// a worse answer than trusting the last look.
+    fn alive(&self) -> bool {
         let Harness::Running(process) = &self.harness else {
-            return false;
+            return true;
         };
-        self.agent == agent
-            && process.start.is_some()
-            && PaneProcess::look_up(process.pid).start == process.start
+        process.start.is_none() || PaneProcess::look_up(process.pid).start == process.start
+    }
+
+    /// What the pane is running *now*, as opposed to what it was running when herdr was asked.
+    ///
+    /// A harness that has exited is [`Harness::Absent`] and not [`Harness::Unknown`]: this node
+    /// looked, in procfs, and there is no harness there. `Unknown` would license a search of the
+    /// working directory, which serves whichever transcript in it was written last — somebody
+    /// else's, at the exact moment an agent has been quit.
+    fn harness(&self) -> Harness {
+        match self.alive() {
+            true => self.harness.clone(),
+            false => Harness::Absent,
+        }
     }
 }
 
@@ -216,11 +262,13 @@ struct Reading {
 pub struct HerdrProvider {
     inner: Arc<Inner>,
     topology_task: tokio::task::JoinHandle<()>,
+    liveness_task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for HerdrProvider {
     fn drop(&mut self) {
         self.topology_task.abort();
+        self.liveness_task.abort();
     }
 }
 
@@ -240,10 +288,16 @@ impl HerdrProvider {
             health: health_tx,
             widths: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
+            probed: AtomicBool::new(false),
             watching: watch::channel(0).0,
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
-        Self { inner, topology_task }
+        let liveness_task = tokio::spawn(liveness(inner.clone()));
+        Self {
+            inner,
+            topology_task,
+            liveness_task,
+        }
     }
 
     pub fn snapshot(&self) -> Arc<Snapshot> {
@@ -363,9 +417,12 @@ impl Inner {
         for (pane_id, agent) in wanted {
             // An error is *not* an absent harness: one says nothing looked, the other says the
             // pane is empty, and the difference decides whether the working directory may be
-            // searched at all. An error is left uncached so the next sweep asks again.
+            // searched at all.
             let running = match self.herdr.process_info(&pane_id).await {
-                Ok(info) => Some(Running::new(&agent, info.harness(&agent))),
+                Ok(info) => {
+                    self.probed.store(true, Ordering::Relaxed);
+                    Some(Running::new(&agent, info.harness(&agent)))
+                }
                 Err(e) => {
                     debug!(pane = %pane_id, error = %e, "could not read the pane's processes");
                     None
@@ -386,13 +443,18 @@ impl Inner {
         processes.retain(|pane_id, _| agents.get(pane_id.as_str()).is_some_and(Option::is_some));
         let mut moved = processes.len() != before;
         for (pane_id, running) in found {
-            let replaced = match running {
-                Some(running) => processes.insert(pane_id, running),
-                None => processes.remove(&pane_id),
+            // An error answered nothing, so what was known is kept rather than dropped. A
+            // dropped entry reads as `Unknown` — the weakest claim there is, and the one that
+            // lets the working directory be searched — and the exit it may be hiding is caught
+            // by [`Running::alive`] anyway.
+            let Some(running) = running else {
+                continue;
             };
-            // A pane whose harness is still absent has not moved. Reporting it as movement would
-            // rebuild the herd on every sweep for as long as it stayed that way.
-            moved |= replaced.is_none_or(|old| !matches!(old.harness, Harness::Absent));
+            let replaced = processes.insert(pane_id, running.clone());
+            // A pane whose harness has not changed has not moved — but one going from no harness
+            // to a harness has, and nothing else in the snapshot says so: a fresh agent in the
+            // pane the last one was quit in is identical in every field but the process.
+            moved |= replaced.is_none_or(|old| old.harness != running.harness);
         }
         moved
     }
@@ -435,12 +497,22 @@ impl Inner {
         }
     }
 
+    /// What is running in a pane, as far as this node knows.
+    ///
+    /// **`Unknown` is a claim about the host, not about the pane.** It means nothing here can see
+    /// into a pane at all, and it is what lets the working directory be searched — which serves
+    /// whichever transcript in that directory was written last, somebody else's as often as this
+    /// pane's. A pane with no record is not that: the record is dropped whenever herdr stops
+    /// calling the pane an agent pane, and herdr decides that by scraping the screen, so it comes
+    /// and goes under a harness that never moved. Once one pane's processes have been read, this
+    /// herdr has proved it answers the question, and a missing record is a pane not looked into
+    /// yet rather than a host that cannot look.
     fn agent_harness(&self, pane_id: &str) -> Harness {
-        self.processes
-            .lock()
-            .unwrap()
-            .get(pane_id)
-            .map_or(Harness::Unknown, |r| r.harness.clone())
+        match self.processes.lock().unwrap().get(pane_id) {
+            Some(running) => running.harness(),
+            None if self.probed.load(Ordering::Relaxed) => Harness::Absent,
+            None => Harness::Unknown,
+        }
     }
 
     /// The corrected width without touching the socket, for callers that only have a snapshot.
@@ -643,6 +715,35 @@ enum Ended {
     Broken,
     /// The agent-pane set moved, so the status entries are stale. Not a fault, so no backoff.
     PaneSetChanged,
+}
+
+/// Notices a harness exiting, which nothing else on this node does.
+///
+/// Herdr announces panes; the processes inside them it answers only when asked, and asking is a
+/// socket round trip — which is why the sweep that does it is measured in seconds. Whether a pid
+/// this node already holds is still alive is a `stat`, so it is asked far oftener and *published*
+/// the moment the answer changes. Publishing is the half that matters: the herd carries
+/// `has_conversation`, the conversation cache behind it is keyed on the process, and a pane whose
+/// agent has been quit keeps advertising that agent's transcript until something rebuilds the
+/// model.
+async fn liveness(inner: Arc<Inner>) {
+    loop {
+        tokio::time::sleep(inner.config.liveness).await;
+        let died = {
+            let mut processes = inner.processes.lock().unwrap();
+            let mut died = false;
+            for running in processes.values_mut() {
+                if !running.alive() {
+                    running.harness = Harness::Absent;
+                    died = true;
+                }
+            }
+            died
+        };
+        if died {
+            inner.revision.send_modify(|r| *r += 1);
+        }
+    }
 }
 
 async fn topology(inner: Arc<Inner>) {

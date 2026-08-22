@@ -298,12 +298,24 @@ async fn refresh_herd(
         tokio::select! {
             _ = wait_for_change(&mut changes) => {}
             _ = sessions.notified() => {}
-            _ = mesh.changed() => {}
-            _ = update.changed() => {}
+            _ = moved(&mut mesh) => {}
+            _ = moved(&mut update) => {}
             _ = tokio::time::sleep(sweep) => {}
         }
         // A harness installed after the node started should not need a restart to be seen.
         journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home)));
+    }
+}
+
+/// Waits for the next value, and for ever once there can be no next value.
+///
+/// A `watch` whose sender is gone answers `changed()` immediately and keeps answering, so a
+/// closed channel in a `select!` is a spin and not a wait. Release discovery is off on most
+/// nodes and its sender is dropped the moment it is declined, which made that spin the default:
+/// the herd was rebuilt — and every node pinged — as fast as the loop could go round.
+async fn moved<T>(rx: &mut watch::Receiver<T>) {
+    if rx.changed().await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -338,9 +350,9 @@ async fn wait_for_change(watches: &mut [SessionChanges]) {
     let waits = watches.iter_mut().map(|(topology, health, watchers)| {
         Box::pin(async move {
             tokio::select! {
-                _ = topology.changed() => {}
-                _ = health.changed() => {}
-                _ = watchers.changed() => {}
+                _ = moved(topology) => {}
+                _ = moved(health) => {}
+                _ = moved(watchers) => {}
             }
         })
     });

@@ -3602,3 +3602,28 @@ async fn moved_to(socket: &mut Socket, pane: &str, stale: &[String], text: &str)
     }
     panic!("the pane never moved to the conversation reading {text:?}");
 }
+
+/// A node with nothing to do rebuilds its herd because something changed, not because it can.
+///
+/// Release discovery is declined by dropping the sender, and a `watch` whose sender is gone
+/// answers `changed()` immediately and for ever — so the rebuild loop selected on a channel that
+/// was always ready and went round as fast as it could, pinging every herdr it serves on every
+/// pass. Nothing in the model moved, so nothing on the wire ever showed it; what it cost was a
+/// core, and everything else on the runtime being starved of one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_with_release_discovery_off_rebuilds_its_herd_only_when_something_changes() {
+    let h = harness!("quiet");
+    let mut herd = h.node.subscribe_herd();
+    herd.borrow_and_update();
+    // Nothing is watched, nothing is connected and nothing moves in this window, and the
+    // reconcile sweep behind it is thirty seconds — so the honest number of rebuilds is none.
+    let mut rebuilds = 0u32;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::timeout_at(deadline, herd.changed()).await.is_ok() {
+        rebuilds += 1;
+    }
+    assert!(
+        rebuilds <= 8,
+        "the herd was rebuilt {rebuilds} times in two seconds with nothing to rebuild it for"
+    );
+}
