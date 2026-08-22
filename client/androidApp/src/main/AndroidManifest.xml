@@ -13,6 +13,8 @@
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <application
         android:label="Kampr"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Kampr">

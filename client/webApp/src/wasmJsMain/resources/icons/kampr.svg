@@ -1,7 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#0E0F13"/>
-  <rect x="56" y="56" width="400" height="400" rx="76" fill="none" stroke="#242938" stroke-width="10"/>
-  <path d="M156 186 L226 256 L156 326" fill="none" stroke="#6EA8FE" stroke-width="34"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="256" y="306" width="108" height="26" rx="13" fill="#FF6B6B"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Kampr">
+  <defs>
+    <path id="tentPath" d="M256 92 q11 0 16 10 L454 390 q10 17 -10 17 H82 q-20 0 -10 -17 L240 102 q5 -10 16 -10 Z"/>
+    <clipPath id="inside"><use href="#tentPath"/></clipPath>
+  </defs>
+
+  <use href="#tentPath" fill="#7E8C53"/>
+  <g clip-path="url(#inside)">
+    <path d="M256 92 q11 0 16 10 L454 390 q10 17 -10 17 H256 Z" fill="#65723E"/>
+    <path d="M152 407 V300 a104 104 0 0 1 208 0 V407 Z" fill="#3F4B2A"/>
+
+    <g>
+      <!-- ears, outside the fleece so they read at any size -->
+      <ellipse cx="158" cy="318" rx="34" ry="19" transform="rotate(19 158 318)" fill="#9A8E70"/>
+      <ellipse cx="354" cy="318" rx="34" ry="19" transform="rotate(-19 354 318)" fill="#9A8E70"/>
+      <ellipse cx="162" cy="318" rx="21" ry="10" transform="rotate(19 162 318)" fill="#6E6650"/>
+      <ellipse cx="350" cy="318" rx="21" ry="10" transform="rotate(-19 350 318)" fill="#6E6650"/>
+
+      <!-- face -->
+      <path d="M256 268 q62 0 62 62 v22 q0 58 -62 58 q-62 0 -62 -58 v-22 q0 -62 62 -62 Z" fill="#33301F"/>
+
+      <!-- fleece crown, lopsided on purpose -->
+      <g fill="#F7F4EA">
+        <circle cx="204" cy="290" r="34"/>
+        <circle cx="244" cy="266" r="40"/>
+        <circle cx="290" cy="272" r="36"/>
+        <circle cx="318" cy="298" r="30"/>
+        <ellipse cx="256" cy="296" rx="70" ry="34"/>
+      </g>
+
+      <!-- eyes -->
+      <ellipse cx="226" cy="336" rx="17" ry="18" fill="#F7F4EA"/>
+      <ellipse cx="286" cy="336" rx="17" ry="18" fill="#F7F4EA"/>
+      <circle cx="230" cy="338" r="8.5" fill="#16150E"/>
+      <circle cx="290" cy="338" r="8.5" fill="#16150E"/>
+      <circle cx="233" cy="335" r="3.2" fill="#F7F4EA"/>
+      <circle cx="293" cy="335" r="3.2" fill="#F7F4EA"/>
+
+      <!-- muzzle -->
+      <ellipse cx="256" cy="382" rx="34" ry="26" fill="#6E6650"/>
+      <path d="M248 374 q8 -6 16 0" stroke="#2A2718" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+      <path d="M256 378 v7 M256 385 q-9 8 -16 1 M256 385 q9 8 16 1" stroke="#2A2718" stroke-width="4"
+            fill="none" stroke-linecap="round"/>
+    </g>
+  </g>
 </svg>

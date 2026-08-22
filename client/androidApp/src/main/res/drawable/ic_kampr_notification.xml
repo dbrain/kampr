@@ -1,9 +1,21 @@
+<!-- Android discards colour on a notification icon, so this is one flat silhouette with the eyes
+     and muzzle knocked out rather than drawn. It has to read at 24dp in a status bar. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
-    android:viewportWidth="24" android:viewportHeight="24"
+    android:viewportWidth="512" android:viewportHeight="512"
     android:tint="#FFFFFF">
-    <path android:fillColor="#FFFFFF"
-        android:pathData="M3,4h18v16h-18zM3,7h18" />
-    <path android:fillColor="#FFFFFF"
-        android:pathData="M6,10l3,3l-3,3v-2l1,-1l-1,-1zM11,15h7v2h-7z" />
+    <group android:pivotX="158" android:pivotY="318" android:rotation="19">
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M124,318 a34,19 0 1 0 68,0 a34,19 0 1 0 -68,0 Z" />
+    </group>
+    <group android:pivotX="354" android:pivotY="318" android:rotation="-19">
+        <path android:fillColor="#FFFFFF"
+            android:pathData="M320,318 a34,19 0 1 0 68,0 a34,19 0 1 0 -68,0 Z" />
+    </group>
+    <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+        android:pathData="M256,244 q66,0 78,52 q30,12 26,44 q-4,30 -34,34 q-8,52 -70,52 q-62,0 -70,-52
+                          q-30,-4 -34,-34 q-4,-32 26,-44 q12,-52 78,-52 Z
+                          M209,336 a17,18 0 1 0 34,0 a17,18 0 1 0 -34,0 Z
+                          M269,336 a17,18 0 1 0 34,0 a17,18 0 1 0 -34,0 Z
+                          M226,382 a30,23 0 1 0 60,0 a30,23 0 1 0 -60,0 Z" />
 </vector>
