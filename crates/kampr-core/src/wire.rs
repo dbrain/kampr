@@ -85,6 +85,17 @@ pub struct NodeEntry {
     /// node names its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
+    /// The release that supersedes [`Self::build`], named — absent when this node is current,
+    /// when it has not managed to ask, and when its operator has turned the check off. All three
+    /// are "nothing to say", and a client that renders the field renders nothing for all three.
+    ///
+    /// **A version, not a flag.** The mesh question is which machines are stale, and a boolean
+    /// answers it without saying what they are stale against.
+    ///
+    /// Filled in by the node it describes, never judged by a hub: only that node knows what it is
+    /// actually running, and only that node's own config can say whether it may ask GitHub at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
     /// Why a node is offline, in the words the operator would see in the log. Additive: a v1
     /// client that does not know the field ignores it, and one that does can say *why* the herd
     /// is empty instead of showing an empty herd.

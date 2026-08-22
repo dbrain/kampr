@@ -131,4 +131,47 @@ class GeometryTest {
         close(view.scrollY, 800f)
         close(view.panX, -240f)
     }
+
+    // The other half of the same move. `adoptDefault` re-derives the zoom every time history or
+    // the real geometry lands, and it runs only while `chosen` is false — which is precisely the
+    // state of a reader who has scrolled but never pinched.
+    @Test
+    fun reDerivingTheDefaultZoomKeepsTheRowTheOperatorWasReading() {
+        val view = TerminalViewState()
+        view.adoptDefault(0.7f)
+        view.scrollY = 400f
+        view.panX = -120f
+        view.adoptDefault(1.4f)
+        close(view.scrollY, 800f)
+        close(view.panX, -240f)
+    }
+
+    // scrollY is a distance from the bottom of the surface, and rows leaving the live grid extend
+    // that bottom — so a reader parked in history has to be carried by exactly what arrived, or
+    // the row under their eye slides away. SurfaceRows.fromTop is the anchor review already uses.
+    @Test
+    fun historyArrivingUnderneathDoesNotMoveTheRowTheReaderIsOn() {
+        val paint = phone()
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.scrollY = 600f
+        val parked = 10
+
+        val before = terminalGeometry(paint, 94, 100, CELL_W, CELL_H, 0f, view.scrollY)
+        val was = before.originY + parked * CELL_H
+
+        view.carryHistory(5, CELL_H)
+
+        val after = terminalGeometry(paint, 94, 105, CELL_W, CELL_H, 0f, view.scrollY)
+        close(after.originY + parked * CELL_H, was)
+    }
+
+    @Test
+    fun aReaderPinnedToTheBottomStaysPinnedWhenHistoryArrives() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.scrollY = 0f
+        view.carryHistory(5, CELL_H)
+        close(view.scrollY, 0f)
+    }
 }

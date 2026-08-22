@@ -13,7 +13,9 @@
 #   KAMPR_REPO            owner/repo (default dbrain/kampr)
 #   KAMPR_VERSION         tag, or `latest` (default latest)
 #   KAMPR_BASE_URL        override the whole download base — a file:// URL works, for testing
-#   KAMPR_MODE            plugin | standalone (default standalone; plugin drops the epilogue)
+#   KAMPR_MODE            plugin | update | standalone (default standalone)
+#                         plugin stops after installing; update also restarts the service but
+#                         drops the first-run epilogue, and is what `kampr update` runs
 #   KAMPR_ALLOW_UNVERIFIED=1  proceed without a checksum. Only for a local test build.
 set -eu
 
@@ -130,12 +132,26 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 [ -f "$tmp/kampr" ] || die "$asset does not contain a kampr binary"
 chmod +x "$tmp/kampr"
 mkdir -p "$PREFIX"
+[ -w "$PREFIX" ] || die "$PREFIX is not writable — nothing has been changed"
+
+# The binary that works is kept until the new one has proved it runs. The window is one rename
+# wide, but on the far side of a bad one is a host with no working kampr and no way to fetch one.
+if [ -f "$PREFIX/kampr" ]; then
+  cp "$PREFIX/kampr" "$tmp/kampr.previous" || die "could not keep a copy of $PREFIX/kampr — refusing
+       to replace a binary that cannot be put back"
+fi
 # Rename over the old binary rather than writing in place: replacing a running node's file
 # in place is ETXTBSY, and a half-written binary is worse than an old one.
 mv "$tmp/kampr" "$PREFIX/kampr.new"
 mv "$PREFIX/kampr.new" "$PREFIX/kampr"
 
-"$PREFIX/kampr" --version >/dev/null 2>&1 || die "$PREFIX/kampr does not run on this host"
+if ! "$PREFIX/kampr" --version >/dev/null 2>&1; then
+  if [ -f "$tmp/kampr.previous" ]; then
+    cp "$tmp/kampr.previous" "$PREFIX/kampr.new" && mv "$PREFIX/kampr.new" "$PREFIX/kampr" \
+      && die "$asset does not run on this host. The binary you had is back in place, unchanged."
+  fi
+  die "$PREFIX/kampr does not run on this host"
+fi
 
 echo "kampr: installed $("$PREFIX/kampr" --version) to $PREFIX/kampr"
 echo "kampr: checksum verified: $checksum_state"
@@ -166,6 +182,12 @@ elif [ -f "$plist" ] && grep -q "<string>$PREFIX/kampr</string>" "$plist"; then
   else
     echo "kampr: run 'launchctl kickstart -k gui/$(id -u)/dev.kampr.node' to move the node onto it"
   fi
+fi
+
+# An update is not a first run: the operator already has a paired node and does not need the
+# ladder read back to them.
+if [ "$MODE" = update ]; then
+  exit 0
 fi
 
 cat <<'NEXT'

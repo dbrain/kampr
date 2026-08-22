@@ -109,6 +109,8 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
         && a.kind == b.kind
         && a.online == b.online
         && a.herdr_version == b.herdr_version
+        && a.build == b.build
+        && a.update == b.update
         && a.detail == b.detail
 }
 
@@ -220,6 +222,51 @@ mod tests {
         assert!(added.is_empty() && removed.is_empty());
         assert_eq!(changed, ["01J/w1:p1"]);
         assert!(after.diff(&after).is_none());
+    }
+
+    fn node(build: &str, update: Option<&str>) -> HerdModel {
+        HerdModel {
+            nodes: vec![NodeEntry {
+                id: "01J".into(),
+                name: "front".into(),
+                kind: "local".into(),
+                online: true,
+                rtt_ms: None,
+                herdr_version: None,
+                build: Some(build.to_string()),
+                update: update.map(str::to_string),
+                detail: None,
+            }],
+            panes: Vec::new(),
+        }
+    }
+
+    /// The check lands once a day, long after the `herd` a client was greeted with. If it is not
+    /// a diffable change the client hears about it at the next sweep at best and never at worst,
+    /// which is a field that works only for whoever reconnects after it.
+    #[test]
+    fn a_release_check_landing_is_a_change_a_client_is_told_about() {
+        let before = node("0.1.0", None);
+        let after = node("0.1.0", Some("0.1.2"));
+        let ServerMsg::HerdPatch { changed, .. } = after.diff(&before).expect("a patch") else {
+            panic!("expected a herd patch");
+        };
+        assert_eq!(changed.nodes.len(), 1);
+        assert_eq!(changed.nodes[0].update.as_deref(), Some("0.1.2"));
+        assert!(
+            after.diff(&after).is_none(),
+            "a settled model kept emitting patches"
+        );
+
+        // And an update that was taken by an install is a change in the other direction.
+        assert!(before.diff(&after).is_some(), "the update line would never clear");
+    }
+
+    /// A node that restarts onto a new binary keeps its id, so the build is the only thing that
+    /// moved — and a client that was told once at `hello` would still be showing the old one.
+    #[test]
+    fn a_node_that_moved_to_a_new_build_is_a_change_too() {
+        assert!(node("0.1.2", None).diff(&node("0.1.0", None)).is_some());
     }
 
     #[test]

@@ -170,6 +170,9 @@ impl Harness {
         let config_dir = state.path().join("config");
 
         let mut config = Config::bootstrap("testnode");
+        // Nothing in this suite reaches the internet: the release check is the one thing in a
+        // node that would, and a test that phoned GitHub would be one with a rate limit.
+        config.update.check = false;
         config.server.bind = format!("127.0.0.1:{port}");
         config.server.origin = format!("http://127.0.0.1:{port}");
         config.herdr.socket = session.socket.display().to_string();
@@ -1360,6 +1363,9 @@ async fn the_node_can_terminate_tls_itself() {
     drop(listener);
 
     let mut config = Config::bootstrap("tlsnode");
+    // Nothing in this suite reaches the internet: the release check is the one thing in a
+    // node that would, and a test that phoned GitHub would be one with a rate limit.
+    config.update.check = false;
     config.server.bind = format!("127.0.0.1:{port}");
     config.server.origin = format!("https://kampr.test:{port}");
     config.server.tls.enabled = true;
@@ -1510,6 +1516,9 @@ async fn open(origin: &str, token: &str) -> Socket {
 async fn the_port_is_bound_before_herdr_is_needed() {
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("lonely");
+    // Nothing in this suite reaches the internet: the release check is the one thing in a
+    // node that would, and a test that phoned GitHub would be one with a rate limit.
+    config.update.check = false;
     config.herdr.socket = state.path().join("nothing-here.sock").display().to_string();
     // Only the configured session, which does not exist. Otherwise this node discovers every
     // other test's throwaway herd and the herd is not empty for reasons that are not the point.
@@ -1630,6 +1639,9 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
 
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("multinode");
+    // Nothing in this suite reaches the internet: the release check is the one thing in a
+    // node that would, and a test that phoned GitHub would be one with a rate limit.
+    config.update.check = false;
     config.herdr.socket = first.socket.display().to_string();
     config.herdr.sessions = Some(vec![second.name.clone()]);
     let (node, origin, server) = serve_config(config, &state).await;

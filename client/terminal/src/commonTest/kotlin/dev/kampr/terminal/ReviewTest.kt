@@ -222,7 +222,8 @@ class ReviewTest {
     }
 
     // The node discards rather than splicing across a gap, so a row a reader was parked on can
-    // genuinely cease to exist. Relocating them without a word is the one thing not allowed.
+    // genuinely cease to exist — a ring that restarts past everything held, not the ordinary tail
+    // that merely continues from it. Relocating them without a word is the one thing not allowed.
     @Test
     fun aDiscardedRowTellsTheReaderRatherThanQuietlyRelocatingThem() {
         val pane = pane()
@@ -232,7 +233,7 @@ class ReviewTest {
         repeat(5) { review.step(surfaceOf(pane), ReviewMove.PreviousLine) }
         assertTrue(review.utterance.contains("three"), review.utterance)
 
-        pane.history(4, listOf("five", "six"), totalRows = 2, complete = false, capped = true)
+        pane.history(9, listOf("ten", "eleven"), totalRows = 2, complete = false, capped = true)
         review.sync(surfaceOf(pane))
         assertTrue(review.lost, "the anchored row is gone and the reader has not been told yet")
 

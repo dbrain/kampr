@@ -76,16 +76,18 @@ impl Node {
         let (herd, _) = watch::channel(Arc::new(HerdModel::default()));
         let home = config.journal_home();
         let (journals, _) = watch::channel(Arc::new(kampr_journal::registry_from_home(&home)));
-        let tasks = vec![
+        let (available, mut tasks) = crate::update::start(&config, state_dir);
+        tasks.extend([
             tokio::spawn(refresh_herd(
                 sessions.clone(),
                 peers.clone(),
                 herd.clone(),
                 journals.clone(),
                 home,
+                available,
             )),
             tokio::spawn(crate::sessions::discover(sessions.clone())),
-        ];
+        ]);
 
         let (push, mut push_tasks) = crate::push::start(
             load_vapid(&config, state_dir, auth.tier()),
@@ -93,7 +95,6 @@ impl Node {
             sessions.clone(),
             herd.subscribe(),
         );
-        let mut tasks = tasks;
         tasks.append(&mut push_tasks);
 
         let node = Arc::new(Self {
@@ -263,6 +264,7 @@ async fn refresh_herd(
     herd: watch::Sender<Arc<HerdModel>>,
     journals: watch::Sender<Arc<Journals>>,
     home: PathBuf,
+    mut update: watch::Receiver<Option<String>>,
 ) {
     let mut previous = Arc::new(HerdModel::default());
     let mut mesh = peers.subscribe();
@@ -273,7 +275,8 @@ async fn refresh_herd(
         // what is behind that wait is a sweep measured in tens of seconds.
         let mut changes = session_changes(&sessions);
         let journal = journals.borrow().clone();
-        let mut model = build_model(&sessions, &journal, &conversations).await;
+        let available = update.borrow_and_update().clone();
+        let mut model = build_model(&sessions, &journal, &conversations, available.as_deref()).await;
         // One herd, whatever host a pane is on. A peer's own nodes arrive already marked `peer`
         // and stamped with the link's measured round trip, so a pane two hops away *looks* two
         // hops away rather than quietly lagging.
@@ -296,6 +299,7 @@ async fn refresh_herd(
             _ = wait_for_change(&mut changes) => {}
             _ = sessions.notified() => {}
             _ = mesh.changed() => {}
+            _ = update.changed() => {}
             _ = tokio::time::sleep(sweep) => {}
         }
         // A harness installed after the node started should not need a restart to be seen.
@@ -424,7 +428,12 @@ impl Conversations {
     }
 }
 
-async fn build_model(sessions: &Sessions, journals: &Journals, conversations: &Conversations) -> HerdModel {
+async fn build_model(
+    sessions: &Sessions,
+    journals: &Journals,
+    conversations: &Conversations,
+    update: Option<&str>,
+) -> HerdModel {
     let mut nodes = Vec::new();
     let mut panes = Vec::new();
     let mut live = HashSet::new();
@@ -441,6 +450,9 @@ async fn build_model(sessions: &Sessions, journals: &Journals, conversations: &C
             },
             herdr_version: session.provider.herdr_version(),
             build: Some(BUILD.to_string()),
+            // Reported by the node it describes, never judged by a hub: only this process knows
+            // what it is running and whether its operator allowed it to ask.
+            update: update.map(str::to_string),
             detail: health.detail.clone(),
         });
         // A herdr restart keeps its workspaces and panes (probe #70), so an outage marks the node

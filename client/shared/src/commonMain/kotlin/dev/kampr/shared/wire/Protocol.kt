@@ -66,6 +66,10 @@ data class NodeInfo(
     // Two nodes in one herd may be running different releases, and a client can only say so if
     // each node names its own; `detail` is why a node is offline, in the node's own words.
     val build: String? = null,
+    // The release that supersedes `build`, named by the node it describes. Absent means there is
+    // nothing to say — current, or it could not ask, or its operator turned the check off — and
+    // all three render the same way, which is not at all.
+    val update: String? = null,
     val detail: String? = null,
 ) {
     // A named session is its own herdr server and joins the herd as its own node, named

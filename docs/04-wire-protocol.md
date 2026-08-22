@@ -97,6 +97,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
   "nodes": [ { "id": "01J...", "name": "comingclean", "kind": "local",   // "local"|"peer"
                "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2",
                "build": "0.1.0+abc1234",   // this node's kampr build — see "Version skew"
+               "update": "0.1.2",          // ABSENT unless a newer release exists — see below
                "detail": null } ],   // why it is offline, when it is
   "panes": [ { "id": "01J.../w3:p2", "node_id": "01J...",
                "workspace_id": "01J.../w3", "tab_id": "01J.../w3:t1",  // node-qualified, usable as `at`
@@ -692,6 +693,37 @@ shows the number that explains it.
 
 `build` on each node is that node's kampr build. Two nodes in one herd may be running different
 releases; a client can only say so if each node names its own, and this is that field.
+
+`update` is the release that supersedes that node's `build`, as a version rather than a flag — a
+boolean says a machine is stale without saying what it is stale against. **It is absent whenever
+there is nothing to say**, and a client renders all of those cases identically, which is not at
+all:
+
+- the node is on the latest release;
+- the node could not reach GitHub, so it does not know;
+- the node's build is not a version this can compare (a working copy between two tags);
+- its operator set `[update] check = false`, and the node never asked.
+
+**Each node answers for itself; a hub never judges a peer.** Only the node knows what it is
+running, and only its own config can say whether it may ask GitHub at all — a hub that filled the
+field in for a silent peer would be publishing a judgement produced by a request that peer's
+operator declined. A hub re-publishes a peer's entry verbatim, so `update` travels the mesh on the
+same path as `build`.
+
+The check runs at most once a day, and its cadence is held on disk (`update.json` in the state
+directory) rather than in the process, so a node under a supervisor that is restarting in a loop
+is not a request in a loop. A failed check is retried in an hour, keeps the last good answer, and
+never surfaces as `detail` — an unreachable GitHub is not a fault of the node.
+
+A change to `build` or `update` is an ordinary `herd.patch`, because the check lands long after
+the `herd` a client was greeted with.
+
+**Nothing on this protocol installs anything.** There is no message that updates a node, and no way
+for a hub to push a binary to a peer — `kampr update`, typed on the machine itself, is the only
+path. A node that can type into every terminal on its host does not replace its own binary unasked,
+and a hub that could push binaries would turn one compromised machine into code execution on every
+machine the operator owns, which is a far larger blast radius than the pane access this protocol
+already grants.
 
 ### When a peer drops
 

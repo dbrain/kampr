@@ -73,8 +73,7 @@ internal suspend fun PointerInputScope.terminalGestures(
                 view.pinch(centroid.x, centroid.y, pan.x, pan.y, event.calculateZoom())
                 moved = true
             } else if (pan != Offset.Zero) {
-                view.panX = (view.panX + pan.x).coerceIn(view.minPanX, 0f)
-                view.scrollY = (view.scrollY - pan.y).coerceIn(0f, view.maxScroll)
+                view.scrollBy(pan.x, pan.y)
                 if (abs(pan.x) + abs(pan.y) > 1f) moved = true
             }
             pressed.firstOrNull()?.let { tracker.addPosition(it.uptimeMillis, it.position) }

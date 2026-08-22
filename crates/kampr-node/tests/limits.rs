@@ -44,6 +44,9 @@ impl Harness {
         std::fs::create_dir_all(&state_dir).expect("a state dir");
 
         let mut config = Config::bootstrap("limits");
+        // Nothing in this suite reaches the internet: the release check is the one thing in a
+        // node that would, and a test that phoned GitHub would be one with a rate limit.
+        config.update.check = false;
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();
         config.server.bind = format!("127.0.0.1:{port}");

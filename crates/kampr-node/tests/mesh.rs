@@ -136,6 +136,9 @@ impl Home {
 
     fn config_for(&self, name: &str) -> Config {
         let mut config = Config::load(&self.config()).unwrap_or_else(|_| Config::bootstrap(name));
+        // Nothing in this suite reaches the internet: the release check is the one thing in a
+        // node that would, and a test that phoned GitHub would be one with a rate limit.
+        config.update.check = false;
         config.config_dir = self.config().display().to_string();
         config.state_dir = self.state().display().to_string();
         config

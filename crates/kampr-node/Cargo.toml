@@ -1,6 +1,6 @@
 [package]
 name = "kampr-node"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,7 +20,9 @@ kampr-mesh = { path = "../kampr-mesh" }
 kampr-term = { path = "../kampr-term" }
 mime_guess.workspace = true
 rust-embed.workspace = true
+reqwest.workspace = true
 rustls.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

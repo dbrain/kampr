@@ -67,6 +67,7 @@ fn a_pane_entry_carries_the_node_qualified_id() {
             rtt_ms: Some(0.4),
             herdr_version: Some("0.8.2".into()),
             build: None,
+            update: None,
             detail: None,
         }],
         panes: vec![PaneEntry::new("01J", &info, true)],
@@ -242,4 +243,49 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
     assert!(cleared["question"].is_null());
     assert!(cleared.as_object().unwrap().contains_key("question"));
     assert_eq!(cleared["source"], "transcript");
+}
+
+/// The mesh question is "which of my machines are stale", and it is only answerable if the answer
+/// rides beside `build` on every node — including a peer's, which a hub re-publishes verbatim.
+#[test]
+fn a_node_names_the_release_that_supersedes_it_and_says_nothing_otherwise() {
+    let entry = NodeEntry {
+        id: "01J".into(),
+        name: "front".into(),
+        kind: "local".into(),
+        online: true,
+        rtt_ms: None,
+        herdr_version: None,
+        build: Some("0.1.0".into()),
+        update: Some("0.1.2".into()),
+        detail: None,
+    };
+    let v = serde_json::to_value(ServerMsg::Herd {
+        nodes: vec![entry.clone()],
+        panes: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(v["nodes"][0]["build"], "0.1.0");
+    assert_eq!(
+        v["nodes"][0]["update"], "0.1.2",
+        "the field has to carry the version; a bare boolean cannot say what is available"
+    );
+
+    let current = serde_json::to_value(NodeEntry {
+        update: None,
+        ..entry.clone()
+    })
+    .unwrap();
+    assert!(
+        current.as_object().unwrap().get("update").is_none(),
+        "a current node still shipped an `update` key, so a client cannot tell quiet from stale: {current}"
+    );
+
+    // A hub re-publishes a peer's own entry, so the field has to survive a round trip through
+    // the same struct the mesh deserialises into.
+    let round: NodeEntry = serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+    assert_eq!(round.update.as_deref(), Some("0.1.2"));
+    let old: NodeEntry =
+        serde_json::from_str(r#"{"id":"01J","name":"front","kind":"peer","online":true}"#).unwrap();
+    assert_eq!(old.update, None);
 }

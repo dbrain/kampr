@@ -130,7 +130,7 @@ class ModelTest {
     }
 
     @Test
-    fun scrollbackDropsRowsBelowAnAdvancedFromTop() {
+    fun scrollbackKeepsWhatItHoldsWhenATailContinuesFromTheKnownEnd() {
         val store = KamprStore()
         store.accept(
             Wire.decode(
@@ -141,14 +141,40 @@ class ModelTest {
         )
         store.accept(
             Wire.decode(
-                """{"t":"scrollback","pane":"p","from_top":1,
-                   "rows":[{"row":1,"runs":[{"s":0,"x":"mid"}]},{"row":2,"runs":[{"s":0,"x":"new"}]}],
-                   "total_rows":2,"complete":true,"capped":true}"""
+                """{"t":"scrollback","pane":"p","from_top":2,
+                   "rows":[{"row":2,"runs":[{"s":0,"x":"new"}]}],
+                   "total_rows":1,"complete":true,"capped":true}"""
             )!!
         )
         val scrollback = store.pane("p").scrollback
+        assertEquals(0, scrollback.fromTop)
+        assertEquals(3, scrollback.historyRows)
+        assertEquals("old", scrollback.row(0)?.runs?.first()?.x)
+        assertEquals("new", scrollback.row(2)?.runs?.first()?.x)
+        assertTrue(scrollback.capped)
+    }
+
+    @Test
+    fun scrollbackDropsRowsWhenTheRingRestartsBeyondWhatItHolds() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"scrollback","pane":"p","from_top":0,
+                   "rows":[{"row":0,"runs":[{"s":0,"x":"old"}]},{"row":1,"runs":[{"s":0,"x":"mid"}]}],
+                   "total_rows":2,"complete":true,"capped":false}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode(
+                """{"t":"scrollback","pane":"p","from_top":9,
+                   "rows":[{"row":9,"runs":[{"s":0,"x":"new"}]}],
+                   "total_rows":1,"complete":true,"capped":true}"""
+            )!!
+        )
+        val scrollback = store.pane("p").scrollback
+        assertEquals(9, scrollback.fromTop)
         assertNull(scrollback.row(0))
-        assertEquals("mid", scrollback.row(1)?.runs?.first()?.x)
+        assertEquals("new", scrollback.row(9)?.runs?.first()?.x)
         assertTrue(scrollback.capped)
     }
 

@@ -25,13 +25,16 @@ class ScrollbackStore {
     private var highestIndex = -1
 
     // History arrives as one document then tails; a later message carries only new rows, so it
-    // must never shrink what is already held. from_top only ever advances, on a discard.
+    // must never shrink what is already held. The node re-bases every delta's from_top onto the
+    // client's known end (`send_history`), so an advanced from_top is the ordinary tail, not a
+    // discard — only a start outside the held range is a gap it could not stitch. Same predicate
+    // as History::absorb in kampr-mesh, which is the other end of this wire.
     fun apply(msg: ServerMsg.Scrollback) {
-        val discarded = msg.fromTop > fromTop
-        if (discarded) {
+        val restart = msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
+        if (restart) {
             fromTop = msg.fromTop
-            val dropped = rows.keys.filter { it < fromTop }
-            for (key in dropped) rows.remove(key)
+            rows.clear()
+            highestIndex = -1
             totalRows = 0
         }
         complete = msg.complete

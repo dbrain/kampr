@@ -54,26 +54,45 @@ class TerminalViewState {
     var chosen = false
         private set
 
-    // The default is re-derived until the operator picks a zoom of their own: history and the real
-    // geometry both arrive after the first paint, and a zoom taken before them is wrong for good.
-    fun adoptDefault(value: Float) {
-        if (!chosen) zoom = value
+    // The opening scroll is re-derived as history, prefs and the measured insets land — all of
+    // which arrive after the first paint. Once the reader has moved the viewport themselves that
+    // re-derivation is a yank, and `chosen` does not cover it: it means "picked a zoom", which a
+    // reader who has only ever dragged never does.
+    var scrolled = false
+        private set
+
+    // Rows leaving the live grid extend the surface *below* a reader parked in history, and
+    // scrollY is measured from that bottom — so standing still means moving with it. A reader
+    // pinned to the bottom is pinned deliberately and must not be carried off it.
+    fun carryHistory(rowsAdded: Int, cellHeight: Float) {
+        if (rowsAdded == 0 || scrollY <= 0f) return
+        scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
+    }
+
+    fun scrollBy(dx: Float, dy: Float) {
+        scrolled = true
+        panX = (panX + dx).coerceIn(minPanX, 0f)
+        scrollY = (scrollY - dy).coerceIn(0f, maxScroll)
     }
 
     // Pan and scroll are distances across the surface, not across the viewport, so a change of
     // cell size has to carry them or the viewport lands on a different row than the one being read.
-    fun setZoom(value: Float, presets: ZoomPresets) {
-        chosen = true
-        val target = value.coerceIn(presets.minimum, presets.maximum)
+    private fun rescale(target: Float) {
         val applied = if (zoom > 0f) target / zoom else 1f
         panX *= applied
         scrollY *= applied
         zoom = target
     }
 
-    fun drag(dx: Float, dy: Float) {
-        panX += dx
-        scrollY -= dy
+    // The default is re-derived until the operator picks a zoom of their own: history and the real
+    // geometry both arrive after the first paint, and a zoom taken before them is wrong for good.
+    fun adoptDefault(value: Float) {
+        if (!chosen) rescale(value)
+    }
+
+    fun setZoom(value: Float, presets: ZoomPresets) {
+        chosen = true
+        rescale(value.coerceIn(presets.minimum, presets.maximum))
     }
 
     fun pinch(centroidX: Float, centroidY: Float, panDx: Float, panDy: Float, scale: Float) {

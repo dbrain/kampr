@@ -34,6 +34,8 @@ pub struct Config {
     pub push: Push,
     #[serde(default)]
     pub android: Android,
+    #[serde(default)]
+    pub update: Update,
 }
 
 /// The Android app this node will let hold a passkey for it.
@@ -61,6 +63,40 @@ impl Default for Android {
             package_name: "dev.kampr.app".into(),
             fingerprints: vec![crate::assetlinks::RELEASE_FINGERPRINT.into()],
         }
+    }
+}
+
+/// Whether this node asks GitHub what the latest release is.
+///
+/// **A legitimate off switch, not an edge case.** Some operators will not have their node reach
+/// GitHub at all, and turning it off has to mean the request is never made — not that the answer
+/// is hidden — because the node still reports the answer to every client and to a hub.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Update {
+    pub check: bool,
+    pub repo: String,
+    /// The API root, for a mirror or a proxy. Empty is GitHub's own.
+    pub api: String,
+}
+
+impl Default for Update {
+    fn default() -> Self {
+        Self {
+            check: true,
+            repo: "dbrain/kampr".into(),
+            api: String::new(),
+        }
+    }
+}
+
+impl Update {
+    pub fn latest_release_url(&self) -> String {
+        let api = match self.api.trim_end_matches('/') {
+            "" => "https://api.github.com",
+            explicit => explicit,
+        };
+        format!("{api}/repos/{}/releases/latest", self.repo)
     }
 }
 
@@ -260,6 +296,7 @@ impl Config {
             mesh: Mesh::default(),
             push: Push::default(),
             android: Android::default(),
+            update: Update::default(),
         }
     }
 

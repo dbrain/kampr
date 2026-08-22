@@ -78,6 +78,52 @@ class RenderTest {
         assertEquals("live0", readRow(rows, 2))
     }
 
+    // What the node actually puts on the wire: `send_history` re-bases every delta's `from_top`
+    // onto the client's known end, so an ordinary tail always arrives with from_top advanced.
+    // Reading that as a discard collapses the surface under a reader who is scrolled back.
+    private fun scrollback(pane: PaneState, from: Int, count: Int, label: String) {
+        pane.applyScrollback(
+            ServerMsg.Scrollback(
+                pane = pane.id,
+                fromTop = from,
+                rows = (0 until count).map { RowDiff(from + it, listOf(Run(0, "$label$it"))) },
+                totalRows = count,
+                complete = false,
+                capped = true,
+            ),
+        )
+    }
+
+    @Test
+    fun aContiguousTailAppendsInsteadOfDiscardingTheHistoryAboveIt() {
+        val pane = pane()
+        scrollback(pane, from = 1463, count = 90, label = "old")
+        assertEquals(93, SurfaceRows(pane).total)
+
+        scrollback(pane, from = 1553, count = 2, label = "new")
+
+        val rows = SurfaceRows(pane)
+        assertEquals(95, rows.total, "a two-row tail must lengthen the surface, not truncate it")
+        assertEquals(1463, rows.fromTop, "the ring start does not move on a contiguous tail")
+        assertEquals("old0", readRow(rows, 0))
+        assertEquals("old89", readRow(rows, 89))
+        assertEquals("new0", readRow(rows, 90))
+        assertEquals("live0", readRow(rows, 92))
+    }
+
+    @Test
+    fun aTailBeyondTheHeldRangeIsARestartAndDropsWhatCameBefore() {
+        val pane = pane()
+        scrollback(pane, from = 1463, count = 90, label = "old")
+
+        scrollback(pane, from = 1600, count = 2, label = "new")
+
+        val rows = SurfaceRows(pane)
+        assertEquals(5, rows.total, "a gap the node could not stitch restarts the ring")
+        assertEquals(1600, rows.fromTop)
+        assertEquals("new0", readRow(rows, 0))
+    }
+
     @Test
     fun aGapInHistoryRendersAsBlankRatherThanShiftingTheSurface() {
         val pane = pane()

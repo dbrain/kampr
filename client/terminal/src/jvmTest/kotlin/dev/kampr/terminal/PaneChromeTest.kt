@@ -3,6 +3,9 @@ package dev.kampr.terminal
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -12,6 +15,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -179,5 +183,71 @@ class TerminalGestureTest {
         }
         waitForIdle()
         assertNotNull(session.view.selection, "holding still is how a selection starts")
+    }
+}
+
+private class PrefsIo : PaneIo {
+    var values by mutableStateOf<Map<String, String>>(emptyMap())
+    override fun send(msg: ClientMsg) = Unit
+    override fun prefs(paneId: String) = PanePrefs(values)
+}
+
+private fun historicPane(): PaneState {
+    val pane = filledPane()
+    pane.applyScrollback(
+        ServerMsg.Scrollback(
+            pane = PANE,
+            fromTop = 0,
+            rows = (0 until 400).map { RowDiff(it, listOf(Run(0, "history $it ${"=".repeat(40)}"))) },
+            totalRows = 400,
+            complete = false,
+            capped = true,
+        ),
+    )
+    return pane
+}
+
+// A frame arriving is not an instruction to move the reader. `prefs` is a key of the effect that
+// places the opening scroll, and that effect used to be guarded only by whether a zoom had been
+// picked — which a reader who has only ever dragged never does.
+@OptIn(ExperimentalTestApi::class)
+class ScrollAnchorTest {
+    @Test
+    fun aPrefsFrameArrivingMidReadDoesNotMoveTheViewport() = runComposeUiTest {
+        val session = PaneSession(PANE)
+        val io = PrefsIo()
+        val pane = historicPane()
+        setContent {
+            CompositionLocalProvider(LocalSafeArea provides SafeArea(top = 32.dp, bottom = 46.dp)) {
+                CompositionLocalProvider(LocalTokens provides tokens(), LocalPaneIo provides io) {
+                    Box(Modifier.fillMaxSize()) { TerminalView(pane, session, io) }
+                }
+            }
+        }
+        waitForIdle()
+        val opened = session.view.scrollY
+
+        onRoot().performTouchInput {
+            swipe(
+                start = Offset(centerX, centerY + 200f),
+                end = Offset(centerX, centerY - 200f),
+                durationMillis = 200,
+            )
+        }
+        waitForIdle()
+
+        val parked = session.view.scrollY
+        assertTrue(
+            abs(parked - opened) > 1f,
+            "the swipe did not move the viewport ($opened -> $parked), maxScroll=${session.view.maxScroll}",
+        )
+
+        io.values = mapOf("zoom" to "1.0")
+        waitForIdle()
+
+        assertTrue(
+            abs(session.view.scrollY - parked) < 1f,
+            "a prefs frame moved the reader from $parked to ${session.view.scrollY}",
+        )
     }
 }

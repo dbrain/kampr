@@ -86,6 +86,12 @@ jobs:
         run: |
           builder=cargo
           if [ "${{ matrix.cross }}" = "true" ]; then builder=cross; fi
+          # The tag is the authority, not the manifest. v0.1.1 shipped reporting 0.1.0 because the
+          # workspace version had to be bumped by hand and was not — and with release discovery on,
+          # a binary that misnames itself tells every node in the herd it is permanently behind and
+          # does not stop saying so after updating. A release cannot disagree with its own tag now.
+          KAMPR_BUILD="${{ github.ref_name }}"
+          export KAMPR_BUILD="${KAMPR_BUILD#v}"
           "$builder" build --release --locked -p kampr-cli \
             --features vendored-tls --target ${{ matrix.target }}
       - name: package

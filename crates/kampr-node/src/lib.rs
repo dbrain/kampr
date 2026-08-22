@@ -22,6 +22,7 @@ pub mod session;
 pub mod sessions;
 pub mod state;
 pub mod toast;
+pub mod update;
 pub mod wire;
 
 pub use config::{Config, ConfigError};

@@ -3,6 +3,11 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
+# The number `kampr --version` prints, the `build` every node puts on the wire, and the thing
+# `kampr update` compares against the release tag. **Bump it to the tag before tagging**: a
+# release whose binary reports the previous version tells every node in the herd, forever, that
+# it is one release behind — and updating does not clear it.
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
@@ -26,6 +31,7 @@ qrcode = { version = "0.14.1", default-features = false }
 rust-embed = "8.12.0"
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
+semver = "1.0.28"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }

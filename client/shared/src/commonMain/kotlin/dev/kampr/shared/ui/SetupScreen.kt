@@ -430,12 +430,33 @@ private fun RungCard(rung: Rung) {
     }
 }
 
+// One list behind both the line that is painted and the sentence that is spoken, so the two
+// cannot drift. `update` sits next to the build it supersedes: "0.1.2 available" means nothing
+// without the 0.1.0 in front of it.
+//
+// `spoken` adds the one fact the eye gets from the mark and the ear gets from nothing — the same
+// reason `StatusMark` names its own shape rather than leaving reachability to a colour.
+private fun machineFacts(node: NodeInfo, spoken: Boolean = false): List<String> = listOfNotNull(
+    if (node.kind == "local") "this machine" else "peer",
+    if (spoken) (if (node.online) "online" else "offline") else null,
+    node.build?.let { "kampr $it" },
+    node.update?.let { "$it available" },
+    node.herdrVersion?.let { "herdr $it" },
+    node.detail,
+)
+
 @Composable
 private fun MachineCard(node: NodeInfo) {
     val tokens = Kampr.tokens
+    val facts = machineFacts(node)
     Surface(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+            Modifier
+                // Spoken as one sentence, like every other status row: a name, then the facts
+                // about it. Not announced — a herd of forty machines announcing a daily release
+                // check is chatter, and the operator came to this screen to read it.
+                .named((listOf(node.name) + machineFacts(node, spoken = true)).joinToString(", "))
+                .padding(horizontal = 15.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -449,12 +470,7 @@ private fun MachineCard(node: NodeInfo) {
                 // Version skew across a herd is invisible unless somebody prints it, and a herd
                 // is exactly where two releases meet.
                 KText(
-                    listOfNotNull(
-                        if (node.kind == "local") "this machine" else "peer",
-                        node.build?.let { "kampr $it" },
-                        node.herdrVersion?.let { "herdr $it" },
-                        node.detail,
-                    ).joinToString(" · "),
+                    facts.joinToString(" · "),
                     tokens.type.meta,
                     tokens.color.mute,
                     maxLines = 2,

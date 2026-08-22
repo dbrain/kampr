@@ -168,6 +168,43 @@ async fn a_peers_nodes_join_the_herd_marked_as_peers() {
     assert_eq!(peers.state("01JZ/w1:p1"), PeerState::Unknown);
 }
 
+/// A peer answers for its own version, and the hub carries the answer without touching it. Both
+/// halves matter: the hub must not drop `update` on the way through, and it must not fill one in
+/// for a peer that said nothing — a peer whose operator turned the check off would otherwise be
+/// judged by a request they declined.
+#[tokio::test]
+async fn a_peers_own_verdict_on_its_version_crosses_the_hub_untouched() {
+    let peers = peers();
+    let mut stale = join(&peers, KEY, "01JA", "laptop");
+    let mut quiet = join(&peers, OTHER, "01JB", "desk");
+    let mut says = herd("01JA", &["w1:p1"]);
+    says["nodes"][0]["update"] = json!("0.1.2");
+    stale.send(says).await;
+    quiet.send(herd("01JB", &["w1:p1"])).await;
+    settle(&peers, |h| h.nodes.len() == 2).await;
+
+    let herd = peers.herd();
+    let stale = herd
+        .nodes
+        .iter()
+        .find(|n| n.id == "01JA")
+        .expect("the stale peer");
+    let quiet = herd
+        .nodes
+        .iter()
+        .find(|n| n.id == "01JB")
+        .expect("the quiet peer");
+    assert_eq!(
+        stale.update.as_deref(),
+        Some("0.1.2"),
+        "the hub dropped what the peer said about its own version"
+    );
+    assert_eq!(
+        quiet.update, None,
+        "the hub answered a version question on behalf of a peer that did not answer it"
+    );
+}
+
 #[tokio::test]
 async fn a_pane_is_watched_once_upstream_however_many_clients_look_at_it() {
     let peers = peers();

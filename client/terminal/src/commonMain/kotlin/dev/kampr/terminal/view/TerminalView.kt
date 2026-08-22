@@ -208,7 +208,7 @@ fun TerminalView(
         // insetTop arrives a frame late — the chrome above this surface has to be laid out before
         // it can be measured — and a scroll clamped against the guess stays clamped there.
         LaunchedEffect(pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored) {
-            if (!pane.painted || view.chosen) return@LaunchedEffect
+            if (!pane.painted || view.chosen || view.scrolled) return@LaunchedEffect
             val fill = defaultZoom(
                 paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
             )
@@ -224,6 +224,12 @@ fun TerminalView(
                 withFrameNanos { }
                 if (cache.reprobe((BASE_CELL_SP * zoom).sp)) fontEpoch++
             }
+        }
+
+        var carriedTotal by remember(pane.id) { mutableIntStateOf(rows.total) }
+        if (rows.total != carriedTotal) {
+            view.carryHistory(rows.total - carriedTotal, metrics.height)
+            carriedTotal = rows.total
         }
 
         val edgeLabel = historyEdgeLabel(reviewSurface())
@@ -266,8 +272,7 @@ fun TerminalView(
             }
             while (abs(view.velocityX) > 1f || abs(view.velocityY) > 1f) {
                 withFrameNanos { }
-                view.panX = (view.panX + view.velocityX / 60f).coerceIn(view.minPanX, 0f)
-                view.scrollY = (view.scrollY - view.velocityY / 60f).coerceIn(0f, view.maxScroll)
+                view.scrollBy(view.velocityX / 60f, view.velocityY / 60f)
                 view.velocityX *= DECAY
                 view.velocityY *= DECAY
                 if (abs(view.velocityX) < 20f) view.velocityX = 0f

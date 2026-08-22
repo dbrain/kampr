@@ -16,7 +16,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
@@ -120,7 +119,6 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
     val shape = RoundedCornerShape(tokens.radii.lg)
     Surface(
         modifier
-            .alpha(if (quiet) 0.72f else 1f)
             .action("Open ${paneSpoken(pane, now)}", onClick, shape)
     ) {
         Row(
@@ -164,7 +162,6 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
                 role = Role.Tab,
                 selected = active,
             )
-            .alpha(if (quiet) 0.68f else 1f)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),

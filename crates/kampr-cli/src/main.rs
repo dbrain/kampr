@@ -7,6 +7,7 @@ mod recovery;
 mod report;
 mod service;
 mod setup;
+mod update;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -95,6 +96,17 @@ enum Command {
     Mesh {
         #[command(subcommand)]
         action: MeshAction,
+    },
+    /// Replace this binary with the latest release, verifying it first
+    Update {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// Say what is available and install nothing
+        #[arg(long)]
+        check: bool,
+        /// A release tag rather than the latest — for going back to one that worked
+        #[arg(long)]
+        version: Option<String>,
     },
     /// Install or remove the user service that keeps the node running
     Service {
@@ -232,6 +244,14 @@ async fn main() -> Result<()> {
                 mesh::leave(&dirs.config(), dirs.state_override(), &node).await
             }
         },
+        Command::Update { dirs, check, version } => {
+            update::run(
+                &dirs.config(),
+                dirs.state_override(),
+                update::Update { check, version },
+            )
+            .await
+        }
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {
                 // Loaded rather than guessed: `serve` resolves the state directory from the
@@ -297,7 +317,19 @@ async fn status(dirs: &Dirs) -> Result<()> {
     let url = local.config.origin();
     let devices = local.auth.devices().await?;
     let active = devices.iter().filter(|d| d.active(kampr_auth::now())).count();
-    println!("kampr {}", kampr_node::BUILD);
+    // From the cache the node's own once-a-day check writes, never a request: status has to
+    // answer on a machine with no route out, and in the time it takes to read a file.
+    let waiting = kampr_node::update::available(
+        &local.config,
+        &local.config.resolve_state_dir(dirs.state_override()),
+    );
+    match waiting {
+        Some(available) => println!(
+            "kampr {} — {available} available, take it with `kampr update`",
+            kampr_node::BUILD
+        ),
+        None => println!("kampr {}", kampr_node::BUILD),
+    }
     println!(
         "  node      {} ({})",
         local.config.node_name, local.config.node_id

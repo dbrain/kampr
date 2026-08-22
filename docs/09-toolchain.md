@@ -160,3 +160,37 @@ is visible to whatever backs this machine up — with its passwords in `~/.gradl
 `make android-keystore` creates it and **refuses to overwrite an existing one**, because replacing it
 orphans every device that has ever installed Kampr — no update path, by kobup or by hand, short of
 uninstalling everywhere. Back up both the keystore and its password, off the machine.
+
+## The version number is a release artefact
+
+`version` in `[workspace.package]` is what `kampr --version` prints, what every node puts on the
+wire as `build`, and what `kampr update` compares against the release tag. **Bump it to the tag
+before tagging.**
+
+It was not, for `v0.1.1`: the published `kampr-x86_64-unknown-linux-musl.tar.gz` for that tag
+prints `kampr 0.1.0`, because the crates were never bumped and nothing sets `KAMPR_BUILD`. That
+was invisible while nothing compared the two numbers. It is not invisible now — a release whose
+binary reports the previous version tells every node in the herd, permanently, that it is one
+release behind, and taking the update does not clear it. The workspace version is set to `0.1.1`
+here so `build` and the published tag agree again.
+
+The durable fix is either this line, bumped with the tag, or `KAMPR_BUILD` exported from the
+release workflow — `crates/kampr-node/src/state.rs` already prefers `KAMPR_BUILD` over
+`CARGO_PKG_VERSION`, so setting it in `release.yml` would make the tag the single source.
+
+## Updating an installed node
+
+`kampr update` embeds `packaging/install.sh` with `include_str!` and runs it with
+`KAMPR_MODE=update` and `KAMPR_PREFIX` set to the directory the running binary is in. Two
+consequences worth knowing:
+
+- **The verifier is never downloaded.** Fetching `install.sh` from the release would mean whoever
+  can serve a tampered binary can serve a verifier that accepts it. The embedded copy came out of
+  the release the operator already verified.
+- **The installer in the tree is the one in the binary**, so a change to `packaging/install.sh` is
+  a change to what `kampr update` does, and `crates/kampr-cli/tests/update_cli.rs` exercises it
+  against a release built on disk and served over `file://`.
+
+`cosign` is optional here for the same reason it is optional in `install.sh`: absent, the command
+says the signature was not checked rather than pretending it was. The checksum is not optional —
+`KAMPR_ALLOW_UNVERIFIED` is deliberately *not* inherited by the installer `kampr update` runs.

@@ -304,8 +304,48 @@ installed the app.
 | `kampr mesh invite / join / list / revoke / forget` | Join hosts into one herd |
 | `kampr service install / uninstall / status` | The user service that keeps the node running |
 | `kampr url` | Print the node's URL |
+| `kampr update [--check] [--version vX.Y.Z]` | Replace this binary with the latest release, verifying it first |
 
 Installed as a Herdr plugin, the same actions appear in Herdr's own workspace menu (`herdr-plugin.toml`).
+
+### Staying current
+
+Each node asks GitHub once a day what the latest release is, caches the answer in its state
+directory, and puts it beside its own build in the herd model. The phone's **Machines** list is
+therefore the answer to the only version question a mesh actually raises — *which of my machines
+are stale* — without logging into any of them:
+
+```
+front — this machine · kampr 0.1.1
+back  — peer · kampr 0.1.0 · 0.1.1 available
+```
+
+A node with no route out says nothing rather than reporting an error, and the check is the
+node's own: a hub never judges a peer's version, because only the peer knows what it is running
+and only the peer's config can say whether it may ask at all. To turn it off entirely:
+
+```toml
+[update]
+check = false
+```
+
+Taking an update is always a decision, never an event. `kampr update` replaces the binary this
+command is running from, using the same download, the same SHA-256 check and the same cosign
+signature check as `install.sh` — it *is* `install.sh`, embedded in the binary — and restarts the
+service only when the installed unit names the binary it just replaced. It refuses rather than
+half-succeeding: a checksum mismatch installs nothing, a release with no `SHA256SUMS` installs
+nothing, `KAMPR_ALLOW_UNVERIFIED` in your shell is not inherited, and a new binary that will not
+run on the host is put back.
+
+```bash
+kampr update --check              # say what is available, install nothing
+kampr update                      # take it
+kampr update --version v0.1.0     # go back to one that worked
+```
+
+**Nothing updates itself, and a hub cannot update a peer.** A process that can type into every
+terminal on a host does not get to replace its own binary unasked, and a hub that could push
+binaries to peers would turn one compromised machine into code execution on all of them.
 
 ### Check the pipeline end to end
 

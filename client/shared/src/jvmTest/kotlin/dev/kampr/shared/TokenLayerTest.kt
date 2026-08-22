@@ -49,6 +49,30 @@ class TokenLayerTest {
         )
     }
 
+    // A Modifier.alpha on a row multiplies every token inside it toward the ground, so a palette
+    // that measures 4.9:1 lands at 1.9:1 on screen and no palette-level test can see it. Dimming
+    // an inactive row is what `dim`, `cardTitleQuiet` and the mark shape are for.
+    @Test
+    fun noSubtreeAlphaDimsTextBelowItsMeasuredContrast() {
+        val root = sourceRoot()
+        val problems = mutableListOf<String>()
+        root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .forEach { file ->
+                file.readLines().forEachIndexed { index, line ->
+                    if (line.trimStart().startsWith("//")) return@forEachIndexed
+                    if (Regex("""\.alpha\(""").containsMatchIn(line)) {
+                        problems += "${file.name}:${index + 1} -> ${line.trim()}"
+                    }
+                }
+            }
+        assertTrue(
+            problems.isEmpty(),
+            "these dim tokens past their measured contrast; use a quieter token instead:\n" +
+                problems.joinToString("\n"),
+        )
+    }
+
     @Test
     fun everyThemeDefinesEveryTokenOnBothGrounds() {
         val root = sourceRoot().resolve("theme/Themes.kt").readText()

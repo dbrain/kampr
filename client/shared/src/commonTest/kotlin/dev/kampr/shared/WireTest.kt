@@ -124,4 +124,17 @@ class WireTest {
         assertEquals("""{"t":"answer","pane":"p","key":"1"}""", Wire.encode(ClientMsg.Answer("p", "1")))
         assertEquals("""{"t":"resync"}""", Wire.encode(ClientMsg.Resync))
     }
+
+    // A node reports the release that supersedes its own build. The field is additive on the
+    // wire, so a herd from a node that has never heard of it must still decode.
+    @Test
+    fun aNodeEntryCarriesTheReleaseThatSupersedesIt() {
+        val herd = Wire.decode(
+            """{"t":"herd","panes":[],"nodes":[
+               {"id":"01JA","name":"front","kind":"local","online":true,"build":"0.1.0","update":"0.1.2"},
+               {"id":"01JB","name":"back","kind":"peer","online":true,"build":"0.1.2"}]}"""
+        ) as ServerMsg.Herd
+        assertEquals("0.1.2", herd.nodes[0].update)
+        assertNull(herd.nodes[1].update, "a node that said nothing was read as saying something")
+    }
 }

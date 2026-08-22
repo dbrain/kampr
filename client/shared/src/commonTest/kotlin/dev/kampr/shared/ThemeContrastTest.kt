@@ -36,40 +36,62 @@ private fun over(fg: Color, bg: Color): Color = Color(
     blue = fg.blue * fg.alpha + bg.blue * (1f - fg.alpha),
 )
 
-private val pairs: List<Pair<String, (Palette) -> Pair<Color, Color>>> = listOf(
-    "text/bg" to { p -> p.text to p.bg },
-    "text/bar" to { p -> p.text to p.bar },
-    "text/surface" to { p -> p.text to p.surface },
-    "text/surface2" to { p -> p.text to p.surface2 },
-    "text/raise" to { p -> p.text to p.raise },
-    "dim/bg" to { p -> p.dim to p.bg },
-    "dim/bar" to { p -> p.dim to p.bar },
-    "dim/surface" to { p -> p.dim to p.surface },
-    "mute/bg" to { p -> p.mute to p.bg },
-    "mute/surface" to { p -> p.mute to p.surface },
-    "accent/bg" to { p -> p.accent to p.bg },
-    "accent/surface" to { p -> p.accent to p.surface },
-    "accentHi/bg" to { p -> p.accentHi to p.bg },
-    "onAccent/accent" to { p -> p.onAccent to p.accent },
-    "blocked/bg" to { p -> p.blocked to p.bg },
-    "blocked/blockedBg" to { p -> p.blocked to p.blockedBg },
-    "working/bg" to { p -> p.working to p.bg },
-    "done/bg" to { p -> p.done to p.bg },
+private val grounds: List<Pair<String, (Palette) -> Color>> = listOf(
+    "bg" to { p -> p.bg },
+    "bar" to { p -> p.bar },
+    "surface" to { p -> p.surface },
+    "surface2" to { p -> p.surface2 },
+    "raise" to { p -> p.raise },
+)
+
+// Every one of these is drawn as text somewhere: `idle` is the word in a StatusBadge, not just
+// the dot beside it, and `working`/`done`/`blocked` are the same badge in another state. So the
+// body floor applies to all of them, on every ground the app can put them on.
+private val inks: List<Pair<String, (Palette) -> Color>> = listOf(
+    "text" to { p -> p.text },
+    "dim" to { p -> p.dim },
+    "mute" to { p -> p.mute },
+    "idle" to { p -> p.idle },
+    "accent" to { p -> p.accent },
+    "accentHi" to { p -> p.accentHi },
+    "working" to { p -> p.working },
+    "done" to { p -> p.done },
+    "blocked" to { p -> p.blocked },
 )
 
 class ThemeContrastTest {
     @Test
-    fun lightGroundMeetsAaOnEveryTextPair() {
+    fun everyInkMeetsAaOnEveryGroundOfEveryThemeAndBothGrounds() {
         val failures = mutableListOf<String>()
         for (family in AllFamilies) {
-            val p = family.light.palette
-            for ((name, pick) in pairs) {
-                val (fg, bg) = pick(p)
-                val r = contrast(fg, bg)
-                if (r < AA_BODY) failures += "${family.id.key} $name = $r"
+            for (spec in listOf(family.dark, family.light)) {
+                val p = spec.palette
+                for ((ink, pickInk) in inks) {
+                    for ((ground, pickGround) in grounds) {
+                        val r = contrast(pickInk(p), pickGround(p))
+                        if (r < AA_BODY) {
+                            failures += "${family.id.key} ${spec.ground} $ink/$ground = $r"
+                        }
+                    }
+                }
             }
         }
-        assertTrue(failures.isEmpty(), "light ground below AA:\n" + failures.joinToString("\n"))
+        assertTrue(failures.isEmpty(), "below AA:\n" + failures.joinToString("\n"))
+    }
+
+    @Test
+    fun inkOnItsOwnTintedGroundMeetsAa() {
+        val failures = mutableListOf<String>()
+        for (family in AllFamilies) {
+            for (spec in listOf(family.dark, family.light)) {
+                val p = spec.palette
+                val onAccent = contrast(p.onAccent, p.accent)
+                if (onAccent < AA_BODY) failures += "${family.id.key} ${spec.ground} onAccent/accent = $onAccent"
+                val onBlocked = contrast(p.blocked, p.blockedBg)
+                if (onBlocked < AA_BODY) failures += "${family.id.key} ${spec.ground} blocked/blockedBg = $onBlocked"
+            }
+        }
+        assertTrue(failures.isEmpty(), "below AA:\n" + failures.joinToString("\n"))
     }
 
     // ADR 0009: the 16 indexed slots are the only colours Kampr may redirect, so they are the

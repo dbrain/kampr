@@ -166,6 +166,18 @@ def scrollback(pane, depth=1553, held=90):
             "total_rows": held, "complete": False, "capped": True}
 
 
+# What `send_history` in kampr-node puts on the wire once a client is caught up: only the rows it
+# has not seen, re-based so `from_top` is the client's own known end. A fixture that sends the
+# opening document and nothing else never exercises the merge that every real session runs.
+def scrollback_tail(pane, sent, count=2):
+    rows = [
+        {"row": sent + i, "runs": [{"s": 2, "x": SHELL_HISTORY[(sent + i) % len(SHELL_HISTORY)] or "..."}]}
+        for i in range(count)
+    ]
+    return {"t": "scrollback", "pane": pane, "from_top": sent, "rows": rows,
+            "total_rows": count, "complete": False, "capped": True}
+
+
 # A live shell grid has its prompt at the bottom, with the rows above already filled.
 SHELL_GRID = [[] for _ in range(40)]
 for _offset, _runs in enumerate([
@@ -234,6 +246,7 @@ class Socket:
 
 
 async def ws_session(sock):
+    watched_history = [0]
     await sock.send({"t": "hello", "protocol": 1, "node_id": NODE, "node_name": "comingclean",
                      "build": "0.1.0+fixture", "role": "full",
                      "caps": {"push": True, "scrollback": True, "conversation": True,
@@ -268,6 +281,7 @@ async def ws_session(sock):
                                                cursor={"col": 33, "row": 39, "visible": True}))
                     if msg.get("scrollback"):
                         await sock.send(scrollback(pane))
+                        watched_history[0] = 1553
                     continue
                 await sock.send(grid_reset(pane))
                 if pane == f"{NODE}/w3:p2":
@@ -285,6 +299,11 @@ async def ws_session(sock):
                 "cursor": {"col": 40, "row": 18, "visible": n % 2 == 0},
                 "links": [],
             })
+            # The node polls its ring every 3 s and ships whatever is new.
+            if n % 3 == 0 and watched_history[0]:
+                pane = f"{NODE}/w3:p1"
+                await sock.send(scrollback_tail(pane, watched_history[0]))
+                watched_history[0] += 2
 
     await asyncio.gather(reader(), ticker())
 
@@ -324,7 +343,7 @@ async def handle(reader, writer):
         writer.close()
         return
 
-    body, ctype = serve(path)
+    body, ctype = serve(path, method)
     writer.write(
         f"HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
         f"Content-Security-Policy: {CSP}\r\n"
@@ -334,20 +353,31 @@ async def handle(reader, writer):
     writer.close()
 
 
-def serve(path):
-    if path.startswith("/auth/status"):
+PAIRING_CODE = "7K2-QN9"
+
+
+def serve(path, method="GET"):
+    # The routes the client actually calls. `/auth/status` and `/auth/devices` were the old names
+    # and nothing has asked for them since AuthApi moved to `/api/*`; a fixture answering the wrong
+    # ones cannot get a client past pairing, which is the whole point of it.
+    if path.startswith("/api/node"):
         return json.dumps({
-            "address": "192.168.1.24:8790", "pairing_code": "7K2-QN9", "https": False,
-            "hostname": None, "tier": 0, "webauthn_available": False, "devices": 2,
-            "version": "0.1.0+fixture",
+            "node_id": NODE, "node_name": "comingclean", "build": "0.1.0+fixture",
+            "protocol": 20, "bundle": True, "enrolled": True,
+            "security": {"origin": "", "tier": 0, "passkeys": False, "installable": False},
         }).encode(), "application/json"
-    if path.startswith("/auth/devices"):
+    if path.startswith("/api/devices"):
         return json.dumps({"devices": [
-            {"id": "d1", "name": "this browser", "kind": "browser", "role": "full",
-             "last_seen": "now", "current": True},
-            {"id": "d2", "name": "Pixel 8", "kind": "phone", "role": "readonly",
-             "last_seen": "2h", "current": False},
+            {"id": "d1", "name": "this browser", "role": "full", "last_seen_at": 0},
+            {"id": "d2", "name": "Pixel 8", "role": "readonly", "last_seen_at": 0},
         ]}).encode(), "application/json"
+    if path.startswith("/api/pair") and method == "POST":
+        return json.dumps({"code": PAIRING_CODE, "role": "full", "expires_in": 600}).encode(), "application/json"
+    if path.startswith("/auth/pair") and method == "POST":
+        return json.dumps({
+            "token": "fixture-token",
+            "device": {"id": "d3", "name": "this phone", "role": "full", "last_seen_at": 0},
+        }).encode(), "application/json"
     name = path.split("?")[0].lstrip("/") or "index.html"
     full = os.path.join(ROOT, name)
     if os.path.isfile(full):
