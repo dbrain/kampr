@@ -1,0 +1,40 @@
+
+╭─── Claude Code v2.1.239 ──────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started             │
+│                 Welcome back Danny!                │ Ask Claude to create a new app or c… │
+│                                                    │ ──────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                           │
+│                      ▝▜██████▀                     │ Cost estimates (`/cost`, status lin… │
+│                        ▝▝ ▝▝                       │ Added the one-time fullscreen rende… │
+│   Opus 5 (1M context) with high… · Claude Max ·    │ Added `/claude-api upgrade` to migr… │
+│   claude@oldug.com's Organization                  │ /release-notes for more              │
+│             /…/scratchpad/stream/work              │                                      │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Create a file notes.md containing three bullet points about ANSI escape sequences, then
+  explain in about 250 words what you wrote and why each bullet matters.
+
+● I'll write the file, then explain it.
+
+● Write(notes.md)
+  ⎿  Wrote 7 lines to notes.md
+      1 # ANSI Escape Sequences
+      3 - **Structure**: Most sequences are CSI codes — `ESC` (`0x1B`) followed by `[`
+        , then numeric parameters separated by `;`, then a final byte that selects the
+        1b[H` homes the cursor).
+      5 - **They occupy zero display columns**: A styled string's byte/char length no
+        longer matches its rendered width, so naive padding, alignment, and truncation
+        ng column layout.
+      6
+        consoles without VT processing, and `TERM=dumb` all render the raw bytes as ga
+         conventions, and always emit a reset (`\x1b[0m`
+     … +6 lines
+
+
+· Cascading… (8s · ↓ 427 tokens)
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents             /rc

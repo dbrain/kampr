@@ -1,0 +1,40 @@
+
+│                 Welcome back Danny!                │ Ask Claude to create a new app or c… │
+│                                                    │ ──────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                           │
+│                      ▝▜██████▀                     │ Cost estimates (`/cost`, status lin… │
+│                        ▝▝ ▝▝                       │ Added the one-time fullscreen rende… │
+│   Opus 5 (1M context) with high… · Claude Max ·    │ Added `/claude-api upgrade` to migr… │
+│   claude@oldug.com's Organization                  │ /release-notes for more              │
+│             /…/scratchpad/stream/work              │                                      │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Without using any tools, write about 350 words explaining how a terminal emulator turns a
+  byte stream into a cell grid. Use a couple of short paragraphs and a short bulleted list.
+
+● A terminal emulator sits between a program writing bytes to a pseudoterminal and a window
+  showing characters. Its job is to consume that byte stream — which carries no structure
+  beyond the bytes themselves — and maintain a two-dimensional array of cells, each holding a
+  character (or grapheme cluster), a foreground and background color, and attribute flags
+  like bold, italic, or underline. Everything the user sees is a render of that array.
+
+  The first stage is decoding. Bytes arrive in arbitrary chunks, so a UTF-8 decoder must hold
+  partial sequences across read boundaries. Decoded codepoints then split into two
+  categories: printable text and control information. Control bytes below 0x20, plus escape
+  sequences introduced by ESC, drive a state machine — the canonical one being Paul Williams'
+  DEC-compatible parser, which recognizes ground state, escape, CSI (ESC [), OSC (ESC ]),
+  and DCS states, accumulating parameters and intermediate bytes until a final byte
+  dispatches the command. The parser must be robust against garbage: a malformed sequence
+  should be discarded and the stream resynchronized, never hang the terminal.
+
+  Printable text goes through width resolution before it lands. This is where most of the
+  subtlety lives:
+
+  -
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with C…
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt                            /rc

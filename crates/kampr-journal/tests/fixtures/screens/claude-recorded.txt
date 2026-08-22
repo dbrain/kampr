@@ -1,0 +1,40 @@
+
+╭─── Claude Code v2.1.239 ──────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started             │
+│                 Welcome back Danny!                │ Ask Claude to create a new app or c… │
+│                                                    │ ──────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                           │
+│                      ▝▜██████▀                     │ Cost estimates (`/cost`, status lin… │
+│                        ▝▝ ▝▝                       │ Added the one-time fullscreen rende… │
+│   Opus 5 (1M context) with high… · Claude Max ·    │ Added `/claude-api upgrade` to migr… │
+│   claude@oldug.com's Organization                  │ /release-notes for more              │
+│             /…/scratchpad/stream/work              │                                      │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Create a file notes.md containing three bullet points about ANSI escape sequences, then
+  explain in about 250 words what you wrote and why each bullet matters.
+
+● I'll write the file, then explain it.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✢ Cascading… (4s · ↓ 85 tokens)
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents             /rc

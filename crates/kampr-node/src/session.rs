@@ -373,6 +373,7 @@ impl Session {
             let provider = session.provider.clone();
             tasks.push(tokio::spawn(convo::pump_convo(ConvoCtx {
                 journals: self.node.journals(),
+                panes: session.registry.clone(),
                 herd: self.node.subscribe_herd(),
                 snapshot: Box::new(move |local| convo::announced(&provider, local)),
                 wire: self.wire.clone(),

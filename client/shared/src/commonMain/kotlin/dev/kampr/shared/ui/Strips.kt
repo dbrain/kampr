@@ -65,6 +65,33 @@ internal fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit, accent: 
     }
 }
 
+// A stored enrolment the node will not have. Nothing here is retryable by waiting, which is exactly
+// what "reconnecting in 12s" over a cached herd told the operator for as long as they left it up —
+// so this says what happened and leads to the one screen that can fix it.
+@Composable
+internal fun BoxScope.RefusedNotice(message: String, onPair: () -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    val spoken = "$message Activate to pair this device again."
+    Row(
+        Modifier
+            .align(Alignment.TopCenter)
+            .padding(12.dp)
+            .background(tokens.color.blockedBg, shape)
+            .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
+            .announce(spoken, urgent = true)
+            .touchable()
+            .action(spoken, onPair, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
+        KText(message, tokens.type.caption, tokens.color.text, maxLines = 3)
+        KText("pair again", tokens.type.meta, tokens.color.blocked)
+    }
+}
+
 // A device whose permissions moved under it. Not a refusal — nothing the operator did failed —
 // but it is the whole of why the buttons went away or came back, and a change nobody announced
 // is one that gets discovered by pressing something that no longer works.

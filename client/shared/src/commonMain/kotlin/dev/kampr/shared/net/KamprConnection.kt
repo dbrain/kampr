@@ -25,6 +25,10 @@ import kotlinx.coroutines.launch
 private const val CAPS_MIN_INTERVAL_MS = 10_000.0
 private const val DEFAULT_OWNER = "screen"
 
+private const val REFUSED =
+    "This node no longer recognises this device. It was removed, or the node was set up again. " +
+        "Pair it once more to get back in."
+
 // Keystrokes are addressed to the shell in front of the operator now. A queue that outlives the
 // socket replays a half-typed command into a live shell a reconnect later — measured at twenty
 // seconds — so input is dropped the moment there is nowhere to put it and the pane says so.
@@ -118,7 +122,16 @@ class KamprConnection(
                 store.markStale()
                 val wait = backoff.next()
                 val reason = outcome.exceptionOrNull()?.message ?: "connection closed"
-                store.status(ConnectionStatus.Offline(reason, wait))
+                // A socket that will not open says nothing about why. Asking the same token over
+                // HTTP is what separates a node that is down — which comes back on its own and must
+                // keep saying "reconnecting" — from one that has been reset, or has revoked this
+                // device, which never will. The retry continues either way, so a node whose
+                // database is restored still heals without a reload.
+                if (target.token != null && NodeApi(client, target).refusesToken()) {
+                    store.status(ConnectionStatus.Refused(REFUSED))
+                } else {
+                    store.status(ConnectionStatus.Offline(reason, wait))
+                }
                 delay(wait)
             }
         } finally {

@@ -1,0 +1,40 @@
+
+│   Opus 5 (1M context) with high… · Claude Max ·    │ Added `/claude-api upgrade` to migr… │
+│   claude@oldug.com's Organization                  │ /release-notes for more              │
+│             /…/scratchpad/stream/work              │                                      │
+╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Create a file notes.md containing three bullet points about ANSI escape sequences, then
+  explain in about 250 words what you wrote and why each bullet matters.
+
+● I'll write the file, then explain it.
+
+● Write(notes.md)
+  ⎿  Wrote 7 lines to notes.md
+      1 # ANSI Escape Sequences
+      3 - **Structure**: Most sequences are CSI codes — `ESC` (`0x1B`) followed by `[`
+        , then numeric parameters separated by `;`, then a final byte that selects the
+        1b[H` homes the cursor).
+      5 - **They occupy zero display columns**: A styled string's byte/char length no
+        longer matches its rendered width, so naive padding, alignment, and truncation
+        ng column layout.
+      6
+        consoles without VT processing, and `TERM=dumb` all render the raw bytes as ga
+         conventions, and always emit a reset (`\x1b[0m`
+     … +6 lines
+
+● notes.md is written. Here's what's in it and why each point earns its place.
+
+  Bullet one — structure. ANSI sequences aren't a grab-bag of magic strings; they follow a
+  grammar. The dominant family is CSI: the escape byte 0x1B, a [, semicolon-separated numeric
+  parameters, and a final byte that picks the operation. Once you see that shape, \x1b[31m,
+  \x1b[2J, and \x1b[1;5H stop being incantations you copy from Stack Overflow and become
+  something you can generate, parse, and validate. It also tells you where the sequence ends,
+  which is exactly what you need to strip or rewrite it programmatically.
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents             /rc

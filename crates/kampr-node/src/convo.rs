@@ -1,8 +1,9 @@
 use crate::herd::HerdModel;
 use crate::wire::Wire;
-use kampr_core::HerdrProvider;
+use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
-use kampr_journal::{Journal, Registry as Journals, SessionKind, SessionRef};
+use kampr_core::{HerdrProvider, PaneRegistry};
+use kampr_journal::{Change, Journal, Registry as Journals, SessionKind, SessionRef, Watch};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,6 +16,14 @@ const PAGE: usize = 40;
 /// How often a followed transcript is re-read. A transcript is a file that grows, so this is the
 /// whole tail mechanism.
 const POLL: Duration = Duration::from_millis(400);
+
+/// How often the visible screen is re-read while a turn is in progress.
+///
+/// Not a re-parse of the pane: the emulator already holds the grid the client is watching, so a
+/// tick copies forty rows of text out of it and walks them upwards from the composer. It runs only
+/// while the pane reports `working`, and only for a client that asked for the conversation — an
+/// idle pane and a pane nobody is reading the conversation of both cost nothing at all.
+const LIVE_POLL: Duration = Duration::from_millis(200);
 
 /// How often the pane is asked which transcript it is on *now*. `/clear` opens a new file under
 /// the same working directory and nothing announces it — but deriving the answer reads
@@ -67,6 +76,7 @@ type Announce = Box<dyn Fn(&str) -> Option<SessionRef> + Send>;
 
 pub struct ConvoCtx {
     pub journals: Arc<Journals>,
+    pub panes: Arc<PaneRegistry>,
     pub herd: watch::Receiver<Arc<HerdModel>>,
     pub snapshot: Announce,
     pub wire: Arc<Wire>,
@@ -83,6 +93,7 @@ pub struct ConvoCtx {
 pub async fn pump_convo(ctx: ConvoCtx) {
     let ConvoCtx {
         journals,
+        panes,
         mut herd,
         snapshot,
         wire,
@@ -99,13 +110,33 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut retry = tokio::time::interval(RETRY_EVERY);
     retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    let mut live_poll = tokio::time::interval(LIVE_POLL);
+    live_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     let mut opened: Option<PathBuf> = None;
     let mut handle: Option<Handle> = None;
     let mut due = true;
     let mut misses = 0u32;
+    let mut live = Watch::default();
 
     loop {
         let now = pane_of(&herd, &global);
+        let working = status_of(&herd, &global) == AgentStatus::Working;
+        // A turn that ends without the status moving is covered by the transcript catching up,
+        // but a turn the operator interrupts leaves its half-written text on the screen forever —
+        // so leaving `working` withdraws whatever is showing.
+        //
+        // The transcript is read first, and in this order deliberately: the harness writes the
+        // record and *then* goes idle, so withdrawing before that read leaves the client with
+        // neither the preview nor its replacement for as long as the follow tick takes to notice.
+        if (!working || opened.is_none()) && live.showing() {
+            if !flush(&journal, &wire, &global) {
+                return;
+            }
+            if send_live(&wire, &global, live.stop()).is_err() {
+                return;
+            }
+        }
         // The harness or the directory moved, or the file went away: whatever is open is the
         // wrong conversation.
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
@@ -153,6 +184,19 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     }
                 }
             }
+            _ = live_poll.tick(), if working && opened.is_some() => {
+                let change = match panes.screen(&local) {
+                    Some(rows) => {
+                        let borrowed: Vec<&str> = rows.iter().map(String::as_str).collect();
+                        let seen = journal.lock().unwrap().as_ref().and_then(|j| j.preview(&borrowed));
+                        live.observe(seen)
+                    }
+                    None => live.stop(),
+                };
+                if send_live(&wire, &global, change).is_err() {
+                    return;
+                }
+            }
             _ = retry.tick(), if opened.is_none() && misses < FAST_RETRIES => due = true,
             _ = recheck.tick() => {
                 let latest = resolve(&journals, &snapshot, &local, &now);
@@ -168,6 +212,42 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
         }
     }
+}
+
+/// Sends whatever the transcript has grown by, if anything. A read that fails is left to the
+/// follow tick, which re-derives the transcript rather than dropping a turn.
+fn flush(journal: &Open, wire: &Wire, pane: &str) -> bool {
+    match drain(journal) {
+        Ok(turns) if !turns.is_empty() => wire.send(&ServerMsg::ConvoTurn {
+            pane: pane.to_string(),
+            turns,
+        }),
+        _ => true,
+    }
+}
+
+/// A live turn is a *revision* like any other, which is what lets it be withdrawn: the same id
+/// with no blocks, and a client that matches by id and replaces is rid of it.
+fn send_live(wire: &Wire, pane: &str, change: Change) -> Result<(), ()> {
+    let turns = match change {
+        Change::Held => return Ok(()),
+        Change::Show(turn) => vec![turn],
+        Change::Retire => vec![kampr_journal::retired()],
+    };
+    match wire.send(&ServerMsg::ConvoTurn {
+        pane: pane.to_string(),
+        turns,
+    }) {
+        true => Ok(()),
+        false => Err(()),
+    }
+}
+
+fn status_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> AgentStatus {
+    herd.borrow()
+        .pane(global)
+        .map(|p| p.agent_status)
+        .unwrap_or_default()
 }
 
 fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> Handle {

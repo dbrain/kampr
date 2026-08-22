@@ -1,0 +1,40 @@
+╰───────────────────────────────────────────────────────╯
+
+  Tip: Try the Desktop app on Linux: install it from
+  https://learn.chatgpt.com/docs/linux/linux-app and run 'chatgpt'.
+
+• You have 1 usage limit reset available. Run /usage to use one.
+
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.
+
+
+› Without running any commands, write about 300 words explaining how a terminal emulator
+  turns a byte stream into a cell grid. Use two short paragraphs and a short bulleted list.
+
+
+• A terminal emulator receives a byte stream from a program through a pseudoterminal (PTY). It
+  first decodes ordinary bytes into characters using an encoding such as UTF-8, but not every
+  byte represents visible text. Control characters and escape sequences act as instructions:
+  move the cursor, erase part of the screen, change colors, enable bold text, switch to an
+  alternate screen, or set a scrolling region. Because these instructions can arrive across
+  multiple reads, the emulator uses a stateful parser. It may retain an incomplete UTF-8
+  character or escape sequence until later bytes complete it. Unsupported or malformed
+  sequences are handled according to the emulator’s compatibility rules.
+
+  The parsed operations update an in-memory model of the terminal screen. This model is
+  usually a rectangular grid of cells, with each cell storing a character or grapheme, styling
+  attributes, and sometimes metadata such as hyperlink information. Printable text is placed
+  at the cursor, which advances according to character width. Most characters occupy one cell,
+  East Asian wide characters commonly occupy two, and combining marks modify an existing cell
+  rather than consuming another. When text reaches the right edge, wrapping rules determine
+  whether the cursor continues on the next row. Writing past the bottom of a scrolling region
+  shifts rows upward, often preserving displaced lines in scrollback. The emulator then
+  renders changed cells using a font system and graphics API; rendering is separate from
+  parsing, so many incoming operations can be combined into one visual update.
+
+  - Input: Read bytes from the PTY.
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/claude-1000/-home-dbrain-dev-kampr/88b9dd03-2675-4287-a9b6-21b7f…

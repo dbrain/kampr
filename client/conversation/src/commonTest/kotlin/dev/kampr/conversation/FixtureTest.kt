@@ -115,3 +115,37 @@ class FixtureTest {
         assertTrue(table.rows.any { it[0] == "51" })
     }
 }
+
+class LiveTurnTest {
+    // The preview arrives beside the recorded turns under the reserved id, so a client that
+    // matches by id and replaces shows one message rather than two.
+    @Test
+    fun aLiveTurnIsAnOrdinaryRevisionUnderAReservedId() {
+        val store = storeWith(RICH_CONVO, LIVE_TURN)
+        val turns = store.pane("01JNODE.../w3:p2").turns
+        val live = turns.last()
+        assertEquals(LIVE_TURN_ID, live.id)
+        assertEquals("assistant", live.role)
+        assertTrue(live.isVisible())
+        assertEquals(1, turns.count { it.id == LIVE_TURN_ID }, "revised in place, never appended twice")
+        val text = live.blocks.filterIsInstance<Block.Md>().single().text
+        assertTrue(text.startsWith("notes.md is written."), text.take(60))
+    }
+
+    // Withdrawal is the same id with no blocks. Nothing else on the wire says "forget that turn",
+    // and a client that renders it anyway leaves a blank card where the preview was.
+    @Test
+    fun aWithdrawnLiveTurnIsNotRendered() {
+        val store = storeWith(RICH_CONVO, LIVE_TURN, LIVE_WITHDRAWN)
+        val turns = store.pane("01JNODE.../w3:p2").turns
+        val live = turns.single { it.id == LIVE_TURN_ID }
+        assertTrue(live.blocks.isEmpty())
+        assertFalse(live.isVisible())
+        assertEquals(
+            turns.count { it.blocks.isNotEmpty() },
+            turns.filter { it.isVisible() }.size,
+            "the visible list is exactly the turns that still carry something",
+        )
+        assertFalse(turns.filter { it.isVisible() }.any { it.id == LIVE_TURN_ID })
+    }
+}

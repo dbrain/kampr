@@ -203,6 +203,9 @@ private fun AppScaffold(
     // below has to move with it.
     val readOnly = state.store.readOnly
     val failure by state.store.failure.collectAsState()
+    // A stored token the node will not have. Not a frame — the socket never opened to carry one —
+    // so it rides on the connection status, and it leads somewhere rather than only saying so.
+    val refused = connectionStatus as? ConnectionStatus.Refused
     // The triage list, at last wired: `KamprStore.blocked()` had no callers, and this is what the
     // roadmap called the one Collie product idea worth stealing wholesale.
     val triage = state.store.triage()
@@ -270,6 +273,7 @@ private fun AppScaffold(
         if (state.screen is Screen.Mosaic) {
             mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
             failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+            refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
             state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
             ManageLayer(state, herd, breakpoint)
             return@Box
@@ -459,6 +463,7 @@ private fun AppScaffold(
         }
 
         failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+        refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
         state.passkeyNote?.let { NoteStrip(it, state::dismissPasskeyNote) }
         // A demotion or a promotion that landed on this socket. Nothing the operator did caused
@@ -514,6 +519,7 @@ private fun EmptyDetail(connectionStatus: ConnectionStatus) {
             when (connectionStatus) {
                 is ConnectionStatus.Live -> "Pick a pane"
                 is ConnectionStatus.Offline -> "Reconnecting"
+                is ConnectionStatus.Refused -> "Not paired with this node"
                 ConnectionStatus.Connecting -> "Connecting"
                 ConnectionStatus.Idle -> "Not connected"
             },
@@ -563,17 +569,22 @@ private fun StatusStrip(
         }
         Box(Modifier.weight(1f))
         val offline = connectionStatus as? ConnectionStatus.Offline
+        val refused = connectionStatus is ConnectionStatus.Refused
         KText(
-            when (offline) {
-                null -> "no lease held — desktop shape untouched"
+            when {
+                refused -> "not paired — this node does not know this device"
+                offline == null -> "no lease held — desktop shape untouched"
                 else -> "reconnecting in ${offline.retryInMs / 1000}s — showing cached grid"
             },
             tokens.type.meta,
-            tokens.color.mute,
-            if (offline == null) Modifier
-            else Modifier.announce(
-                "Offline — reconnecting in ${offline.retryInMs / 1000} seconds, showing a cached grid",
-            ),
+            if (refused) tokens.color.blocked else tokens.color.mute,
+            when {
+                refused -> Modifier.announce("Not paired — this node does not know this device")
+                offline == null -> Modifier
+                else -> Modifier.announce(
+                    "Offline — reconnecting in ${offline.retryInMs / 1000} seconds, showing a cached grid",
+                )
+            },
         )
         KText("local ${formatLatency(localRtt)}", tokens.type.meta, tokens.color.mute)
         KText("kampr ${build ?: "0.1.0"}", tokens.type.meta, tokens.color.mute)

@@ -1,0 +1,40 @@
+  replaying a stateful terminal protocol, including cursor motion and destructive edits,
+  against a fixed-size screen model. Resizing adds another complication: the emulator changes
+  the grid dimensions and may reflow wrapped scrollback, while the PTY informs the running
+  program of the new row and column count.
+
+
+› Create a file notes.md with three bullet points about ANSI escape sequences, then explain
+  in about 200 words why each bullet matters.
+
+
+• I’ll create notes.md with exactly three concise bullet points, then explain their
+  significance here.
+
+• Added notes.md (+3 -0)
+    1 +- ANSI escape sequences can move the cursor and erase or replace terminal content.
+    2 +- Select Graphic Rendition (SGR) sequences control colors, emphasis, and other text att
+       ributes.
+    3 +- Escape sequences are stateful control instructions whose bytes may arrive in incomple
+       te chunks.
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+• Created notes.md.
+
+  - Cursor movement and content editing: These sequences let interactive programs update
+    selected parts of the screen instead of printing an entirely new display for every change.
+    Shell prompts, progress indicators, full-screen editors, and monitoring dashboards all
+    rely on cursor positioning and erase operations. Without them, terminal output would
+    behave mainly like an ever-growing paper log.
+
+  - Select Graphic Rendition: SGR sequences attach visual meaning to text through foreground
+    and background colors, bold or faint intensity, underlining, and related attributes.
+    Programs use these styles to distinguish errors, warnings, commands, selections, and
+    syntax. Because styles remain active until changed or reset, applications must manage them
+    carefully; a missing reset can accidentally color everything printed afterward.
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/claude-1000/-home-dbrain-dev-kampr/88b9dd03-2675-4287-a9b6-21b7f…

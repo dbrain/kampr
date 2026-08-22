@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::discover;
 use crate::error::JournalError;
+use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
@@ -83,6 +84,10 @@ impl JournalAdapter for ClaudeAdapter {
 
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(ClaudeParser::default())
+    }
+
+    fn screen(&self) -> Option<ScreenReader> {
+        Some(live)
     }
 }
 
@@ -202,4 +207,31 @@ impl ClaudeParser {
             turn.blocks.push(Block::Diff { path, text });
         }
     }
+}
+
+/// Claude 2.1.239 opens every assistant message with `●` in column zero and indents the wrapped
+/// remainder by two, and opens a tool card exactly the same way — `● Write(notes.md)` — so the
+/// call shape is what separates a card from prose. Captured live: `tests/fixtures/screens`.
+const LAYOUT: Layout = Layout {
+    message: '●',
+    prompt: '❯',
+    result: '⎿',
+    indent: 2,
+    reject: is_tool_card,
+};
+
+/// `Write(notes.md)`, `Bash(herdr pane list)`, `Read(…)`. Prose does not open with a bare
+/// identifier and an opening bracket, and a card is already in the transcript under its own turn.
+fn is_tool_card(head: &str) -> bool {
+    let name: String = head
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    !name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && head[name.len()..].starts_with('(')
+}
+
+pub fn live(screen: &[&str]) -> Option<LiveBlock> {
+    crate::live::read(screen, &LAYOUT)
 }

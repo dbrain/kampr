@@ -30,17 +30,25 @@ pub fn serve(path: &str) -> Response {
     }
 }
 
-/// Files served behind a stable name whose *contents* change with every release. An immutable
-/// service worker is a worker that never updates — the browser would keep running the old one
-/// against a new node forever — and the same is true of the shell and the manifest.
-const MUTABLE: &[&str] = &["index.html", "sw.js", "manifest.webmanifest"];
+/// Only a name that carries its own content hash may be cached forever, and the rule is stated
+/// this way round on purpose. An allow-list of *mutable* names has to be right about every file
+/// the bundler emits; miss one and a browser that has visited once keeps that file for a year,
+/// across every node upgrade. `kamprWeb.js` is the file that made this concrete — it is served
+/// under a stable name and it is what names the hashed `.wasm`, so caching it pinned a returning
+/// browser to a build the node no longer had on disk.
+fn hashed(path: &str) -> bool {
+    let stem = path.rsplit('/').next().unwrap_or(path);
+    stem.split('.')
+        .next()
+        .is_some_and(|s| s.len() >= 16 && s.chars().all(|c| c.is_ascii_hexdigit()))
+}
 
 fn file_response(path: &str, body: Vec<u8>) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
-    let cache = if MUTABLE.contains(&path) {
-        "no-store"
-    } else {
+    let cache = if hashed(path) {
         "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
     };
     Response::builder()
         .header(header::CONTENT_TYPE, mime.as_ref())
@@ -84,6 +92,40 @@ before <code>cargo build</code>, or point an existing client at this node.</p>
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+
+    fn cache_of(path: &str) -> String {
+        let r = file_response(path, b"x".to_vec());
+        r.headers()[header::CACHE_CONTROL].to_str().unwrap().to_string()
+    }
+
+    /// The shell names `boot.js`, `kampr.css` and `kamprWeb.js` by stable name, and that last one
+    /// names the content-hashed wasm. Serve any of them `immutable` and a browser that has visited
+    /// once keeps its old client for a year — across every node upgrade — asking for a `.wasm` the
+    /// node no longer has on disk.
+    #[test]
+    fn only_a_content_hashed_name_may_be_cached_forever() {
+        for stable in [
+            "index.html",
+            "sw.js",
+            "manifest.webmanifest",
+            "boot.js",
+            "kampr.css",
+            "kamprWeb.js",
+            "offline.html",
+        ] {
+            assert_eq!(
+                cache_of(stable),
+                "no-store",
+                "{stable} is served under a stable name"
+            );
+        }
+        for hashed in ["6e23e5428398b92da386.wasm", "cd08fc40208bccbb0d73.wasm"] {
+            assert!(
+                cache_of(hashed).contains("immutable"),
+                "{hashed} carries its own hash"
+            );
+        }
+    }
 
     async fn body_of(response: Response) -> String {
         String::from_utf8(to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec()).unwrap()

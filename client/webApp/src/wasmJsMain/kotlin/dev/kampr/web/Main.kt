@@ -25,6 +25,15 @@ private fun query(name: String): String? = param(window.location.search.removePr
 // it cannot land in its access log or in the reverse proxy's.
 private fun fragment(name: String): String? = param(window.location.hash.removePrefix("#"), name)
 
+// Read once, then taken out of the address bar. Left there it is a spent secret sitting in the
+// history and in whatever bookmark was made from it, and — because a `pair` fragment forces the
+// pairing screen — every later reload of that URL opened on "Point Kampr at a node" on a device
+// that was already paired, which is what it looks like to be logged out.
+private fun forgetFragment() {
+    if (window.location.hash.isEmpty()) return
+    window.history.replaceState(null, "", window.location.pathname + window.location.search)
+}
+
 // ConversationSurfaces wraps: it renders the transcript and delegates the terminal and the
 // key row to its base, so both halves of the pane are live.
 private val surfaces = ConversationSurfaces(TerminalSurfaces())
@@ -37,6 +46,7 @@ fun main() {
         query("theme"), query("mode"), query("screen"), query("view"), query("pane"),
         fragment("pair"),
     )
+    forgetFragment()
     ComposeViewport(document.body!!) {
         if (bench) TerminalBenchApp() else KamprApp(surfaces, deepLink, mosaic)
     }

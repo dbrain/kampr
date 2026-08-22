@@ -89,9 +89,11 @@ class AppState(
     var themeMode: ThemeMode by mutableStateOf(modeOf(prefs.get(KEY_MODE)))
         private set
 
-    // A device with no address to dial opens on the screen that asks for one, rather than on a
-    // herd it cannot fetch behind an error about a connection nobody asked it to make.
-    var screen: Screen by mutableStateOf(if (endpoint == null) Screen.Setup else Screen.Herd)
+    // A device with nothing to connect *with* opens on the screen that asks for it, rather than on
+    // a herd it cannot fetch behind an error about a connection nobody asked it to make. An address
+    // is not enough: the browser is served by the node, so it can always derive one, and a page that
+    // has never paired would otherwise land on a herd that stays empty forever.
+    var screen: Screen by mutableStateOf(if (endpoint?.token == null) Screen.Setup else Screen.Herd)
         private set
 
     var lastPaneId: String? by mutableStateOf(null)
@@ -148,6 +150,10 @@ class AppState(
     fun start() {
         watchInstallability()
         val target = endpoint ?: return
+        // `useEndpoint` has refused to dial a tokenless address since 0.1.1 — "having nothing to
+        // keep is not a reason to dial anyway and retry in silence". This is the other entry point,
+        // and on the web it is the one that runs on every load.
+        if (target.token == null) return
         push.prepare(target.token)
         connection.connect(target)
         warm(target)

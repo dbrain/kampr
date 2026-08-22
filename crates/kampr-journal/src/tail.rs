@@ -3,7 +3,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::error::JournalError;
-use crate::model::{Page, Turn};
+use crate::live::{self, ScreenReader};
+use crate::model::{Block, Page, Turn};
 use crate::store::TurnStore;
 
 pub trait TranscriptParser: Send {
@@ -18,23 +19,53 @@ pub trait Journal: Send {
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError>;
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page;
     fn path(&self) -> &Path;
+    /// A best-effort turn for the message the harness is painting right now, checked against the
+    /// transcript so that a message which has already been recorded is never previewed beside its
+    /// own record.
+    fn preview(&self, screen: &[&str]) -> Option<Turn>;
 }
+
+/// How far back a preview is checked. Claude writes an assistant record per message, so the newest
+/// turn is usually the answer; a tool card can sit between the message being painted and the last
+/// text record, and the operator's own prompt is the turn a clipped preview is most likely to
+/// have drifted into.
+const RECENT: usize = 4;
 
 pub struct FileJournal {
     path: PathBuf,
     offset: u64,
     partial: Vec<u8>,
     parser: Box<dyn TranscriptParser>,
+    screen: Option<ScreenReader>,
 }
 
 impl FileJournal {
-    pub fn new(path: PathBuf, parser: Box<dyn TranscriptParser>) -> Self {
+    pub fn new(path: PathBuf, parser: Box<dyn TranscriptParser>, screen: Option<ScreenReader>) -> Self {
         Self {
             path,
             offset: 0,
             partial: Vec::new(),
             parser,
+            screen,
         }
+    }
+
+    fn recent(&self) -> Vec<String> {
+        let turns = self.parser.store().turns();
+        turns[turns.len().saturating_sub(RECENT)..]
+            .iter()
+            .rev()
+            .map(|turn| {
+                turn.blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        Block::Md { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect()
     }
 
     fn rewind(&mut self) {
@@ -88,5 +119,9 @@ impl Journal for FileJournal {
 
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn preview(&self, screen: &[&str]) -> Option<Turn> {
+        live::preview(self.screen, screen, &self.recent())
     }
 }

@@ -6,6 +6,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
 import dev.kampr.shared.util.parseHttpDateMillis
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -63,6 +64,15 @@ class NodeApi(private val client: HttpClient, private val endpoint: Endpoint) {
         }
         if (response.status.isSuccess()) response.bodyAsText() else null
     }.getOrNull()
+
+    // A browser is never shown the status of a failed WebSocket handshake, so on the socket alone a
+    // node that has forgotten this device is indistinguishable from one that is switched off. Over
+    // plain HTTP the same token gets a status code. Only an explicit 401 counts: a node that is
+    // down answers nothing, and reporting that as a refusal would send the operator to re-pair
+    // against something that was going to come back on its own.
+    suspend fun refusesToken(): Boolean = runCatching {
+        client.get("${endpoint.httpBase}/api/devices") { auth() }.status == HttpStatusCode.Unauthorized
+    }.getOrDefault(false)
 
     private fun io.ktor.client.request.HttpRequestBuilder.auth() {
         endpoint.token?.let { header("Authorization", "Bearer $it") }

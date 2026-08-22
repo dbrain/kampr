@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::JournalError;
+use crate::live::ScreenReader;
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,12 +50,20 @@ pub trait JournalAdapter: Send + Sync {
     fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError>;
     fn parser(&self) -> Box<dyn TranscriptParser>;
 
+    /// Reads an in-progress message off this harness's visible screen, for the harnesses whose
+    /// screen somebody has actually probed. `None` — the default — means a pane running this
+    /// harness serves its transcript and nothing more, which is what every harness did before
+    /// live turns existed.
+    fn screen(&self) -> Option<ScreenReader> {
+        None
+    }
+
     fn open(&self, session: &SessionRef) -> Result<Box<dyn Journal>, JournalError> {
         Ok(self.open_path(self.locate(session)?))
     }
 
     fn open_path(&self, path: PathBuf) -> Box<dyn Journal> {
-        Box::new(FileJournal::new(path, self.parser()))
+        Box::new(FileJournal::new(path, self.parser(), self.screen()))
     }
 }
 

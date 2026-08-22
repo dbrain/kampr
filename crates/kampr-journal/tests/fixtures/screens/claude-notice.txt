@@ -1,0 +1,40 @@
+  grammar. The dominant family is CSI: the escape byte 0x1B, a [, semicolon-separated numeric
+  parameters, and a final byte that picks the operation. Once you see that shape, \x1b[31m,
+  \x1b[2J, and \x1b[1;5H stop being incantations you copy from Stack Overflow and become
+  something you can generate, parse, and validate. It also tells you where the sequence ends,
+  which is exactly what you need to strip or rewrite it programmatically.
+
+  Bullet two — zero display width. This is where most real bugs come from. len(s) counts the
+  escape bytes, but the terminal draws none of them. Any code that pads a column, centers a
+  header, wraps at 80 characters, or truncates with an ellipsis will silently misalign the
+  moment color enters. The fix is to separate the styling layer from the layout layer:
+  measure the plain text, then apply styling. Worth calling out explicitly because the
+  failure is visual and intermittent rather than a crash, so it survives testing and shows up
+  in front of users.
+
+  Bullet three — support isn't guaranteed. The same bytes that render as red in an
+  interactive terminal render as ←[31m litter in a log file, a CI transcript, or a pipe into
+  grep. Hence the isatty gate and the NO_COLOR/FORCE_COLOR conventions, which let users and
+  CI systems override you. The trailing reset matters for a related reason: without it, an
+  abnormal exit leaves the user's shell prompt stuck in whatever color you set last.
+
+✻ Baked for 17s
+
+❯ Run a bash command that sleeps for 12 seconds and then prints hello. Just do it, no
+  commentary first.
+
+  Ran 1 shell command
+
+● Running in the background (foreground sleep is blocked in this harness) — I'll report the
+  output when it finishes.
+
+✻ Crunched for 5s
+
+● Background command "Sleep 12 seconds then print hello" completed (exit code 0)
+
+✢ Perusing…
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents             /rc

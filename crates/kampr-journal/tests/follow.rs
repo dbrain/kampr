@@ -28,7 +28,7 @@ fn appended_records_arrive_without_replaying_the_file() {
     let path = scratch_dir("follow").join("session.jsonl");
     std::fs::write(&path, source[..split].join("\n") + "\n").unwrap();
 
-    let mut journal = FileJournal::new(path.clone(), claude_parser());
+    let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
     let first = journal.poll().unwrap();
     assert_eq!(first.len(), 2);
 
@@ -69,7 +69,7 @@ fn a_settled_tool_is_re_emitted_under_the_same_id() {
     let path = scratch_dir("settle").join("session.jsonl");
     std::fs::write(&path, source[..split].join("\n") + "\n").unwrap();
 
-    let mut journal = FileJournal::new(path.clone(), claude_parser());
+    let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
     let first = journal.poll().unwrap();
     let bash = first.last().unwrap();
     assert!(matches!(
@@ -105,7 +105,7 @@ fn a_half_written_line_waits_for_its_newline() {
     let path = scratch_dir("torn").join("session.jsonl");
     std::fs::write(&path, source[..5].join("\n") + "\n").unwrap();
 
-    let mut journal = FileJournal::new(path.clone(), claude_parser());
+    let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
     assert_eq!(journal.poll().unwrap().len(), 1);
 
     let record = &source[5];
@@ -126,7 +126,7 @@ fn a_truncated_transcript_is_re_read_from_the_start() {
     let path = scratch_dir("truncate").join("session.jsonl");
     std::fs::write(&path, &source).unwrap();
 
-    let mut journal = FileJournal::new(path.clone(), claude_parser());
+    let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
     assert_eq!(journal.poll().unwrap().len(), 5);
 
     std::fs::write(

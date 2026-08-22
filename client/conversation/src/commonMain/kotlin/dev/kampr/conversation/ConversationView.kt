@@ -61,7 +61,9 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
         return
     }
 
-    val turns = pane.turns
+    // A live preview is withdrawn by arriving again with no blocks, so an empty turn is a turn
+    // that is no longer there.
+    val turns = remember(pane.revision) { pane.turns.filter { it.isVisible() } }
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var focus by remember { mutableStateOf(0) }

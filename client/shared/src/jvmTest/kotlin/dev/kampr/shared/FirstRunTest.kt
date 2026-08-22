@@ -37,12 +37,23 @@ class FirstRunTest {
         }
     }
 
+    // The browser is served by the node, so it can always derive an address — which is not the
+    // same as being able to use one. Found in a real browser: a page that had never paired dialled
+    // that derived address anyway, was refused eight times in twenty seconds, and sat on a herd it
+    // could not fetch under "Reconnecting" with nothing offering to pair. `useEndpoint` has refused
+    // to dial a tokenless address since 0.1.1; `start()` is the entry point that never learned.
     @Test
-    fun aPlatformThatCanDeriveOneStillGoesStraightToTheHerd() {
+    fun aDerivedAddressWithNoEnrolmentIsOfferedButNotDialled() {
         val (app, scope) = state(fallback = Endpoint("http://127.0.0.1:8790"))
         try {
-            assertEquals("http://127.0.0.1:8790", app.endpoint?.baseUrl)
-            assertEquals(Screen.Herd, app.screen)
+            assertEquals(
+                "http://127.0.0.1:8790",
+                app.endpoint?.baseUrl,
+                "the derived address is still what the pairing panel should offer",
+            )
+            assertEquals(Screen.Setup, app.screen, "there is nothing to connect with, so it has to ask")
+            app.start()
+            assertEquals(ConnectionStatus.Idle, app.store.status.value, "a tokenless address must not be dialled")
         } finally {
             scope.cancel()
         }
@@ -57,6 +68,26 @@ class FirstRunTest {
         try {
             assertEquals(Endpoint("https://kampr.example.com", "tok"), app.endpoint)
             assertEquals(Screen.Herd, app.screen)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // The other half of the same rule: an enrolment that is there is dialled without being asked
+    // about, which is the whole of "it remembered I was logged in".
+    @Test
+    fun aStoredEnrolmentIsDialledOnStartWithoutAskingAnything() {
+        val prefs = MemoryPrefs()
+        prefs.set("endpoint", "http://127.0.0.1:8790")
+        prefs.set("token", "kmp_stored")
+        val (app, scope) = state(prefs)
+        try {
+            assertEquals(Screen.Herd, app.screen)
+            app.start()
+            assertTrue(
+                app.store.status.value != ConnectionStatus.Idle,
+                "a device that is already paired must dial on its own",
+            )
         } finally {
             scope.cancel()
         }

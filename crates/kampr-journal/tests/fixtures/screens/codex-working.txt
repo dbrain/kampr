@@ -1,0 +1,40 @@
+  alternate screen, or set a scrolling region. Because these instructions can arrive across
+  multiple reads, the emulator uses a stateful parser. It may retain an incomplete UTF-8
+  character or escape sequence until later bytes complete it. Unsupported or malformed
+  sequences are handled according to the emulator’s compatibility rules.
+
+  The parsed operations update an in-memory model of the terminal screen. This model is
+  usually a rectangular grid of cells, with each cell storing a character or grapheme, styling
+  attributes, and sometimes metadata such as hyperlink information. Printable text is placed
+  at the cursor, which advances according to character width. Most characters occupy one cell,
+  East Asian wide characters commonly occupy two, and combining marks modify an existing cell
+  rather than consuming another. When text reaches the right edge, wrapping rules determine
+  whether the cursor continues on the next row. Writing past the bottom of a scrolling region
+  shifts rows upward, often preserving displaced lines in scrollback. The emulator then
+  renders changed cells using a font system and graphics API; rendering is separate from
+  parsing, so many incoming operations can be combined into one visual update.
+
+  - Input: Read bytes from the PTY.
+  - Decode: Convert encoded bytes into Unicode characters.
+  - Parse: Interpret controls and escape sequences.
+  - Update: Apply operations to cursor state and the cell grid.
+  - Measure: Account for wide and combining characters.
+  - Render: Draw changed cells, cursor, colors, and decorations.
+
+  The grid is therefore not a direct picture of the byte stream. It is the current result of
+  replaying a stateful terminal protocol, including cursor motion and destructive edits,
+  against a fixed-size screen model. Resizing adds another complication: the emulator changes
+  the grid dimensions and may reflow wrapped scrollback, while the PTY informs the running
+  program of the new row and column count.
+
+
+› Create a file notes.md with three bullet points about ANSI escape sequences, then explain
+  in about 200 words why each bullet matters.
+
+
+• Working (2s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/claude-1000/-home-dbrain-dev-kampr/88b9dd03-2675-4287-a9b6-21b7f…

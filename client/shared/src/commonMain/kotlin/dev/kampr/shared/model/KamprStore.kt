@@ -17,6 +17,10 @@ sealed interface ConnectionStatus {
     data object Connecting : ConnectionStatus
     data class Live(val role: String) : ConnectionStatus
     data class Offline(val reason: String, val retryInMs: Long) : ConnectionStatus
+
+    // The node is up and will not have this device. Separate from `Offline` because they are not
+    // the same news: one comes back on its own and one never will until somebody pairs again.
+    data class Refused(val reason: String) : ConnectionStatus
 }
 
 class KamprStore {

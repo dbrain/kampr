@@ -236,6 +236,24 @@ impl Harness {
         socket
     }
 
+    /// The pane of this harness's session rooted at `cwd`, once herdr has reported it.
+    async fn pane_with_cwd(&self, cwd: &str) -> Option<String> {
+        for _ in 0..100 {
+            let found = self
+                .node
+                .herd()
+                .panes
+                .iter()
+                .find(|p| p.node_id == self.node.node_id() && p.cwd.as_deref() == Some(cwd))
+                .map(|p| p.id.clone());
+            if found.is_some() {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    }
+
     /// A pane of *this harness's own* session. The node discovers every named herdr session on
     /// the machine, so the herd carries other tests' panes — and another test's throwaway session
     /// is not what a test means by "the pane".
@@ -3034,4 +3052,222 @@ async fn a_workspace_opened_at_the_desk_reaches_a_client_at_once() {
         }
     }
     panic!("a new workspace took longer than two seconds to reach a connected client");
+}
+
+/// A pane whose herdr says `claude`, whose working directory a transcript claims, and whose screen
+/// is painted the way Claude 2.1.239 paints one.
+///
+/// Nothing here is a stub: a real herdr runs the pane, the node's own emulator holds the grid, the
+/// journal follows a file on disk, and the frames are read off a websocket.
+struct LiveTurn {
+    home: tempfile::TempDir,
+    work: tempfile::TempDir,
+    transcript: PathBuf,
+}
+
+impl LiveTurn {
+    fn new() -> Self {
+        let home = tempfile::tempdir().expect("home");
+        let work = tempfile::tempdir().expect("work");
+        let cwd = work.path().canonicalize().expect("cwd");
+        let slug = cwd.display().to_string().replace('/', "-");
+        let project = home.path().join(".claude/projects").join(slug);
+        std::fs::create_dir_all(&project).expect("project dir");
+        let transcript = project.join("11111111-2222-3333-4444-555555555555.jsonl");
+        std::fs::write(&transcript, String::new()).expect("transcript");
+        let me = Self {
+            home,
+            work,
+            transcript,
+        };
+        me.append(&json!({
+            "type": "user",
+            "uuid": "u-1",
+            "cwd": cwd.display().to_string(),
+            "message": { "content": "explain the parser" },
+        }));
+        me
+    }
+
+    fn append(&self, record: &Value) {
+        let mut line = record.to_string();
+        line.push('\n');
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.transcript)
+            .expect("open transcript");
+        use std::io::Write;
+        file.write_all(line.as_bytes()).expect("append");
+    }
+
+    fn cwd(&self) -> String {
+        self.work.path().canonicalize().unwrap().display().to_string()
+    }
+}
+
+/// Paints literal screen fragments, one shell command, with a pause between them — so a block is
+/// seen to *grow*, and only one echoed command line ever sits above it.
+fn paint(parts: &[&[&str]]) -> String {
+    let mut command = String::new();
+    for part in parts {
+        if !command.is_empty() {
+            command.push_str("sleep 1; ");
+        }
+        let quoted: Vec<String> = part
+            .iter()
+            .map(|l| format!("'{}'", l.replace('\'', "'\\''")))
+            .collect();
+        command.push_str(&format!("printf '%s\\n' {}; ", quoted.join(" ")));
+    }
+    command.push('\n');
+    command
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
+    let fixture = LiveTurn::new();
+    let home = fixture.home.path().to_path_buf();
+    let h = harness!("liveturn", |config: &mut Config| {
+        config.journals.home = home.display().to_string();
+    });
+    // A second workspace, because the harness's own is rooted at /tmp and a transcript is found
+    // through the pane's working directory.
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd() }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd()).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    // Herdr detects a harness by scraping the screen, so a test that wants a `claude` pane at
+    // `working` says so through the same API a plugin would.
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "source": "kampr-test", "agent": "claude", "state": "working" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 20).await;
+    assert_eq!(
+        opening["turns"].as_array().map(Vec::len),
+        Some(1),
+        "the transcript opens with the operator's own turn and nothing else"
+    );
+
+    // The message arrives in two paints, because a block earns its preview by growing.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": paint(&[
+            &[
+                "● The parser is a state machine over the byte stream, and every escape",
+                "  sequence is one walk through it.",
+            ],
+            &[
+                "  Printable text takes the short path and lands in a cell; a control byte",
+                "  takes the long one.",
+            ],
+        ]) }),
+    )
+    .await;
+
+    let live = until_live(&mut socket, &pane, 20).await.expect("a live turn");
+    let text = live["blocks"][0]["text"].as_str().expect("md").to_string();
+    assert_eq!(live["id"], "live");
+    assert_eq!(live["role"], "assistant");
+    assert!(
+        text.starts_with("The parser is a state machine over the byte stream"),
+        "the marker is layout and the wrap indent is stripped: {text:?}"
+    );
+    assert!(
+        !text.contains('●') && !text.contains("printf"),
+        "neither the harness's glyph nor the shell that painted it: {text:?}"
+    );
+
+    // The record lands, unwrapped and in markdown, exactly as Claude writes one.
+    fixture.append(&json!({
+        "type": "assistant",
+        "uuid": "a-1",
+        "message": { "content": [ { "type": "text", "text":
+            "The **parser** is a state machine over the byte stream, and every escape sequence is one walk through it.\n\nPrintable text takes the short path and lands in a cell; a control byte takes the long one." } ] },
+    }));
+
+    let mut authoritative = false;
+    let mut withdrawn = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline && !(authoritative && withdrawn) {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] != "convo.turn" || message["pane"] != pane.as_str() {
+            continue;
+        }
+        for turn in message["turns"].as_array().unwrap_or(&Vec::new()) {
+            match turn["id"].as_str() {
+                Some("a-1") => authoritative = true,
+                Some("live") => {
+                    withdrawn = turn["blocks"].as_array().is_none_or(Vec::is_empty);
+                    assert!(
+                        withdrawn,
+                        "once the record is on the wire the preview may only be withdrawn: {turn}"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(authoritative, "the transcript record never arrived");
+    assert!(
+        withdrawn,
+        "the preview was never withdrawn, so the client renders the message twice"
+    );
+
+    // And nothing is streamed for a client that did not ask for the conversation.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 20).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": paint(&[
+            &[
+                "● A second message nobody asked to see, growing",
+                "  across two paints so it would qualify.",
+            ],
+            &["  And here is the second paint."],
+        ]) }),
+    )
+    .await;
+    assert!(
+        until_live(&mut socket, &pane, 6).await.is_none(),
+        "a pane watched without `conversation` runs no pump and reads no screen"
+    );
+}
+
+/// The next `convo.turn` carrying the reserved live id, or `None` if none arrives in time.
+async fn until_live(socket: &mut Socket, pane: &str, seconds: u64) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] != "convo.turn" || message["pane"] != pane {
+            continue;
+        }
+        for turn in message["turns"].as_array().unwrap_or(&Vec::new()) {
+            if turn["id"] == "live" && !turn["blocks"].as_array().is_none_or(Vec::is_empty) {
+                return Some(turn.clone());
+            }
+        }
+    }
+    None
 }

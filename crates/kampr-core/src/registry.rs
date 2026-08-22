@@ -276,6 +276,28 @@ impl PaneRegistry {
         }
     }
 
+    /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed.
+    ///
+    /// The emulator only exists while somebody is streaming the pane, so this is `None` for an
+    /// unwatched pane and never opens anything to answer. It is the same grid the client is
+    /// looking at — no `pane.read`, no socket call, no second emulation.
+    pub fn screen(&self, pane_id: &str) -> Option<Vec<String>> {
+        let entry = self.lookup(pane_id)?;
+        let state = entry.state.lock().unwrap();
+        if !state.ready {
+            return None;
+        }
+        let grid = state.term.grid();
+        Some(
+            (0..grid.rows())
+                .map(|r| {
+                    let row: String = grid.row(r).iter().map(|c| c.ch).collect();
+                    row.trim_end().to_string()
+                })
+                .collect(),
+        )
+    }
+
     /// What cadence the pane's history poller has settled on, and the row rate it measured.
     pub fn history_status(&self, pane_id: &str) -> Option<HistoryStatus> {
         self.lookup(pane_id).map(|e| *e.status.lock().unwrap())

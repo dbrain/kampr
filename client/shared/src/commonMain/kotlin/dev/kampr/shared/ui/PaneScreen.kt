@@ -35,6 +35,18 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 
+// `has_conversation` is the node saying a transcript resolves for this pane, not that the pane is
+// an agent — a freshly started `claude` reports false until its journal appears. It moves during a
+// session in both directions, so it is read on every composition rather than at open.
+private val PaneInfo?.talks: Boolean get() = this?.hasConversation == true
+
+// What is actually rendered, against what was asked for. A remembered preference, a deep link and
+// the desktop's own Split default all outlive the transcript that justified them, and the pane they
+// name is still live — so the terminal is where that lands, and the request is kept rather than
+// rewritten, which is what brings the operator's choice back when the transcript returns.
+private fun viewOn(info: PaneInfo?, view: PaneView): PaneView =
+    if (info.talks) view else PaneView.Terminal
+
 private fun statusLabel(status: AgentStatus): String? = when (status) {
     AgentStatus.Blocked, AgentStatus.Working, AgentStatus.Done -> statusWord(status)
     else -> null
@@ -82,9 +94,10 @@ fun PaneScreenMobile(
     // with it. Padding the screen would letterbox the grid, which is the one thing it must not do.
     var chrome by remember { mutableStateOf<Dp?>(null) }
     val presence = rememberWatchPresence(pane.id, info)
+    val shown = viewOn(info, view)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
-            when (view) {
+            when (shown) {
                 PaneView.Conversation -> surfaces.Conversation(
                     pane,
                     info,
@@ -141,7 +154,7 @@ fun PaneScreenMobile(
                 // Landscape has no second row to hang these off, and an agent pane opens in
                 // Conversation: without them here the terminal is unreachable without rotating.
                 if (landscape) {
-                    ViewSwitch(view, onView, Modifier.width(210.dp))
+                    if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
                     surfaces.Zoom(pane, Modifier)
                 }
             }
@@ -155,7 +168,7 @@ fun PaneScreenMobile(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    ViewSwitch(view, onView, Modifier.weight(1f))
+                    if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f)) else Box(Modifier.weight(1f))
                     surfaces.Zoom(pane, Modifier)
                 }
             }
@@ -174,7 +187,7 @@ fun PaneScreenMobile(
 
         // The conversation surface renders its own prompt strip and reply box, so the terminal
         // chrome stands down rather than stacking a second one underneath it.
-        if (view != PaneView.Conversation) {
+        if (shown != PaneView.Conversation) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
                 if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
                 surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
@@ -290,15 +303,16 @@ fun PaneScreenDesktop(
     val safe = LocalSafeArea.current
     var chrome by remember { mutableStateOf<Dp?>(null) }
     val presence = rememberWatchPresence(pane.id, info)
+    val shown = viewOn(info, view)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             Row(Modifier.fillMaxSize()) {
                 // Split shares the width rather than pinning the terminal to a fixed one: on a
                 // wide monitor a fixed width crops the grid and leaves the other half empty.
-                if (view != PaneView.Conversation) {
+                if (shown != PaneView.Conversation) {
                     surfaces.Terminal(pane, info, Modifier.weight(1f).fillMaxHeight())
                 }
-                if (view != PaneView.Terminal) {
+                if (shown != PaneView.Terminal) {
                     surfaces.Conversation(
                         pane,
                         info,
@@ -330,25 +344,27 @@ fun PaneScreenDesktop(
             NewAction(pane.id)
             PaneManageAction(pane.id)
             Box(Modifier.weight(1f))
-            Segmented(
-                listOf("Split", "Terminal", "Conversation"),
-                when (view) {
-                    PaneView.Split -> 0
-                    PaneView.Terminal -> 1
-                    PaneView.Conversation -> 2
-                },
-                { index ->
-                    onView(
-                        when (index) {
-                            0 -> PaneView.Split
-                            1 -> PaneView.Terminal
-                            else -> PaneView.Conversation
-                        }
-                    )
-                },
-                Modifier.width(320.dp),
-                what = "view",
-            )
+            if (info.talks) {
+                Segmented(
+                    listOf("Split", "Terminal", "Conversation"),
+                    when (shown) {
+                        PaneView.Split -> 0
+                        PaneView.Terminal -> 1
+                        PaneView.Conversation -> 2
+                    },
+                    { index ->
+                        onView(
+                            when (index) {
+                                0 -> PaneView.Split
+                                1 -> PaneView.Terminal
+                                else -> PaneView.Conversation
+                            }
+                        )
+                    },
+                    Modifier.width(320.dp),
+                    what = "view",
+                )
+            }
         }
 
         WatchNotice(
@@ -359,7 +375,7 @@ fun PaneScreenDesktop(
                 .padding(top = (chrome ?: 56.dp) + 8.dp, end = 14.dp),
         )
 
-        if (!readOnly && view == PaneView.Terminal) {
+        if (!readOnly && shown == PaneView.Terminal) {
             pane.pending?.let {
                 Box(Modifier.align(Alignment.BottomStart).fillMaxWidth()) { PendingBar(it, onAnswer) }
             }

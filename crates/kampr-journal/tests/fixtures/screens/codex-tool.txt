@@ -1,0 +1,40 @@
+
+  - Cursor movement and content editing: These sequences let interactive programs update
+    selected parts of the screen instead of printing an entirely new display for every change.
+    Shell prompts, progress indicators, full-screen editors, and monitoring dashboards all
+    rely on cursor positioning and erase operations. Without them, terminal output would
+    behave mainly like an ever-growing paper log.
+
+  - Select Graphic Rendition: SGR sequences attach visual meaning to text through foreground
+    and background colors, bold or faint intensity, underlining, and related attributes.
+    Programs use these styles to distinguish errors, warnings, commands, selections, and
+    syntax. Because styles remain active until changed or reset, applications must manage them
+    carefully; a missing reset can accidentally color everything printed afterward.
+
+  - Stateful, incrementally received instructions: An escape sequence is a protocol command
+    rather than an indivisible character. Its bytes can be divided across multiple reads from
+    the terminal’s byte stream, so an emulator cannot safely interpret each input chunk
+    independently. It needs a stateful parser that remembers partial sequences until they are
+    complete. This matters for correctness and security: malformed, unsupported, or
+    unexpectedly long sequences must be handled predictably without corrupting the display,
+    confusing subsequent text, or consuming unbounded resources. Robust parsing also ensures
+    that programs behave consistently despite differences in buffering and transmission
+    timing.
+
+──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Run 'ls -la' and then 'wc -l notes.md', then say in one sentence what you saw.
+
+
+• I’ll run those two commands in order and summarize the results in one sentence.
+
+• Explored
+  └ List ls -la
+
+• Working (3s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-sol default · /tmp/claude-1000/-home-dbrain-dev-kampr/88b9dd03-2675-4287-a9b6-21b7f…

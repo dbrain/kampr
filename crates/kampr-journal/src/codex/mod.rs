@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::discover;
 use crate::error::JournalError;
+use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
@@ -101,6 +102,10 @@ impl JournalAdapter for CodexAdapter {
 
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(CodexParser::default())
+    }
+
+    fn screen(&self) -> Option<ScreenReader> {
+        Some(live)
     }
 }
 
@@ -234,4 +239,24 @@ impl CodexParser {
             *lines = count_lines(&text);
         }
     }
+}
+
+/// Codex 0.149 opens both its assistant messages and its own status line with `•` in column zero.
+/// The status line is the only head worth rejecting: while a turn runs, the block at the foot of
+/// the screen is either the spinner or the message being written — a tool card always has the
+/// spinner painted underneath it. Captured live: `tests/fixtures/screens`.
+const LAYOUT: Layout = Layout {
+    message: '•',
+    prompt: '›',
+    result: '└',
+    indent: 2,
+    reject: is_status,
+};
+
+fn is_status(head: &str) -> bool {
+    head.starts_with("Working (")
+}
+
+pub fn live(screen: &[&str]) -> Option<LiveBlock> {
+    crate::live::read(screen, &LAYOUT)
 }

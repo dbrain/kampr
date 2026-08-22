@@ -292,6 +292,43 @@ classifier covers them, but a renderer must not assume unified-diff headers are 
 timestamps predate the ones above them, and sorting shuffles the conversation. Replace by id, keep
 the given order.
 
+#### The live turn — `id: "live"`
+
+A harness writes an assistant record only when the message is **finished**, so a conversation built
+from the transcript alone shows nothing until the turn ends. While a pane is `working`, the node
+also reads the message off the pane's own screen and publishes it as an ordinary `convo.turn`
+revision under the reserved id **`live`**.
+
+```jsonc
+{ "t": "convo.turn", "pane": "01J.../w3:p2",
+  "turns": [ { "id": "live", "role": "assistant",
+               "blocks": [ { "b": "md", "text": "The parser is a state machine over…" } ] } ] }
+
+{ "t": "convo.turn", "pane": "01J.../w3:p2",
+  "turns": [ { "id": "live", "role": "assistant", "blocks": [] } ] }   // withdrawn
+```
+
+Three rules, and they are the whole contract:
+
+- **It is an approximation, and it always loses.** The screen is hard-wrapped to the viewport, has
+  had its markdown rendered away, and is clipped at the top once a message outgrows the pane. The
+  node withdraws it the moment the transcript carries the same message, so the authoritative record
+  replaces it rather than sitting beside it. A client must never page from it, cite it, or keep it
+  across a `convo` reload.
+- **A turn with `blocks: []` is withdrawn, not empty.** This is the only place the protocol says a
+  turn can go away. Clients drop it from the rendered list — rendering it leaves a blank card where
+  the preview was. Only `live` is ever withdrawn.
+- **It is always the newest turn**, it carries no `at`, and it is never a `cursor`. Everything else
+  about it is an ordinary turn: match by id, replace, keep the given order.
+
+Rendering it identically to a recorded turn is wrong in one specific way — the wording may still
+change under the reader — so a client should mark it. Kampr's own conversation view puts a caret
+and *still writing* under the text.
+
+**A harness with no probed screen publishes no live turn**, which is the same conversation this
+protocol described before live turns existed. Today that is `claude` 2.1.239 and `codex` 0.149;
+every other agent kind serves its transcript and nothing more.
+
 ### `pending` — a prompt is waiting
 ```jsonc
 { "t": "pending", "pane": "01J.../w3:p2", "question": "Do you want to make this edit?",
