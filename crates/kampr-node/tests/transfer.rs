@@ -82,7 +82,12 @@ async fn fetch(origin: &str, path: &str, accept_encoding: Option<&str>) -> (Stri
 }
 
 /// The biggest thing the bundle ships, which is the wasm module and is the whole first load.
+///
+/// A checkout with no staged bundle still holds `.gitkeep`, and 229 bytes of text is not a bundle
+/// — compressing it says nothing and its overhead makes brotli *larger*, so a run that found only
+/// that would fail this test for the wrong reason. Anything under a kilobyte is not the first load.
 fn heaviest_asset() -> Option<(String, u64)> {
+    const A_BUNDLE_IS_BIGGER_THAN_THIS: u64 = 1024;
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist");
     std::fs::read_dir(dist)
         .ok()?
@@ -91,7 +96,8 @@ fn heaviest_asset() -> Option<(String, u64)> {
             let path = e.path();
             let size = path.metadata().ok()?.len();
             let name = path.file_name()?.to_str()?.to_string();
-            path.is_file().then_some((name, size))
+            (path.is_file() && !name.starts_with('.') && size > A_BUNDLE_IS_BIGGER_THAN_THIS)
+                .then_some((name, size))
         })
         .max_by_key(|(_, size)| *size)
 }
