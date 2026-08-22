@@ -6,7 +6,7 @@ use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
 use kampr_core::provider::PaneInfo;
 use kampr_core::wire::{NodeEntry, PaneEntry};
 use kampr_herdr::Herdr;
-use kampr_journal::Registry as Journals;
+use kampr_journal::{Harness, Registry as Journals};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
@@ -365,6 +365,11 @@ struct Conversations {
     waiting: std::sync::atomic::AtomicBool,
 }
 
+/// What a resolution can be cached against: a pane whose harness, directory *and* session are
+/// all the same is the same conversation. The session is the last field, and it is the one that
+/// moves when an agent is quit and a fresh one started in the same directory — without it a
+/// restarted pane kept advertising the transcript of the run before it for as long as the node
+/// lived.
 type ConversationKey = (String, String, String);
 
 struct Resolved {
@@ -385,11 +390,20 @@ impl Conversations {
         if !journals.serves(info.agent.as_deref()) {
             return false;
         }
-        let announced = crate::convo::announced(&session.provider, &info.pane_id);
+        let announced = crate::convo::identity(&session.provider, &info.pane_id).announced;
         let key = (
             info.agent.clone().unwrap_or_default(),
             info.cwd.clone().unwrap_or_default(),
-            announced.as_ref().map(|a| a.value.clone()).unwrap_or_default(),
+            match announced.as_ref() {
+                Some(a) => a.value.clone(),
+                // A harness that is absent and one nothing could look for resolve differently, so
+                // they may not share a cache entry.
+                None => match &info.agent_harness {
+                    Harness::Running(p) => format!("{}:{}", p.pid, p.start.as_deref().unwrap_or_default()),
+                    Harness::Absent => "absent".into(),
+                    Harness::Unknown => String::new(),
+                },
+            },
         );
         live.insert(key.clone());
         match self.seen.lock().unwrap().get(&key) {
@@ -402,6 +416,7 @@ impl Conversations {
                 info.agent.as_deref(),
                 announced.as_ref(),
                 info.cwd.as_deref().map(Path::new),
+                &info.agent_harness,
             )
             .unwrap_or_default();
         let found = path.is_some();

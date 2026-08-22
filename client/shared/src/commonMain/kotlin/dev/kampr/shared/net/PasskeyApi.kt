@@ -82,15 +82,15 @@ class PasskeyApi(
     }
 
     // The authenticator says what it refused; only the node can say *why* it was ever going to.
-    // A node that does not name this build of the app in its asset links refuses every ceremony,
-    // and that is the one cause the phone can diagnose and the operator can fix in one line.
+    // Fetched from the same address this client dials, which is the half of the check the phone
+    // can do — `passkeyRefusal` owns what each answer means.
     private suspend fun explain(reason: String): String {
         val identity = passkeys.identity ?: return reason
         val document = runCatching {
             val response = client.get("${endpoint.httpBase}$ASSET_LINKS_PATH")
             if (response.status.isSuccess()) response.bodyAsText() else null
         }.getOrNull()
-        return assetLinkComplaint(document, identity) ?: reason
+        return passkeyRefusal(document, identity, endpoint.host, reason)
     }
 
     private fun enrolmentOf(body: JsonObject): PasskeyOutcome {

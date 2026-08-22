@@ -4,7 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -14,28 +17,63 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 
+// A strip is not inside any screen — it floats over all of them, so nothing else pays its insets
+// for it. Left at zero it was drawn under the status bar and behind the punch-hole, which on a
+// pixel_6 is the whole of where a strip aligned to the top of the window lands.
+//
+// The width bound is what lets a message be longer than a sentence: the one path in this app that
+// produces a real explanation produces several lines of it, and a strip that hugs its content
+// makes those lines as wide as the window and then clips them.
+private val STRIP_MAX_WIDTH = 520.dp
+
+// Enough for the config lines the passkey diagnosis hands over. A cap rather than none because a
+// node's own text arrives here too, and a strip that fills the screen has taken it over.
+private const val STRIP_MAX_LINES = 12
+
+@Composable
+private fun BoxScope.Strip(
+    background: Color,
+    border: Color,
+    spoken: String,
+    urgent: Boolean,
+    onActivate: () -> Unit,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
+    val shape = RoundedCornerShape(tokens.radii.md)
+    Row(
+        Modifier
+            .align(Alignment.TopCenter)
+            .absolutePadding(left = 12.dp + safe.left, top = 12.dp + safe.top, right = 12.dp + safe.right)
+            .widthIn(max = STRIP_MAX_WIDTH)
+            .background(background, shape)
+            .edge(BorderSpec(1.dp, border), shape)
+            .announce(spoken, urgent = urgent)
+            .touchable()
+            .action(spoken, onActivate, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+        content = content,
+    )
+}
+
 // error.code is an open string: an unrecognised code still shows its message.
 @Composable
 internal fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () -> Unit) {
     val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
     val spoken = "${message.ifBlank { code }} ($code). Activate to dismiss."
-    Row(
-        Modifier
-            .align(Alignment.TopCenter)
-            .padding(12.dp)
-            .background(tokens.color.blockedBg, shape)
-            .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
-            .announce(spoken, urgent = true)
-            .touchable()
-            .action(spoken, onDismiss, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
-        KText(message.ifBlank { code }, tokens.type.caption, tokens.color.text)
-        KText(code, tokens.type.meta, tokens.color.mute)
+    Strip(tokens.color.blockedBg, tokens.color.blocked, spoken, urgent = true, onActivate = onDismiss) {
+        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked, Modifier.padding(top = 2.dp))
+        KText(
+            message.ifBlank { code },
+            tokens.type.caption,
+            tokens.color.text,
+            Modifier.weight(1f),
+            maxLines = STRIP_MAX_LINES,
+        )
+        KText(code, tokens.type.meta, tokens.color.mute, Modifier.padding(top = 2.dp))
     }
 }
 
@@ -45,23 +83,10 @@ internal fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () ->
 @Composable
 internal fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit, accent: Color = Kampr.tokens.color.done) {
     val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
     val spoken = "$message Activate to dismiss."
-    Row(
-        Modifier
-            .align(Alignment.TopCenter)
-            .padding(12.dp)
-            .background(tokens.color.surface2, shape)
-            .edge(BorderSpec(1.dp, accent), shape)
-            .announce(spoken)
-            .touchable()
-            .action(spoken, onDismiss, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        Mark(accent, MarkShape.Bar, 7.dp)
-        KText(message, tokens.type.caption, tokens.color.text, maxLines = 3)
+    Strip(tokens.color.surface2, accent, spoken, urgent = false, onActivate = onDismiss) {
+        Mark(accent, MarkShape.Bar, 7.dp, Modifier.padding(top = 5.dp))
+        KText(message, tokens.type.caption, tokens.color.text, Modifier.weight(1f), maxLines = STRIP_MAX_LINES)
     }
 }
 
@@ -71,24 +96,11 @@ internal fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit, accent: 
 @Composable
 internal fun BoxScope.RefusedNotice(message: String, onPair: () -> Unit) {
     val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.md)
     val spoken = "$message Activate to pair this device again."
-    Row(
-        Modifier
-            .align(Alignment.TopCenter)
-            .padding(12.dp)
-            .background(tokens.color.blockedBg, shape)
-            .edge(BorderSpec(1.dp, tokens.color.blocked), shape)
-            .announce(spoken, urgent = true)
-            .touchable()
-            .action(spoken, onPair, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked)
-        KText(message, tokens.type.caption, tokens.color.text, maxLines = 3)
-        KText("pair again", tokens.type.meta, tokens.color.blocked)
+    Strip(tokens.color.blockedBg, tokens.color.blocked, spoken, urgent = true, onActivate = onPair) {
+        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked, Modifier.padding(top = 2.dp))
+        KText(message, tokens.type.caption, tokens.color.text, Modifier.weight(1f), maxLines = STRIP_MAX_LINES)
+        KText("pair again", tokens.type.meta, tokens.color.blocked, Modifier.padding(top = 2.dp))
     }
 }
 

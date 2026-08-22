@@ -3,7 +3,7 @@ package dev.kampr.terminal
 import dev.kampr.terminal.view.PaintRect
 import dev.kampr.terminal.view.defaultZoom
 import dev.kampr.terminal.view.followCursorPan
-import dev.kampr.terminal.view.initialScroll
+import dev.kampr.terminal.view.caretFloor
 import dev.kampr.terminal.view.terminalGeometry
 import dev.kampr.terminal.view.TerminalViewState
 import dev.kampr.terminal.view.zoomPresets
@@ -100,13 +100,40 @@ class GeometryTest {
     @Test
     fun aPaneOpensOnTheCaretWhenItWouldOtherwiseOpenOnBlankTail() {
         val paint = phone()
-        val pinnedOnly = initialScroll(paint, totalRows = 34, cursorIndex = 33, cellHeight = 21f)
+        val pinnedOnly = caretFloor(paint, totalRows = 34, cursorIndex = 33, cellHeight = 21f)
         close(pinnedOnly, 0f)
-        val caretHigh = initialScroll(paint, totalRows = 34, cursorIndex = 4, cellHeight = 21f)
+        val caretHigh = caretFloor(paint, totalRows = 34, cursorIndex = 4, cellHeight = 21f)
         assertTrue(caretHigh > 0f, "a caret above the fold has to pull the surface down")
         val geometry = terminalGeometry(paint, 94, 34, CELL_W, 21f, 0f, caretHigh)
         val caretTop = geometry.originY + 4 * 21f
         assertTrue(caretTop >= paint.insetTop && caretTop <= paint.contentBottom)
+    }
+
+    // Why one device of three was fine. Nothing about the caret rule is device-specific: the floor
+    // is zero exactly when the grid fits the rectangle it is shown in, and non-zero exactly when it
+    // does not. A tall window holds a 40-row pane and the bottom-pinned surface was right all
+    // along; the same pane with the keyboard up does not, and it was wrong every time.
+    @Test
+    fun theFloorIsZeroWhereverTheGridFitsAndNonZeroWhereverItDoesNot() {
+        val cell = 21f
+        val roomy = PaintRect(width = 390f, height = 1600f, insetTop = 108f, insetBottom = 130f)
+        val keyboard = PaintRect(width = 390f, height = 560f, insetTop = 108f, insetBottom = 130f)
+        for (caret in listOf(0, 3, 20, 39)) {
+            close(caretFloor(roomy, totalRows = 40, cursorIndex = caret, cellHeight = cell), 0f)
+        }
+        for (caret in listOf(0, 3, 20)) {
+            val floor = caretFloor(keyboard, totalRows = 40, cursorIndex = caret, cellHeight = cell)
+            assertTrue(floor > 0f, "caret $caret has to be pulled into a rectangle that cannot hold the grid")
+            val geometry = terminalGeometry(keyboard, 94, 40, CELL_W, cell, 0f, floor)
+            val top = geometry.originY + caret * cell
+            assertTrue(
+                top >= keyboard.insetTop - 0.01f && top + cell <= keyboard.contentBottom + 0.01f,
+                "caret $caret lands at $top, outside ${keyboard.insetTop}..${keyboard.contentBottom}",
+            )
+        }
+        // The caret already near the bottom of the grid is the case the old rule got right, and it
+        // has to stay right: nothing is pulled that does not need pulling.
+        close(caretFloor(keyboard, totalRows = 40, cursorIndex = 39, cellHeight = cell), 0f)
     }
 
     @Test
@@ -173,5 +200,41 @@ class GeometryTest {
         view.scrollY = 0f
         view.carryHistory(5, CELL_H)
         close(view.scrollY, 0f)
+    }
+
+    // The report, verbatim: "scroll direction on terminal screen is reversed, i need to swipe up
+    // to go into history and swipe down to go back to current".
+    //
+    // The surface goes where the finger goes, on both axes — a terminal is a sheet of paper under
+    // the glass, not a document being paged. Dragging down drags the sheet down and uncovers what
+    // is above it, which is older. The horizontal axis has always worked that way; the vertical was
+    // the odd one out, and inside the same two lines.
+    @Test
+    fun theSurfaceFollowsTheFingerOnBothAxes() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.minPanX = -1_000f
+        view.scrollY = 500f
+        view.panX = -500f
+
+        view.scrollBy(0f, 120f)
+        assertTrue(
+            view.scrollY > 500f,
+            "dragging down has to uncover what is above — older — and it went to ${view.scrollY}",
+        )
+
+        view.scrollBy(0f, -120f)
+        close(view.scrollY, 500f)
+
+        val paint = phone()
+        val older = terminalGeometry(paint, 94, 400, CELL_W, CELL_H, 0f, 500f)
+        val dragged = terminalGeometry(paint, 94, 400, CELL_W, CELL_H, 0f, 620f)
+        assertTrue(
+            dragged.originY > older.originY,
+            "and the surface itself has to move down with the finger",
+        )
+
+        view.scrollBy(80f, 0f)
+        assertTrue(view.panX > -500f, "dragging right moves the surface right, as it always has")
     }
 }

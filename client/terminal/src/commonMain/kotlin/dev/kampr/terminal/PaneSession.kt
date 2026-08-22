@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.review.ReviewState
+import dev.kampr.terminal.view.GridProbe
 import dev.kampr.terminal.view.TerminalViewState
 
 // The terminal surface and the key row are separate composables in separate subtrees, so the
@@ -15,6 +16,10 @@ import dev.kampr.terminal.view.TerminalViewState
 @Stable
 class PaneSession(val paneId: String) {
     val view = TerminalViewState()
+
+    // Where the grid was last painted. A gesture detector reads it to turn a finger into a cell,
+    // and it is the only place the painted geometry of a frame is a value rather than a local.
+    val grid = GridProbe()
     val review = ReviewState()
     val latches = Latches()
     val confirm = ConfirmState()

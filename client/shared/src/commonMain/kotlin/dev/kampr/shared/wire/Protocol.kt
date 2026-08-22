@@ -222,10 +222,6 @@ sealed interface ServerMsg {
 
     data class Pong(val n: Int) : ServerMsg
 
-    // The answer to `notify`. `ok: false` with a reason is the common case on a headless herdr:
-    // there is no attached client to show a toast to (probe #77), and a phone that thinks it told
-    // the desk something it did not is worse than one that knows it could not.
-    data class Notified(val ok: Boolean, val reason: String?, val pane: String?) : ServerMsg
 }
 
 @Serializable
@@ -265,9 +261,5 @@ sealed interface ClientMsg {
     // Without this `caps.agent_kinds` and `caps.sessions` are dead on both ends: the node only
     // answers a `caps` it was asked for.
     data object RequestCaps : ClientMsg
-
-    // A toast on the operator's desktop (probe #50). The node attributes it to this device, rate
-    // limits it and audits it, so the title is a message and never an identity.
-    data class Notify(val title: String, val body: String? = null, val pane: String? = null) : ClientMsg
 
 }

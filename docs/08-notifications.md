@@ -139,28 +139,31 @@ desktop Kampr is already on the screen the herd is running on.
 
 ## `notification.show` — the reverse direction
 
-Probe #50: a phone can raise a toast on the **desktop**. Two places it is not noise:
+Probe #50: the node can raise a toast on the **desktop**. One place it is not noise:
 
-- **"Tell the desk"** on a pane header. Somebody may be sitting at that machine, and that somebody
-  should know a remote device is about to type into their terminal.
 - **A pairing confirmation.** When a device redeems a code, the operator watching the console sees
   it happen on the same screen the code was printed on. A pairing nobody expected is exactly the
   one worth noticing, and this is the only channel that reaches a person who is not holding the
   phone.
 
+There was a second: a **"Tell the desk"** button on a pane header, which announced that a remote
+device was about to type into a terminal somebody might be sitting at. It is gone. On a node run
+as a service — a headless herdr, which is what the plugin and the systemd unit both produce — it
+could only ever answer `no_foreground_client`, so the button's every outcome was "No desk". And
+the job it was invented for is now done passively and better by **watcher presence**, which shows
+that another client has the pane open without anyone pressing anything. The `notify` client
+message and its `notified` reply went with it.
+
 Three rules, in `crates/kampr-node/src/toast.rs`:
 
-- **Always attributed.** The node prefixes the device's own name. A client is exactly as
-  attacker-influenceable as pane output, and an unattributed toast on an operator's desktop is a
-  phishing surface.
-- **Rate limited per connection** (5 s). A socket that can put arbitrary text on someone's screen
-  as fast as it likes is a denial of service against the person.
+- **Always attributed.** The node prefixes what raised it. An unattributed toast on an operator's
+  desktop is a phishing surface.
+- **Rate limited** (5 s). Anything that can put arbitrary text on someone's screen as fast as it
+  likes is a denial of service against the person.
 - **Control characters are stripped, not escaped.** The text is rendered by a TUI.
 
 **It is answered honestly.** `notification.show` returns `{shown, reason}`, and on a herdr with no
-attached client it returns `shown: false, reason: "no_foreground_client"` (probe #77) — which is
-exactly what the plugin and the systemd unit both produce. A phone that thinks it told the desk
-something it did not is worse than one that knows it could not.
+attached client it returns `shown: false, reason: "no_foreground_client"` (probe #77).
 
 ## What is not proved
 

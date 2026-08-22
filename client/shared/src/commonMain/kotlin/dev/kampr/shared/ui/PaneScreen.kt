@@ -147,7 +147,6 @@ fun PaneScreenMobile(
                         label = "This device is read-only — it cannot type into the pane",
                     )
                 }
-                if (!landscape) TakingPaneAction(pane.id, info?.let(::paneTitle) ?: pane.id)
                 NewAction(pane.id)
                 PaneManageAction(pane.id)
                 StatusChip(info)

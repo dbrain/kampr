@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::error::JournalError;
+use crate::process::active_since;
 
 /// How many transcripts a cwd search will open. A pane that is live has by definition one of the
 /// most recently written transcripts, so this is a bound on the search rather than on the history.
@@ -105,8 +106,9 @@ pub fn head(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// The newest candidate whose own records name `cwd`. Verifying rather than trusting a derived
-/// filename is what stops a near-miss serving a different project's conversation.
+/// The newest candidate whose own records name `cwd`, out of those still being written after
+/// `since`. Verifying rather than trusting a derived filename is what stops a near-miss serving a
+/// different project's conversation.
 ///
 /// Recency is the transcript's own RFC 3339 stamps, with mtime only as the tiebreak: a rollout
 /// copied or checked out carries a modification time that says when it was written to this disk,
@@ -115,9 +117,15 @@ pub fn head(path: &Path) -> Vec<Value> {
 ///
 /// The head decides *whether* a transcript belongs to this directory; the tail decides *how
 /// recent* it is. Reading only the head answers the second question with the first one's data.
+///
+/// `since` is when the pane's harness process started, and it is the difference between "the
+/// newest conversation in this directory" and "the newest conversation this process could
+/// possibly have had": a transcript whose last record predates the process was written by some
+/// other run, in the same directory, and serving it is the tool lying about what the agent said.
 pub fn newest_declaring(
     candidates: Vec<PathBuf>,
     cwd: &Path,
+    since: Option<SystemTime>,
     declared: impl Fn(&Value) -> Option<String>,
 ) -> Option<PathBuf> {
     let wanted = cwd.to_string_lossy();
@@ -128,8 +136,12 @@ pub fn newest_declaring(
             if !head(&path).iter().any(|r| declared(r).as_deref() == Some(wanted)) {
                 return None;
             }
-            let stamp = latest_stamp(&path).unwrap_or_default();
-            Some((stamp, modified(&path), path))
+            let stamp = latest_stamp(&path);
+            let modified = modified(&path);
+            if since.is_some_and(|since| !active_since(stamp.as_deref(), modified, since)) {
+                return None;
+            }
+            Some((stamp.unwrap_or_default(), modified, path))
         })
         .collect();
     matches.sort();

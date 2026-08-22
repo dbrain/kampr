@@ -19,6 +19,10 @@ pub trait Journal: Send {
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError>;
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page;
     fn path(&self) -> &Path;
+    /// Every turn id this journal has produced. What a client is holding for this pane is a
+    /// subset of it, which is what lets a conversation be taken off the screen when the pane
+    /// moves to a different one.
+    fn turn_ids(&self) -> Vec<String>;
     /// A best-effort turn for the message the harness is painting right now, checked against the
     /// transcript so that a message which has already been recorded is never previewed beside its
     /// own record.
@@ -119,6 +123,10 @@ impl Journal for FileJournal {
 
     fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn turn_ids(&self) -> Vec<String> {
+        self.parser.store().turns().iter().map(|t| t.id.clone()).collect()
     }
 
     fn preview(&self, screen: &[&str]) -> Option<Turn> {

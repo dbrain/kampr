@@ -2,6 +2,7 @@ mod record;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde_json::Value;
 
@@ -10,6 +11,7 @@ use crate::discover;
 use crate::error::JournalError;
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Block, Role, ToolState, Turn};
+use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
 use crate::summary::{count_lines, summarise};
@@ -66,12 +68,35 @@ impl JournalAdapter for ClaudeAdapter {
         }
     }
 
-    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError> {
+    /// `~/.claude/sessions/<pid>.json`, which Claude 2.1.236 and later writes when a session
+    /// opens and **removes when it exits** — so its presence is already the claim that this pid
+    /// is on this session right now.
+    ///
+    /// `procStart` beside it is field 22 of `/proc/<pid>/stat` verbatim, and checking it is what
+    /// stops a file the kernel has since handed the pid to somebody else from being believed.
+    fn locate_by_process(&self, process: &PaneProcess) -> Result<PathBuf, JournalError> {
+        let named = format!("{}.json", process.pid);
+        let record = self.root.contain(&format!("sessions/{named}"))?;
+        let text = std::fs::read_to_string(&record).map_err(|_| JournalError::NotFound(named.clone()))?;
+        let session: Value =
+            serde_json::from_str(&text).map_err(|_| JournalError::NotFound(named.clone()))?;
+        if !process.owns(session.get("procStart").and_then(Value::as_str)) {
+            return Err(JournalError::NotFound(named));
+        }
+        let id = session
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or(JournalError::NotFound(named))?;
+        self.find_by_id(id)
+    }
+
+    fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError> {
         let projects = self.root.path().join("projects");
         let named = projects.join(slug(cwd));
         let declared = |record: &Value| record.get("cwd").and_then(Value::as_str).map(str::to_string);
         if named.is_dir()
-            && let Some(found) = discover::newest_declaring(discover::jsonl_files(&named), cwd, declared)
+            && let Some(found) =
+                discover::newest_declaring(discover::jsonl_files(&named), cwd, since, declared)
         {
             return Ok(found);
         }
@@ -79,7 +104,7 @@ impl JournalAdapter for ClaudeAdapter {
             .iter()
             .flat_map(|d| discover::jsonl_files(d))
             .collect();
-        discover::newest_declaring(everything, cwd, declared).ok_or_else(|| discover::not_found(cwd))
+        discover::newest_declaring(everything, cwd, since, declared).ok_or_else(|| discover::not_found(cwd))
     }
 
     fn parser(&self) -> Box<dyn TranscriptParser> {

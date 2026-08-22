@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
@@ -28,6 +29,12 @@ import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.ui.group
 import dev.kampr.shared.ui.named
 import dev.kampr.terminal.PaneSession
+
+// The bar's own inside margin, above the first row of caps and below the last. `safe.bottom` used
+// to stand in for the second half, which held only while something was under the row: the moment
+// the keyboard took the gesture handle — `KeyboardFloor` takes off whatever the keys already cover
+// — the last row of caps sat flush on Gboard's first, with nothing between them.
+fun keyRowPadding(compact: Boolean): Dp = if (compact) 6.dp else 10.dp
 
 @Composable
 fun PaneKeyRow(
@@ -60,9 +67,9 @@ fun PaneKeyRow(
             .group()
             .absolutePadding(
                 left = 8.dp + safe.left,
-                top = if (compact) 6.dp else 10.dp,
+                top = keyRowPadding(compact),
                 right = 8.dp + safe.right,
-                bottom = safe.bottom,
+                bottom = keyRowPadding(compact) + safe.bottom,
             ),
         verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
     ) {

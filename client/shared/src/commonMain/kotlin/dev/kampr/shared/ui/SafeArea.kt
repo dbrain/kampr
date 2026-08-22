@@ -1,5 +1,7 @@
 package dev.kampr.shared.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.padding
@@ -52,7 +54,7 @@ val LocalSafeArea = staticCompositionLocalOf { SafeArea.None }
 fun systemSafeArea(): SafeArea {
     val padding = WindowInsets.systemBars.asPaddingValues()
     val direction = LocalLayoutDirection.current
-    return safeAreaOf(
+    return SafeArea(
         top = padding.calculateTopPadding(),
         bottom = padding.calculateBottomPadding(),
         left = padding.calculateLeftPadding(direction),
@@ -66,17 +68,36 @@ fun systemSafeArea(): SafeArea {
 @Composable
 internal expect fun imeInset(): Dp
 
-// The keyboard is drawn over the navigation bar, and the system keeps reporting the bar's height
-// the whole time. Standing clear of both is a strip of dead ground between the last control and
-// the keys — one bottom inset tall, which is exactly the gap the operator saw under the key row.
-internal fun safeAreaOf(top: Dp, bottom: Dp, left: Dp, right: Dp, ime: Dp): SafeArea =
-    SafeArea(top, if (ime > 0.dp) 0.dp else bottom, left, right, ime)
+// What a surface at the app's floor still owes the system once the keys are over it. The keyboard
+// is drawn on top of the navigation bar and the system goes on reporting the bar the whole time,
+// so standing clear of both is a strip of dead ground between the last control and the keys.
+//
+// Subtracted, not switched off: this is a value the system moves over roughly 250 ms, and a step
+// in what the bottom of the app owes is a jump on screen. The last handle's worth of a dismissal
+// is exactly where the tab bar's own ground is being uncovered.
+internal fun bottomUnderKeyboard(bottom: Dp, ime: Dp): Dp = (bottom - ime).coerceAtLeast(0.dp)
 
 // Where the keyboard is paid for: a surface that reaches the bottom of the window, so the inset
 // applies whole and nothing below it has to be subtracted. Everything inside is then laid out
 // against a window that already stops at the keys, and needs to know nothing about them.
 @Composable
 fun Modifier.keyboardInset(): Modifier = padding(bottom = LocalSafeArea.current.ime)
+
+// The one surface that reaches the bottom of the window, and therefore the one that pays the
+// keyboard — and the one place that can say what the keys have already taken off everything
+// inside. `LocalSafeArea` above this box is the window's own furniture; below it, it is what a
+// surface standing on the app's floor still owes.
+@Composable
+fun KeyboardFloor(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    val safe = LocalSafeArea.current
+    Box(modifier.keyboardInset()) {
+        CompositionLocalProvider(
+            LocalSafeArea provides safe.copy(bottom = bottomUnderKeyboard(safe.bottom, safe.ime)),
+        ) {
+            content()
+        }
+    }
+}
 
 // The gesture handle is owed by whatever ends at the bottom of the window, and by nothing else. A
 // container that puts its own chrome down there — the bottom navigation, the desktop status strip

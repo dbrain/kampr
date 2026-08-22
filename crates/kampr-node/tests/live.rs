@@ -8,7 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use kampr_auth::Role;
 use kampr_node::{Config, Node, http};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -234,6 +234,18 @@ impl Harness {
             .await
             .expect("websocket upgrade");
         socket
+    }
+
+    /// Whether the herd says this pane has a transcript, once the sweep has had time to say so.
+    async fn claims_a_conversation(&self, pane: &str) -> bool {
+        let mut claimed = false;
+        for _ in 0..24 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if let Some(entry) = self.node.herd().pane(pane) {
+                claimed |= serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+            }
+        }
+        claimed
     }
 
     /// The pane of this harness's session rooted at `cwd`, once herdr has reported it.
@@ -914,8 +926,6 @@ async fn a_refused_write_is_audited_and_a_retry_loop_does_not_flood_the_log() {
     assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
     send(&mut socket, json!({ "t": "answer", "pane": pane, "key": "1" })).await;
     assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
-    send(&mut socket, json!({ "t": "notify", "title": "taking this pane" })).await;
-    assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");
     send(
         &mut socket,
         json!({ "t": "manage", "op": "pane.close", "at": pane, "rid": "r1" }),
@@ -946,7 +956,7 @@ async fn a_refused_write_is_audited_and_a_retry_loop_does_not_flood_the_log() {
         .collect();
     let verb =
         |name: &str| -> Vec<&Value> { refusals.iter().filter(|e| e["detail"]["verb"] == name).collect() };
-    for name in ["input", "answer", "notify", "manage", "api.devices"] {
+    for name in ["input", "answer", "manage", "api.devices"] {
         assert!(
             !verb(name).is_empty(),
             "a refused {name} left no audit line at all; the log holds {text}"
@@ -1909,18 +1919,29 @@ fn longest_hash_run(message: &Value) -> u16 {
 
 /// A Claude-shaped transcript, written the way the harness writes one: JSON Lines, a `tool_use`
 /// whose result lands in a later record.
+///
+/// **Stamped from the clock, not from a date somebody typed.** A transcript belongs to the
+/// harness process running in the pane, and a node will not serve one whose last word was written
+/// before that process existed — so a fixture frozen at a past date describes a conversation no
+/// live pane could have had, and would pass only for as long as nobody looked.
 fn claude_transcript(cwd: &str, filler: usize) -> (String, String) {
+    let opened = time::OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+    let at = |seconds: i64| {
+        (opened + time::Duration::seconds(seconds))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    };
     let mut lines = Vec::new();
     for n in 0..filler {
         lines.push(json!({
             "type": "user", "uuid": format!("u{n}"), "cwd": cwd,
-            "timestamp": format!("2026-08-20T10:{:02}:00Z", n),
+            "timestamp": at(n as i64),
             "message": { "content": format!("filler {n}") }
         }));
     }
     lines.push(json!({
         "type": "assistant", "uuid": "a-md", "cwd": cwd,
-        "timestamp": "2026-08-20T13:41:55Z",
+        "timestamp": at(filler as i64 + 1),
         "message": { "content": [
             { "type": "text",
               "text": "Six, and they are…\n\n| Key | Accepted |\n|---|---|\n| `Up` | yes |\n" }
@@ -1928,7 +1949,7 @@ fn claude_transcript(cwd: &str, filler: usize) -> (String, String) {
     }));
     lines.push(json!({
         "type": "assistant", "uuid": "a-tool", "cwd": cwd,
-        "timestamp": "2026-08-20T13:42:01Z",
+        "timestamp": at(filler as i64 + 2),
         "message": { "content": [
             { "type": "tool_use", "id": "tu1", "name": "Bash",
               "input": { "command": "herdr pane list --json", "description": "probe key grammar" } }
@@ -1936,13 +1957,59 @@ fn claude_transcript(cwd: &str, filler: usize) -> (String, String) {
     }));
     let settle = json!({
         "type": "user", "uuid": "u-result", "cwd": cwd,
-        "timestamp": "2026-08-20T13:42:48Z",
+        "timestamp": at(filler as i64 + 3),
         "message": { "content": [
             { "type": "tool_result", "tool_use_id": "tu1", "content": "one\ntwo\nthree\n" }
         ] }
     });
     let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
     (body, format!("{settle}\n"))
+}
+
+/// Makes the pane's own shell the harness: a copy of `bash` under the harness's name, `exec`ed
+/// in place, so that herdr's `pane.process_info` reports a foreground process named after the
+/// agent the pane claims to be running. A node serves no conversation to a pane with no harness
+/// in it — herdr detects one by scraping the screen and can be wrong — and `pane.report_agent`
+/// alone is exactly that wrongness. A shell rather than a `sleep`, because these tests go on to
+/// paint the harness's screen through it. Answers with its pid.
+async fn become_harness(session: &Session, local: &str, dir: &Path, agent: &str) -> u32 {
+    let binary = dir.join(agent);
+    if !binary.exists() {
+        std::fs::copy(which("bash").expect("bash on PATH"), &binary).unwrap();
+    }
+    session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": format!("exec {}\n", binary.display()) }),
+        )
+        .await;
+    for _ in 0..100 {
+        let info = session
+            .call("pane.process_info", json!({ "pane_id": local }))
+            .await;
+        let found = info["process_info"]["foreground_processes"]
+            .as_array()
+            .and_then(|ps| ps.iter().find(|p| p["name"] == agent))
+            .and_then(|p| p["pid"].as_u64());
+        if let Some(pid) = found {
+            return pid as u32;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("herdr never reported a {agent} process in the pane");
+}
+
+/// The `timestamp` a record carries, read back out of the transcript that was written. The claim
+/// is that the wire passes the harness's own stamp through, so the transcript has to be what the
+/// expectation is taken from — a literal repeated in the test only ever agrees with itself.
+fn stamp_of(body: &str, uuid: &str) -> String {
+    body.lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|r| r["uuid"] == uuid)
+        .expect("the record")["timestamp"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 /// The conversation path end to end: a real node, a real WebSocket, and the bytes checked against
@@ -1959,8 +2026,6 @@ async fn a_watched_agent_pane_streams_its_conversation() {
     let project = home.path().join(".claude/projects/-tmp");
     std::fs::create_dir_all(&project).unwrap();
     let transcript = project.join("9f1c0b2e-0000-4000-8000-000000000042.jsonl");
-    let (body, settle) = claude_transcript(cwd, 45);
-    std::fs::write(&transcript, &body).unwrap();
 
     let home_path = home.path().display().to_string();
     let h = harness!("convo", |c: &mut Config| c.journals.home = home_path);
@@ -1975,13 +2040,18 @@ async fn a_watched_agent_pane_streams_its_conversation() {
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
 
-    // Herdr's own agent report is what makes this an agent pane, exactly as detection would.
+    // Herdr's own agent report is what makes this an agent pane, exactly as detection would —
+    // and a real process named after the harness is what makes the report true. The transcript is
+    // written after both, because a harness cannot have written one before it started.
+    become_harness(&h._session, &local, home.path(), "claude").await;
     h._session
         .call(
             "pane.report_agent",
             json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
         )
         .await;
+    let (body, settle) = claude_transcript(cwd, 45);
+    std::fs::write(&transcript, &body).unwrap();
 
     let mut announced = false;
     for _ in 0..40 {
@@ -2018,7 +2088,7 @@ async fn a_watched_agent_pane_streams_its_conversation() {
         .find(|t| t["id"] == "a-md")
         .expect("the assistant turn is in the newest page");
     assert_eq!(markdown["role"], "assistant");
-    assert_eq!(markdown["at"], "2026-08-20T13:41:55Z");
+    assert_eq!(markdown["at"], stamp_of(&body, "a-md"));
     let block = &markdown["blocks"][0];
     assert_eq!(block["b"], "md");
     assert!(
@@ -2742,6 +2812,7 @@ async fn a_freshly_started_agent_claims_no_conversation_until_one_exists() {
 
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
+    become_harness(&h._session, &local, home.path(), "claude").await;
     h._session
         .call(
             "pane.report_agent",
@@ -3075,18 +3146,26 @@ impl LiveTurn {
         std::fs::create_dir_all(&project).expect("project dir");
         let transcript = project.join("11111111-2222-3333-4444-555555555555.jsonl");
         std::fs::write(&transcript, String::new()).expect("transcript");
-        let me = Self {
+        Self {
             home,
             work,
             transcript,
-        };
-        me.append(&json!({
+        }
+    }
+
+    /// The first record, written **after** the pane exists.
+    ///
+    /// A harness cannot have written a transcript before the terminal it runs in was opened, and
+    /// a node will not serve one that claims to have: the transcripts in a working directory
+    /// outnumber the sessions a pane has had, and the ones that predate its harness belong to
+    /// somebody else. So the fixture has to happen in the order the real thing happens in.
+    fn open(&self) {
+        self.append(&json!({
             "type": "user",
             "uuid": "u-1",
-            "cwd": cwd.display().to_string(),
+            "cwd": self.cwd(),
             "message": { "content": "explain the parser" },
         }));
-        me
     }
 
     fn append(&self, record: &Value) {
@@ -3140,9 +3219,12 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
         .await;
     let pane = h.pane_with_cwd(&fixture.cwd()).await.expect("the convo pane");
     let local = pane.rsplit('/').next().unwrap().to_string();
+    fixture.open();
 
     // Herdr detects a harness by scraping the screen, so a test that wants a `claude` pane at
-    // `working` says so through the same API a plugin would.
+    // `working` says so through the same API a plugin would — over a pane that really is running
+    // a process by that name, because a node serves no conversation to one that is not.
+    become_harness(&h._session, &local, fixture.home.path(), "claude").await;
     h._session
         .call(
             "pane.report_agent",
@@ -3270,4 +3352,236 @@ async fn until_live(socket: &mut Socket, pane: &str, seconds: u64) -> Option<Val
         }
     }
     None
+}
+
+/// One `claude`-shaped harness in a pane, and the session file it would have written.
+///
+/// The process is real: a copy of `sleep` under the name the pane's harness has, run in the pane
+/// so that herdr's own `pane.process_info` reports it and the node reads its pid from there. What
+/// is written by hand is only the *contents* of `~/.claude/sessions/<pid>.json`, whose shape is
+/// checked against a verbatim capture of `claude` 2.1.239 in
+/// `kampr-journal/tests/fixtures/identity`.
+struct Harnessed {
+    home: PathBuf,
+    project: PathBuf,
+    cwd: String,
+    binary: PathBuf,
+}
+
+impl Harnessed {
+    fn new(home: &Path, work: &Path) -> Self {
+        let cwd = work.canonicalize().unwrap().display().to_string();
+        let project = home.join(".claude/projects").join(cwd.replace('/', "-"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
+        let binary = home.join("claude");
+        std::fs::copy(which("sleep").expect("sleep on PATH"), &binary).unwrap();
+        Self {
+            home: home.to_path_buf(),
+            project,
+            cwd,
+            binary,
+        }
+    }
+
+    /// Runs the harness in the pane and waits for herdr to report it, answering with its pid.
+    async fn start(&self, session: &Session, local: &str) -> u32 {
+        session
+            .call(
+                "pane.send_text",
+                json!({ "pane_id": local, "text": format!("{} 600\n", self.binary.display()) }),
+            )
+            .await;
+        for _ in 0..100 {
+            let info = session
+                .call("pane.process_info", json!({ "pane_id": local }))
+                .await;
+            let found = info["process_info"]["foreground_processes"]
+                .as_array()
+                .and_then(|ps| ps.iter().find(|p| p["name"] == "claude"))
+                .and_then(|p| p["pid"].as_u64());
+            if let Some(pid) = found {
+                return pid as u32;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("herdr never reported a claude process in the pane");
+    }
+
+    async fn stop(&self, session: &Session, local: &str, pid: u32) {
+        std::fs::remove_file(self.session_file(pid)).unwrap();
+        session
+            .call("pane.send_keys", json!({ "pane_id": local, "keys": ["ctrl+c"] }))
+            .await;
+        for _ in 0..100 {
+            if !Path::new(&format!("/proc/{pid}")).exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn session_file(&self, pid: u32) -> PathBuf {
+        self.home.join(".claude/sessions").join(format!("{pid}.json"))
+    }
+
+    /// What the harness publishes about itself, with the pid and `procStart` of the process that
+    /// is really running — so a node that checks them against `/proc` is checking real values.
+    fn announce(&self, pid: u32, id: &str) {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("/proc stat");
+        let start = stat[stat.rfind(") ").unwrap() + 2..]
+            .split_whitespace()
+            .nth(19)
+            .expect("field 22")
+            .to_string();
+        let record = json!({
+            "pid": pid, "sessionId": id, "cwd": self.cwd, "procStart": start,
+            "version": "2.1.239", "kind": "interactive", "entrypoint": "cli", "status": "idle",
+        });
+        std::fs::write(self.session_file(pid), record.to_string()).unwrap();
+    }
+
+    /// A one-turn transcript for a session, stamped `offset` seconds from now — so a test can put
+    /// another run's transcript *ahead* of the one the pane is really on.
+    fn transcript(&self, id: &str, text: &str, offset: i64) {
+        let at = (time::OffsetDateTime::now_utc() + time::Duration::seconds(offset))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let record = json!({
+            "type": "assistant", "uuid": format!("{id}-1"), "cwd": self.cwd, "timestamp": at,
+            "message": { "content": [ { "type": "text", "text": text } ] },
+        });
+        std::fs::write(self.project.join(format!("{id}.jsonl")), format!("{record}\n")).unwrap();
+    }
+}
+
+/// The operator's two reports, end to end: *"i opened claude on a terminal … that had never
+/// opened claude and its showing me the most recent session"*, and *"closed claude -> opened
+/// again fresh session -> conversation panel showing old and not updating to new at all"*.
+///
+/// Both are one defect — a transcript resolved from the pane's *directory* — and both are driven
+/// here against a real herdr, with a real process in the pane and the pid read out of herdr's own
+/// `pane.process_info`. The decoy transcript is deliberately the newest thing in the directory,
+/// which is what every previous rule went by.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_shows_the_session_its_own_process_is_on_and_moves_when_it_restarts() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("identity", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&h._session, &local).await;
+    fixture.announce(first, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    // Somebody else working in the same directory while this pane sat idle, and the newest
+    // transcript in it by half a minute — which is what every rule before this one went by.
+    fixture.transcript("99999999-9999-4999-8999-999999999999", "SOMEBODY ELSE", -30);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let turns = opening["turns"].as_array().expect("turns").clone();
+    assert_eq!(
+        turns.len(),
+        1,
+        "the pane's own session, not the directory's newest: {opening}"
+    );
+    assert_eq!(turns[0]["blocks"][0]["text"], "FIRST SESSION");
+    let stale: Vec<String> = turns
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    // Quit the agent and start a fresh one in the same pane, in the same directory. Nothing about
+    // the pane changes except the process — herdr goes on reporting `claude` throughout, because
+    // its detection is a screen scrape and this test is what a stale one looks like.
+    fixture.stop(&h._session, &local, first).await;
+    // And somebody else works in the directory in the gap — after the pane's *shell* started, so
+    // only the harness's own start time excludes it, and there is no harness.
+    fixture.transcript("99999999-9999-4999-8999-999999999998", "SOMEBODY ELSE AGAIN", 0);
+    assert!(
+        !h.claims_a_conversation(&pane).await,
+        "a pane with nothing running in it advertised the directory's newest transcript"
+    );
+    let second = fixture.start(&h._session, &local).await;
+    assert_ne!(second, first);
+    fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+    fixture.transcript("22222222-2222-4222-8222-222222222222", "SECOND SESSION", 0);
+
+    // The new conversation arrives, and the old one is taken off the client first — a page merges
+    // by id, so without the withdrawal the new turns land *above* the old ones and the panel
+    // reads as though it never updated.
+    let stale = moved_to(&mut socket, &pane, &stale, "SECOND SESSION").await;
+
+    // `/clear` is the same move without a new process: claude rewrites `sessionId` in place in
+    // `~/.claude/sessions/<pid>.json` and opens a new transcript under the same pid, so nothing
+    // about the pane changes at all — measured against claude 2.1.239.
+    fixture.announce(second, "33333333-3333-4333-8333-333333333333");
+    fixture.transcript("33333333-3333-4333-8333-333333333333", "AFTER CLEAR", 0);
+    moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// Waits for the pane to move to the conversation whose only turn reads `text`, and answers with
+/// the ids the client is left holding. Fails unless the previous conversation was withdrawn on
+/// the way, because a page that merges leaves the old one underneath the new.
+async fn moved_to(socket: &mut Socket, pane: &str, stale: &[String], text: &str) -> Vec<String> {
+    let mut withdrawn = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane {
+            continue;
+        }
+        let turns = message["turns"].as_array().cloned().unwrap_or_default();
+        if message["t"] == "convo.turn" {
+            let retired: Vec<&str> = turns
+                .iter()
+                .filter(|t| t["blocks"].as_array().is_none_or(Vec::is_empty))
+                .filter_map(|t| t["id"].as_str())
+                .collect();
+            withdrawn |= stale.iter().all(|id| retired.contains(&id.as_str()));
+        }
+        if message["t"] == "convo" {
+            let texts: Vec<&str> = turns
+                .iter()
+                .filter_map(|t| t["blocks"][0]["text"].as_str())
+                .collect();
+            assert_eq!(texts, [text], "{message}");
+            assert!(
+                withdrawn,
+                "the previous conversation was never taken off the client"
+            );
+            return turns
+                .iter()
+                .map(|t| t["id"].as_str().unwrap().to_string())
+                .collect();
+        }
+    }
+    panic!("the pane never moved to the conversation reading {text:?}");
 }

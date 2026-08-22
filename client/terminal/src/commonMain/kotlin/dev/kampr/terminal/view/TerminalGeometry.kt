@@ -98,10 +98,18 @@ fun defaultZoom(
     cellHeight = baseCellHeight,
 ).zoom
 
-// A pane taller than the viewport opens on the caret rather than on whatever happens to sit at the
-// bottom of the grid: an alt-screen app draws its prompt wherever it likes, and pinning blindly can
-// open on its blank tail.
-fun initialScroll(
+// The floor under the whole surface: the least scroll that leaves the caret inside the content
+// rectangle, and zero whenever the grid already fits.
+//
+// Pinning the bottom of the grid to the bottom of the rectangle is right only while the grid fits.
+// A herdr pane is as tall as the desktop made it, the caret sits wherever the shell left it — near
+// the top of a freshly started one — and the rectangle is shorter than the grid the moment the
+// keyboard is up. Bottom-pinning then shows the blank tail and takes the caret, the prompt, and
+// every character being typed off the top with it.
+//
+// Least, not a comfortable resting place: any larger scroll moves the caret further down and shows
+// fewer of the rows *below* it, which is where an agent draws its footer.
+fun caretFloor(
     paint: PaintRect,
     totalRows: Int,
     cursorIndex: Int,
@@ -112,8 +120,7 @@ fun initialScroll(
     if (maxScroll <= 0f) return 0f
     val pinnedTop = paint.contentBottom - surfaceHeight + cursorIndex * cellHeight
     if (pinnedTop >= paint.insetTop) return 0f
-    val target = paint.contentBottom - 4f * cellHeight
-    return (target - pinnedTop).coerceIn(0f, maxScroll)
+    return (paint.insetTop - pinnedTop).coerceIn(0f, maxScroll)
 }
 
 private const val READABLE_SP = 15f

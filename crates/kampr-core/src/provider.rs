@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use kampr_journal::Harness;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -29,6 +30,10 @@ pub struct PaneInfo {
     /// `None` on a shell pane. This is the agent-vs-shell discriminator, and it also decides
     /// whether scrollback may be read at all.
     pub agent: Option<String>,
+    /// The harness process this pane is running. **This, not `cwd`, is what identifies a
+    /// conversation**: every run in a directory writes a new transcript, so the newest of them
+    /// belongs to whoever ran last rather than to this pane.
+    pub agent_harness: Harness,
     pub agent_status: AgentStatus,
     /// `None` until the width has been *proven*. In a headless session the PTY does not follow
     /// the layout rect — a pane whose rect reads 47 is really 93 wide — so the rect is a number

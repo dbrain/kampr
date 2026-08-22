@@ -22,7 +22,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
@@ -153,7 +152,6 @@ fun KamprApp(
                 LocalMosaic provides remember(state, mosaic) {
                     if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null
                 },
-                LocalKamprStore provides state.store,
             ) {
                 AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
             }
@@ -266,8 +264,11 @@ private fun AppScaffold(
     // Here rather than per screen: this box is the only thing in the app that reaches the bottom
     // of the window, so the inset applies without a subtraction, and everything inside — the
     // bottom navigation, a sheet's fields, the pane's own key row — is measured against a window
-    // that already stops at the keyboard.
-    Box(Modifier.fillMaxSize().background(tokens.color.bg).keyboardInset()) {
+    // that already stops at the keyboard, and against system furniture the keys have already
+    // taken. `safe` is read above it, and is the window's own: the tab bar spans the edge the
+    // keys are moving through, so it is sized against what the window has rather than what is
+    // left of it.
+    KeyboardFloor(Modifier.fillMaxSize().background(tokens.color.bg)) {
         // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
         // and this screen is about four.
         if (state.screen is Screen.Mosaic) {
@@ -276,9 +277,8 @@ private fun AppScaffold(
             refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
             state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
             ManageLayer(state, herd, breakpoint)
-            return@Box
+            return@KeyboardFloor
         }
-        val chrome = bottomChrome(breakpoint, state.screen, safe.ime)
         Box(Modifier.fillMaxSize().behindSheet()) {
             when (breakpoint) {
                 Breakpoint.Desktop -> Column(Modifier.fillMaxSize().screenInset(state.screen)) {
@@ -296,7 +296,7 @@ private fun AppScaffold(
                             onOpenPane = { state.openPane(it, PaneView.Split) },
                             onSettings = { state.go(Screen.Setup) },
                         )
-                        ScreenBody(Modifier.weight(1f).fillMaxSize(), chrome) {
+                        ScreenBody(Modifier.weight(1f).fillMaxSize(), bottomChrome(breakpoint, state.screen)) {
                             when (val screen = state.screen) {
                                 is Screen.Pane -> PaneScreenDesktop(
                                     pane = state.store.pane(screen.paneId),
@@ -345,117 +345,94 @@ private fun AppScaffold(
                 // first-class layout — could reach Setup, Devices, Appearance and Notifications
                 // from nowhere at all. It stays off a pane, where every row of height is the
                 // terminal's and `onBack` already leads out.
-                Breakpoint.Landscape -> Column(Modifier.fillMaxSize()) {
-                    ScreenBody(Modifier.weight(1f).screenInset(state.screen), chrome) {
-                        when (val screen = state.screen) {
-                            is Screen.Pane -> PaneScreenMobile(
-                                pane = state.store.pane(screen.paneId),
-                                info = state.store.paneInfo(screen.paneId),
-                                view = screen.view,
-                                surfaces = surfaces,
-                                landscape = true,
-                                readOnly = readOnly,
-                                onBack = state::back,
-                                onView = state::setPaneView,
-                                onAnswer = { answer(screen.paneId, it) },
-                            )
-                            Screen.Setup -> SetupScreen(
-                                auth.setup,
-                                security,
-                                connectionStatus is ConnectionStatus.Live,
-                                state.endpoint,
-                                herd.nodes,
-                                auth.pairingCode,
-                                state.pairingError,
-                                state::useEndpoint,
-                                auth.onPairingCode,
-                                { state.go(Screen.Herd) },
-                                { state.go(Screen.Devices) },
-                                { state.go(Screen.Appearance) },
-                                { state.go(Screen.Notifications) },
-                                passkeys,
-                                passkeySignIn,
-                                install,
-                                state.recentAddresses,
-                                deepLink?.pair,
-                                wide = false,
-                            )
-                            Screen.Devices -> DevicesScreen(
-                                auth.devices, auth.currentDeviceId, now,
-                                { state.go(Screen.Setup) }, auth.onRevoke,
-                            )
-                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                            Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
-                        }
-                    }
-                    if (chrome) {
-                        BottomNav(
-                            when (state.screen) {
-                                Screen.Herd, Screen.Mosaic -> Tab.Herd
-                                else -> Tab.Nodes
-                            },
-                            state::selectTab,
+                Breakpoint.Landscape -> PhoneScaffold(breakpoint, state.screen, safe, state::selectTab) {
+                    when (val screen = state.screen) {
+                        is Screen.Pane -> PaneScreenMobile(
+                            pane = state.store.pane(screen.paneId),
+                            info = state.store.paneInfo(screen.paneId),
+                            view = screen.view,
+                            surfaces = surfaces,
+                            landscape = true,
+                            readOnly = readOnly,
+                            onBack = state::back,
+                            onView = state::setPaneView,
+                            onAnswer = { answer(screen.paneId, it) },
                         )
+                        Screen.Setup -> SetupScreen(
+                            auth.setup,
+                            security,
+                            connectionStatus is ConnectionStatus.Live,
+                            state.endpoint,
+                            herd.nodes,
+                            auth.pairingCode,
+                            state.pairingError,
+                            state::useEndpoint,
+                            auth.onPairingCode,
+                            { state.go(Screen.Herd) },
+                            { state.go(Screen.Devices) },
+                            { state.go(Screen.Appearance) },
+                            { state.go(Screen.Notifications) },
+                            passkeys,
+                            passkeySignIn,
+                            install,
+                            state.recentAddresses,
+                            deepLink?.pair,
+                            wide = false,
+                        )
+                        Screen.Devices -> DevicesScreen(
+                            auth.devices, auth.currentDeviceId, now,
+                            { state.go(Screen.Setup) }, auth.onRevoke,
+                        )
+                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                        Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
                     }
                 }
 
-                Breakpoint.Portrait -> Column(Modifier.fillMaxSize()) {
-                    ScreenBody(Modifier.weight(1f).screenInset(state.screen), chrome) {
-                        when (val screen = state.screen) {
-                            is Screen.Pane -> PaneScreenMobile(
-                                pane = state.store.pane(screen.paneId),
-                                info = state.store.paneInfo(screen.paneId),
-                                view = screen.view,
-                                surfaces = surfaces,
-                                landscape = false,
-                                readOnly = readOnly,
-                                onBack = state::back,
-                                onView = state::setPaneView,
-                                onAnswer = { answer(screen.paneId, it) },
-                            )
-                            Screen.Setup -> SetupScreen(
-                                auth.setup,
-                                security,
-                                connectionStatus is ConnectionStatus.Live,
-                                state.endpoint,
-                                herd.nodes,
-                                auth.pairingCode,
-                                state.pairingError,
-                                state::useEndpoint,
-                                auth.onPairingCode,
-                                { state.go(Screen.Herd) },
-                                { state.go(Screen.Devices) },
-                                { state.go(Screen.Appearance) },
-                                { state.go(Screen.Notifications) },
-                                passkeys,
-                                passkeySignIn,
-                                install,
-                                state.recentAddresses,
-                                deepLink?.pair,
-                                wide = false,
-                            )
-                            Screen.Devices -> DevicesScreen(
-                                auth.devices, auth.currentDeviceId, now,
-                                { state.go(Screen.Setup) }, auth.onRevoke,
-                            )
-                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                            Screen.Herd, Screen.Mosaic -> HerdPortrait(
-                                herd, now, localRtt, triage,
-                                state::openPane,
-                                if (readOnly) null else { paneId: String -> answer(paneId, "1") },
-                            )
-                        }
-                    }
-                    if (chrome) {
-                        BottomNav(
-                            when (state.screen) {
-                                is Screen.Pane -> Tab.Pane
-                                Screen.Herd, Screen.Mosaic -> Tab.Herd
-                                else -> Tab.Nodes
-                            },
-                            state::selectTab,
+                Breakpoint.Portrait -> PhoneScaffold(breakpoint, state.screen, safe, state::selectTab) {
+                    when (val screen = state.screen) {
+                        is Screen.Pane -> PaneScreenMobile(
+                            pane = state.store.pane(screen.paneId),
+                            info = state.store.paneInfo(screen.paneId),
+                            view = screen.view,
+                            surfaces = surfaces,
+                            landscape = false,
+                            readOnly = readOnly,
+                            onBack = state::back,
+                            onView = state::setPaneView,
+                            onAnswer = { answer(screen.paneId, it) },
+                        )
+                        Screen.Setup -> SetupScreen(
+                            auth.setup,
+                            security,
+                            connectionStatus is ConnectionStatus.Live,
+                            state.endpoint,
+                            herd.nodes,
+                            auth.pairingCode,
+                            state.pairingError,
+                            state::useEndpoint,
+                            auth.onPairingCode,
+                            { state.go(Screen.Herd) },
+                            { state.go(Screen.Devices) },
+                            { state.go(Screen.Appearance) },
+                            { state.go(Screen.Notifications) },
+                            passkeys,
+                            passkeySignIn,
+                            install,
+                            state.recentAddresses,
+                            deepLink?.pair,
+                            wide = false,
+                        )
+                        Screen.Devices -> DevicesScreen(
+                            auth.devices, auth.currentDeviceId, now,
+                            { state.go(Screen.Setup) }, auth.onRevoke,
+                        )
+                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                        Screen.Herd, Screen.Mosaic -> HerdPortrait(
+                            herd, now, localRtt, triage,
+                            state::openPane,
+                            if (readOnly) null else { paneId: String -> answer(paneId, "1") },
                         )
                     }
                 }
@@ -465,33 +442,15 @@ private fun AppScaffold(
         failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
         refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
-        state.passkeyNote?.let { NoteStrip(it, state::dismissPasskeyNote) }
+        state.passkeyNote?.let {
+            if (it.refused) ErrorStrip(it.message, "passkey", state::dismissPasskeyNote)
+            else NoteStrip(it.message, state::dismissPasskeyNote)
+        }
         // A demotion or a promotion that landed on this socket. Nothing the operator did caused
         // it, so it is said here rather than discovered by pressing a control that has gone.
         state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
         ManageLayer(state, herd, breakpoint)
     }
-}
-
-// Whether the app's own chrome sits under a screen at the bottom of the window — which is the one
-// fact that decides who owes the gesture handle, and on a phone is also whether the tab bar is
-// drawn at all.
-//
-// The desktop always ends in its status strip. Landscape keeps the tabs off a pane, where every
-// row of height is the terminal's and `onBack` already leads out. Portrait stands them down while
-// the keyboard is up, for the same reason: the key row and the reply box are meant to sit on the
-// keys, and a tab bar between them is a strip of chrome nobody is reaching for mid-sentence.
-internal fun bottomChrome(breakpoint: Breakpoint, screen: Screen, ime: Dp): Boolean = when (breakpoint) {
-    Breakpoint.Desktop -> true
-    Breakpoint.Landscape -> screen !is Screen.Pane
-    Breakpoint.Portrait -> screen !is Screen.Pane || ime == 0.dp
-}
-
-// Where a screen goes, and what it is told about the bottom of the window. The scaffold is the one
-// thing that can see whether its own chrome is under the screen, so it is the thing that says so.
-@Composable
-private fun ScreenBody(modifier: Modifier, chrome: Boolean, content: @Composable () -> Unit) {
-    Box(modifier) { BottomEdgeHeldBelow(chrome, content) }
 }
 
 // What the system draws over, kept off every screen but the pane.

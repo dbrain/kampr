@@ -90,7 +90,6 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
         device,
         peer,
         panes: HashMap::new(),
-        toaster: crate::toast::Toaster::default(),
     };
     session.greet().await;
     let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
@@ -169,7 +168,6 @@ struct Session {
     device: Device,
     peer: String,
     panes: HashMap<String, PaneHandle>,
-    toaster: crate::toast::Toaster,
 }
 
 impl Session {
@@ -280,7 +278,7 @@ impl Session {
         // Anything that types into a terminal re-reads the device first. The handshake snapshot
         // is a cache, and a revoked token or a demoted role has to bite between two frames rather
         // than at the next connection.
-        if matches!(tag.as_deref(), Some("manage" | "input" | "answer" | "notify")) && !self.refresh().await {
+        if matches!(tag.as_deref(), Some("manage" | "input" | "answer")) && !self.refresh().await {
             return false;
         }
         // Unknown `t` values are ignored rather than refused — that is how a v1 client survives a
@@ -291,7 +289,6 @@ impl Session {
             Some("manage") => self.manage(value).await,
             Some("caps") => self.caps().await,
             Some("prefs") => self.prefs(&value).await,
-            Some("notify") => self.notify(&value).await,
             Some(known) if CLIENT_VERBS.contains(&known) => {
                 match serde_json::from_value::<ClientMsg>(value) {
                     Ok(msg) => self.client_msg(msg).await,
@@ -375,7 +372,7 @@ impl Session {
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
                 herd: self.node.subscribe_herd(),
-                snapshot: Box::new(move |local| convo::announced(&provider, local)),
+                identity: Box::new(move |local| convo::identity(&provider, local)),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
                 local,
@@ -719,39 +716,6 @@ impl Session {
             }
         }
         self.wire.send_json(&reply);
-    }
-
-    /// Probe #50, the reverse direction: a phone raising a toast on the operator's desktop.
-    ///
-    /// Writer-only, because it puts text on someone's screen; attributed to this device by the
-    /// node rather than by the client; and answered honestly when the herdr session is headless
-    /// and there is no desk to show it on (probe #77).
-    async fn notify(&mut self, value: &Value) {
-        let pane = value["pane"].as_str();
-        if !self.may_write("notify", pane) {
-            return;
-        }
-        let Some(title) = value["title"].as_str().map(str::trim).filter(|t| !t.is_empty()) else {
-            self.wire
-                .error(ErrorCode::BadRequest, "notify needs a title", pane);
-            return;
-        };
-        let session = pane
-            .and_then(|p| self.node.route(p))
-            .unwrap_or_else(|| self.node.primary());
-        self.audit("notify", pane, Some(json!({ "title": title })));
-        let shown = self
-            .toaster
-            .show(&session.herdr, &self.device.name, title, value["body"].as_str())
-            .await;
-        let (ok, reason) = match &shown {
-            crate::toast::Toast::Shown => (true, None),
-            crate::toast::Toast::NoDesk(reason) => (false, Some(reason.as_str())),
-            crate::toast::Toast::TooSoon => (false, Some("rate_limited")),
-            crate::toast::Toast::Refused(reason) => (false, Some(reason.as_str())),
-        };
-        self.wire
-            .send_json(&json!({ "t": "notified", "ok": ok, "reason": reason, "pane": pane }));
     }
 
     async fn caps(&self) {

@@ -4,13 +4,16 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-/// The reverse direction: a phone raising a toast on the *desktop* (probe #50).
+/// A toast on the operator's *desktop*, through herdr (probe #50).
 ///
-/// Two rules make it useful rather than noise. It is **always attributed** — the desk sees which
-/// device did it, because an unlabelled toast on an operator's screen is a phishing surface and a
-/// client is exactly as attacker-influenceable as pane output. And it is **rate limited per
-/// connection**, because a socket that can put arbitrary text on someone's desktop as fast as it
-/// likes is a denial of service against the person, not the machine.
+/// One caller: a device redeeming a pairing code, announced on the same screen the code was
+/// printed on. That is the only channel that reaches somebody who is not holding the phone, and a
+/// pairing nobody expected is the one worth noticing.
+///
+/// Two rules make it useful rather than noise. It is **always attributed** — the desk sees what
+/// raised it, because an unlabelled toast on an operator's screen is a phishing surface. And it is
+/// **rate limited**, because anything that can put arbitrary text on someone's desktop as fast as
+/// it likes is a denial of service against the person, not the machine.
 const MIN_INTERVAL: Duration = Duration::from_secs(5);
 
 const MAX_TITLE: usize = 60;
@@ -27,14 +30,14 @@ pub enum Toast {
     Shown,
     /// Herdr took it and had nowhere to put it — a headless session has no attached client
     /// (probe #77), which is exactly what the plugin and the systemd unit both produce. Reported
-    /// rather than dressed up as success: "I'm taking this pane" that nobody saw is worth knowing.
+    /// rather than dressed up as success: a toast nobody saw is worth knowing about.
     NoDesk(String),
     TooSoon,
     Refused(String),
 }
 
 impl Toaster {
-    /// `who` is the device name, and it is prefixed rather than trusted from the client.
+    /// `who` names what raised it, and it is prefixed by the node rather than taken from a client.
     pub async fn show(&self, herdr: &Herdr, who: &str, title: &str, body: Option<&str>) -> Toast {
         {
             let mut last = self.last.lock().await;
@@ -100,11 +103,11 @@ mod tests {
 
     #[test]
     fn a_body_is_optional_and_an_empty_one_is_not_a_dangling_dash() {
-        assert_eq!(title_body("Taking this pane", None), "Taking this pane");
-        assert_eq!(title_body("Taking this pane", Some("  ")), "Taking this pane");
+        assert_eq!(title_body("kampr paired", None), "kampr paired");
+        assert_eq!(title_body("kampr paired", Some("  ")), "kampr paired");
         assert_eq!(
-            title_body("Taking this pane", Some("from the phone")),
-            "Taking this pane — from the phone"
+            title_body("kampr paired", Some("from the phone")),
+            "kampr paired — from the phone"
         );
     }
 

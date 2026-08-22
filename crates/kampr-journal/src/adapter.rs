@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::error::JournalError;
 use crate::live::ScreenReader;
+use crate::process::{Harness, PaneProcess};
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +43,24 @@ impl SessionRef {
 pub trait JournalAdapter: Send + Sync {
     fn agent(&self) -> &str;
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError>;
-    /// The newest transcript that declares `cwd` as its working directory.
+    /// The transcript the pane's own harness process is writing.
     ///
-    /// Herdr 0.8.2 detects both harnesses by scraping the screen and never populates
-    /// `pane.agent_session`, so this is the resolution path that actually runs. Every candidate is
-    /// verified against the directory it claims, so a wrong guess yields nothing rather than
-    /// somebody else's conversation.
-    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError>;
+    /// **This is the only exact answer a node gets.** Herdr 0.8.2 never populates
+    /// `pane.agent_session` (probe #75), and a working directory names a *project*, not a
+    /// session. A harness that publishes which session a pid is on answers it here; one that does
+    /// not leaves it, and the caller falls back to a bounded search of the directory.
+    fn locate_by_process(&self, _process: &PaneProcess) -> Result<PathBuf, JournalError> {
+        Err(JournalError::NotFound(String::new()))
+    }
+
+    /// The newest transcript that declares `cwd` as its working directory, out of those still
+    /// being written after `since`.
+    ///
+    /// Every candidate is verified against the directory it claims, so a wrong guess yields
+    /// nothing rather than somebody else's conversation — and `since`, the pane harness's start
+    /// time, is what makes "this directory's newest" mean "this run's", because every run in a
+    /// directory leaves a transcript behind it.
+    fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError>;
     fn parser(&self) -> Box<dyn TranscriptParser>;
 
     /// Reads an in-progress message off this harness's visible screen, for the harnesses whose
@@ -101,21 +114,18 @@ impl Registry {
     }
 
     /// `Ok(None)` covers every "this pane simply has no conversation" case: no harness, no
-    /// adapter for the harness, or nothing on disk that either handle resolves to.
-    ///
-    /// An announced session wins when it agrees with the pane's own harness. Herdr keeps
-    /// reporting the last session a pane announced (probe #38), so a session whose `agent`
-    /// disagrees is stale and is dropped in favour of the cwd rather than followed.
+    /// adapter for the harness, or nothing on disk that any handle resolves to.
     pub fn open(
         &self,
         pane_agent: Option<&str>,
         session: Option<&SessionRef>,
         cwd: Option<&Path>,
+        harness: &Harness,
     ) -> Result<Option<Box<dyn Journal>>, JournalError> {
         let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
             return Ok(None);
         };
-        let Some(path) = self.locate(pane_agent, session, cwd)? else {
+        let Some(path) = self.locate(pane_agent, session, cwd, harness)? else {
             return Ok(None);
         };
         Ok(Some(adapter.open_path(path)))
@@ -124,11 +134,25 @@ impl Registry {
     /// The transcript [`Self::open`] would open, without opening it. This is what
     /// `has_conversation` is answered from: the file either resolves or it does not, and nothing
     /// short of looking can tell the difference.
+    ///
+    /// Three handles, strongest first, and **nothing** when none of them lands:
+    ///
+    /// 1. The session the pane announced, when it agrees with the pane's own harness. Herdr keeps
+    ///    reporting the last session a pane announced (probe #38), so one whose `agent` disagrees
+    ///    is stale and is dropped rather than followed.
+    /// 2. The pane's harness **process**, which is what actually identifies a session. Exact
+    ///    where the harness publishes the map, and it is the handle that moves the view when an
+    ///    agent is quit and a fresh one started in the same pane.
+    /// 3. The working directory, bounded by when that process started — never the directory
+    ///    alone, because every run in a directory leaves a transcript and the newest of them
+    ///    belongs to whoever ran last, not to this pane. Skipped entirely where the host has
+    ///    looked into the pane and found no harness at all.
     pub fn locate(
         &self,
         pane_agent: Option<&str>,
         session: Option<&SessionRef>,
         cwd: Option<&Path>,
+        harness: &Harness,
     ) -> Result<Option<PathBuf>, JournalError> {
         let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
             return Ok(None);
@@ -136,13 +160,21 @@ impl Registry {
         let announced = session
             .filter(|s| Some(s.agent.as_str()) == pane_agent)
             .and_then(|s| adapter.locate(s).ok());
-        match announced {
-            Some(path) => Ok(Some(path)),
-            None => match cwd.map(|cwd| adapter.locate_by_cwd(cwd)) {
-                Some(Ok(path)) => Ok(Some(path)),
-                Some(Err(JournalError::NotFound(_))) | None => Ok(None),
-                Some(Err(e)) => Err(e),
-            },
+        if let Some(path) = announced {
+            return Ok(Some(path));
+        }
+        let process = harness.process();
+        if let Some(path) = process.and_then(|p| adapter.locate_by_process(p).ok()) {
+            return Ok(Some(path));
+        }
+        if !harness.may_search() {
+            return Ok(None);
+        }
+        let since = process.and_then(|p| p.started);
+        match cwd.map(|cwd| adapter.locate_by_cwd(cwd, since)) {
+            Some(Ok(path)) => Ok(Some(path)),
+            Some(Err(JournalError::NotFound(_))) | None => Ok(None),
+            Some(Err(e)) => Err(e),
         }
     }
 }

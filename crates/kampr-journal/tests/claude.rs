@@ -206,7 +206,7 @@ fn the_newest_transcript_is_the_last_written_not_the_first_opened() {
 
     let adapter = ClaudeAdapter::new(TranscriptRoot::new(&home).unwrap());
     let found = adapter
-        .locate_by_cwd(std::path::Path::new("/home/u/live"))
+        .locate_by_cwd(std::path::Path::new("/home/u/live"), None)
         .expect("a transcript for the cwd");
     assert_eq!(
         found,

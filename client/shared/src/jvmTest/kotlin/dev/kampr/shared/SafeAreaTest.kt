@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -16,20 +15,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
-import dev.kampr.shared.theme.Ground
-import dev.kampr.shared.theme.KamprFonts
-import dev.kampr.shared.theme.KamprTokens
-import dev.kampr.shared.theme.LocalTokens
-import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.theme.on
-import dev.kampr.shared.theme.themeOf
-import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.BottomSheet
@@ -49,10 +39,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-// A gesture handle's worth of system furniture, and a status bar's. Real values on the API 37
-// AVD this was found on: 1080×2400 at 420 dpi.
-private val BARS = SafeArea(top = 32.dp, bottom = 46.dp)
-
 private const val PANE_ID = "01JNODE/w1:p1"
 private const val SHEET_FLOOR = "Sheet floor"
 
@@ -60,23 +46,6 @@ private const val SHEET_FLOOR = "Sheet floor"
 // still reported while the keyboard is drawn over it, which is what made the arithmetic that
 // tried to reconcile the two get it wrong.
 private val KEYBOARD = SafeArea(top = 32.dp, bottom = 24.dp, ime = 300.dp)
-
-// Rotated, with three-button navigation: the status bar thins, the gesture area goes to whichever
-// side the rotation put it on, and the bottom of the window is no longer where the system draws.
-private val SIDE_BARS = listOf(
-    SafeArea(top = 24.dp, bottom = 0.dp, left = 48.dp, right = 0.dp),
-    SafeArea(top = 24.dp, bottom = 0.dp, left = 0.dp, right = 48.dp),
-)
-
-private fun tokens() = themeOf("soft").on(Ground.Dark).let { spec ->
-    val fonts = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
-    KamprTokens(spec, fonts, typography(fonts, spec.label, TypeScale.Phone))
-}
-
-@Composable
-private fun Bars(bars: SafeArea = BARS, content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalTokens provides tokens(), LocalSafeArea provides bars, content = content)
-}
 
 @Composable
 private fun PaneScreen(landscape: Boolean) = PaneScreenMobile(
@@ -102,9 +71,6 @@ private fun ComposeUiTest.topOf(labels: List<String>): Dp = labels
     .also { assertTrue(it.isNotEmpty(), "none of $labels is on this screen, so nothing was measured") }
     .minOf { with(density) { it.boundsInRoot.top.toDp() } }
 
-// Every layout assertion in this suite measures Compose's own semantics tree, which knows nothing
-// about what SystemUI paints on top of it — so a full suite passed while the gesture handle sat on
-// the word "Pane". `LocalSafeArea` exists so a test can put the bars back.
 @OptIn(ExperimentalTestApi::class)
 class SafeAreaTest {
     @Test
@@ -120,7 +86,7 @@ class SafeAreaTest {
         // Against the window rather than a number: a fixed height taller than the test window is
         // how this assertion passed while the defect was on screen.
         val screen = onRoot().getUnclippedBoundsInRoot()
-        for (tab in listOf("Herd tab", "Pane tab", "Nodes tab")) {
+        for (tab in listOf("Herd tab", "Settings tab")) {
             val bounds = onNodeWithContentDescription(tab).getUnclippedBoundsInRoot()
             assertTrue(
                 bounds.bottom <= screen.bottom - BARS.bottom,
@@ -184,14 +150,14 @@ class SafeAreaTest {
                 Box(Modifier.fillMaxSize().keyboardInset()) {
                     Column(Modifier.fillMaxSize()) {
                         Box(Modifier.weight(1f)) { PaneScreen(landscape = false) }
-                        BottomNav(Tab.Pane, {})
+                        BottomNav(Tab.Herd, {})
                     }
                 }
             }
         }
         val screen = onRoot().getUnclippedBoundsInRoot()
         val floor = screen.bottom - KEYBOARD.ime
-        for (label in listOf("Herd tab", "Pane tab", "Nodes tab")) {
+        for (label in listOf("Herd tab", "Settings tab")) {
             val bounds = onNodeWithContentDescription(label).getUnclippedBoundsInRoot()
             assertTrue(
                 bounds.bottom <= floor,

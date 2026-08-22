@@ -41,7 +41,25 @@ enum class PaneView(val key: String) {
 
 fun viewOf(key: String): PaneView? = PaneView.entries.firstOrNull { it.key == key }
 
-enum class Tab { Herd, Pane, Nodes }
+// Two stacks, and every screen is in one of them: the herd holds the list and whatever pane was
+// opened out of it, settings holds the address, the pairing code, the machines, the devices,
+// appearance and notifications. The desktop sidebar has called that second destination Settings
+// since it was written; the phone called it Nodes and the operator could not tell what it was for.
+//
+// There was a third, "Pane", and it was not a peer of a list of everything: it led to whichever
+// pane had last been opened, kept pointing at it after the pane had been left, and fell through to
+// the herd when nothing had. A tab has to be a place.
+enum class Tab { Herd, Settings }
+
+fun screenFor(tab: Tab): Screen = when (tab) {
+    Tab.Herd -> Screen.Herd
+    Tab.Settings -> Screen.Setup
+}
+
+fun tabFor(screen: Screen): Tab = when (screen) {
+    Screen.Setup, Screen.Devices, Screen.Appearance, Screen.Notifications -> Tab.Settings
+    Screen.Herd, Screen.Mosaic, is Screen.Pane -> Tab.Herd
+}
 
 sealed interface Screen {
     data object Herd : Screen
@@ -58,6 +76,17 @@ sealed interface Screen {
 sealed interface Sheet {
     data class New(val nodeId: String, val paneId: String?) : Sheet
     data class Actions(val paneId: String) : Sheet
+}
+
+// One field carried both endings and one strip painted both, so a refusal arrived in the colour
+// of a success — which on the screen about credentials is the worst version of getting it wrong.
+data class PasskeyNote(val message: String, val refused: Boolean)
+
+// Backing out of the system sheet is a decision, not a failure to report.
+fun passkeyNoteOf(outcome: PasskeyOutcome): PasskeyNote? = when (outcome) {
+    PasskeyOutcome.Cancelled -> null
+    is PasskeyOutcome.Refused -> PasskeyNote(outcome.reason, refused = true)
+    is PasskeyOutcome.Enrolled -> PasskeyNote("Passkey enrolled. This device now signs in with it.", refused = false)
 }
 
 private const val KEY_THEME = "theme"
@@ -96,9 +125,6 @@ class AppState(
     var screen: Screen by mutableStateOf(if (endpoint?.token == null) Screen.Setup else Screen.Herd)
         private set
 
-    var lastPaneId: String? by mutableStateOf(null)
-        private set
-
     var sheet: Sheet? by mutableStateOf(null)
         private set
 
@@ -121,7 +147,7 @@ class AppState(
 
     val passkeysUsable: Boolean get() = passkeys.available
 
-    var passkeyNote: String? by mutableStateOf(null)
+    var passkeyNote: PasskeyNote? by mutableStateOf(null)
         private set
 
     // Everything time-shaped here compares the node's clock against this device's: a pane's age is
@@ -213,15 +239,11 @@ class AppState(
     fun enrolPasskey() {
         scope.launch {
             val target = endpoint ?: return@launch
-            when (val outcome = withPasskeys(target) { it.enrol(deviceName()) }) {
-                // Backing out of the system sheet is a decision, not a failure to report.
-                PasskeyOutcome.Cancelled -> {}
-                is PasskeyOutcome.Refused -> passkeyNote = outcome.reason
-                is PasskeyOutcome.Enrolled -> {
-                    adopt(target.copy(token = outcome.enrolment.token), outcome.enrolment.deviceId)
-                    passkeyNote = "Passkey enrolled. This device now signs in with it."
-                }
+            val outcome = withPasskeys(target) { it.enrol(deviceName()) }
+            if (outcome is PasskeyOutcome.Enrolled) {
+                adopt(target.copy(token = outcome.enrolment.token), outcome.enrolment.deviceId)
             }
+            passkeyNote = passkeyNoteOf(outcome)
         }
     }
 
@@ -327,10 +349,7 @@ class AppState(
     fun go(target: Screen) {
         sheet = null
         val leaving = (screen as? Screen.Pane)?.paneId
-        if (target is Screen.Pane) {
-            lastPaneId = target.paneId
-            connection.watch(target.paneId)
-        }
+        if (target is Screen.Pane) connection.watch(target.paneId)
         if (leaving != null && leaving != (target as? Screen.Pane)?.paneId) connection.unwatch(leaving)
         screen = target
     }
@@ -352,13 +371,7 @@ class AppState(
         connection.send(ClientMsg.SetPrefs(current.paneId, mapOf("view" to view.key)))
     }
 
-    fun selectTab(tab: Tab) {
-        when (tab) {
-            Tab.Herd -> go(Screen.Herd)
-            Tab.Pane -> lastPaneId?.let { openPane(it) } ?: go(Screen.Herd)
-            Tab.Nodes -> go(Screen.Setup)
-        }
-    }
+    fun selectTab(tab: Tab) = go(screenFor(tab))
 
     fun back() {
         go(Screen.Herd)

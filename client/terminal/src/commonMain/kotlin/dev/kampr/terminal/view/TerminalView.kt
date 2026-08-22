@@ -127,7 +127,7 @@ fun TerminalView(
     val guard = remember(pane, io, session) { SubmitGuard(pane, io, session.confirm) }
     val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
     val logical = remember(rows) { LogicalText(rows) }
-    val probe = remember(pane.id) { GridProbe() }
+    val probe = session.grid
     val review = session.review
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
@@ -213,9 +213,6 @@ fun TerminalView(
                 paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
             )
             if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(fill)
-            view.scrollY = initialScroll(
-                paint, rows.total, rows.historyRows + pane.cursor.row, base.height * view.zoom,
-            )
         }
         val zoom = if (view.zoom > 0f) view.zoom else 1f
         val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }
@@ -230,6 +227,19 @@ fun TerminalView(
         if (rows.total != carriedTotal) {
             view.carryHistory(rows.total - carriedTotal, metrics.height)
             carriedTotal = rows.total
+        }
+
+        // Where the surface is allowed to rest. Re-derived every frame rather than placed once,
+        // because the two things that move it — the caret, and the height of the rectangle the
+        // keyboard leaves behind — both move long after the first paint. Placing it once is why
+        // raising the keyboard took the prompt off the top and left the operator typing blind.
+        val floor = caretFloor(paint, rows.total, rows.historyRows + pane.cursor.row, metrics.height)
+        view.minScroll = floor
+        // Review positions the viewport from the row being read and reaches rows this floor holds
+        // off, so it is the one surface the floor does not govern.
+        LaunchedEffect(floor, review.active, view.following) {
+            if (review.active) return@LaunchedEffect
+            view.scrollY = if (view.following) floor else max(view.scrollY, floor)
         }
 
         val edgeLabel = historyEdgeLabel(reviewSurface())

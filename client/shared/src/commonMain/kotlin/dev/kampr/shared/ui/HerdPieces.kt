@@ -355,8 +355,7 @@ fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
             ),
     ) {
         NavItem(Tab.Herd, "Herd", KamprIcons.herd, selected, onSelect)
-        NavItem(Tab.Pane, "Pane", KamprIcons.pane, selected, onSelect)
-        NavItem(Tab.Nodes, "Nodes", KamprIcons.nodes, selected, onSelect)
+        NavItem(Tab.Settings, "Settings", KamprIcons.gear, selected, onSelect)
     }
 }
 

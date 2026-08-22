@@ -42,6 +42,18 @@ class TerminalViewState {
     var minPanX = 0f
     var maxScroll = 0f
 
+    // The bottom of the grid is not the bottom of the surface a reader is allowed to rest on: on a
+    // grid taller than the viewport, resting there hides the caret and everything typed into it.
+    // `TerminalGeometry.caretFloor` is what this holds, and it is zero whenever the grid fits.
+    var minScroll = 0f
+
+    // Whether the viewport is riding the live edge rather than parked somewhere a reader put it.
+    // The edge moves both ways — an agent draws its banner with the caret still at the top of the
+    // grid and moves it to the input box a frame later — so following has to mean "sits at the
+    // floor", not "never went below it".
+    var following by mutableStateOf(true)
+        private set
+
     var flings by mutableIntStateOf(0)
         private set
 
@@ -69,10 +81,14 @@ class TerminalViewState {
         scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
     }
 
+    // Both axes take the delta with the same sign: the surface goes where the finger goes. The
+    // vertical one was subtracted, which made dragging down mean "newer" on a surface whose
+    // horizontal drag already meant "the sheet moves with me".
     fun scrollBy(dx: Float, dy: Float) {
         scrolled = true
         panX = (panX + dx).coerceIn(minPanX, 0f)
-        scrollY = (scrollY - dy).coerceIn(0f, maxScroll)
+        scrollY = (scrollY + dy).coerceIn(minScroll, maxScroll)
+        following = scrollY <= minScroll + FOLLOW_SLACK
     }
 
     // Pan and scroll are distances across the surface, not across the viewport, so a change of
@@ -118,7 +134,12 @@ class TerminalViewState {
         val target = (zoom * scale).coerceIn(presets.minimum, presets.maximum)
         val applied = if (zoom > 0f) target / zoom else 1f
         panX = panX * applied + tx
-        scrollY = scrollY * applied + ty + contentBottom * (applied - 1f)
+        scrollY = (scrollY * applied + ty + contentBottom * (applied - 1f))
+            .coerceIn(minScroll, maxScroll.coerceAtLeast(minScroll))
+        following = scrollY <= minScroll + FOLLOW_SLACK
         zoom = target
     }
 }
+
+// A drag that lands on the floor lands exactly on it, because that is where it was clamped.
+private const val FOLLOW_SLACK = 0.5f

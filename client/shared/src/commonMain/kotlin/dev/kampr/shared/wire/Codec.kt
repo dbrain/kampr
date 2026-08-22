@@ -116,11 +116,6 @@ object Wire {
                     )
                 } ?: emptyMap()
             )
-            "notified" -> ServerMsg.Notified(
-                ok = obj.bool("ok") ?: false,
-                reason = obj.str("reason"),
-                pane = obj.str("pane"),
-            )
             "pong" -> ServerMsg.Pong(obj.int("n") ?: 0)
             else -> null
         }
@@ -155,11 +150,6 @@ object Wire {
             msg.request.fields().forEach { (k, v) -> put(k, v) }
         }
         ClientMsg.RequestCaps -> buildJsonObject { put("t", "caps") }
-        is ClientMsg.Notify -> buildJsonObject {
-            put("t", "notify"); put("title", msg.title)
-            msg.pane?.let { put("pane", it) }
-            msg.body?.let { put("body", it) }
-        }
     }
 
     private fun JsonObject.prim(key: String): JsonPrimitive? = (this[key] as? JsonPrimitive)

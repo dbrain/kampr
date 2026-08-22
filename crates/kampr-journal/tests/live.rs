@@ -269,8 +269,12 @@ fn a_harness_with_no_probed_screen_publishes_no_preview() {
         ) -> Result<PathBuf, kampr_journal::JournalError> {
             self.0.locate(session)
         }
-        fn locate_by_cwd(&self, cwd: &std::path::Path) -> Result<PathBuf, kampr_journal::JournalError> {
-            self.0.locate_by_cwd(cwd)
+        fn locate_by_cwd(
+            &self,
+            cwd: &std::path::Path,
+            since: Option<std::time::SystemTime>,
+        ) -> Result<PathBuf, kampr_journal::JournalError> {
+            self.0.locate_by_cwd(cwd, since)
         }
         fn parser(&self) -> Box<dyn kampr_journal::TranscriptParser> {
             self.0.parser()

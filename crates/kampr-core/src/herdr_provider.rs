@@ -3,6 +3,7 @@ use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provi
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use kampr_herdr::{Herdr, Observer, Snapshot, StreamEvent, Sub, rpc::Subscription};
+use kampr_journal::{Harness, PaneProcess};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -126,6 +127,10 @@ struct Inner {
     revision: watch::Sender<u64>,
     health: watch::Sender<Health>,
     widths: Mutex<HashMap<String, Measured>>,
+    /// The harness process behind each agent pane. Held here rather than derived per caller
+    /// because finding one costs a socket round trip, and because a pane's *identity* has to be
+    /// as stable as the pane while the process behind it lives.
+    processes: Mutex<HashMap<String, Running>>,
     /// Panes with a live stream. The sweep reads it to pick its cadence and waits on it, so the
     /// first watcher speeds the herd up without waiting out the slow interval it is parked in.
     watching: watch::Sender<usize>,
@@ -144,6 +149,38 @@ impl Watching {
 impl Drop for Watching {
     fn drop(&mut self) {
         self.0.watching.send_modify(|n| *n = n.saturating_sub(1));
+    }
+}
+
+/// What one agent pane's processes were found to be, and the harness they were looked up for.
+#[derive(Debug, Clone)]
+struct Running {
+    agent: String,
+    harness: Harness,
+}
+
+impl Running {
+    fn new(agent: &str, pid: Option<u32>) -> Self {
+        Self {
+            agent: agent.to_string(),
+            harness: match pid {
+                Some(pid) => Harness::Running(PaneProcess::look_up(pid)),
+                None => Harness::Absent,
+            },
+        }
+    }
+
+    /// Whether this entry still describes what is in the pane: the same harness, and a pid that
+    /// is still the same live process rather than one the kernel has handed on. An entry that
+    /// found nothing is never held — the whole point of asking again is that a harness starting
+    /// is what a pane is waiting for.
+    fn is_still(&self, agent: &str) -> bool {
+        let Harness::Running(process) = &self.harness else {
+            return false;
+        };
+        self.agent == agent
+            && process.start.is_some()
+            && PaneProcess::look_up(process.pid).start == process.start
     }
 }
 
@@ -202,6 +239,7 @@ impl HerdrProvider {
             revision: rev_tx,
             health: health_tx,
             widths: Mutex::new(HashMap::new()),
+            processes: Mutex::new(HashMap::new()),
             watching: watch::channel(0).0,
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
@@ -214,6 +252,11 @@ impl HerdrProvider {
 
     pub async fn refresh(&self) -> Result<Arc<Snapshot>> {
         self.inner.refresh().await
+    }
+
+    /// The harness process behind a pane, as of the last refresh.
+    pub fn agent_harness(&self, pane_id: &str) -> Harness {
+        self.inner.agent_harness(pane_id)
     }
 
     pub fn health(&self) -> Health {
@@ -248,7 +291,8 @@ impl Inner {
             }
         };
         self.came_online();
-        let changed = fingerprint(&self.snapshot.borrow()) != fingerprint(&snapshot);
+        let moved = self.refresh_processes(&snapshot).await;
+        let changed = moved || fingerprint(&self.snapshot.borrow()) != fingerprint(&snapshot);
         if changed {
             self.snapshot.send_replace(snapshot.clone());
             self.revision.send_modify(|r| *r += 1);
@@ -293,6 +337,66 @@ impl Inner {
         }
     }
 
+    /// Which process each agent pane is running, refreshed against herdr.
+    ///
+    /// **The pane record carries no pid** (herdr 0.8.2), so this is a socket round trip per agent
+    /// pane — and the reason it is not one per sweep is that procfs answers the only question
+    /// that matters for free: an entry whose pid is still the same live process is still this
+    /// pane's harness, and a harness that was quit takes its `/proc` entry with it.
+    ///
+    /// Returns whether anything moved, because a pane whose agent was restarted looks identical
+    /// in the snapshot and is a different conversation.
+    async fn refresh_processes(&self, snapshot: &Snapshot) -> bool {
+        let mut wanted = Vec::new();
+        for pane in &snapshot.panes {
+            let Some(agent) = pane.agent.as_deref() else {
+                continue;
+            };
+            let held = self.processes.lock().unwrap().get(&pane.pane_id).cloned();
+            match held {
+                Some(running) if running.is_still(agent) => continue,
+                _ => wanted.push((pane.pane_id.clone(), agent.to_string())),
+            }
+        }
+
+        let mut found = Vec::new();
+        for (pane_id, agent) in wanted {
+            // An error is *not* an absent harness: one says nothing looked, the other says the
+            // pane is empty, and the difference decides whether the working directory may be
+            // searched at all. An error is left uncached so the next sweep asks again.
+            let running = match self.herdr.process_info(&pane_id).await {
+                Ok(info) => Some(Running::new(&agent, info.harness(&agent))),
+                Err(e) => {
+                    debug!(pane = %pane_id, error = %e, "could not read the pane's processes");
+                    None
+                }
+            };
+            found.push((pane_id, running));
+        }
+
+        let agents: HashMap<&str, Option<&str>> = snapshot
+            .panes
+            .iter()
+            .map(|p| (p.pane_id.as_str(), p.agent.as_deref()))
+            .collect();
+        let mut processes = self.processes.lock().unwrap();
+        let before = processes.len();
+        // A pane that stopped being an agent pane stops having a harness process, and a pane that
+        // closed stops existing. Both leave an entry that would outlive what it describes.
+        processes.retain(|pane_id, _| agents.get(pane_id.as_str()).is_some_and(Option::is_some));
+        let mut moved = processes.len() != before;
+        for (pane_id, running) in found {
+            let replaced = match running {
+                Some(running) => processes.insert(pane_id, running),
+                None => processes.remove(&pane_id),
+            };
+            // A pane whose harness is still absent has not moved. Reporting it as movement would
+            // rebuild the herd on every sweep for as long as it stayed that way.
+            moved |= replaced.is_none_or(|old| !matches!(old.harness, Harness::Absent));
+        }
+        moved
+    }
+
     /// Probe #68/#84: in a headless session the PTY does not follow the layout rect, so the rect
     /// is fiction and observing at it crops every row. The reads render at the **true** PTY
     /// width, so they, not the rect, are what an observe stream is sized from.
@@ -329,6 +433,14 @@ impl Inner {
                 Reading::default()
             }
         }
+    }
+
+    fn agent_harness(&self, pane_id: &str) -> Harness {
+        self.processes
+            .lock()
+            .unwrap()
+            .get(pane_id)
+            .map_or(Harness::Unknown, |r| r.harness.clone())
     }
 
     /// The corrected width without touching the socket, for callers that only have a snapshot.
@@ -466,6 +578,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         cwd: pane.cwd.clone(),
         label: pane.label.clone(),
         agent: pane.agent.clone(),
+        agent_harness: inner.agent_harness(&pane.pane_id),
         agent_status: AgentStatus::from(pane.agent_status),
         cols,
         rows: rows as u16,

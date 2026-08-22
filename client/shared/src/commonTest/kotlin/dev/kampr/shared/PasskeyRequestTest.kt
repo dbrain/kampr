@@ -3,6 +3,10 @@ package dev.kampr.shared
 import dev.kampr.shared.net.AppIdentity
 import dev.kampr.shared.net.assetLinkComplaint
 import dev.kampr.shared.net.credentialManagerRequest
+import dev.kampr.shared.net.Enrolment
+import dev.kampr.shared.net.PasskeyOutcome
+import dev.kampr.shared.net.passkeyRefusal
+import dev.kampr.shared.ui.passkeyNoteOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -28,6 +32,9 @@ private const val ASSET_LINKS = """
 "package_name":"dev.kampr.app","sha256_cert_fingerprints":
 ["A0:8A:21:84:46:AA:2B:99:08:5C:67:0B:5A:9B:70:32:5E:05:F9:27:CC:DD:12:17:E7:94:63:13:C7:7F:C6:18"]}}]
 """
+
+// What Credential Manager actually says when Google's validator cannot fetch the file.
+private const val RAW = "RP ID cannot be validated"
 
 private val RELEASE = AppIdentity(
     "dev.kampr.app",
@@ -73,6 +80,45 @@ class PasskeyRequestTest {
 
         val missing = requireNotNull(assetLinkComplaint(null, RELEASE))
         assertTrue("assetlinks.json" in missing, missing)
+    }
+
+    // Probe #170: the operator's node named this exact build, served the file as application/json
+    // over a real certificate, and every ceremony still failed — because the host resolves to
+    // 10.0.0.6 and Android decides RP-ID validity through Google's fetcher, not through the phone.
+    // The file check answers "nothing wrong here", and answering that to somebody whose passkey
+    // just failed is a diagnosis that is confidently wrong.
+    @Test
+    fun aFileThatIsRightIsNotReportedAsAShrug() {
+        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "kampr.oldug.com", RAW)
+        assertTrue("kampr.oldug.com" in told, told)
+        assertTrue(RAW in told, "the authenticator's own words are the one thing to search for: $told")
+        assertTrue("public internet" in told, told)
+        assertTrue("doctor" in told, told)
+    }
+
+    // The order the three answers are tried in. A file that is wrong is still the likelier cause
+    // and still the one the phone can prove, so it keeps precedence over the one it cannot.
+    @Test
+    fun theFileIsBlamedOnlyWhenTheFileIsWrong() {
+        val debug = AppIdentity("dev.kampr.app", "AB".repeat(32).chunked(2).joinToString(":"))
+        assertTrue("fingerprints" in passkeyRefusal(ASSET_LINKS, debug, "node", RAW))
+        assertTrue("assetlinks.json" in passkeyRefusal(null, RELEASE, "node", RAW))
+        assertEquals(RAW, passkeyRefusal(ASSET_LINKS, null, "node", RAW), "a browser has no asset links")
+    }
+
+    // One field held the success and the refusal, one strip painted both, and the operator got a
+    // green strip telling them a ceremony had failed. Both directions, or a rule that answered
+    // "not a refusal" to everything would pass.
+    @Test
+    fun aRefusalIsNotToldInTheVoiceOfASuccess() {
+        val refused = requireNotNull(passkeyNoteOf(PasskeyOutcome.Refused(RAW)))
+        assertEquals(RAW, refused.message)
+        assertTrue(refused.refused, "a refusal painted as a success is the worst version of this")
+
+        val enrolled = requireNotNull(passkeyNoteOf(PasskeyOutcome.Enrolled(Enrolment("t", null, null, null))))
+        assertTrue(!enrolled.refused, "an enrolment is not a failure")
+
+        assertNull(passkeyNoteOf(PasskeyOutcome.Cancelled), "backing out of the sheet says nothing")
     }
 
     // A node whose file lists this app under some *other* relation delegates nothing a passkey

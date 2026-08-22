@@ -2,6 +2,7 @@ mod record;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde_json::Value;
 
@@ -77,8 +78,10 @@ impl JournalAdapter for CodexAdapter {
     }
 
     /// A rollout carries its working directory in the `session_meta` record it opens with
-    /// (probe #45), which is the only thing that ties one to a pane.
-    fn locate_by_cwd(&self, cwd: &Path) -> Result<PathBuf, JournalError> {
+    /// (probe #45). Codex publishes no map from a process to the thread it is on — its
+    /// `~/.codex/thread-writer-locks` entries are empty files named after the thread — so the
+    /// directory, bounded by when the pane's `codex` started, is the whole handle here.
+    fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError> {
         let rollouts = discover::descend(&self.root.path().join("sessions"), 3)
             .iter()
             .flat_map(|d| discover::jsonl_files(d))
@@ -88,7 +91,7 @@ impl JournalAdapter for CodexAdapter {
                     .is_some_and(|n| n.starts_with("rollout-"))
             })
             .collect();
-        discover::newest_declaring(rollouts, cwd, |record| {
+        discover::newest_declaring(rollouts, cwd, since, |record| {
             if record.get("type").and_then(Value::as_str) != Some("session_meta") {
                 return None;
             }

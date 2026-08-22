@@ -292,6 +292,41 @@ classifier covers them, but a renderer must not assume unified-diff headers are 
 timestamps predate the ones above them, and sorting shuffles the conversation. Replace by id, keep
 the given order.
 
+#### Which conversation a pane has
+
+**A working directory is not a session.** Every run of a harness in one writes its own transcript,
+so "the newest transcript declaring this cwd" is somebody else's conversation as often as it is
+this pane's — the run that was quit a minute ago, a `claude -p` from a shell, the pane next door.
+Two field reports were the same defect wearing two faces: a pane whose agent was restarted kept
+showing the session that was quit, and a pane that had just started its first agent showed
+whatever had last been run in that directory.
+
+A node resolves a pane's transcript from three handles, strongest first, and serves **nothing**
+when none of them lands:
+
+1. **`pane.agent_session`**, when herdr populates it and it agrees with the pane's own harness.
+   Herdr 0.8.2 never does (probe #75), so this is a path that has to exist without ever firing.
+2. **The harness process in the pane**, from herdr's `pane.process_info`. Claude 2.1.236 and later
+   writes `~/.claude/sessions/<pid>.json` naming the session that pid is on, and removes it when
+   the session exits, so this is exact — and it is the handle that moves the view when an agent is
+   quit and a fresh one started in the same pane. `procStart` in that file is field 22 of
+   `/proc/<pid>/stat` verbatim, and a node checks it, because a pid the kernel has handed on is
+   not the process the file was written for. `/clear` rewrites `sessionId` in that file **in
+   place**, under the same pid, so this handle follows a cleared session as well as a restarted
+   one — a node re-reads it rather than trusting what it resolved at `watch`.
+3. **The working directory, bounded by when that process started.** For the harnesses that
+   publish no such map — Codex, and Claude before 2.1.236 — a transcript whose last record
+   predates the pane's harness cannot be that harness's. It is a bound, not an identity: two runs
+   in one directory at the same time are still indistinguishable this way.
+
+**A pane whose harness the host looked for and did not find has no conversation**, rather than
+falling back to the directory. Herdr detects a harness by scraping the screen, so a pane can claim
+`claude` while nothing named `claude` is running in it; that is information, not the absence of
+it. `has_conversation` goes `false` and the tab is hidden, which is a supported state.
+
+**An empty conversation view is a missing feature; the wrong transcript is the tool lying about
+what an agent said.** A node prefers the first.
+
 #### The live turn — `id: "live"`
 
 A harness writes an assistant record only when the message is **finished**, so a conversation built
@@ -315,9 +350,12 @@ Three rules, and they are the whole contract:
   node withdraws it the moment the transcript carries the same message, so the authoritative record
   replaces it rather than sitting beside it. A client must never page from it, cite it, or keep it
   across a `convo` reload.
-- **A turn with `blocks: []` is withdrawn, not empty.** This is the only place the protocol says a
-  turn can go away. Clients drop it from the rendered list — rendering it leaves a blank card where
-  the preview was. Only `live` is ever withdrawn.
+- **A turn with `blocks: []` is withdrawn, not empty.** Clients drop it from the rendered list —
+  rendering it leaves a blank card where the preview was. `live` is the id it happens to most
+  often, but **any** turn may be withdrawn: when a pane moves to a different transcript the node
+  withdraws the previous conversation before sending the new one's first page, because a page
+  *merges* by id and the ids of another session match nothing — so without the withdrawal the new
+  turns arrive above the old ones and the panel reads as though it never updated.
 - **It is always the newest turn**, it carries no `at`, and it is never a `cursor`. Everything else
   about it is an ordinary turn: match by id, replace, keep the given order.
 
@@ -342,14 +380,6 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
 
-### `notified` — the answer to a `notify`
-```jsonc
-{ "t": "notified", "ok": false, "reason": "no_foreground_client", "pane": "01J.../w3:p2" }
-```
-`ok: false` is the common case, not an error: a *headless* herdr session — what the plugin and the
-systemd unit both produce — has no attached client to show a toast to, and says so (probe #77).
-A client that reports "told the desk" without checking is reporting something that did not happen.
-
 ### `error`
 ```jsonc
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
@@ -357,8 +387,7 @@ A client that reports "told the desk" without checking is reporting something th
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `bad_request` ·
 `not_found` · `revoked` · `unsupported` (the node does not implement that op).
 
-There is no `rate_limited` error code. Toast throttling answers `notified{ok:false,
-reason:"rate_limited"}` on its own frame and pairing throttling is an HTTP **429**, so nothing ever
+There is no `rate_limited` error code. Pairing throttling is an HTTP **429**, so nothing ever
 emitted one and a client written to expect it was written against a code that does not exist.
 Relayed errors are the one exception to this list being closed: a hub forwards a peer's `code`
 verbatim, so a newer peer's code reaches a client unchanged rather than being dropped.
@@ -405,14 +434,6 @@ the same path but is **not** an error and does not close anything — it arrives
 // fit in 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the
 // role, so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
 // preferences per device and drops the least recently updated first.
-
-// A toast on the *operator's desktop* (probe #50). `title` is required; `pane` picks which herdr
-// session shows it and defaults to the node's own. The node prefixes this device's name — an
-// unattributed toast on somebody's screen is a phishing surface, and a client is exactly as
-// attacker-influenceable as pane output — strips control characters, rate limits to one per five
-// seconds per connection, and audits it. `readonly` devices are refused with not_writer.
-{ "t": "notify", "pane": "01J.../w3:p2", "title": "Taking this pane", "body": "from the phone" }
-//   -> { "t": "notified", "ok": true, "reason": null, "pane": "01J.../w3:p2" }
 
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}

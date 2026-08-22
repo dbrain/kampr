@@ -99,6 +99,52 @@ pub struct Rect {
     pub height: u32,
 }
 
+fn stem(arg: &str) -> &str {
+    let file = arg.rsplit('/').next().unwrap_or(arg);
+    file.split_once('.').map_or(file, |(stem, _)| stem)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProcessInfoReply {
+    pub process_info: ProcessInfo,
+}
+
+/// What herdr knows about the processes inside a pane. `foreground_processes` is the job the
+/// terminal is actually attached to — the harness itself, where one is running — and the pid it
+/// carries is the only handle a node gets on *which* session a pane is having.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProcessInfo {
+    #[serde(default)]
+    pub foreground_processes: Vec<ForegroundProcess>,
+}
+
+impl ProcessInfo {
+    /// The process to treat as the pane's harness, **or nothing**.
+    ///
+    /// A pane can report several — a shell and the job it launched — so this is a search for the
+    /// one that *is* the harness rather than for whatever the terminal happens to be attached to.
+    /// Falling back to the shell would be worse than answering nothing: its start time predates
+    /// every transcript in the directory, so it re-admits exactly the neighbouring sessions a
+    /// harness's start time exists to exclude, and it does so at the moment an agent has just
+    /// been quit — which is the moment the operator noticed.
+    ///
+    /// A launcher counts, because `node …/cli.js` is the harness under another name.
+    pub fn harness(&self, agent: &str) -> Option<u32> {
+        self.foreground_processes
+            .iter()
+            .find(|p| p.name == agent || p.argv.iter().any(|arg| stem(arg) == agent))
+            .map(|p| p.pid)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ForegroundProcess {
+    pub pid: u32,
+    pub name: String,
+    #[serde(default)]
+    pub argv: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReadReply {
     pub read: Read,

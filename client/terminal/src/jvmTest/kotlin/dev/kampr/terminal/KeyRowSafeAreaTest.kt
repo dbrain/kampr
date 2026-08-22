@@ -14,6 +14,7 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
@@ -39,6 +40,7 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
+import dev.kampr.terminal.input.keyRowPadding
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -53,7 +55,7 @@ private val SIDE_BARS = listOf(
 )
 
 // Gboard on a 1080x2400 phone. `bottom` is zero because an open keyboard is drawn over the
-// navigation bar and `safeAreaOf` has already taken it — SafeAreaValueTest is what pins that.
+// navigation bar and `KeyboardFloor` has already taken it — SafeAreaValueTest is what pins that.
 private val KEYBOARD = SafeArea(top = 32.dp, bottom = 0.dp, ime = 300.dp)
 
 private const val PANE = "01JNODE/w1:p1"
@@ -83,6 +85,7 @@ private fun ComposeUiTest.keyRow(
     compact: Boolean,
     bars: SafeArea = BARS,
     nav: Boolean = false,
+    barTop: MutableState<Dp> = mutableStateOf(Dp.Unspecified),
 ): MutableState<Dp> {
     val pane = PaneState(PANE, StyleTable())
     val session = PaneSession(PANE)
@@ -95,11 +98,15 @@ private fun ComposeUiTest.keyRow(
                         BottomEdgeHeldBelow(nav) {
                             Column(Modifier.fillMaxSize()) {
                                 Box(Modifier.weight(1f))
+                                val rowDensity = LocalDensity.current
                                 PaneKeyRow(
                                     session,
                                     InputSink(pane.id, SilentIo, session.latches),
                                     compact,
                                     enabled = true,
+                                    modifier = Modifier.onGloballyPositioned {
+                                        barTop.value = with(rowDensity) { it.positionInRoot().y.toDp() }
+                                    },
                                 )
                             }
                         }
@@ -111,7 +118,7 @@ private fun ComposeUiTest.keyRow(
                                 navTop.value = with(density) { it.positionInRoot().y.toDp() }
                             },
                         ) {
-                            BottomNav(Tab.Pane, {})
+                            BottomNav(Tab.Herd, {})
                         }
                     }
                 }
@@ -168,18 +175,20 @@ class KeyRowSafeAreaTest {
 
     // The other half, and the one a fix for the first half breaks: on the pane screen the bottom
     // navigation is under the key row and is already holding the handle off, so a row that pays
-    // again leaves a dead strip between the last key and the tabs.
+    // again leaves a dead strip between the last key and the tabs. What it still owes there is its
+    // own padding and nothing else — the same as it owes the keyboard.
     @Test
-    fun theKeyRowAddsNothingWhenTheBottomNavigationAlreadyCoversTheHandle() {
+    fun theKeyRowAddsNothingButItsOwnPaddingOverTheBottomNavigation() {
         for (compact in listOf(false, true)) {
             runComposeUiTest {
                 val navTop = keyRow(compact, nav = true)
                 assertTrue(navTop.value.isSpecified, "the bottom navigation never laid out")
                 val gap = navTop.value - lowestCap()
                 assertTrue(
-                    abs(gap.value) < 1f,
-                    "compact=$compact: $gap of dead strip between the last key and the bottom " +
-                        "navigation at ${navTop.value}, which is already holding the handle off",
+                    abs((gap - keyRowPadding(compact)).value) < 1f,
+                    "compact=$compact: $gap of strip between the last key and the bottom " +
+                        "navigation at ${navTop.value}, which is already holding the handle off — " +
+                        "the row owes it ${keyRowPadding(compact)} and no more",
                 )
             }
         }
@@ -188,17 +197,47 @@ class KeyRowSafeAreaTest {
     // The report, verbatim: "keyboard opens up on terminal, there's a space between keyboard and
     // the ctrl/pgdown/pgend keys". The keys are what the row docks on, and the tabs stand down
     // while it is up, so the row is the last thing in the window again.
+    //
+    // And then, verbatim again: "now there's no padding at all". Docking on the keys is not the
+    // same as touching them. `safe.bottom` was doing two jobs — clear the system chrome, *and* be
+    // the bar's own bottom padding — so the moment the keyboard took the first job away the second
+    // went with it and the last row of caps sat flush on Gboard's first.
     @Test
-    fun theKeyRowLandsOnTheKeysWithTheKeyboardUp() {
+    fun theKeyRowRestsOnTheKeysWithItsOwnPaddingAndNoMore() {
         for (compact in listOf(false, true)) {
             runComposeUiTest {
                 keyRow(compact, bars = KEYBOARD)
                 val screen = onRoot().getUnclippedBoundsInRoot()
                 val gap = screen.bottom - KEYBOARD.ime - lowestCap()
                 assertTrue(
-                    abs(gap.value) < 1f,
+                    abs((gap - keyRowPadding(compact)).value) < 1f,
                     "compact=$compact: $gap between the last key and the keys, which start at " +
-                        "${screen.bottom - KEYBOARD.ime} of ${screen.bottom}",
+                        "${screen.bottom - KEYBOARD.ime} of ${screen.bottom} — the row owes them " +
+                        "${keyRowPadding(compact)}, the same as it leaves above its first row",
+                )
+            }
+        }
+    }
+
+    // The bar's own padding is symmetric, and that is the whole of the rule: what is above the
+    // first row of caps is what is below the last. Anything else is a number picked to look right
+    // against one piece of chrome, which is how the two corrections that came before this one both
+    // went wrong.
+    @Test
+    fun theKeyRowLeavesTheSameRoomBelowItsCapsAsAbove() {
+        for (compact in listOf(false, true)) {
+            runComposeUiTest {
+                val barTop = mutableStateOf(Dp.Unspecified)
+                keyRow(compact, bars = BARS, barTop = barTop)
+                assertTrue(barTop.value.isSpecified, "the key row never laid out")
+                val screen = onRoot().getUnclippedBoundsInRoot()
+                val firstCap = onNodeWithContentDescription("Escape key", substring = true)
+                    .getUnclippedBoundsInRoot()
+                val above = firstCap.top - barTop.value
+                val below = screen.bottom - BARS.bottom - lowestCap()
+                assertTrue(
+                    abs((above - below).value) < 1f,
+                    "compact=$compact: $above above the caps and $below below them",
                 )
             }
         }

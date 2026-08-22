@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use kampr_journal::{ClaudeAdapter, CodexAdapter, Registry, SessionRef, TranscriptRoot};
+use kampr_journal::{ClaudeAdapter, CodexAdapter, Harness, Registry, SessionRef, TranscriptRoot};
 use std::path::Path;
 
 fn registry() -> Registry {
@@ -20,7 +20,12 @@ fn registry() -> Registry {
 #[test]
 fn a_shell_pane_has_no_conversation() {
     assert!(!registry().serves(None));
-    assert!(registry().locate(None, None, None).unwrap().is_none());
+    assert!(
+        registry()
+            .locate(None, None, None, &Harness::Unknown)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -29,7 +34,7 @@ fn a_harness_with_no_adapter_has_no_conversation() {
     assert!(!registry().serves(Some("gemini")));
     assert!(
         registry()
-            .open(Some("gemini"), Some(&session), None)
+            .open(Some("gemini"), Some(&session), None, &Harness::Unknown)
             .unwrap()
             .is_none()
     );
@@ -48,7 +53,12 @@ fn a_pane_conversation_can_never_outrun_the_node_capability() {
     assert!(!empty.serves(Some("claude")));
     assert!(
         empty
-            .locate(Some("claude"), None, Some(Path::new("/home/u/demo")))
+            .locate(
+                Some("claude"),
+                None,
+                Some(Path::new("/home/u/demo")),
+                &Harness::Unknown
+            )
             .unwrap()
             .is_none()
     );
@@ -63,14 +73,24 @@ fn a_harness_with_no_transcript_on_disk_resolves_to_nothing() {
     assert!(registry.serves(Some("claude")), "the adapter is registered");
     assert!(
         registry
-            .locate(Some("claude"), None, Some(Path::new("/home/u/never-used")))
+            .locate(
+                Some("claude"),
+                None,
+                Some(Path::new("/home/u/never-used")),
+                &Harness::Unknown
+            )
             .unwrap()
             .is_none(),
         "a directory with no transcript has no conversation"
     );
     assert!(
         registry
-            .locate(Some("claude"), None, Some(Path::new("/home/u/demo")))
+            .locate(
+                Some("claude"),
+                None,
+                Some(Path::new("/home/u/demo")),
+                &Harness::Unknown
+            )
             .unwrap()
             .is_some(),
         "and one with a transcript does"
@@ -86,12 +106,17 @@ fn a_stale_session_announcement_falls_back_to_the_working_directory() {
     let registry = registry();
     assert!(
         registry
-            .open(Some("claude"), Some(&stale), None)
+            .open(Some("claude"), Some(&stale), None, &Harness::Unknown)
             .unwrap()
             .is_none()
     );
     let mut journal = registry
-        .open(Some("claude"), Some(&stale), Some(Path::new("/home/u/demo")))
+        .open(
+            Some("claude"),
+            Some(&stale),
+            Some(Path::new("/home/u/demo")),
+            &Harness::Unknown,
+        )
         .unwrap()
         .expect("the cwd still names a claude transcript");
     assert!(journal.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));
@@ -105,14 +130,14 @@ fn a_matching_session_opens_its_transcript() {
     assert!(registry.serves(Some("claude")));
 
     let mut journal = registry
-        .open(Some("claude"), Some(&session), None)
+        .open(Some("claude"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("adapter selected");
     assert_eq!(drain(journal.as_mut()).len(), 5);
 
     let session = SessionRef::id("codex", CODEX_SESSION);
     let mut journal = registry
-        .open(Some("codex"), Some(&session), None)
+        .open(Some("codex"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("adapter selected");
     assert_eq!(drain(journal.as_mut()).len(), 5);
@@ -127,7 +152,7 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
     let demo = Path::new("/home/u/demo");
 
     let mut claude = registry
-        .open(Some("claude"), None, Some(demo))
+        .open(Some("claude"), None, Some(demo), &Harness::Unknown)
         .unwrap()
         .expect("claude resolves from cwd");
     assert!(claude.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));
@@ -135,7 +160,7 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
 
     // Two codex rollouts declare this cwd; the newest wins.
     let mut codex = registry
-        .open(Some("codex"), None, Some(demo))
+        .open(Some("codex"), None, Some(demo), &Harness::Unknown)
         .unwrap()
         .expect("codex resolves from cwd");
     assert!(codex.path().to_string_lossy().contains("2026/08/20"));
@@ -143,7 +168,12 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
 
     assert!(
         registry
-            .open(Some("claude"), None, Some(Path::new("/home/u/nowhere")))
+            .open(
+                Some("claude"),
+                None,
+                Some(Path::new("/home/u/nowhere")),
+                &Harness::Unknown
+            )
             .unwrap()
             .is_none(),
         "a cwd no transcript claims resolves to nothing rather than to somebody else's"
@@ -159,7 +189,7 @@ fn a_home_with_both_harnesses_registers_both() {
     let registry = kampr_journal::registry_from_home(&home);
     let session = SessionRef::id("claude", CLAUDE_SESSION);
     let journal = registry
-        .open(Some("claude"), Some(&session), None)
+        .open(Some("claude"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("claude adapter registered from home");
     assert!(journal.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));

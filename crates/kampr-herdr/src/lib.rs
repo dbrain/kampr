@@ -2,7 +2,7 @@ pub mod model;
 pub mod observe;
 pub mod rpc;
 
-pub use model::{AgentStatus, Pane, Snapshot, SnapshotReply};
+pub use model::{AgentStatus, Pane, ProcessInfo, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};
 pub use rpc::{Herdr, Sub};
 
@@ -12,6 +12,18 @@ impl Herdr {
     pub async fn snapshot(&self) -> Result<Snapshot> {
         let r: SnapshotReply = self.call("session.snapshot", serde_json::json!({})).await?;
         Ok(r.snapshot)
+    }
+
+    /// The processes inside a pane.
+    ///
+    /// **The pane record carries no pid**, so this call is the whole of what a node can learn
+    /// about which process a pane is running — and the working directory it does carry names a
+    /// project, not a session.
+    pub async fn process_info(&self, pane_id: &str) -> Result<model::ProcessInfo> {
+        let r: model::ProcessInfoReply = self
+            .call("pane.process_info", serde_json::json!({ "pane_id": pane_id }))
+            .await?;
+        Ok(r.process_info)
     }
 
     pub async fn send_text(&self, pane_id: &str, text: &str) -> Result<()> {

@@ -60,7 +60,7 @@ private fun Phone(safe: SafeArea, nav: Boolean = true, content: @Composable () -
         Box(Modifier.fillMaxSize().keyboardInset()) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) { BottomEdgeHeldBelow(nav, content) }
-                if (nav) BottomNav(Tab.Pane, {})
+                if (nav) BottomNav(Tab.Herd, {})
             }
         }
     }
@@ -93,7 +93,7 @@ class ComposerInsetTest {
         val (_, pane) = demoPane(RICH_CONVO)
         setContent { Phone(BARS) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) } }
         val screen = onRoot().getUnclippedBoundsInRoot()
-        val nav = onNodeWithContentDescription("Pane tab").getUnclippedBoundsInRoot()
+        val nav = onNodeWithContentDescription("Herd tab").getUnclippedBoundsInRoot()
         assertTrue(
             nav.bottom <= screen.bottom && nav.bottom > screen.bottom - 100.dp,
             "the bottom navigation is at ${nav.bottom} of ${screen.bottom}",

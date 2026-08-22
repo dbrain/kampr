@@ -3,7 +3,9 @@ use crate::wire::Wire;
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_core::{HerdrProvider, PaneRegistry};
-use kampr_journal::{Change, Journal, Registry as Journals, SessionKind, SessionRef, Watch};
+use kampr_journal::{
+    Change, Harness, Journal, Registry as Journals, Role, SessionKind, SessionRef, Turn, Watch,
+};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -46,22 +48,37 @@ pub fn open() -> Open {
     Arc::new(Mutex::new(None))
 }
 
-/// The session a pane has announced to herdr, when it has announced one.
-///
-/// Herdr 0.8.2 detects both harnesses by scraping the screen and leaves `agent_session` null, so
-/// in practice this is empty and the working directory carries the resolution. An announcement is
-/// exact, though, so it wins whenever a harness starts making one.
-pub fn announced(provider: &HerdrProvider, local: &str) -> Option<SessionRef> {
+/// Everything the pane's host knows about *which session* the pane is having, as opposed to which
+/// directory it is in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identity {
+    /// The session a pane has announced to herdr, when it has announced one. Herdr 0.8.2 detects
+    /// both harnesses by scraping the screen and leaves `agent_session` null (probe #75), so in
+    /// practice this is empty — but an announcement is exact, so it wins whenever a harness
+    /// starts making one.
+    pub announced: Option<SessionRef>,
+    /// The harness process in the pane. This is what actually identifies a session, and it is
+    /// what changes when an agent is quit and a fresh one started in the same pane.
+    pub harness: Harness,
+}
+
+pub fn identity(provider: &HerdrProvider, local: &str) -> Identity {
     let snapshot = provider.snapshot();
-    let session = snapshot.pane(local)?.agent_session.as_ref()?;
-    Some(SessionRef {
-        agent: session.agent.clone(),
-        kind: match session.kind.as_str() {
-            "path" => SessionKind::Path,
-            _ => SessionKind::Id,
-        },
-        value: session.value.clone(),
-    })
+    let announced = snapshot
+        .pane(local)
+        .and_then(|p| p.agent_session.as_ref())
+        .map(|session| SessionRef {
+            agent: session.agent.clone(),
+            kind: match session.kind.as_str() {
+                "path" => SessionKind::Path,
+                _ => SessionKind::Id,
+            },
+            value: session.value.clone(),
+        });
+    Identity {
+        announced,
+        harness: provider.agent_harness(local),
+    }
 }
 
 /// A page of turns running backwards from `before`, or from the newest turn when it is `None`.
@@ -71,14 +88,23 @@ pub fn page(journal: &Open, pane: &str, before: Option<&str>) -> Option<ServerMs
     Some(ServerMsg::convo(pane, guard.as_ref()?.page_before(before, PAGE)))
 }
 
-type Handle = (Option<String>, Option<String>);
-type Announce = Box<dyn Fn(&str) -> Option<SessionRef> + Send>;
+/// What a pane has to keep for its conversation to be the same conversation: the harness, the
+/// working directory, and the session inside them. A change to any of the three is a different
+/// transcript, and the one the client is holding has to be taken off the screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Handle {
+    agent: Option<String>,
+    cwd: Option<String>,
+    identity: Identity,
+}
+
+type Look = Box<dyn Fn(&str) -> Identity + Send>;
 
 pub struct ConvoCtx {
     pub journals: Arc<Journals>,
     pub panes: Arc<PaneRegistry>,
     pub herd: watch::Receiver<Arc<HerdModel>>,
-    pub snapshot: Announce,
+    pub identity: Look,
     pub wire: Arc<Wire>,
     pub global: String,
     pub local: String,
@@ -95,7 +121,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         journals,
         panes,
         mut herd,
-        snapshot,
+        identity,
         wire,
         global,
         local,
@@ -118,9 +144,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut due = true;
     let mut misses = 0u32;
     let mut live = Watch::default();
+    // The transcript the client is holding turns from, and their ids, from the moment this pump
+    // let go of it. See [`withdraw`].
+    let mut shown: Option<(PathBuf, Vec<String>)> = None;
+    let mut was_working = false;
 
     loop {
-        let now = pane_of(&herd, &global);
+        let now = pane_of(&herd, &global, &identity, &local);
         let working = status_of(&herd, &global) == AgentStatus::Working;
         // A turn that ends without the status moving is covered by the transcript catching up,
         // but a turn the operator interrupts leaves its half-written text on the screen forever —
@@ -137,22 +167,36 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 return;
             }
         }
-        // The harness or the directory moved, or the file went away: whatever is open is the
-        // wrong conversation.
+        // The harness moved, the directory moved, the *session inside them* moved, or the file
+        // went away: whatever is open is the wrong conversation. A pane whose agent was quit and
+        // restarted looks identical in every field but the process, which is why the process is
+        // in the handle.
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
             handle = Some(now.clone());
             opened = None;
-            *journal.lock().unwrap() = None;
+            shown = close(&journal).or(shown);
             due = true;
             misses = 0;
         }
 
+        // A pane starting a turn is about to have a transcript whether or not it had one before,
+        // so the retries a fresh session already spent looking for a file that did not exist yet
+        // are given back. Without this a first message waits out [`RESOLVE_EVERY`].
+        if working && !was_working && opened.is_none() {
+            due = true;
+            misses = 0;
+        }
+        was_working = working;
+
         if due && opened.is_none() {
             due = false;
-            match resolve(&journals, &snapshot, &local, &now) {
+            match resolve(&journals, &now) {
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
+                    if !withdraw(&wire, &global, &mut shown, fresh.path()) {
+                        return;
+                    }
                     opened = Some(fresh.path().to_path_buf());
                     *journal.lock().unwrap() = Some(fresh);
                     // The first read is the page the client is about to be sent, so it must not
@@ -179,7 +223,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     Err(e) => {
                         debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
                         opened = None;
-                        *journal.lock().unwrap() = None;
+                        shown = close(&journal).or(shown);
                         due = true;
                     }
                 }
@@ -202,9 +246,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             _ = retry.tick(), if opened.is_none() && misses < FAST_RETRIES => due = true,
             _ = recheck.tick() => {
-                let latest = resolve(&journals, &snapshot, &local, &now);
+                let latest = resolve(&journals, &now);
                 if latest.as_deref().map(Journal::path) != opened.as_deref() {
                     opened = None;
+                    shown = close(&journal).or(shown);
                 }
                 due = true;
             }
@@ -253,24 +298,59 @@ fn status_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> AgentStatu
         .unwrap_or_default()
 }
 
-fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> Handle {
-    herd.borrow()
+fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str, look: &Look, local: &str) -> Handle {
+    let (agent, cwd) = herd
+        .borrow()
         .pane(global)
         .map(|p| (p.agent.clone(), p.cwd.clone()))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let identity = match agent.is_some() {
+        true => look(local),
+        false => Identity::default(),
+    };
+    Handle { agent, cwd, identity }
 }
 
-fn resolve(
-    journals: &Journals,
-    snapshot: &Announce,
-    local: &str,
-    (agent, cwd): &Handle,
-) -> Option<Box<dyn Journal>> {
-    let cwd = cwd.as_deref().map(Path::new);
+fn resolve(journals: &Journals, handle: &Handle) -> Option<Box<dyn Journal>> {
     journals
-        .open(agent.as_deref(), snapshot(local).as_ref(), cwd)
+        .open(
+            handle.agent.as_deref(),
+            handle.identity.announced.as_ref(),
+            handle.cwd.as_deref().map(Path::new),
+            &handle.identity.harness,
+        )
         .ok()
         .flatten()
+}
+
+/// Lets go of the open transcript and reports what the client is left holding from it.
+fn close(journal: &Open) -> Option<(PathBuf, Vec<String>)> {
+    let old = journal.lock().unwrap().take()?;
+    Some((old.path().to_path_buf(), old.turn_ids()))
+}
+
+/// Takes the previous conversation off the client before a different one is sent.
+///
+/// **A page merges; it does not replace.** Turns are matched by id, and the ids of another
+/// session's transcript match nothing — so a fresh page for a *different* transcript arrives
+/// above the old conversation instead of in place of it, which reads exactly like the panel
+/// refusing to update. Withdrawing first is the existing retirement mechanism applied to the
+/// whole conversation: a turn carrying no blocks is not drawn.
+fn withdraw(wire: &Wire, pane: &str, shown: &mut Option<(PathBuf, Vec<String>)>, fresh: &Path) -> bool {
+    let Some((path, ids)) = shown.take() else {
+        return true;
+    };
+    if path == fresh || ids.is_empty() {
+        return true;
+    }
+    let turns = ids
+        .into_iter()
+        .map(|id| Turn::new(id, Role::Assistant, None))
+        .collect();
+    wire.send(&ServerMsg::ConvoTurn {
+        pane: pane.to_string(),
+        turns,
+    })
 }
 
 fn drain(journal: &Open) -> Result<Vec<kampr_journal::Turn>, kampr_journal::JournalError> {

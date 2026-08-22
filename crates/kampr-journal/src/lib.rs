@@ -5,6 +5,7 @@ mod discover;
 pub mod error;
 pub mod live;
 pub mod model;
+pub mod process;
 pub mod root;
 mod store;
 mod summary;
@@ -19,6 +20,7 @@ pub use codex::CodexAdapter;
 pub use error::JournalError;
 pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, Watch, retired};
 pub use model::{Block, Page, Role, ToolState, Turn};
+pub use process::{Harness, PaneProcess};
 pub use root::TranscriptRoot;
 pub use tail::{FileJournal, Journal, TranscriptParser};
 

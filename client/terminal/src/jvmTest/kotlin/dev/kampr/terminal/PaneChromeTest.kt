@@ -227,10 +227,12 @@ class ScrollAnchorTest {
         waitForIdle()
         val opened = session.view.scrollY
 
+        // Down, because down is into history: the surface follows the finger and dragging the
+        // sheet down uncovers what was above it.
         onRoot().performTouchInput {
             swipe(
-                start = Offset(centerX, centerY + 200f),
-                end = Offset(centerX, centerY - 200f),
+                start = Offset(centerX, centerY - 200f),
+                end = Offset(centerX, centerY + 200f),
                 durationMillis = 200,
             )
         }
