@@ -184,7 +184,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     }
                 }
             }
-            _ = live_poll.tick(), if working && opened.is_some() => {
+            // A preview is the one thing on this socket that can be dropped without loss: the
+            // record behind it is still coming, and a client that is already behind does not want
+            // a fifth revision of a message it has not drawn yet.
+            _ = live_poll.tick(), if working && opened.is_some() && !wire.outbox().congested() => {
                 let change = match panes.screen(&local) {
                     Some(rows) => {
                         let borrowed: Vec<&str> = rows.iter().map(String::as_str).collect();

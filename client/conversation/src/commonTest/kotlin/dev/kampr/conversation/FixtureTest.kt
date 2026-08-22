@@ -129,7 +129,7 @@ class LiveTurnTest {
         assertTrue(live.isVisible())
         assertEquals(1, turns.count { it.id == LIVE_TURN_ID }, "revised in place, never appended twice")
         val text = live.blocks.filterIsInstance<Block.Md>().single().text
-        assertTrue(text.startsWith("notes.md is written."), text.take(60))
+        assertTrue(text.startsWith("I'll write the file"), text.take(60))
     }
 
     // Withdrawal is the same id with no blocks. Nothing else on the wire says "forget that turn",

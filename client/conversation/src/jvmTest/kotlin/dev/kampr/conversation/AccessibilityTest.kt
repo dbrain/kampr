@@ -76,4 +76,33 @@ class AccessibilityTest {
         }
         onNodeWithContentDescription("Search the transcript").assertHeightIsAtLeast(LANDSCAPE_TOUCH)
     }
+
+    // A preview is text whose wording may still change under the reader, so it says so — and it
+    // stops saying so the moment the transcript takes over. Both halves, because a mark that never
+    // goes away is worse than no mark.
+    @Test
+    fun aLiveTurnSaysItIsStillBeingWrittenAndThenStops() = runComposeUiTest {
+        setContent {
+            CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone)) {
+                val (_, pane) = demoPane(RICH_CONVO, LIVE_TURN)
+                for (turn in pane.turns.filter { it.isVisible() }) {
+                    TurnView(turn, "", emptyList(), {}, Modifier.fillMaxWidth())
+                }
+            }
+        }
+        onNodeWithContentDescription("still writing").assertExists()
+    }
+
+    @Test
+    fun aWithdrawnLiveTurnSaysNothingAtAll() = runComposeUiTest {
+        setContent {
+            CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone)) {
+                val (_, pane) = demoPane(RICH_CONVO, LIVE_TURN, LIVE_WITHDRAWN)
+                for (turn in pane.turns.filter { it.isVisible() }) {
+                    TurnView(turn, "", emptyList(), {}, Modifier.fillMaxWidth())
+                }
+            }
+        }
+        onNodeWithContentDescription("still writing").assertDoesNotExist()
+    }
 }

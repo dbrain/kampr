@@ -145,7 +145,7 @@ pub fn retired() -> Turn {
 /// that is plainly the same message. A link is the one case punctuation alone does not cover:
 /// Codex writes `Created [notes.md](/tmp/…/notes.md)` and paints `Created notes.md`, and the
 /// target is real alphanumeric text that only ever exists on one of the two sides.
-pub fn fingerprint(text: &str) -> String {
+fn fingerprint(text: &str) -> String {
     flatten_links(text)
         .chars()
         .filter(|c| c.is_alphanumeric())
@@ -218,16 +218,19 @@ impl Watch {
             Some(Block::Md { text }) => text.clone(),
             _ => return self.stop(),
         };
-        let grew = self
-            .seen
-            .as_deref()
-            .is_some_and(|seen| text.len() > seen.len() && text.starts_with(seen));
-        let published = self.sent.as_deref().is_some_and(|sent| text.starts_with(sent));
+        let moving = self.seen.as_deref().is_some_and(|seen| advanced(seen, &text));
+        let static_block = self.seen.as_deref() == Some(text.as_str());
         self.seen = Some(text.clone());
-        if !grew && !published {
-            // The screen moved to a block this has never watched grow. Whatever is on the client
-            // belongs to the block that just left.
-            return self.withdraw();
+        if !moving {
+            // Unchanged, so still whatever it was — a one-line notice that never becomes a
+            // message, or a published message that has stopped growing and is waiting for its
+            // record. Anything else is a block this has never watched move, and whatever is on
+            // the client belongs to the block that just left.
+            return if static_block {
+                Change::Held
+            } else {
+                self.withdraw()
+            };
         }
         if self.sent.as_deref() == Some(text.as_str()) {
             return Change::Held;
@@ -254,3 +257,27 @@ impl Watch {
         }
     }
 }
+
+/// Whether `text` is the same block as `seen`, further on.
+///
+/// A message shorter than the pane simply extends. One longer than the pane **slides**: its header
+/// scrolls off the top while new lines arrive at the bottom, so successive views share a middle
+/// and not a prefix — and treating that as a new block withdraws a preview in the middle of the
+/// message it is previewing. The last line already seen is the anchor, because it is the one line
+/// that must still be on screen if this is the same message.
+fn advanced(seen: &str, text: &str) -> bool {
+    if text == seen {
+        return false;
+    }
+    if text.len() > seen.len() && text.starts_with(seen) {
+        return true;
+    }
+    match seen.lines().rev().find(|l| l.trim().len() >= ANCHOR) {
+        Some(anchor) => text.contains(anchor),
+        None => false,
+    }
+}
+
+/// How much of a line has to match before it can anchor a slide. A whole wrapped row is far longer
+/// than this; a stray `-` being typed at the head of a list item is not.
+const ANCHOR: usize = 16;

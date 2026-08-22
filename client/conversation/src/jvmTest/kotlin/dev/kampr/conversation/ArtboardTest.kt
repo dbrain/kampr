@@ -1,6 +1,14 @@
 package dev.kampr.conversation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.PhosphorTheme
 import dev.kampr.shared.theme.TypeScale
@@ -86,6 +94,24 @@ class ArtboardTest {
                 onView = {},
                 onAnswer = {},
             )
+        }
+    }
+
+    // Visual evidence of a turn mid-flight: the preview and the mark that says it is one. The
+    // assertion that the mark is *there* is a semantics one, in AccessibilityTest.
+    @Test
+    fun aLiveTurnRenders() {
+        renderArtboard(PORTRAIT.first, 300.dp, SoftTheme, TypeScale.Phone, File(OUT, "conversation-live.png")) {
+            val (_, pane) = demoPane(RICH_CONVO, LIVE_TURN)
+            Box(Modifier.fillMaxSize().background(Kampr.tokens.color.bg).padding(16.dp)) {
+                TurnView(
+                    turn = pane.turns.first { it.id == LIVE_TURN_ID },
+                    query = "",
+                    expanded = emptyList(),
+                    onToggle = {},
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 

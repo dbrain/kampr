@@ -1,0 +1,40 @@
+  rather than replaced: the same fundamental control vocabulary, the same twenty-four by
+  eighty default, but faster, smaller, and considerably less expensive to put on a desk.
+
+  What the VT320 did add was mostly a matter of capacity and correctness. It answered DECSCL
+  at conformance level 3, one step above the VT220, and it supported ISO 8859-1 alongside
+  DEC's own Multinational Character Set — a quiet but consequential concession that the wider
+  industry, not DEC, would decide how accented characters were encoded. It carried multiple
+  pages of screen memory, so a host could compose a form on an off-screen page and flip to it
+  instantly rather than repainting line by line, and it offered several page lengths beyond
+  the traditional twenty-four lines. The LK201 keyboard carried over, later joined by the
+  LK401 with its additional modifier and Compose keys.
+
+  The VT420 of 1990 is the more interesting machine technically, because it is where DEC
+  added features that modern terminal emulators are still catching up with. The headline
+  addition was rectangular area operations: a family of sequences that treat a bounded box of
+  cells as a single object. DECCRA copies a rectangle from one part of the screen to
+  another, DECFRA fills one with a given character, DECERA and DECSERA erase one, and DECCARA
+  and DECRARA change or invert video attributes across one without touching the characters
+  underneath. On a 9600-baud serial line these were enormously valuable — scrolling a
+  sub-window or highlighting a block became a handful of bytes instead of a full repaint —
+  and they anticipate, in hardware, exactly the operations a windowing text application
+  performs constantly.
+
+  Alongside them came horizontal margins. The VT100 had given applications a top and bottom
+  scrolling margin through DECSTBM, which is why fixed headers and status bars are trivial to
+  implement; the VT420 completed the picture with DECSLRM, left and right margins enabled
+  through the DECLRMM mode. With both sets of margins in force, a program could define a
+  genuine rectangular sub-window that scrolled independently of everything around it —
+  side-by-side panes, each moving on its own, without the host redrawing a single unaffected
+  cell. It is a striking capability to find in a 1990 serial terminal, and it went largely
+  unused for decades because by the time anyone cared, people were writing for emulators that
+  had not implemented it.
+
+  The VT420 also supported two concurrent host sessions multiplexed over a single physical
+  line, presented as a horizontally split screen, and it retained and extended the page
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ← for agents             /rc

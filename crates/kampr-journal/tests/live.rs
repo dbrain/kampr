@@ -361,3 +361,39 @@ fn an_unmarked_tool_line_is_not_read_as_a_message() {
     let journal = upto(&claude(), "claude-notes", 12);
     assert_eq!(journal.preview(&lines(&screen("claude-unmarked-tool"))), None);
 }
+
+/// A message longer than the pane does not grow, it *slides*: the header scrolls off the top
+/// while new lines arrive at the bottom, so two successive views share a middle rather than a
+/// prefix. Seen live at 2203 characters into a 2975-character answer, where treating the slide as
+/// a new block withdrew the preview and left three seconds with nothing on screen at all.
+#[test]
+fn a_message_that_outgrows_the_pane_keeps_streaming_while_it_slides() {
+    let adapter = claude();
+    let journal = upto(&adapter, "claude-vt320", 1);
+    let first = screen("claude-sliding-1");
+    let second = screen("claude-sliding-2");
+    let mut watch = kampr_journal::Watch::default();
+
+    // The pair is genuinely two views of one message, and neither carries its own header.
+    let a = journal.preview(&lines(&first)).expect("a clipped preview");
+    let b = journal.preview(&lines(&second)).expect("a clipped preview");
+    assert_ne!(md(&a), md(&b), "the screen moved between the two captures");
+    assert!(
+        !md(&b).starts_with(md(&a)),
+        "and it moved by sliding, not by extending — which is the whole point"
+    );
+
+    assert_eq!(watch.observe(Some(a)), kampr_journal::Change::Held);
+    let moved = watch.observe(Some(b));
+    assert!(
+        matches!(moved, kampr_journal::Change::Show(_)),
+        "a slide is the same message still being written: {moved:?}"
+    );
+
+    let after = upto(&adapter, "claude-vt320", 2);
+    assert_eq!(
+        watch.observe(after.preview(&lines(&second))),
+        kampr_journal::Change::Retire,
+        "and it still yields the moment the record lands"
+    );
+}

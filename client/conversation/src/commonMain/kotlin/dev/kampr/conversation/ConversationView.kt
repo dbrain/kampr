@@ -48,6 +48,7 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 
@@ -106,7 +107,11 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
     val keyboardOpen = LocalSafeArea.current.ime > 0.dp
-    LaunchedEffect(turns.size, keyboardOpen) {
+    // Keyed on how much prose the newest turn carries as well as on how many turns there are: a
+    // live preview is *revised*, so a message being written grows the last item without ever
+    // changing the count — and a reader at the bottom would watch it run off the bottom.
+    val tail = turns.lastOrNull()?.blocks.orEmpty().filterIsInstance<Block.Md>().sumOf { it.text.length }
+    LaunchedEffect(turns.size, tail, keyboardOpen) {
         if (atBottom && turns.isNotEmpty()) listState.requestScrollToItem(turns.lastIndex + leading)
     }
 
