@@ -71,7 +71,10 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           mv herdr "$HOME/.local/bin/herdr"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: ./gradlew build
+      # Not `build`: that packages the *release* variant, and `checkReleaseSigning` correctly
+      # refuses to produce an unsigned APK on a runner with no keystore. The key stays on the
+      # operator's machine, so CI verifies everything except the one step that needs it.
+      - run: ./gradlew check :webApp:stageNodeBundle :androidApp:assembleDebug
         working-directory: client
         env:
           KAMPR_QR_DECODE: '1'
