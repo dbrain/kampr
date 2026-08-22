@@ -17,8 +17,13 @@ pub fn codex_root() -> PathBuf {
     fixtures().join("codex")
 }
 
+pub fn agy_root() -> PathBuf {
+    fixtures().join("agy")
+}
+
 pub const CLAUDE_SESSION: &str = "9f1c0b2e-0000-4000-8000-000000000001";
 pub const CODEX_SESSION: &str = "01a01311-5036-7e52-8bef-ac91e2fe2b51";
+pub const AGY_SESSION: &str = "ded9537c-7c10-4c47-9b02-8f8f688b9938";
 
 pub fn claude_transcript() -> PathBuf {
     claude_root()
@@ -29,6 +34,12 @@ pub fn claude_transcript() -> PathBuf {
 pub fn codex_transcript() -> PathBuf {
     codex_root().join(format!(
         "sessions/2026/08/18/rollout-2026-08-18T14-11-36-{CODEX_SESSION}.jsonl"
+    ))
+}
+
+pub fn agy_transcript() -> PathBuf {
+    agy_root().join(format!(
+        "brain/{AGY_SESSION}/.system_generated/logs/transcript_full.jsonl"
     ))
 }
 

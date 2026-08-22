@@ -200,8 +200,9 @@ impl Default for Push {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Journals {
-    /// The home directory holding `.claude` and `.codex`. Empty means this process's own `$HOME`;
-    /// set it when the node runs as a service user whose home is not the operator's.
+    /// The home directory holding `.claude`, `.codex` and `.gemini/antigravity-cli`. Empty means
+    /// this process's own `$HOME`; set it when the node runs as a service user whose home is not
+    /// the operator's.
     pub home: String,
 }
 

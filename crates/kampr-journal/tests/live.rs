@@ -7,8 +7,8 @@
 
 mod common;
 
+use kampr_journal::{AgyAdapter, ClaudeAdapter, CodexAdapter, JournalAdapter, LIVE_ID, TranscriptRoot};
 use kampr_journal::{Block, Journal, Turn};
-use kampr_journal::{ClaudeAdapter, CodexAdapter, JournalAdapter, LIVE_ID, TranscriptRoot};
 use std::path::PathBuf;
 
 fn screen(name: &str) -> String {
@@ -27,7 +27,11 @@ fn transcript(name: &str) -> PathBuf {
 /// A journal open on a real transcript, read up to `records` lines of it — which is how a turn
 /// half-way through a conversation is reproduced without inventing one.
 fn upto(adapter: &dyn JournalAdapter, name: &str, records: usize) -> Box<dyn Journal> {
-    let whole = std::fs::read_to_string(transcript(name)).expect("transcript");
+    upto_path(adapter, &transcript(name), records)
+}
+
+fn upto_path(adapter: &dyn JournalAdapter, from: &std::path::Path, records: usize) -> Box<dyn Journal> {
+    let whole = std::fs::read_to_string(from).expect("transcript");
     let head: String = whole.lines().take(records).map(|l| format!("{l}\n")).collect();
     let path = common::scratch_dir("live").join("t.jsonl");
     std::fs::write(&path, head).expect("write");
@@ -42,6 +46,16 @@ fn claude() -> ClaudeAdapter {
 
 fn codex() -> CodexAdapter {
     CodexAdapter::new(TranscriptRoot::new(common::codex_root()).expect("root"))
+}
+
+fn agy() -> AgyAdapter {
+    AgyAdapter::new(TranscriptRoot::new(common::agy_root()).expect("root"))
+}
+
+/// `agy` keeps its transcript under the conversation rather than in a directory of its own, so
+/// the same run's screens and records are reached from the adapter's own fixture root.
+fn agy_upto(records: usize) -> Box<dyn Journal> {
+    upto_path(&agy(), &common::agy_transcript(), records)
 }
 
 fn md(turn: &Turn) -> &str {
@@ -253,8 +267,8 @@ fn codex_previews_a_message_that_follows_a_tool_card() {
     assert_eq!(after.preview(&lines(&text)), None);
 }
 
-/// Twenty of herdr's twenty-two agent kinds have no adapter at all, and the two that do are the
-/// two whose screens have been probed. A harness nobody has probed must serve its transcript
+/// Nineteen of herdr's twenty-two agent kinds have no adapter at all, and the three that do are
+/// the three whose screens have been probed. A harness nobody has probed must serve its transcript
 /// exactly as it did before live turns existed rather than guess at a layout.
 #[test]
 fn a_harness_with_no_probed_screen_publishes_no_preview() {
@@ -400,4 +414,165 @@ fn a_message_that_outgrows_the_pane_keeps_streaming_while_it_slides() {
         kampr_journal::Change::Retire,
         "and it still yields the moment the record lands"
     );
+}
+
+/// `agy` 1.1.18 paints its answer *inside* the block it opened for its own reasoning, so the two
+/// lines above the message — `▸ Thought for 4s` and the reasoning's one-line title — are the
+/// harness, not the answer, and they are the whole per-harness difference here.
+#[test]
+fn agy_streams_from_inside_its_own_thought_block() {
+    let text = screen("agy-streaming");
+    // Fourteen records in: the operator's prompt has landed and the answer has not.
+    let before = agy_upto(14);
+    let turn = before.preview(&lines(&text)).expect("a preview");
+    assert_eq!(turn.id, LIVE_ID);
+    let body = md(&turn);
+    assert!(
+        body.starts_with("1. A terminal multiplexer allows multiple terminal sessions"),
+        "the message starts at its own first word: {body:?}"
+    );
+    assert!(
+        !body.contains("Thought for") && !body.contains("Begin Considering Parameters"),
+        "the thought header and its title belong to no turn — the record keeps the reasoning \
+         in a field of its own: {body:?}"
+    );
+    assert!(
+        !body.contains("Without using any tools"),
+        "the operator's own prompt is a different turn: {body:?}"
+    );
+    assert!(
+        !body.contains("Tip:") && !body.contains("esc to cancel"),
+        "the harness's footer is not part of the answer: {body:?}"
+    );
+    assert!(
+        body.lines().all(|l| !l.starts_with("  ")),
+        "the wrap indent is stripped so the client can re-wrap it: {body:?}"
+    );
+
+    let after = agy_upto(15);
+    assert_eq!(
+        after.preview(&lines(&text)),
+        None,
+        "and the record it is a prefix of retires it"
+    );
+}
+
+/// The same message once it is finished and still on screen, with its header intact. This is the
+/// pair the stripping has to survive in both directions: publish before the record, stand down
+/// after it.
+#[test]
+fn an_agy_message_the_transcript_has_caught_up_with_is_not_previewed() {
+    let text = screen("agy-recorded");
+    let lines = lines(&text);
+
+    let before = agy_upto(12);
+    let published = before.preview(&lines).expect("a preview before the record lands");
+    assert!(
+        md(&published).starts_with("Append-only logs allow consumers to stream updates"),
+        "{:?}",
+        md(&published)
+    );
+    assert!(
+        md(&published).ends_with("for real-time monitoring and log aggregation."),
+        "the whole visible message, not its first line: {:?}",
+        md(&published)
+    );
+
+    let after = agy_upto(13);
+    assert_eq!(after.preview(&lines), None);
+}
+
+/// Past thirty-odd lines the thought header scrolls off the top and the message is all that is
+/// left on screen — so there is nothing to strip, and the comparison has to be a containment
+/// rather than a prefix.
+#[test]
+fn an_agy_message_whose_header_has_scrolled_off_previews_and_still_stands_down() {
+    let text = screen("agy-clipped");
+    let lines = lines(&text);
+
+    let before = agy_upto(14);
+    let published = before.preview(&lines).expect("a clipped preview");
+    assert!(
+        md(&published).ends_with("boosts productivity in command-line\nenvironments."),
+        "what is left of the message is what gets shown: {:?}",
+        md(&published)
+    );
+    assert!(
+        !md(&published).contains("1. A terminal multiplexer allows"),
+        "the first ten sentences have gone off the top with the header: {:?}",
+        md(&published)
+    );
+    assert!(
+        !md(&published).contains("Thought for"),
+        "and the header is not on screen to be stripped: {:?}",
+        md(&published)
+    );
+
+    let after = agy_upto(15);
+    assert_eq!(after.preview(&lines), None);
+}
+
+/// A thought block that has painted its title and no message yet is the harness clearing its
+/// throat. Stripping the two lines it owns leaves nothing, which is the answer.
+#[test]
+fn an_agy_tool_card_and_a_bare_thought_title_are_never_previewed() {
+    for name in ["agy-tool", "agy-working"] {
+        assert_eq!(agy_upto(2).preview(&lines(&screen(name))), None, "{name}");
+    }
+}
+
+/// The growth rule, on `agy`: two captures of one message a poll apart, where the second extends
+/// a line the first cut mid-word.
+#[test]
+fn an_agy_block_earns_its_preview_by_growing() {
+    let journal = agy_upto(14);
+    let mut watch = kampr_journal::Watch::default();
+
+    let early = journal
+        .preview(&lines(&screen("agy-streaming-earlier")))
+        .expect("a preview");
+    let late = journal
+        .preview(&lines(&screen("agy-streaming")))
+        .expect("a preview");
+    assert_ne!(md(&early), md(&late), "the screen moved between the two captures");
+    assert!(
+        md(&early).ends_with("10. Navigation between pane") && md(&late).starts_with(md(&early)),
+        "the later capture finishes the word the earlier one was cut mid-way through, so this \
+         message extends rather than slides"
+    );
+
+    assert_eq!(
+        watch.observe(Some(early)),
+        kampr_journal::Change::Held,
+        "the first sighting is not yet proof of a message"
+    );
+    let grown = watch.observe(Some(late));
+    let kampr_journal::Change::Show(turn) = grown else {
+        panic!("the same message, longer, is a message: {grown:?}");
+    };
+    assert!(md(&turn).contains("11. Most multiplexers use a customizable prefix key"));
+    assert!(watch.showing());
+}
+
+/// What `agy`'s reader is allowed to assume, checked against every frame captured off it: the
+/// marker glyph opens a thought header and nothing else. The reader refuses any other head
+/// rather than stripping two lines it cannot account for, and this is the evidence for that
+/// being a refusal of nothing.
+#[test]
+fn every_agy_head_in_every_capture_is_a_thought_header() {
+    let dir = common::fixtures().join("screens");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("agy-") {
+            continue;
+        }
+        for line in std::fs::read_to_string(entry.path()).unwrap().lines() {
+            if let Some(head) = line.strip_prefix('▸') {
+                seen += 1;
+                assert!(head.trim_start().starts_with("Thought for "), "{name}: {line:?}");
+            }
+        }
+    }
+    assert!(seen >= 6, "the corpus has heads to check: {seen}");
 }

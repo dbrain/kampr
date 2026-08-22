@@ -10,7 +10,7 @@ running at your desk.
 
 - **A live terminal, not a text mirror.** Kampr streams Herdr's own rendered frames and
   reconstructs the grid exactly — truecolour, cursor, hyperlinks and all.
-- **A conversation view for agents.** Claude and Codex transcripts render as real markdown, so a
+- **A conversation view for agents.** Claude, Codex and Antigravity transcripts render as real markdown, so a
   table is a table. This is the default view for agent panes.
 - **It never resizes your panes.** Kampr observes and types; it is structurally incapable of
   reshaping a session. Small screens are handled with zoom, pan and the conversation view, so the
@@ -369,7 +369,7 @@ Reconstructs the pane's grid from the frame stream alone and diffs it against He
 | `crates/kampr-node` | axum server, `/ws`, herd model, `manage` ops |
 | `crates/kampr-mesh` | Peer transport, node-to-node handshake, hub relay |
 | `crates/kampr-auth` | Tiers, devices, tokens, passkeys, audit log |
-| `crates/kampr-journal` | Claude and Codex transcript adapters |
+| `crates/kampr-journal` | Claude, Codex and Antigravity (`agy`) transcript adapters |
 | `crates/kampr-push` | VAPID, subscriptions, batching |
 | `crates/kampr-cli` | The `kampr` binary |
 | `crates/kampr-spike` | End-to-end fidelity check against Herdr's own grid |

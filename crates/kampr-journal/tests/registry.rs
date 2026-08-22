@@ -45,7 +45,7 @@ fn a_harness_with_no_adapter_has_no_conversation() {
 #[test]
 fn a_pane_conversation_can_never_outrun_the_node_capability() {
     let registry = registry();
-    for agent in [None, Some("claude"), Some("codex"), Some("gemini")] {
+    for agent in [None, Some("claude"), Some("codex"), Some("agy"), Some("gemini")] {
         assert!(!registry.serves(agent) || registry.serves_any());
     }
     let empty = Registry::new();
@@ -181,10 +181,12 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
 }
 
 #[test]
-fn a_home_with_both_harnesses_registers_both() {
+fn a_home_registers_every_harness_it_has_a_root_for() {
     let home = scratch_dir("home");
     std::os::unix::fs::symlink(claude_root(), home.join(".claude")).unwrap();
     std::os::unix::fs::symlink(codex_root(), home.join(".codex")).unwrap();
+    std::fs::create_dir(home.join(".gemini")).unwrap();
+    std::os::unix::fs::symlink(agy_root(), home.join(".gemini/antigravity-cli")).unwrap();
 
     let registry = kampr_journal::registry_from_home(&home);
     let session = SessionRef::id("claude", CLAUDE_SESSION);
@@ -194,6 +196,27 @@ fn a_home_with_both_harnesses_registers_both() {
         .expect("claude adapter registered from home");
     assert!(journal.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));
     assert!(registry.get("codex").is_some());
+
+    let agy = registry
+        .open(
+            Some("agy"),
+            Some(&SessionRef::id("agy", AGY_SESSION)),
+            None,
+            &Harness::Unknown,
+        )
+        .unwrap()
+        .expect("agy adapter registered from home");
+    assert!(agy.path().ends_with("transcript_full.jsonl"), "{:?}", agy.path());
+}
+
+/// `agy` keeps its conversations under `~/.gemini`, which `gemini-cli` also writes to — so a
+/// machine that has only ever run the older harness has the outer directory and none of the
+/// inner one, and registering on the outer would claim conversations that are not there.
+#[test]
+fn a_gemini_home_with_no_antigravity_directory_registers_nothing() {
+    let home = scratch_dir("gemini-only");
+    std::fs::create_dir(home.join(".gemini")).unwrap();
+    assert!(kampr_journal::registry_from_home(&home).get("agy").is_none());
 }
 
 #[test]
@@ -202,4 +225,5 @@ fn a_home_with_no_harness_registers_nothing() {
     let registry = kampr_journal::registry_from_home(&home);
     assert!(registry.get("claude").is_none());
     assert!(registry.get("codex").is_none());
+    assert!(registry.get("agy").is_none());
 }

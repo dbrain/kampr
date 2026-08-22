@@ -1,7 +1,8 @@
 pub mod adapter;
+pub mod agy;
 pub mod claude;
 pub mod codex;
-mod discover;
+pub(crate) mod discover;
 pub mod error;
 pub mod live;
 pub mod model;
@@ -15,6 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use adapter::{JournalAdapter, Registry, SessionKind, SessionRef};
+pub use agy::AgyAdapter;
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use error::JournalError;
@@ -33,6 +35,9 @@ pub fn registry_from_home(home: &Path) -> Registry {
     }
     if let Ok(root) = TranscriptRoot::new(home.join(".codex")) {
         registry.register(Arc::new(CodexAdapter::new(root)));
+    }
+    if let Ok(root) = TranscriptRoot::new(home.join(agy::HOME)) {
+        registry.register(Arc::new(AgyAdapter::new(root)));
     }
     registry
 }

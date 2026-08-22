@@ -285,8 +285,10 @@ A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **r
 its result lands: match by turn id and replace, never append, or every tool renders twice.
 
 **A `diff` block is not one dialect.** Claude sends a unified diff rebuilt from `structuredPatch`;
-Codex sends its `*** Begin Patch` envelope verbatim. Both share `+`/`-` line prefixes, so one
-classifier covers them, but a renderer must not assume unified-diff headers are present.
+Codex sends its `*** Begin Patch` envelope verbatim; `agy` sends the unified diff its edit tool
+puts in the tool *result*, hunk headers and all but no `---`/`+++`. All three share `+`/`-` line
+prefixes, so one classifier covers them, but a renderer must not assume unified-diff headers are
+present.
 
 **Turn order is the node's order.** Do not sort by `at`: a resumed session carries records whose
 timestamps predate the ones above them, and sorting shuffles the conversation. Replace by id, keep
@@ -314,10 +316,25 @@ when none of them lands:
    not the process the file was written for. `/clear` rewrites `sessionId` in that file **in
    place**, under the same pid, so this handle follows a cleared session as well as a restarted
    one — a node re-reads it rather than trusting what it resolved at `watch`.
+
+   `agy` 1.1.18 publishes the same map through the kernel instead of through a file: it holds an
+   `flock` on `~/.gemini/antigravity-cli/presence/<conversation-id>.lock` for as long as that
+   conversation is the one it is on, and `/proc/locks` names the pid holding it. The lock *files*
+   are never unlinked, so the directory alone is a list of conversations that have **ended**; only
+   the kernel's answer separates the live one. It needs no start-time check — a lock is released
+   when its holder dies, so a pid that holds one is alive — and it moves with `/new`, which
+   `~/.claude/sessions/<pid>.json` has no equivalent of. `/proc/locks` is world-readable, which
+   `/proc/<pid>/fd` is not.
 3. **The working directory, bounded by when that process started.** For the harnesses that
    publish no such map — Codex, and Claude before 2.1.236 — a transcript whose last record
    predates the pane's harness cannot be that harness's. It is a bound, not an identity: two runs
    in one directory at the same time are still indistinguishable this way.
+
+   **`agy` has no third handle at all.** Its transcript declares no working directory, and the two
+   caches that map one to a conversation — `cache/last_conversations.json` and
+   `conversation_summaries.db` — are written on the way out, so while a conversation is live they
+   name the one before it. A pane whose `agy` cannot be reached through handle 2 has no
+   conversation, which is the supported state below.
 
 **A pane whose harness the host looked for and did not find has no conversation**, rather than
 falling back to the directory. Herdr detects a harness by scraping the screen, so a pane can claim

@@ -1,0 +1,40 @@
+  byte offset or file pointer rather than re-reading the entire file. In contrast, whole-
+  document rewrites require reading and parsing the entire dataset from scratch on every
+  modification to determine what changed. Because previous entries in an append-only
+  structure remain immutable, readers never have to handle arbitrary in-place edits or
+  truncated history while streaming. Standard utilities like tail -f or operating system
+  file-watch mechanisms can efficiently seek straight to the end of the file and process
+  newly arrived bytes immediately. Whole-file replacements frequently involve atomic
+  renames or inode changes, which complicate tracking and risk breaking active file
+  descriptors for readers. Ultimately, append-only designs drastically reduce I/O overhead
+  and synchronization complexity for real-time monitoring and log aggregation.
+
+────────────────────────────────────────────────────────────
+> Without using any tools, write thirty short numbered sentences about terminal
+  multiplexers. One sentence per line, numbered 1 to 30.
+
+▸ Thought for 4s
+  Begin Considering Parameters
+
+  1. A terminal multiplexer allows multiple terminal sessions to be managed within a
+  single window.
+  2. Popular terminal multiplexers include tmux, GNU Screen, and Zellij.
+  3. They enable running multiple command-line programs simultaneously without opening
+  separate GUI windows.
+  4. Multiplexers operate using a client-server architecture to persist background
+  sessions.
+  5. A major benefit is the ability to detach from an active session and reattach to it
+  later.
+  6. Detached sessions continue executing processes even if a user loses an SSH connection.
+  7. Users can divide a single screen into multiple rectangular panes horizontally or
+  vertically.
+  8. Panes can be resized, swapped, zoomed, or closed independently.
+  9. Multiplexers organize workflows into multiple distinct named windows or tabs within a
+  session.
+  10. Navigation between pane
+⣯  Begin Considering Parameters...
+└ Tip: Press esc to interrupt generation.
+─────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                         Gemini 3.7 Flash · high

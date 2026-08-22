@@ -1,0 +1,40 @@
+  keyboard shortcuts.
+  11. Most multiplexers use a customizable prefix key sequence to intercept user commands.
+  12. Scrollback buffers allow users to navigate and search through historical terminal
+  output.
+  13. Built-in copy modes let users select and copy text directly without touching a mouse.
+  14. Configuration files allow comprehensive customization of keybindings, themes, and
+  default layouts.
+  15. Status bars display helpful system information like time, hostname, and active
+  window titles.
+  16. Multiple users can attach to the same session simultaneously to collaborate and pair
+  program.
+  17. Shell scripts can programmatically spawn predefined workspace layouts upon startup.
+  18. Plugins and extensions can add capabilities such as battery meters, git status, and
+  session managers.
+  19. Session saving tools can restore open windows and directories across system reboots.
+  20. Terminal multiplexers run with minimal overhead on low-resource remote servers.
+  21. They provide terminal emulator independence by managing standard pseudo-terminals
+  under the hood.
+  22. GNU Screen was one of the earliest widespread terminal multiplexers created in 1987.
+  23. tmux was developed as a modern, modular alternative to GNU Screen with a clean
+  codebase.
+  24. Zellij is a newer multiplexer written in Rust featuring built-in WebAssembly plugin
+  support.
+  25. Multiplexers protect long-running build or deployment jobs against unexpected
+  terminal closures.
+  26. Synchronized pane modes allow typing the same shell command across multiple hosts at
+  once.
+  27. Custom layouts can automatically arrange monitors, logs, and editor panes for
+  development work.
+  28. Nested multiplexer sessions can be controlled cleanly by using distinct prefix key
+  bindings.
+  29. Mouse support can optionally be toggled on for scrolling and clicking between active
+  panes.
+  30. Mastering a terminal multiplexer significantly boosts productivity in command-line
+  environments.
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                       Gemini 3.7 Flash · high
