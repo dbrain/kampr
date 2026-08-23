@@ -192,11 +192,69 @@ impl Pane {
         self.agent.is_some()
     }
 
-    /// True only when herdr actually holds scrollback for this pane. Alt-screen panes
-    /// report zero, and asking for more than the viewport on a *detected agent* pane makes
-    /// herdr harvest via the agent's mouse-scroll interface — slow, and it moves the
-    /// operator's screen. Both hazards are excluded here.
+    /// True only when herdr actually holds scrollback for this pane — alt-screen panes report
+    /// zero, and so does an agent that clears the scrollback when it takes the screen.
+    ///
+    /// **A detected harness is not the second half of this.** The inherited rule also excluded
+    /// agent panes, on the documented hazard that reading above the viewport there makes herdr
+    /// harvest through the agent's mouse-scroll interface and move the operator's screen. It does
+    /// not: measured against a live `codex` and a live `claude`, both herdr-detected and both
+    /// holding a ring, `lines: 5000` comes back in **1 ms** with the whole ring and the viewport
+    /// untouched, and a pane deliberately marked an agent while running a mouse-mode program
+    /// received no wheel bytes at all (probe #231). Excluding them cost the node history on the
+    /// one kind of pane it exists to serve.
+    ///
+    /// What is slow is a live harness whose ring is *empty* — Claude Code clears the scrollback
+    /// when it takes the screen: every read past `viewport_rows` there costs a flat ~375 ms and
+    /// returns the viewport anyway. That is this predicate's remaining half, so the only way to
+    /// pay it is for the agent to clear its ring between the snapshot this was asked of and the
+    /// read that follows.
     pub fn scrollback_is_safe_to_read(&self) -> bool {
-        !self.is_agent() && self.scroll.is_some_and(|s| s.max_offset_from_bottom > 0)
+        self.scroll.is_some_and(|s| s.max_offset_from_bottom > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Pane;
+
+    fn pane(agent: Option<&str>, max_offset_from_bottom: u64) -> Pane {
+        serde_json::from_value(serde_json::json!({
+            "pane_id": "w1:p1",
+            "workspace_id": "w1",
+            "tab_id": "w1:t1",
+            "cwd": null,
+            "label": null,
+            "agent": agent,
+            "agent_session": null,
+            "scroll": {
+                "offset_from_bottom": 0,
+                "max_offset_from_bottom": max_offset_from_bottom,
+                "viewport_rows": 40,
+            },
+        }))
+        .unwrap()
+    }
+
+    /// Probe #231 — reading above the viewport on a detected-agent pane. The hazard the interlock
+    /// inherited was never measured: a real `codex` and a real `claude`, both herdr-detected,
+    /// both holding a ring, answer `lines: 5000` in **1 ms** with every row of the ring and the
+    /// viewport exactly where it was. What is slow is a live harness with an *empty* ring, and
+    /// that is the case the other half of the interlock already excludes.
+    #[test]
+    fn a_ring_is_a_ring_whether_or_not_a_harness_is_in_the_pane() {
+        assert!(pane(None, 361).scrollback_is_safe_to_read());
+        assert!(
+            pane(Some("claude"), 384).scrollback_is_safe_to_read(),
+            "an agent pane holding a ring reads like any other pane"
+        );
+    }
+
+    /// The half of the interlock that measurement keeps: an alt-screen pane reports no ring, and
+    /// a live harness with no ring is the one read that costs ~375 ms rather than under one.
+    #[test]
+    fn a_pane_with_no_ring_is_never_read_above_its_viewport() {
+        assert!(!pane(None, 0).scrollback_is_safe_to_read());
+        assert!(!pane(Some("claude"), 0).scrollback_is_safe_to_read());
     }
 }

@@ -413,14 +413,15 @@ So **the node holds the scrollback**: backfill from `pane.read recent format=ans
 through the same emulator so styling matches the live grid, and extend it as the ring grows.
 Over-asking clamps harmlessly (`lines: 5000` returns 1000, `truncated: true` — see #51, which corrected #29) **[probed]**.
 
-**The interlock** — read scrollback only when `max_offset_from_bottom > 0` **and** the pane has no
-detected `agent`. The second condition is Collie's documented hazard: on an idle *recognised agent*
-pane, `recent` with `lines > viewport_rows` harvests through the agent's own mouse-scroll interface,
-which is slow and visibly moves the operator's screen. Encoded as
-`Pane::scrollback_is_safe_to_read` in `crates/kampr-herdr`.
+**The interlock** — read scrollback only when `max_offset_from_bottom > 0`. Encoded as
+`Pane::scrollback_is_safe_to_read` in `crates/kampr-herdr`. It used to also exclude panes with a
+detected `agent`, on Collie's documented hazard that `recent` with `lines > viewport_rows` harvests
+through the agent's own mouse-scroll interface; #231 measured it and it does not — a live `codex`
+and a live `claude` holding a ring both answer `lines: 5000` in 1 ms with the viewport unmoved. The
+slow read is a live harness whose ring is **empty**, which the surviving half excludes.
 
-Agent panes lose nothing by this: they are alt-screen, so no ring exists to miss, and the
-Conversation view is a better history than a ring — whole-session, searchable, structured.
+Agent panes were also said to lose nothing by it, being alt-screen with no ring to miss. A codex
+pane read back 402 rows of one, so what was excluded was real history.
 
 ### 3.5 Live keys + JuiceSSH key row — **POSSIBLE, fully**
 

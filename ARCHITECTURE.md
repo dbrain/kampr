@@ -245,9 +245,23 @@ half of it in characters — read as 46 columns on that same 93-column pane, and
 restarted at 46.
 
 What replaces it walks both reads **from the bottom**, where they are anchored on the same row, and
-pairs each logical line with the rows that rebuild it: padded to one stride and concatenated, they
-must reproduce the line character for character. The stride is the width. The walk stops at the
-first line the remaining rows cannot rebuild, because everything above that is another screen.
+pairs each logical line with the rows that rebuild it: laid out on one grid and concatenated, they
+must reproduce the line character for character. That grid is the width. The walk stops at the first
+line the remaining rows cannot rebuild, because everything above that is another screen — and
+stopping is the whole of the safety. A line that cannot be rebuilt is a line whose height is
+unknown, so there is no count of rows to step over with it, and every join above it would be paired
+with rows belonging to some other line. Stepping over one is the defect this walk exists to prevent.
+
+The rows of a join do **not** all occupy the same number of columns, and assuming they did was the
+one place the walk went silent (#229). A
+real prompt line of 1891 columns came back over rows of 92, eighteen of 93 and a remainder: the
+double-width glyph starting the second row would not straddle the last column, so herdr laid the
+first row out at 92 and the join carries it as 92. No single stride reconstructs that, the walk
+stopped on the bottom-most line it looked at, and the poll measured nothing at all — on a third of
+live screens. So the grid is not divided out of the total any more. What the total pins down is the
+*pair* the grid must be one of — `p / n` and `p / n + 1`, since every row occupies the grid width or
+one less — and both are tried. A grid only one of them rebuilds is proved outright, by the rows that
+filled it; a grid both rebuild is the ambiguity below.
 
 A break is only the width itself when a *narrow* character made it, because one more column would
 have held that character. A break a double-width glyph made is a column ambiguous — the glyph will
@@ -261,6 +275,14 @@ well. It resolves upwards only when nothing it agrees with is standing — no pr
 some other width, or one the rows in hand have already outgrown — because observing above the PTY
 pads and observing below it crops (#87). A line that is longer than the read is deep is never proof
 of anything.
+
+That ambiguity is narrower than #220 made it look, and rebuilding row by row is what shows why: it
+holds only while the wrap is the *last* thing on the screen. The last row of a join carries what it
+wrote and nothing more, so a screen ending on a run of wide glyphs says nothing — but let one more
+row follow it, a shell prompt for instance, and the wrap's own final row is no longer last and is
+padded out to the full grid. Measured on one pane held at 92 and then at 93: identical physical rows
+both times, and logical lines of **860** and **861** (#229). So a live pane, which always has
+something under its output, usually settles its own column.
 
 What is left is the pane that has *never* shown a narrow break since the rect last moved: nothing
 in the two reads separates its two candidate widths, and nothing else on the socket does either —
@@ -342,16 +364,23 @@ emulator cannot rebuild scrollback however long it has been watching. And `termi
 control-mode command, which Kampr does not use (§2, ADR 0002).
 
 So history comes from `pane.read recent format=ansi`, run through the same emulator so styling
-matches, behind an interlock: read only when the ring is non-empty **and** the pane has no detected
-agent. The second half is Collie's documented hazard — on an idle recognised-agent pane, a deep read
-harvests through the agent's own mouse-scroll interface and visibly moves the operator's screen. The
-interlock assumes the worst about that case rather than testing it, which is the right default and
-is now looser than the evidence requires: probe #86 found a read at exactly `viewport_rows` safe on
-a detected-agent pane, leaving the viewport unmoved. Narrowing the interlock to depth rather than to
-the presence of an agent is a change worth making on that evidence.
+matches, behind an interlock: **read only when the ring is non-empty.** That is the whole of it now.
 
-Agent panes lose nothing by this. They are alt-screen, so `max_offset_from_bottom` is 0 and no ring
-exists to miss (#30), and their history is the conversation.
+It used to have a second half — and no detected agent — on Collie's documented hazard that a deep
+read on a recognised-agent pane harvests through the agent's own mouse-scroll interface and visibly
+moves the operator's screen. Measured, it does not (#231 — reading a detected agent's ring above the
+viewport). A live `codex` and a live `claude`, both herdr-detected and both holding a ring, answer
+`lines: 5000` in **1 ms** with every row of the ring, `truncated: false`, and the viewport exactly
+where it was; a pane deliberately marked an agent while running a mouse-mode program received no
+wheel bytes at all. What *is* slow is a live harness whose ring is **empty** — Claude Code clears
+the scrollback when it takes the screen, and never gets one back — where any read past
+`viewport_rows` costs a flat ~375 ms and returns the viewport anyway. That case is what is left of the interlock, so the node can only pay
+it by losing a race with an agent clearing its ring.
+
+The half that went was also standing on a premise that has since stopped being true: agent panes
+were said to be alt-screen, so `max_offset_from_bottom` would be 0 and no ring existed to miss
+(#30). Codex does not clear it, so what the old interlock excluded was real history on the one
+kind of pane the product exists for.
 
 Herdr caps a read at **1000 lines and takes no offset parameter** (#51), so deep history cannot be
 paged to at all. A node that *watches* is better placed: successive reads overlap, and the overlap is

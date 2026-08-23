@@ -4190,3 +4190,118 @@ async fn reopening_a_pane_repaints_it_from_the_screen_as_it_is_now() {
          them carrying what the pane printed while this client was away"
     );
 }
+
+/// Herdr's cell boundary is UAX #29's and its column count is not `unicode-width`'s: a conjoining
+/// jamo block is **one** cell of two columns however many lead jamo it stacks, and an unpaired
+/// regional indicator gets the two columns a whole flag gets. Both are only visible through
+/// scrollback — `pane.read` hands the node the raw code points and the node lays the row out
+/// itself, where the live grid gets herdr's own cursor addressing to lean on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_jamo_block_and_a_lone_flag_half_arrive_in_the_columns_herdr_spends() {
+    let h = harness!("jamo");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut socket, "grid.reset", 15).await;
+    // Only scrollback shows the node laying a row out on its own, and a pane has no scrollback
+    // until it has scrolled — so the three lines are pushed off the screen on purpose.
+    let script =
+        "printf '%b\\n' 'AB\\u1100\\u1100CD' 'AB\\U0001F1EBCD' 'AB\\u1100\\u1161\\u11a8CD'; seq 1 200\n";
+    send(&mut socket, json!({ "t": "input", "pane": pane, "text": script })).await;
+
+    let wanted = [
+        ("two lead jamo", "\u{1100}\u{1100}"),
+        ("an unpaired regional indicator", "\u{1F1EB}"),
+        ("a jamo syllable block", "\u{1100}\u{1161}\u{11A8}"),
+    ];
+    let mut found: Vec<Option<Vec<Option<String>>>> = vec![None; wanted.len()];
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline && found.iter().any(Option::is_none) {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if message["t"] != "scrollback" {
+            continue;
+        }
+        for row in message["rows"].as_array().cloned().unwrap_or_default() {
+            let cols = clusters(&row["runs"]);
+            let text = cluster_text(&cols);
+            for (i, (_, cluster)) in wanted.iter().enumerate() {
+                if text == format!("AB{cluster}CD") {
+                    found[i] = Some(cols.clone());
+                }
+            }
+        }
+    }
+
+    for (i, (name, cluster)) in wanted.iter().enumerate() {
+        let cols = found[i]
+            .clone()
+            .unwrap_or_else(|| panic!("no row came back reading AB{cluster}CD ({name})"));
+        assert_eq!(cols[1].as_deref(), Some("B"), "{name}: the base row is intact");
+        assert_eq!(
+            cols[2].as_deref(),
+            Some(*cluster),
+            "{name} is one cell carrying every code point herdr kept"
+        );
+        assert_eq!(cols[3], None, "{name}: column 3 is the cluster's other half");
+        assert_eq!(
+            cols[4].as_deref(),
+            Some("C"),
+            "{name}: C is in column 4, two columns past the cluster"
+        );
+    }
+}
+
+/// Probe #231. The interlock used to refuse history to any pane with a detected agent, on an
+/// inherited hazard that was never measured: that reading above the viewport there harvests
+/// through the agent's own mouse-scroll interface and moves the operator's screen. It does not —
+/// a live `codex` and a live `claude`, both herdr-detected and both holding a ring, answer
+/// `lines: 5000` in 1 ms with the whole ring and the viewport where it was. So the pane that is
+/// the entire point of the product gets its history like any other.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_detected_agent_pane_delivers_its_history_too() {
+    let h = harness!("agenthistory");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut socket, "grid.reset", 15).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "seq 1 400\n" }),
+    )
+    .await;
+
+    let history = until(&mut socket, "scrollback", 25).await;
+    let text: String = history["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|r| r["runs"].as_array().cloned().unwrap_or_default())
+        .filter_map(|run| run["x"].as_str().map(str::to_string))
+        .collect();
+    assert!(text.contains("100"), "an agent pane's ring is a ring: {history}");
+}

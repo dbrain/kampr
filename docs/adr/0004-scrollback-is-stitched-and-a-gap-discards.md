@@ -33,10 +33,11 @@ of the second:
    (#30) — `recent` degrades to the viewport. Agent panes lose nothing by this: the conversation
    view is a better history than a ring, being whole-session and structured
    ([ADR 0005](./0005-structure-comes-from-the-transcript.md)).
-2. **A read on an idle *recognised agent* pane can move the operator's screen.** Collie documented
-   this hazard and it is respected rather than re-tested: `recent` with `lines > viewport_rows`
-   harvests through the agent's own mouse-scroll interface. Hence the interlock — read only when
-   `max_offset_from_bottom > 0` **and** the pane has no detected agent.
+2. ~~**A read on an idle *recognised agent* pane can move the operator's screen.**~~ **Measured and
+   withdrawn (#231).** Collie's hazard was respected rather than tested; a live `codex` and a live
+   `claude`, both herdr-detected and both holding a ring, answer `lines: 5000` in 1 ms with the
+   whole ring and the viewport unmoved. The interlock is now only `max_offset_from_bottom > 0` —
+   which is also what excludes the one read that *is* slow, a live harness whose ring is empty.
 3. **Reads cap at 1000 lines and there is no offset parameter.** Probe #29 originally recorded that
    over-asking clamps harmlessly with `truncated: false`; that only held because the ring under test
    was 400 deep. Against a 1371-row ring, `lines=5000` returns **1000** with `truncated: true`, and

@@ -629,6 +629,13 @@ impl Inner {
 /// walk stops at the first line that cannot be rebuilt from the rows left. Anything above that is
 /// another screen, and this is not a measurement of it.
 ///
+/// **Stopping is the whole of the safety, and stepping over the line instead would undo it.** A
+/// line that cannot be rebuilt is a line whose height is unknown, so there is no count of rows to
+/// step over with it: every join above it would be paired with rows belonging to some other line
+/// and would prove a width the pane never had, which is the defect this walk exists to prevent.
+/// What was worth loosening was not the stop but what counts as rebuilding it (probe #229 — a
+/// wide glyph cutting one row of a join a column short).
+///
 /// Without a join there is no proof, only a floor: herdr trims each row's trailing blanks, so a
 /// screen holding a short prompt reads narrow. A floor is never an over-estimate, which is what
 /// makes combining it with the rect by `max` safe.
@@ -651,12 +658,11 @@ fn reading(physical: &str, logical: &str) -> Reading {
         let Some(join) = joined(&rows[..row], lines[line]) else {
             break;
         };
-        let stride = if join.broke_before_a_wide_glyph {
-            &mut or_one_wider
-        } else {
-            &mut at
+        let proved = match join.could_be_one_wider {
+            true => &mut or_one_wider,
+            false => &mut at,
         };
-        *stride = Some(stride.unwrap_or(0).max(join.cols));
+        *proved = Some(proved.unwrap_or(0).max(join.cols));
         row -= join.rows;
     }
     Reading {
@@ -666,19 +672,26 @@ fn reading(physical: &str, logical: &str) -> Reading {
 }
 
 struct Join {
-    rows: usize,
     cols: u16,
-    /// The break could be a column short of the grid: a double-width glyph will not straddle the
-    /// last column, so a row of wide glyphs breaks at `cols` on a grid of `cols` **or** `cols + 1`
-    /// and the two are indistinguishable from the read.
-    broke_before_a_wide_glyph: bool,
+    rows: usize,
+    /// The grid could be a column wider than `cols`: a double-width glyph will not straddle the
+    /// last column, so a run of wide glyphs lays out identically on a grid of `cols` and on one
+    /// of `cols + 1` and the read cannot separate them (probe #220).
+    could_be_one_wider: bool,
 }
 
-/// The trailing rows of `rows` that rebuild `line`, and the stride they were laid out at.
+/// The trailing rows of `rows` that rebuild `line`, and the grid they were laid out on.
 ///
 /// Nothing here trusts herdr's idea of where a line began: the rows are only accepted when
-/// padding them to one width and concatenating them reproduces the logical line character for
+/// laying them out on one grid and concatenating them reproduces the logical line character for
 /// character.
+///
+/// The rows of a join do not all occupy the same number of columns — one a wide glyph cut short
+/// is a column narrower than the rest — so the grid cannot be divided out of the total. What the
+/// total does pin down is the pair it must be one of: every row occupies the grid width or one
+/// less, so a run of `n` rows accounting for `p` columns is on a grid of `p / n` or `p / n + 1`.
+/// Both are tried. A grid only one of them rebuilds is proved outright, by the rows that filled
+/// it; a grid both rebuild is the ambiguity of probe #220.
 fn joined(rows: &[&str], line: &str) -> Option<Join> {
     let total = columns(line);
     for span in 2..=rows.len().min(MAX_JOIN) {
@@ -688,33 +701,55 @@ fn joined(rows: &[&str], line: &str) -> Option<Join> {
             continue;
         };
         let stride = padded / rest.len() as u16;
-        if stride == 0
-            || padded % rest.len() as u16 != 0
-            || rest.iter().any(|row| columns(row) > stride)
-            || !rebuilds(run, stride, line)
-        {
+        if stride == 0 {
             continue;
         }
+        let mut fits = [stride, stride + 1]
+            .into_iter()
+            .filter(|grid| rebuilds(run, *grid, line));
+        let Some(cols) = fits.next() else {
+            continue;
+        };
         return Some(Join {
+            cols,
             rows: span,
-            cols: stride,
-            broke_before_a_wide_glyph: run.windows(2).any(|pair| {
-                columns(pair[0]) == stride && pair[1].chars().next().and_then(|c| c.width()) == Some(2)
-            }),
+            could_be_one_wider: fits.next().is_some(),
         });
     }
     None
 }
 
-fn rebuilds(run: &[&str], stride: u16, line: &str) -> bool {
+/// Whether `run` laid out on a `grid`-column pane is exactly `line`.
+///
+/// Every row but the last carries the columns it occupied: the grid width, or one short of it
+/// where the next row starts on a glyph too wide for the column left over — herdr does not pad
+/// that column back (probe #220). The last row carries what it wrote and nothing more.
+fn rebuilds(run: &[&str], grid: u16, line: &str) -> bool {
     let mut rebuilt = String::with_capacity(line.len());
-    let (last, rest) = run.split_last().expect("a join is at least two rows");
-    for row in rest {
+    let Some((last, rest)) = run.split_last() else {
+        return false;
+    };
+    for (i, row) in rest.iter().enumerate() {
+        let width = columns(row);
+        if width > grid || rebuilt.len() > line.len() {
+            return false;
+        }
+        let occupied = match width + 1 == grid && starts_on_a_wide_glyph(run[i + 1]) {
+            true => width,
+            false => grid,
+        };
         rebuilt.push_str(row);
-        rebuilt.extend(std::iter::repeat_n(' ', (stride - columns(row)) as usize));
+        rebuilt.extend(std::iter::repeat_n(' ', (occupied - width) as usize));
     }
     rebuilt.push_str(last);
     rebuilt == line
+}
+
+/// The first *character*, not the first cluster: a base plus a variation selector is two columns
+/// and reads as one here (probe #222). It costs a join that is never found rather than a width
+/// that is wrong, because a grid nothing rebuilds proves nothing.
+fn starts_on_a_wide_glyph(row: &str) -> bool {
+    row.chars().next().and_then(|c| c.width()) == Some(2)
 }
 
 /// Columns, not characters. A row of double-width glyphs is half as many characters as it is
@@ -1166,9 +1201,10 @@ async fn run_observer(
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, PROOF_LIFETIME, Proof, Reading, Wrapped, reading};
+    use super::{Measured, PROOF_LIFETIME, Proof, Reading, Wrapped, columns, reading};
     use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, subscriptions};
     use kampr_herdr::Snapshot;
+    use unicode_width::UnicodeWidthChar;
 
     fn snapshot(panes: &[(&str, Option<&str>)]) -> Snapshot {
         let json = serde_json::json!({
@@ -1322,9 +1358,10 @@ mod tests {
         assert_eq!(reading("", ""), Reading::default());
     }
 
-    /// Probe #69: even unsplit the rect is one column wider than the PTY, and the same proof
-    /// fixes it — `observe` padded that column rather than cropping, but the grid was still a
-    /// column wider than the pane.
+    /// Probe #69: even unsplit the rect is one column wider than the PTY, because the rect is
+    /// the pane's outer box and the column it keeps back is the scrollbar's (#230). The same
+    /// proof fixes it — `observe` padded that column rather than cropping, but the grid was
+    /// still a column wider than the pane.
     #[test]
     fn a_proof_below_the_rect_is_still_the_truth() {
         let (physical, logical) = wide(93, 400);
@@ -1538,6 +1575,82 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 80,
+                wrapped: Some(Wrapped::At(93))
+            }
+        );
+    }
+
+    /// Lays `text` out on a `grid`-column pane the way herdr does — wrapping before a glyph that
+    /// will not fit — and returns the pair of reads it comes back as, with `tail` on its own
+    /// physical row and glued to the end of the logical line the way a prompt is.
+    fn laid_out(grid: u16, text: &str, tail: &str) -> (Vec<String>, String) {
+        let (mut rows, mut row, mut width) = (Vec::new(), String::new(), 0u16);
+        let mut logical = String::new();
+        for c in text.chars() {
+            let w = c.width().unwrap_or(0) as u16;
+            if width + w > grid {
+                // A wrapped row occupies exactly the columns it wrote: the grid width, or one
+                // short of it when a double-width glyph could not straddle the last column, and
+                // herdr does not pad that column back (probe #220).
+                logical.push_str(&row);
+                rows.push(std::mem::take(&mut row));
+                width = 0;
+            }
+            row.push(c);
+            width += w;
+        }
+        logical.push_str(&row);
+        logical.extend(std::iter::repeat_n(' ', (grid - width) as usize));
+        rows.push(row);
+        rows.push(tail.to_string());
+        logical.push_str(tail);
+        (rows, logical)
+    }
+
+    /// Measured live on a 93-column pane: `'a' * 92`, a `日`, `'b' * 91`, another
+    /// `日` and 1600 `c`, printed without a newline so the prompt joins the line. The rows
+    /// come back 92, eighteen of 93, then the remainder, over **one logical line of 1891
+    /// columns** — the
+    /// wide glyph would not straddle the last column, so one row of the join is a column short
+    /// of the rest. No single stride rebuilds that, so the walk stopped on the bottom-most line
+    /// it looked at and the poll measured nothing at all.
+    #[test]
+    fn a_wrap_a_wide_glyph_cut_a_column_short_still_measures_the_pane() {
+        let text = format!("{}日{}日{}", "a".repeat(92), "b".repeat(91), "c".repeat(1600));
+        let (rows, logical) = laid_out(93, &text, PROMPT);
+        assert_eq!(
+            rows.iter().map(|r| columns(r)).collect::<Vec<_>>(),
+            [&[92u16][..], &[93; 18][..], &[21, 32][..]].concat(),
+            "the fixture is the shape the live read had"
+        );
+        assert_eq!(columns(&logical), 1891);
+        assert_eq!(
+            reading(&rows.join("\n"), &logical),
+            Reading {
+                floor: 93,
+                wrapped: Some(Wrapped::At(93))
+            },
+            "the rows that filled the grid prove it outright"
+        );
+    }
+
+    /// The other half of the same live capture: 400 `日` on the same pane, where the join
+    /// runs eight rows of 92 and then a *padded* short row before the prompt. [#220](probe log)
+    /// says a screen of nothing but wide glyphs cannot separate 92 from 93 — but that is a screen
+    /// whose last row is the end of the wrap. Here a row after it was laid out at the full grid,
+    /// and that row settles it.
+    #[test]
+    fn a_padded_row_after_a_wide_glyph_wrap_settles_the_column_it_left_open() {
+        let (rows, logical) = laid_out(93, &"日".repeat(400), PROMPT);
+        assert_eq!(
+            rows.iter().map(|r| columns(r)).collect::<Vec<_>>(),
+            [&[92u16; 8][..], &[64, 32][..]].concat()
+        );
+        assert_eq!(columns(&logical), 861);
+        assert_eq!(
+            reading(&rows.join("\n"), &logical),
+            Reading {
+                floor: 92,
                 wrapped: Some(Wrapped::At(93))
             }
         );
