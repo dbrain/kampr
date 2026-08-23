@@ -254,12 +254,34 @@ makes a row countable, so the marks travel beside the text instead:
 - **Copy, find and link detection read `x` *and* `m`.** `x` alone is the bases; the text on screen
   is each cell's base followed by its marks. A client that already keeps a cell buffer has both.
 
-**What the node clusters, and what it does not.** Zero-width code points join the cell to their
-left; so does anything after a ZWJ, a skin-tone modifier, and the second of a flag's two regional
-indicators. A variation selector that widens its base to two columns takes the second column with
-it, because herdr does. Everything else starts a new cell — Hangul jamo and Indic conjuncts among
-them — which is what herdr does with them too. A mark printed with no cell to its left is dropped,
-as herdr drops it.
+**What the node clusters.** A cell is a UAX #29 extended grapheme cluster, because herdr's is.
+Measured against the column herdr wraps a string at on a 93-column pane: Devanagari
+`\u0915\u094d\u0937` moves to the next row whole while the same shape in Tamil splits, which is
+GB9c to the letter and not something a handful of hand-written rules reach (#225). So zero-width
+code points join the cell to their left, and so do a spacing mark, the character after a prepend,
+a skin-tone modifier, a conjoining jamo block however many lead jamo it stacks, the second of a
+flag's two regional indicators, and a pictograph after a ZWJ — but **only** a pictograph:
+`X\u200dY` is two cells and so is `\u65e5\u200d\u672c`, exactly as herdr leaves them. A mark
+printed with no cell to its left is dropped, as herdr drops it, and so is a zero-width space,
+which is not a mark and has nothing to ride on.
+
+**The column count is herdr's, not `unicode-width`'s.** A cluster spends `min(width, 2)` columns,
+and a cluster that starts with a regional indicator spends **2** whether or not it found its pair.
+Both diverge from `unicode-width` 0.2.2 and both were measured (#226, #227): `\u1100\u1100` sums
+to 4 columns and herdr spends 2, three prepends before a digit sum to 4 and herdr spends 2, and a
+lone `\U0001f1eb` sums to 1 where herdr spends the 2 a whole flag gets. A variation selector that
+widens its base to two columns takes the second column with it, the same way.
+
+**What is still out, and why it is unreachable rather than unfixed.** Herdr discards a cluster it
+cannot attach to anything — a bare jungseong or jongseong jamo, a choseong or jungseong filler,
+`A\ufe0f`, `e\ufe0e`, a leading combining mark — before it ever reaches the node, so the node
+keeps some of those where herdr would have dropped them. No herdr frame and no `pane.read` can
+carry one, so nothing on the wire can show the difference. Two more, same reason: herdr renders a
+cluster it has no glyph for as blank cells in its `observe` frames, so a live grid can show `AB  CD`
+where scrollback shows the jamo — the columns agree, the content is herdr's to lose, not the
+node's. And a cluster that grows into a second column while it is already sitting in the row's
+last column stays one column wide instead of moving to the next row whole; herdr wraps it, but
+herdr also wraps every row before the node ever parses it, so the node is never handed that shape.
 
 **`links` may appear on `grid.patch` as well as `grid.reset`, and the two carry different things.**
 A hyperlink can first be seen mid-stream, so a client that only reads `links` from `grid.reset` will

@@ -236,9 +236,14 @@ fn a_zero_width_code_point_rides_on_the_cell_before_it() {
         ),
         ("a mark with no base is dropped", "\u{301}ab", &["a", "b"]),
         (
-            "the virama in a conjunct is a mark, not a joiner",
+            "a mark rides on a blank cell, as herdr lets it",
+            "A \u{301}B",
+            &["A", " \u{301}", "B"],
+        ),
+        (
+            "a virama joins the consonant after it into one conjunct",
             "\u{915}\u{94D}\u{937}",
-            &["\u{915}\u{94D}", "\u{937}"],
+            &["\u{915}\u{94D}\u{937}", ""],
         ),
     ];
     for (name, input, want) in cases {
@@ -277,4 +282,197 @@ fn a_variation_selector_that_widens_its_base_takes_the_second_column_with_it() {
     assert!(row[1].is_tail(), "the selector bought a second column");
     assert_eq!(row[2].ch, 'Z', "and the text after it moved over");
     assert_eq!(t.cursor().0, 3);
+}
+
+/// Every cell herdr 0.8.2 was measured to spend, base included, against the columns it spent on
+/// it: the cluster contents come from `pane.read`, the column count from where herdr wrapped the
+/// same string against the right margin of a 93-column pane.
+fn cells(input: &str, upto: usize) -> Vec<String> {
+    let mut t = Emulator::new(20, 2);
+    t.feed(input.as_bytes());
+    t.grid()
+        .row(0)
+        .iter()
+        .take(upto)
+        .map(|c| if c.is_tail() { String::new() } else { c.cluster() })
+        .collect()
+}
+
+/// A conjoining jamo sequence is one grapheme however many lead jamo it stacks, and herdr spends
+/// **two** columns on it — not the four or six `unicode-width` sums for `L L` and `L L L`.
+/// Half-width jamo do not conjoin and stay one column each, and a jamo herdr cannot attach to
+/// anything never reaches the node at all.
+#[test]
+fn a_hangul_jamo_sequence_is_one_cluster_of_two_columns() {
+    let cases: &[(&str, &str, &[&str], u16)] = &[
+        (
+            "precomposed",
+            "AB\u{AC01}CD",
+            &["A", "B", "\u{AC01}", "", "C", "D"],
+            6,
+        ),
+        (
+            "conjoining L V T",
+            "AB\u{1100}\u{1161}\u{11A8}CD",
+            &["A", "B", "\u{1100}\u{1161}\u{11A8}", "", "C", "D"],
+            6,
+        ),
+        (
+            "two lead jamo are still one syllable block",
+            "AB\u{1100}\u{1100}CD",
+            &["A", "B", "\u{1100}\u{1100}", "", "C", "D"],
+            6,
+        ),
+        (
+            "three lead jamo do not buy a third column",
+            "AB\u{1100}\u{1100}\u{1100}CD",
+            &["A", "B", "\u{1100}\u{1100}\u{1100}", "", "C", "D"],
+            6,
+        ),
+        (
+            "a lead jamo swallows the precomposed syllable after it",
+            "AB\u{1100}\u{AC01}CD",
+            &["A", "B", "\u{1100}\u{AC01}", "", "C", "D"],
+            6,
+        ),
+        (
+            "two precomposed syllables are two cells",
+            "AB\u{AC01}\u{AC01}CD",
+            &["A", "B", "\u{AC01}", "", "\u{AC01}", ""],
+            8,
+        ),
+        (
+            "a trailing jamo rides on a precomposed syllable",
+            "AB\u{AC00}\u{11A8}CD",
+            &["A", "B", "\u{AC00}\u{11A8}", "", "C", "D"],
+            6,
+        ),
+        (
+            "old-Korean extended jamo conjoin the same way",
+            "AB\u{A960}\u{1161}\u{D7CB}CD",
+            &["A", "B", "\u{A960}\u{1161}\u{D7CB}", "", "C", "D"],
+            6,
+        ),
+        (
+            "half-width jamo do not conjoin and stay one column each",
+            "AB\u{FFA1}\u{FFC2}CD",
+            &["A", "B", "\u{FFA1}", "\u{FFC2}", "C", "D"],
+            6,
+        ),
+        (
+            "compatibility jamo are ordinary wide characters",
+            "AB\u{3131}\u{314F}CD",
+            &["A", "B", "\u{3131}", "", "\u{314F}", ""],
+            8,
+        ),
+    ];
+    for (name, input, want, cursor) in cases {
+        assert_eq!(cells(input, want.len()), *want, "{name}");
+        let mut t = Emulator::new(20, 2);
+        t.feed(input.as_bytes());
+        assert_eq!(t.cursor().0, *cursor, "{name}: columns spent");
+    }
+}
+
+/// `unicode-width` calls a lone regional indicator one column. Herdr spends **two** — on the
+/// first of an odd run, on a third one after a complete flag, and on one standing by itself —
+/// and herdr's cell model is the one the grid has to agree with (probes #210, #213).
+#[test]
+fn an_unpaired_regional_indicator_is_two_columns_because_herdr_spends_two() {
+    let cases: &[(&str, &str, &[&str], u16)] = &[
+        (
+            "on its own",
+            "AB\u{1F1EB}CD",
+            &["A", "B", "\u{1F1EB}", "", "C", "D"],
+            6,
+        ),
+        (
+            "at the left margin",
+            "\u{1F1EB}CD",
+            &["\u{1F1EB}", "", "C", "D"],
+            4,
+        ),
+        (
+            "a third one after a complete flag",
+            "AB\u{1F1EC}\u{1F1E7}\u{1F1EB}CD",
+            &["A", "B", "\u{1F1EC}\u{1F1E7}", "", "\u{1F1EB}", "", "C", "D"],
+            8,
+        ),
+        (
+            "a space between two of them keeps them apart",
+            "\u{1F1EB} \u{1F1EB}",
+            &["\u{1F1EB}", "", " ", "\u{1F1EB}", ""],
+            5,
+        ),
+    ];
+    for (name, input, want, cursor) in cases {
+        assert_eq!(cells(input, want.len()), *want, "{name}");
+        let mut t = Emulator::new(20, 2);
+        t.feed(input.as_bytes());
+        assert_eq!(t.cursor().0, *cursor, "{name}: columns spent");
+    }
+}
+
+/// The cases the four hand-written rules got wrong in the other direction: a ZWJ only joins two
+/// pictographs, so `X\u{200D}Y` is two cells and so is `\u{65E5}\u{200D}\u{672C}`; a prepend and
+/// a spacing mark do join; and a zero-width space is not a mark, so it rides on nothing and is
+/// dropped. All measured against herdr's wrap column on a 93-column pane.
+#[test]
+fn a_cluster_ends_where_herdr_ends_it_and_no_earlier() {
+    let cases: &[(&str, &str, &[&str], u16)] = &[
+        (
+            "a ZWJ between two letters joins nothing",
+            "X\u{200D}Y",
+            &["X\u{200D}", "Y"],
+            2,
+        ),
+        (
+            "a ZWJ between two CJK glyphs joins nothing",
+            "\u{65E5}\u{200D}\u{672C}",
+            &["\u{65E5}\u{200D}", "", "\u{672C}", ""],
+            4,
+        ),
+        (
+            "a ZWJ between two pictographs joins them",
+            "\u{1F468}\u{200D}\u{1F469}Z",
+            &["\u{1F468}\u{200D}\u{1F469}", "", "Z"],
+            3,
+        ),
+        (
+            "a prepend takes the character after it",
+            "AB\u{600}\u{661}CD",
+            &["A", "B", "\u{600}\u{661}", "", "C", "D"],
+            6,
+        ),
+        (
+            "three prepends do not buy a third column",
+            "\u{600}\u{600}\u{600}\u{661}Z",
+            &["\u{600}\u{600}\u{600}\u{661}", "", "Z"],
+            3,
+        ),
+        (
+            "a spacing mark joins its base",
+            "AB\u{915}\u{93E}CD",
+            &["A", "B", "\u{915}\u{93E}", "", "C", "D"],
+            6,
+        ),
+        (
+            "a conjunct is one cell, a Tamil one is not",
+            "\u{BA4}\u{BCD}\u{BA4}Z",
+            &["\u{BA4}\u{BCD}", "\u{BA4}", "Z"],
+            3,
+        ),
+        (
+            "a zero-width space rides on nothing",
+            "A\u{200B}B",
+            &["A", "B"],
+            2,
+        ),
+    ];
+    for (name, input, want, cursor) in cases {
+        assert_eq!(cells(input, want.len()), *want, "{name}");
+        let mut t = Emulator::new(20, 2);
+        t.feed(input.as_bytes());
+        assert_eq!(t.cursor().0, *cursor, "{name}: columns spent");
+    }
 }

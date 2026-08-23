@@ -1,6 +1,7 @@
 use crate::grid::{Cell, CellAttrs, Color, Grid};
 use std::sync::Arc;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::GraphemeCursor;
+use unicode_width::UnicodeWidthStr;
 use vte::{Params, Perform};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -47,18 +48,17 @@ impl State {
     /// col+2, so advancing one leaves a blank behind every wide character — permanently, because
     /// herdr never repaints a cell it believes already matches.
     ///
-    /// Probe #215: herdr's cell is a grapheme, not a code point. A zero-width character rides on
-    /// the cell to its left instead of taking a column of its own, and dropping it — which is what
-    /// this used to do — loses the accent for the same reason.
+    /// Probe #215: herdr's cell is a grapheme, not a code point, so a mark rides on the cell to
+    /// its left instead of taking a column of its own — see [`is_boundary`] for where the grapheme
+    /// ends and [`cluster_width`] for how many columns herdr spends on it.
     fn put(&mut self, c: char) {
         if self.join(c) {
             return;
         }
-        let width = match c.width() {
-            Some(0) | None => return,
-            Some(2) => 2,
-            Some(_) => 1,
-        };
+        let width = cluster_width(c.encode_utf8(&mut [0u8; 4]));
+        if width == 0 {
+            return;
+        }
         if self.cursor.col + width > self.grid.cols() {
             self.cursor.col = 0;
             self.newline();
@@ -96,15 +96,18 @@ impl State {
         let Some(cell) = self.grid.cell(col, row) else {
             return false;
         };
-        if cell.is_tail() || !continues(cell, c) {
+        if cell.is_tail() || (c.is_ascii() && cell.marks.is_none() && cell.ch.is_ascii()) {
+            return false;
+        }
+        let mut cluster = cell.cluster();
+        let boundary = cluster.len();
+        cluster.push(c);
+        if is_boundary(&cluster, boundary) {
             return false;
         }
         let mut marks = String::with_capacity(cell.marks().len() + c.len_utf8());
         marks.push_str(cell.marks());
         marks.push(c);
-        let mut cluster = String::with_capacity(marks.len() + cell.ch.len_utf8());
-        cluster.push(cell.ch);
-        cluster.push_str(&marks);
         let mut joined = cell.clone();
         joined.marks = Some(Arc::new(marks));
 
@@ -113,9 +116,11 @@ impl State {
         } else {
             1
         };
-        // A variation selector can buy its base a second column — an emoji-presentation heart, a
-        // keycap — and herdr addresses whatever follows past that column, measured.
-        let width = if cluster.width() >= 2 && col + 1 < self.grid.cols() {
+        // A cluster only ever grows into its second column — a variation selector buying an
+        // emoji-presentation heart or a keycap its width, a prepend taking the character after
+        // it, a lead jamo swallowing the syllable block — and herdr addresses whatever follows
+        // past that column, measured.
+        let width = if cluster_width(&cluster) == 2 && col + 1 < self.grid.cols() {
             2
         } else {
             1
@@ -180,26 +185,29 @@ impl State {
     }
 }
 
-const ZWJ: char = '\u{200D}';
+/// Herdr 0.8.2 breaks cells exactly where UAX #29 breaks extended grapheme clusters — measured
+/// against where it wraps a string at the right margin of a 93-column pane (#225 — herdr's cell
+/// boundary is UAX #29). Devanagari `\u{915}\u{94D}\u{937}` wraps whole and the same shape in
+/// Tamil does not, which is GB9c to the letter and not something four hand-written rules reach.
+fn is_boundary(cluster: &str, at: usize) -> bool {
+    GraphemeCursor::new(at, cluster.len(), true)
+        .is_boundary(cluster, 0)
+        .unwrap_or(true)
+}
 
 fn is_regional(c: char) -> bool {
     ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
 }
 
-fn is_emoji_modifier(c: char) -> bool {
-    ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
-}
-
-/// Grapheme clustering cut down to what a terminal has to get right (probe #215): anything of
-/// width zero, anything after a ZWJ, a skin-tone modifier, and the second of a flag's two regional
-/// indicators. Herdr's own cell model was measured to agree on all four. Everything else — Hangul
-/// jamo, Indic conjuncts — starts a new cell, which is what herdr does with them too.
-fn continues(cell: &Cell, c: char) -> bool {
-    if matches!(c.width(), Some(0) | None) || is_emoji_modifier(c) {
-        return true;
+/// The columns herdr spends on one cluster, which is **not** `unicode-width`'s sum over it.
+/// A conjoining jamo block sums to 4 or 6 and herdr spends 2; a prepend chain sums to 3 or 4 and
+/// herdr spends 2; an unpaired regional indicator sums to 1 and herdr spends 2, the same as the
+/// flag it half is (#226, #227).
+fn cluster_width(cluster: &str) -> u16 {
+    if cluster.starts_with(is_regional) {
+        return 2;
     }
-    let marks = cell.marks();
-    marks.ends_with(ZWJ) || (marks.is_empty() && is_regional(c) && is_regional(cell.ch))
+    cluster.width().min(2) as u16
 }
 
 fn extended(rest: &[u16]) -> Option<(Color, usize)> {
