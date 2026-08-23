@@ -5,6 +5,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,6 +70,24 @@ private fun StatusChip(info: PaneInfo?) {
     }
 }
 
+// Everything the header says *about* the pane rather than which pane it is: what the frame stream
+// is doing, what the keyboard is doing, what the agent is doing. Emitted as siblings so the row
+// that hosts them decides how they lay out.
+@Composable
+private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean) {
+    val tokens = Kampr.tokens
+    if (pane.stale) StaleBadge()
+    if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
+    if (readOnly) {
+        StatusBadge(
+            "read-only", tokens.color.dim, tokens.color.surface,
+            label = "This device is read-only — it cannot type into the pane",
+        )
+    }
+    StatusChip(info)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PaneScreenMobile(
     pane: PaneState,
@@ -133,40 +153,40 @@ fun PaneScreenMobile(
                 if (landscape) {
                     KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
                     KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+                    PaneMarks(pane, info, readOnly)
+                    NewAction(pane.id)
+                    PaneManageAction(pane.id)
+                    // Landscape has no second row to hang these off, and an agent pane opens in
+                    // Conversation: without them here the terminal is unreachable without rotating.
+                    if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
+                    surfaces.Zoom(pane, Modifier)
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
                         KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
                     }
-                }
-                if (pane.stale) StaleBadge()
-                if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
-                if (readOnly) {
-                    StatusBadge(
-                        "read-only", tokens.color.dim, tokens.color.surface,
-                        label = "This device is read-only — it cannot type into the pane",
-                    )
-                }
-                NewAction(pane.id)
-                PaneManageAction(pane.id)
-                StatusChip(info)
-                // Landscape has no second row to hang these off, and an agent pane opens in
-                // Conversation: without them here the terminal is unreachable without rotating.
-                if (landscape) {
-                    if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
-                    surfaces.Zoom(pane, Modifier)
+                    // The marks go on the row below. At 480 dpi the phone is 360 dp wide and the
+                    // title is the only elastic thing on this line, so it is handed whatever the
+                    // fixed items leave: 69 px of the 133 px `kampr · claude` needs against a
+                    // blocked agent, and 0 px once the pane was also stale and read-only.
+                    NewAction(pane.id)
+                    PaneManageAction(pane.id)
                 }
             }
             if (!landscape) {
-                Row(
+                // Flowing rather than a Row: stale, unsent, read-only and a status pill together
+                // outrun 360 dp, and a switch squeezed to nothing is not a switch.
+                FlowRow(
                     Modifier
                         .fillMaxWidth()
                         .background(tokens.color.bar)
                         .edgeBottom()
                         .absolutePadding(left = 16.dp + safe.left, right = 16.dp + safe.right, bottom = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
+                    PaneMarks(pane, info, readOnly)
                     if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f)) else Box(Modifier.weight(1f))
                     surfaces.Zoom(pane, Modifier)
                 }

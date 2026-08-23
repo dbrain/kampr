@@ -62,6 +62,17 @@ private val SCANNED_HOST = Regex("""^(\[[0-9A-Fa-f:]{2,45}]|[A-Za-z0-9](?:[A-Za-
 // form the CLI uses. Anything longer is not a code and is not going in a URL this app then dials.
 private val SCANNED_CODE = Regex("""^[A-Za-z0-9-]{4,32}$""")
 
+// `kampr-auth`'s CODE_ALPHABET and CODE_LEN. The node normalises the same way before it looks a
+// code up — upper-case, then keep only these glyphs — so the dash the CLI prints between the two
+// groups, and anything a phone keyboard puts in the way, fall out here exactly as they do there.
+private const val CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTVWXYZ"
+private const val CODE_LEN = 8
+
+// A pairing code has one length, and the node is what fixed it. That is what lets a field holding
+// a whole one act on it instead of waiting for a key nobody can see on a phone.
+fun pairingCodeComplete(typed: String): Boolean =
+    typed.uppercase().count { it in CODE_ALPHABET } == CODE_LEN
+
 // What a scanned QR turns into. The desktop's symbol is `origin#pair=<code>` and the code rides in
 // the fragment on purpose — a fragment is never sent, so it reaches neither the node's access log
 // nor the proxy's. Null means "that was not a Kampr node", which is the common case for a camera.

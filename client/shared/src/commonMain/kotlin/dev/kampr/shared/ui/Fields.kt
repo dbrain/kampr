@@ -9,15 +9,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 
+// `onSubmit` is what puts a labelled action key on the phone's keyboard. Without one the IME
+// shows a plain Return, a single-line field swallows it, and the field has no way at all to be
+// finished from the keyboard that is covering the button.
 @Composable
 fun KField(
     hint: String,
@@ -25,6 +31,8 @@ fun KField(
     modifier: Modifier = Modifier,
     style: TextStyle = Kampr.tokens.type.meta,
     label: String? = null,
+    keyboard: KeyboardOptions = KeyboardOptions.Default,
+    onSubmit: (() -> Unit)? = null,
     onChange: (TextFieldValue) -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -43,6 +51,8 @@ fun KField(
             singleLine = true,
             textStyle = style.copy(color = tokens.color.text),
             cursorBrush = SolidColor(tokens.color.accent),
+            keyboardOptions = if (onSubmit == null) keyboard else keyboard.copy(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = onSubmit?.let { submit -> { submit() } }),
             modifier = Modifier.fillMaxWidth().named(label ?: hint),
         )
     }

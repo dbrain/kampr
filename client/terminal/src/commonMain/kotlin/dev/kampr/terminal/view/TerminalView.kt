@@ -369,9 +369,11 @@ fun TerminalView(
                     if (view.sheetOpen || session.confirm.held != null) {
                         Modifier
                     } else {
-                        Modifier.pointerInput(pane.id) {
-                            terminalGestures(session, presets, paint, probe, ::tapped)
-                        }
+                        Modifier
+                            .pointerInput(pane.id) { terminalWheel(view, probe) }
+                            .pointerInput(pane.id) {
+                                terminalGestures(session, presets, paint, probe, ::tapped)
+                            }
                     },
                 ),
         ) {
