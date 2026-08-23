@@ -257,6 +257,7 @@ mod tests {
             s,
             x: text.into(),
             l: None,
+            w: 1,
         }
     }
 

@@ -177,7 +177,7 @@ private fun pick(herd: Herd, kind: String): PaneInfo {
 
 private fun grid(pane: PaneState): String = buildString {
     for (row in 0 until pane.cells.rows) {
-        for (col in 0 until pane.cells.cols) append(pane.cells.charAt(col, row))
+        append(pane.cells.rowText(row))
         append('\n')
     }
 }

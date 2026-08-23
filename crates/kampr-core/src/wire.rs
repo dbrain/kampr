@@ -29,6 +29,20 @@ pub struct Run {
     pub x: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l: Option<u32>,
+    /// Columns per character in `x`, 1 or 2. A client has no Unicode width table and must not
+    /// need one: this is how it learns that the column after a double-width glyph belongs to that
+    /// glyph and not to the next one (probe #210). Omitted when 1, so `x` stays exactly the text
+    /// on screen and every path that reads it — copy, find, link detection — reads it unchanged.
+    #[serde(default = "narrow", skip_serializing_if = "is_narrow")]
+    pub w: u8,
+}
+
+fn narrow() -> u8 {
+    1
+}
+
+fn is_narrow(w: &u8) -> bool {
+    *w == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,18 +432,29 @@ impl Encoder {
         let blank = Cell::default();
         let end = cells.iter().rposition(|c| *c != blank).map_or(0, |i| i + 1);
         let mut runs: Vec<Run> = Vec::new();
-        for cell in &cells[..end] {
+        for (i, cell) in cells[..end].iter().enumerate() {
+            // The right half of a double-width glyph is carried by its lead's `w`, not by a
+            // character of its own.
+            if cell.is_tail() {
+                continue;
+            }
+            let w = if cells.get(i + 1).is_some_and(Cell::is_tail) {
+                2
+            } else {
+                1
+            };
             let s = self.intern(Style {
                 fg: cell.fg,
                 bg: cell.bg,
                 attrs: cell.attrs,
             });
             match runs.last_mut() {
-                Some(r) if r.s == s && r.l == cell.link => r.x.push(cell.ch),
+                Some(r) if r.s == s && r.l == cell.link && r.w == w => r.x.push(cell.ch),
                 _ => runs.push(Run {
                     s,
                     x: cell.ch.to_string(),
                     l: cell.link,
+                    w,
                 }),
             }
         }

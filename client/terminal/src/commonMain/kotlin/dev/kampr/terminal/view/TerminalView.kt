@@ -160,7 +160,7 @@ fun TerminalView(
         if (review.active) return@LaunchedEffect
         snapshotFlow { pane.revision to pane.cursor }.collectLatest {
             delay(SPEECH_SETTLE_MS)
-            val line = logical.lineAt(rows.historyRows + pane.cursor.row).first.trim()
+            val line = logical.lineAt(rows.historyRows + pane.cursor.row, pane.cursor.col).first.trim()
             spokenLine = if (line.isEmpty()) "blank line" else line
         }
     }
@@ -317,8 +317,8 @@ fun TerminalView(
                 view.target = Target(declared, TargetKind.Link)
                 return
             }
-            val (line, offset) = logical.lineAt(cell.row)
-            val found = detectTarget(line, offset + cell.col)
+            val (line, offset) = logical.lineAt(cell.row, cell.col)
+            val found = detectTarget(line, offset)
             view.target = found
             if (found == null) session.openKeyboard()
         }

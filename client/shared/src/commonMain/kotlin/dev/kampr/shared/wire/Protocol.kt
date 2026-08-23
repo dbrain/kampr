@@ -26,7 +26,10 @@ data class Style(
 )
 
 @Serializable
-data class Run(val s: Int = 0, val x: String = "", val l: Int? = null)
+// `w` is columns per character in `x`, 1 or 2, omitted on the wire when 1. A double-width glyph
+// occupies two columns (probe #210) and the client has no Unicode width table to work that out for
+// itself, so the node says so. `x` stays exactly the text on screen either way.
+data class Run(val s: Int = 0, val x: String = "", val l: Int? = null, val w: Int = 1)
 
 @Serializable
 data class RowDiff(val row: Int, val runs: List<Run> = emptyList())

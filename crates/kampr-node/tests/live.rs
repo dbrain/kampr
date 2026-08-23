@@ -1211,6 +1211,93 @@ async fn a_shell_pane_delivers_its_history_as_absolute_rows() {
     assert!(text.contains("100"), "history did not carry the pane's output");
 }
 
+/// The columns a row's runs actually cover, `None` where a column is the right half of the
+/// double-width glyph before it. This is the client's own reading of `w` (probe #210) and the
+/// only honest way to ask whether a frame puts a wide glyph where a terminal does.
+fn columns(runs: &Value) -> Vec<Option<char>> {
+    let mut out = Vec::new();
+    for run in runs.as_array().cloned().unwrap_or_default() {
+        let w = run["w"].as_u64().unwrap_or(1);
+        for ch in run["x"].as_str().unwrap_or("").chars() {
+            out.push(Some(ch));
+            for _ in 1..w {
+                out.push(None);
+            }
+        }
+    }
+    out
+}
+
+fn text_of(cols: &[Option<char>]) -> String {
+    cols.iter().flatten().collect::<String>().trim_end().to_string()
+}
+
+/// Probe #210, end to end against a real herdr rather than against an idea of one: herdr spends
+/// two columns on a double-width glyph and addresses the next glyph at col+2, so a frame that
+/// spends one leaves a blank behind every wide character for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wide_glyph_reaches_the_client_in_the_two_columns_herdr_gave_it() {
+    let h = harness!("wide");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "printf '%s\\n' 'AB\u{65e5}\u{672c}\u{8a9e}CD' 'XY\u{1f680}ZW'\n" }),
+    )
+    .await;
+
+    let mut grid: std::collections::HashMap<u64, Vec<Option<char>>> = std::collections::HashMap::new();
+    let mut cjk = None;
+    let mut emoji = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    while std::time::Instant::now() < deadline && (cjk.is_none() || emoji.is_none()) {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        let rows = match message["t"].as_str() {
+            Some("grid.reset") => {
+                grid.clear();
+                message["rows_data"].clone()
+            }
+            Some("grid.patch") => message["rows"].clone(),
+            _ => continue,
+        };
+        for row in rows.as_array().cloned().unwrap_or_default() {
+            let cols = columns(&row["runs"]);
+            grid.insert(row["row"].as_u64().unwrap_or(0), cols);
+        }
+        cjk = grid
+            .values()
+            .find(|c| text_of(c) == "AB\u{65e5}\u{672c}\u{8a9e}CD")
+            .cloned();
+        emoji = grid.values().find(|c| text_of(c) == "XY\u{1f680}ZW").cloned();
+    }
+
+    let cjk = cjk.expect("no row came back reading AB\u{65e5}\u{672c}\u{8a9e}CD");
+    assert_eq!(cjk[2], Some('\u{65e5}'));
+    assert_eq!(
+        cjk[3], None,
+        "column 3 is the other half of \u{65e5}, not a blank"
+    );
+    assert_eq!(cjk[4], Some('\u{672c}'), "herdr addresses this glyph at column 5");
+    assert_eq!(cjk[6], Some('\u{8a9e}'), "and this one at column 7");
+    assert_eq!(cjk[8], Some('C'), "and the text after them at column 9");
+
+    let emoji = emoji.expect("no row came back reading XY\u{1f680}ZW");
+    assert_eq!(
+        emoji[2],
+        Some('\u{1f680}'),
+        "one astral glyph, not two surrogate halves"
+    );
+    assert_eq!(emoji[3], None);
+    assert_eq!(emoji[4], Some('Z'));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn resync_repaints_every_watched_pane_and_unwatch_stops_one() {
     let h = harness!("resync");
@@ -1821,6 +1908,84 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
     // The node must follow the PTY, not the rect it was just handed.
     let after = await_grid_at(&mut socket, &pane, pty).await;
     assert_eq!(after["cols"].as_u64().unwrap(), pty as u64);
+}
+
+/// Probe #211. The width prober can prove a width nothing ever wrapped at, and the proof used to
+/// be sticky. A screen of double-width glyphs is the sharpest case: every row is the PTY's width
+/// in columns and half of it in characters, so counting characters called the pane half as wide
+/// as it is, and the stream was restarted at that width and stayed there.
+///
+/// What is asserted is the contract rather than a number — the node must never stream narrower
+/// than the PTY. A wrap made by a wide glyph cannot say whether the last column was used or was
+/// too narrow to hold one, so a screen with nothing but wide glyphs on it is allowed to read one
+/// column wide; it is never allowed to read narrow.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_screen_of_wide_glyphs_is_not_streamed_at_half_the_pty_width() {
+    let h = harness!("cjkwidth");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": "clear; printf '%.0s#' $(seq 1 400); echo\n" }),
+        )
+        .await;
+    let pty = filled_width(&h._session, &local).await;
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let before = await_grid_at(&mut socket, &pane, pty).await;
+    assert_eq!(before["cols"].as_u64().unwrap(), pty as u64);
+
+    // The phases #211 was driven through, ending on the one that has no ASCII wrap left on it.
+    for phase in [
+        "clear; for i in $(seq 1 60); do printf '\\r'; printf '=%.0s' $(seq 1 $i); done; echo\n",
+        "clear; seq 1 3000\n",
+        "clear; printf '%.0s\u{65e5}' $(seq 1 200); echo\n",
+    ] {
+        h._session
+            .call("pane.send_text", json!({ "pane_id": local, "text": phase }))
+            .await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+
+    // Four width polls with nothing but wide glyphs on the screen, and then a fresh watch, which
+    // repaints from the pane as it is now (probe #209) and so carries the width the node has
+    // settled on rather than the one it started at.
+    let narrow = drain_resets(&mut socket, &pane, Duration::from_secs(12)).await;
+    assert!(
+        narrow.iter().all(|&cols| cols >= pty),
+        "the node streamed a {pty}-column pane at {narrow:?}"
+    );
+
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let after = until_pane(&mut socket, "grid.reset", &pane, 30).await["cols"]
+        .as_u64()
+        .unwrap() as u16;
+    assert!(
+        (pty..=pty + 1).contains(&after),
+        "a pane of wide glyphs came back at {after} columns against a PTY of {pty}"
+    );
+}
+
+/// Every width a `grid.reset` carried for this pane over `window`.
+async fn drain_resets(socket: &mut Socket, pane: &str, window: Duration) -> Vec<u16> {
+    let deadline = tokio::time::Instant::now() + window;
+    let mut widths = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "grid.reset" && message["pane"] == pane {
+            widths.push(message["cols"].as_u64().unwrap_or(0) as u16);
+        }
+    }
+    widths
 }
 
 /// Waits for a `grid.reset` on this pane whose grid is `pty` wide and whose probe line is
@@ -3625,5 +3790,215 @@ async fn a_node_with_release_discovery_off_rebuilds_its_herd_only_when_something
     assert!(
         rebuilds <= 8,
         "the herd was rebuilt {rebuilds} times in two seconds with nothing to rebuild it for"
+    );
+}
+
+/// Reported from a phone: a workspace made from the New sheet comes up with nothing on it, typing
+/// into it puts nothing on the screen, and there is no shell anywhere in sight.
+///
+/// Everything `a_paired_device_drives_a_pane_end_to_end` proves, against a pane that did not exist
+/// when the herd was first sent — which is the only difference, and the whole report.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_created_from_the_client_is_a_pane_you_can_type_into() {
+    let h = harness!("newws");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "workspace.create", "node": node,
+                "label": "typed", "cwd": "/tmp" }),
+    )
+    .await;
+    let ack = managed(&mut socket, "workspace.create", 25).await;
+    assert_eq!(ack["ok"], true, "{ack}");
+    let workspace = ack["id"].as_str().expect("a workspace id").to_string();
+    let pane = patch_adding(&mut socket, &workspace, 30).await;
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let reset = until_pane(&mut socket, "grid.reset", &pane, 25).await;
+    assert!(
+        reset["rows"].as_u64().unwrap_or(0) > 0,
+        "the new pane arrived with no grid at all: {reset}"
+    );
+    // A shell that has printed its prompt and nothing else puts every non-blank row at the very
+    // top of a 40-row grid, with the caret on row 0 — the shape the phone reported as blank.
+    assert_eq!(reset["cursor"]["row"], 0, "{reset}");
+
+    let marker = "kampr-new-workspace-marker";
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": format!("echo {marker}\n") }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    let mut echoed = false;
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline && !echoed {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if message["t"] == "error" {
+            seen.push(message.to_string());
+        }
+        if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+            continue;
+        }
+        echoed = message["pane"] == pane.as_str() && message.to_string().contains(marker);
+    }
+    assert!(
+        echoed,
+        "a workspace the client made never echoed what was typed into it; errors: {seen:?}"
+    );
+}
+
+/// Reported from a phone: a pane that produced a burst of output showed a few lines from the top
+/// of the screen and never the bottom, and reopening it showed the same truncated screen.
+///
+/// The layout rect's height is not the PTY's — probe #205: a `down` split halves the rect and
+/// leaves the PTY at its old size — and `observe --rows` *crops* to the rows it is handed rather
+/// than scrolling to the bottom (probe #206). Sizing the stream from the rect therefore serves
+/// every client the top of the pane and nothing else, permanently: there is no later frame that
+/// repairs it, because the bottom of the pane was never in the stream to begin with.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_split_pane_is_observed_at_the_pty_height_not_the_rect() {
+    let h = harness!("ptyheight");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.split",
+            json!({ "target_pane_id": local, "direction": "down" }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let rect = rect_height(&h._session, &local).await;
+    let pty = viewport_rows(&h._session, &local).await;
+    assert!(
+        rect < pty,
+        "the split must have halved the rect: rect {rect}, PTY {pty}"
+    );
+
+    // Content past the rect, so the bottom of the pane is only reachable at the PTY's height.
+    let marker = "kampr-bottom-marker";
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text":
+                format!("clear; for i in $(seq 1 {}); do echo filler-$i; done; echo {marker}\n", pty - 5) }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    let mut heights = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if message["t"] != "grid.reset" || message["pane"] != pane.as_str() {
+            continue;
+        }
+        heights.push(message["rows"].as_u64().unwrap_or(0));
+        if message["rows"].as_u64() == Some(pty as u64) && message.to_string().contains(marker) {
+            return;
+        }
+    }
+    panic!(
+        "the pane was never streamed at its PTY's {pty} rows with the bottom of the screen on it; \
+         the grid came back at {heights:?} rows, and the rect claims {rect}"
+    );
+}
+
+async fn rect_height(session: &Session, pane: &str) -> u16 {
+    let layout = session.call("pane.layout", json!({ "pane_id": pane })).await;
+    layout["layout"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pane_id"] == pane)
+        .and_then(|p| p["rect"]["height"].as_u64())
+        .unwrap() as u16
+}
+
+/// Herdr's own `scroll.viewport_rows` — the PTY's height, which is what the program in the pane
+/// is actually writing to.
+async fn viewport_rows(session: &Session, pane: &str) -> u16 {
+    let snapshot = session.call("session.snapshot", json!({})).await;
+    snapshot["snapshot"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pane_id"] == pane)
+        .and_then(|p| p["scroll"]["viewport_rows"].as_u64())
+        .unwrap() as u16
+}
+
+/// The operator's own suggested repair — "on opening a session we could ask for the freshest
+/// data". A second `watch` must repaint from the pane's *current* screen rather than attaching
+/// silently to a stream already in flight, or a pane that moved while nobody was looking stays
+/// wrong until it happens to move again.
+///
+/// A second viewer holds the pane open throughout, so the registry entry survives the `unwatch`
+/// and the reopening client is answered from the emulator every viewer shares — the case where
+/// there is no fresh `observe` to repaint it by accident.
+#[tokio::test(flavor = "multi_thread")]
+async fn reopening_a_pane_repaints_it_from_the_screen_as_it_is_now() {
+    let h = harness!("reopen");
+    let mut held = h.connect(&h.token(Role::Full).await).await;
+    let mut socket = h.connect(&h.token(Role::Full).await).await;
+    for s in [&mut held, &mut socket] {
+        until(s, "hello", 10).await;
+        until(s, "herd", 10).await;
+    }
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut held, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut held, "grid.reset", &pane, 20).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 20).await;
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+
+    // Everything from here happens while this client is not looking.
+    let marker = "kampr-while-away-marker";
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": format!("echo {marker}\n") }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut resets = 0;
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if message["t"] != "grid.reset" || message["pane"] != pane.as_str() {
+            continue;
+        }
+        resets += 1;
+        if message.to_string().contains(marker) {
+            return;
+        }
+    }
+    panic!(
+        "reopening the pane never repainted it as it is now: {resets} grid.reset frames, none of \
+         them carrying what the pane printed while this client was away"
     );
 }

@@ -45,6 +45,7 @@ tower-http = { version = "0.7.0", features = ["compression-br", "compression-gzi
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ulid = "3.0.0"
+unicode-width = "0.2.2"
 url = "2.5.8"
 web-push = { version = "0.11.0", default-features = false }
 # `workaround-google-passkey-specific-issues` is the crate's own name for the one thing Android

@@ -1,5 +1,9 @@
 package dev.kampr.terminal.render
 
+import dev.kampr.shared.model.BLANK
+import dev.kampr.shared.model.TAIL
+import dev.kampr.shared.model.appendGlyph
+
 data class GridPoint(val row: Int, val col: Int) : Comparable<GridPoint> {
     override fun compareTo(other: GridPoint): Int =
         if (row != other.row) row - other.row else col - other.col
@@ -32,7 +36,7 @@ data class Selection(val anchor: GridPoint, val head: GridPoint, val block: Bool
 // newline is what reconstructs the logical line. A path or a URL broken by a newline in the middle
 // is worse than not copying it at all.
 class LogicalText(private val rows: SurfaceRows) {
-    private var chars = CharArray(0)
+    private var glyphs = IntArray(0)
     private var styles = IntArray(0)
     private var links = IntArray(0)
 
@@ -41,18 +45,33 @@ class LogicalText(private val rows: SurfaceRows) {
     private fun read(index: Int): Boolean {
         val cols = rows.cols
         if (cols == 0) return false
-        if (chars.size < cols) {
-            chars = CharArray(cols)
+        if (glyphs.size < cols) {
+            glyphs = IntArray(cols)
             styles = IntArray(cols)
             links = IntArray(cols)
         }
-        return rows.into(index, chars, styles, links)
+        return rows.into(index, glyphs, styles, links)
     }
 
     private fun wraps(index: Int): Boolean {
         if (!read(index)) return false
-        return chars[rows.cols - 1] != ' '
+        return glyphs[rows.cols - 1] != BLANK
     }
+
+    private fun lastInk(): Int {
+        var end = rows.cols - 1
+        while (end >= 0 && glyphs[end] == BLANK) end--
+        return end
+    }
+
+    private fun appendInk(builder: StringBuilder, from: Int, to: Int) {
+        for (i in from..to) if (glyphs[i] != TAIL) builder.appendGlyph(glyphs[i])
+    }
+
+    // Probe #210: a double-width glyph owns two columns, so the column a finger lands on is not
+    // always the column its glyph starts in. Anything turning a column into a character resolves
+    // that first, or it is a glyph out. Reads the row already in the scratch.
+    private fun lead(col: Int): Int = if (col > 0 && glyphs[col] == TAIL) col - 1 else col
 
     fun copy(selection: Selection): String {
         val cols = rows.cols
@@ -63,9 +82,10 @@ class LogicalText(private val rows: SurfaceRows) {
         for (row in first..last) {
             val span = selection.span(row, cols) ?: continue
             if (!read(row)) continue
+            val from = lead(span.first)
             var end = span.last
-            while (end >= span.first && chars[end] == ' ') end--
-            for (i in span.first..end) builder.append(chars[i])
+            while (end >= from && glyphs[end] == BLANK) end--
+            if (end >= from) appendInk(builder, from, end)
             if (row == last) break
             if (selection.block || !wraps(row)) builder.append('\n')
         }
@@ -78,15 +98,17 @@ class LogicalText(private val rows: SurfaceRows) {
     fun rowAt(index: Int): String {
         val cols = rows.cols
         if (cols == 0 || !read(index)) return ""
-        var end = cols - 1
-        while (end >= 0 && chars[end] == ' ') end--
+        val end = lastInk()
+        if (end < 0) return ""
         val builder = StringBuilder(end + 1)
-        for (i in 0..end) builder.append(chars[i])
+        appendInk(builder, 0, end)
         return builder.toString()
     }
 
-    // The logical line through a row, plus the offset at which that row's own cells begin.
-    fun lineAt(index: Int): Pair<String, Int> {
+    // The logical line through a row, and the offset *in that string* of the column asked for.
+    // Column and offset are two different coordinates once a glyph can be two columns wide, and
+    // handing a caller the column would put a link detector a character out on every CJK line.
+    fun lineAt(index: Int, col: Int): Pair<String, Int> {
         val cols = rows.cols
         if (cols == 0) return "" to 0
         var first = index
@@ -95,11 +117,15 @@ class LogicalText(private val rows: SurfaceRows) {
         var offset = 0
         var row = first
         while (true) {
-            if (row == index) offset = builder.length
             if (!read(row)) break
-            var end = cols - 1
-            while (end >= 0 && chars[end] == ' ') end--
-            for (i in 0..end) builder.append(chars[i])
+            val end = lastInk()
+            if (row == index) {
+                val target = lead(col.coerceIn(0, cols - 1))
+                var at = builder.length
+                for (i in 0 until minOf(target, end + 1)) if (glyphs[i] != TAIL) at++
+                offset = at
+            }
+            if (end >= 0) appendInk(builder, 0, end)
             if (!wraps(row)) break
             row++
         }

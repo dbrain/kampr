@@ -10,6 +10,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import dev.kampr.shared.model.glyphString
 
 data class CellMetrics(val width: Float, val height: Float)
 
@@ -86,13 +87,12 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
         return shape(text, fontKey).also { runs[RunKey(text, fontKey)] = it }
     }
 
-    fun glyph(ch: Char, fontKey: Int): TextLayoutResult {
-        val code = ch.code
-        if (code < 128) {
-            val index = code * 16 + fontKey
-            return asciiGlyphs[index] ?: shape(ch.toString(), fontKey).also { asciiGlyphs[index] = it }
+    fun glyph(codePoint: Int, fontKey: Int): TextLayoutResult {
+        if (codePoint < 128) {
+            val index = codePoint * 16 + fontKey
+            return asciiGlyphs[index] ?: shape(glyphString(codePoint), fontKey).also { asciiGlyphs[index] = it }
         }
-        return wideGlyphs.getOrPut(code * 16 + fontKey) { shape(ch.toString(), fontKey) }
+        return wideGlyphs.getOrPut(codePoint * 16 + fontKey) { shape(glyphString(codePoint), fontKey) }
     }
 
     // Probe #65: a resource font resolves asynchronously, so the advance is re-probed whenever the

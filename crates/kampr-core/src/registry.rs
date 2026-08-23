@@ -288,14 +288,7 @@ impl PaneRegistry {
             return None;
         }
         let grid = state.term.grid();
-        Some(
-            (0..grid.rows())
-                .map(|r| {
-                    let row: String = grid.row(r).iter().map(|c| c.ch).collect();
-                    row.trim_end().to_string()
-                })
-                .collect(),
-        )
+        Some((0..grid.rows()).map(|r| grid.row_text(r)).collect())
     }
 
     /// What cadence the pane's history poller has settled on, and the row rate it measured.

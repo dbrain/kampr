@@ -49,6 +49,22 @@ pub struct Cell {
     pub link: Option<u32>,
 }
 
+/// The right half of a double-width glyph. Herdr's own cell model spends two columns on one
+/// (probe #210), so the grid does too; `'\0'` is a character no `print` can produce, and a
+/// consumer that forgets to skip it renders something obviously wrong rather than a plausible
+/// blank in the middle of a CJK line.
+const TAIL: char = '\0';
+
+impl Cell {
+    pub fn is_tail(&self) -> bool {
+        self.ch == TAIL
+    }
+
+    fn tail(&self) -> Self {
+        Self { ch: TAIL, ..*self }
+    }
+}
+
 impl Default for Cell {
     fn default() -> Self {
         Self {
@@ -103,6 +119,21 @@ impl Grid {
         &self.cells[start..start + self.cols as usize]
     }
 
+    /// The row as text: one character per glyph, so a double-width glyph contributes itself once
+    /// and not a trailing NUL. Column and string index part company here — that is the point.
+    pub fn row_text(&self, row: u16) -> String {
+        if row >= self.rows {
+            return String::new();
+        }
+        let text: String = self
+            .row(row)
+            .iter()
+            .filter(|c| !c.is_tail())
+            .map(|c| c.ch)
+            .collect();
+        text.trim_end().to_string()
+    }
+
     pub fn set(&mut self, col: u16, row: u16, cell: Cell) {
         if col >= self.cols || row >= self.rows {
             return;
@@ -120,12 +151,44 @@ impl Grid {
         self.links.clear();
     }
 
-    pub fn clear_row_from(&mut self, row: u16, from_col: u16) {
-        if row >= self.rows {
+    /// Blanks both halves of any double-width glyph straddling the boundary to the left of `col`,
+    /// so nothing is ever left holding half a character.
+    fn split_wide(&mut self, row: u16, col: u16) {
+        if row >= self.rows || col == 0 || col >= self.cols {
             return;
         }
-        for c in from_col..self.cols {
+        if self.cells[row as usize * self.cols as usize + col as usize].is_tail() {
+            self.set(col - 1, row, Cell::default());
+            self.set(col, row, Cell::default());
+        }
+    }
+
+    pub fn clear_span(&mut self, row: u16, from: u16, to: u16) {
+        if row >= self.rows || from > to || from >= self.cols {
+            return;
+        }
+        let to = to.min(self.cols - 1);
+        self.split_wide(row, from);
+        self.split_wide(row, to + 1);
+        for c in from..=to {
             self.set(c, row, Cell::default());
+        }
+    }
+
+    pub fn clear_row_from(&mut self, row: u16, from_col: u16) {
+        if self.cols == 0 {
+            return;
+        }
+        self.clear_span(row, from_col, self.cols - 1);
+    }
+
+    /// Places a glyph of `width` columns, clearing whatever double-width glyph it lands on top of.
+    pub fn put(&mut self, col: u16, row: u16, cell: Cell, width: u16) {
+        self.split_wide(row, col);
+        self.split_wide(row, col + width);
+        self.set(col, row, cell);
+        if width == 2 {
+            self.set(col + 1, row, cell.tail());
         }
     }
 

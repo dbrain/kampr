@@ -1,6 +1,10 @@
 package dev.kampr.terminal.render
 
+import dev.kampr.shared.model.BLANK
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.TAIL
+import dev.kampr.shared.model.glyphAt
+import dev.kampr.shared.model.glyphUnits
 
 // Scrollback and the live grid are one continuous surface addressed by a single index: history
 // runs [0, historyRows), the live viewport follows it and is pinned to the bottom. There is no
@@ -17,7 +21,10 @@ class SurfaceRows(private val pane: PaneState) {
     val capped: Boolean get() = pane.scrollback.capped
     val complete: Boolean get() = pane.scrollback.complete
 
-    fun into(index: Int, chars: CharArray, styleIds: IntArray, linkIds: IntArray? = null): Boolean {
+    // One code point per column, with TAIL where a column is the right half of the double-width
+    // glyph beside it. Scrollback rows are decoded from their runs the same way the live buffer
+    // decodes them, so the two halves of the surface read alike.
+    fun into(index: Int, glyphs: IntArray, styleIds: IntArray, linkIds: IntArray? = null): Boolean {
         val width = cols
         if (width == 0) return false
         val history = historyRows
@@ -27,7 +34,7 @@ class SurfaceRows(private val pane: PaneState) {
             val base = row * width
             val cells = pane.cells
             for (col in 0 until width) {
-                chars[col] = cells.chars[base + col]
+                glyphs[col] = cells.glyphs[base + col]
                 styleIds[col] = cells.styles[base + col].toInt()
                 linkIds?.set(col, cells.links[base + col] - 1)
             }
@@ -35,26 +42,34 @@ class SurfaceRows(private val pane: PaneState) {
         }
         val diff = pane.scrollback.row(pane.scrollback.fromTop + index)
         if (diff == null) {
-            chars.fill(' ', 0, width)
+            glyphs.fill(BLANK, 0, width)
             styleIds.fill(0, 0, width)
             linkIds?.fill(-1, 0, width)
             return true
         }
         var col = 0
-        for (run in diff.runs) {
+        runs@ for (run in diff.runs) {
             val style = run.s
             val link = run.l ?: -1
-            for (ch in run.x) {
-                if (col >= width) break
-                chars[col] = ch
+            val glyphWidth = if (run.w >= 2) 2 else 1
+            var i = 0
+            while (i < run.x.length) {
+                val glyph = glyphAt(run.x, i)
+                i += glyphUnits(glyph)
+                if (col + glyphWidth > width) break@runs
+                glyphs[col] = glyph
                 styleIds[col] = style
                 linkIds?.set(col, link)
-                col++
+                if (glyphWidth == 2) {
+                    glyphs[col + 1] = TAIL
+                    styleIds[col + 1] = style
+                    linkIds?.set(col + 1, link)
+                }
+                col += glyphWidth
             }
-            if (col >= width) break
         }
         while (col < width) {
-            chars[col] = ' '
+            glyphs[col] = BLANK
             styleIds[col] = 0
             linkIds?.set(col, -1)
             col++

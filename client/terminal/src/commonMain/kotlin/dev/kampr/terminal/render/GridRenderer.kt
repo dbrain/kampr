@@ -5,14 +5,18 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.drawText
+import dev.kampr.shared.model.BLANK
+import dev.kampr.shared.model.TAIL
+import dev.kampr.shared.model.appendGlyph
 import kotlin.math.ceil
 import kotlin.math.floor
 
 class GridRenderer(private val cache: TextCache, private val modes: ModeSelector) {
-    private var chars = CharArray(0)
+    private var glyphs = IntArray(0)
     private var styleIds = IntArray(0)
     private var linkIds = IntArray(0)
     private val builder = StringBuilder(256)
+    private var cols = 0
 
     val mode: RenderMode get() = modes.mode
 
@@ -36,12 +40,12 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
         selectionWash: Color,
         linkInk: Color,
     ) {
-        val cols = rows.cols
+        cols = rows.cols
         val total = rows.total
         scope.drawRect(Color(styles.defaultBg), Offset.Zero, scope.size)
         if (cols == 0 || total == 0 || cellWidth <= 0f || cellHeight <= 0f) return
-        if (chars.size < cols) {
-            chars = CharArray(cols)
+        if (glyphs.size < cols) {
+            glyphs = IntArray(cols)
             styleIds = IntArray(cols)
             linkIds = IntArray(cols)
         }
@@ -54,12 +58,16 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
 
         cache.resetCounters()
         for (index in firstRow until lastRow) {
-            if (!rows.into(index, chars, styleIds, linkIds)) continue
+            if (!rows.into(index, glyphs, styleIds, linkIds)) continue
             val y = originY + index * cellHeight
             paintBackgrounds(scope, styles, firstCol, lastCol, originX, y, cellWidth, cellHeight)
             selection?.span(index, cols)?.let { span ->
-                val from = maxOf(span.first, firstCol)
-                val to = minOf(span.last, lastCol - 1)
+                // A wash that stops between the halves of a glyph is a selection half a column
+                // out, so an endpoint that lands on a tail takes its lead with it and back.
+                var edge = span.first
+                if (edge > 0 && glyphs[edge] == TAIL) edge--
+                val from = maxOf(edge, firstCol)
+                val to = minOf(if (wide(span.last)) span.last + 1 else span.last, lastCol - 1)
                 if (to >= from) {
                     scope.drawRect(
                         selectionWash,
@@ -68,9 +76,12 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
                     )
                 }
             }
+            // A wide glyph whose lead is off the left edge still has to be drawn or its visible
+            // half disappears, so the ink passes start one column earlier than the paint window.
+            val inkCol = if (firstCol > 0 && glyphs[firstCol] == TAIL) firstCol - 1 else firstCol
             when (modes.mode) {
-                RenderMode.CachedRuns -> paintRuns(scope, styles, firstCol, lastCol, originX, y, cellWidth)
-                RenderMode.PerGlyph -> paintGlyphs(scope, styles, firstCol, lastCol, originX, y, cellWidth)
+                RenderMode.CachedRuns -> paintRuns(scope, styles, inkCol, lastCol, originX, y, cellWidth)
+                RenderMode.PerGlyph -> paintGlyphs(scope, styles, inkCol, lastCol, originX, y, cellWidth)
             }
             paintLinks(scope, firstCol, lastCol, originX, y, cellWidth, cellHeight, linkInk)
         }
@@ -141,6 +152,12 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
         }
     }
 
+    private fun wide(col: Int): Boolean = col + 1 < cols && glyphs[col + 1] == TAIL
+
+    // Probe #210: a run string is laid out at the font's own advances, and nothing guarantees the
+    // fallback face that draws a CJK glyph or an emoji advances exactly two cells. So a cached run
+    // covers narrow cells only and each wide glyph is drawn at the column it belongs to — the
+    // fixed pitch is the contract, not the font.
     private fun paintRuns(
         scope: DrawScope,
         styles: ResolvedStyles,
@@ -161,19 +178,47 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
                 if (styles.fg[next] != fg || styles.fontKey[next] != key) break
                 end++
             }
-            var trimmed = end
-            if (key and (FONT_UNDERLINE or FONT_STRIKE) == 0) {
-                while (trimmed > col && chars[trimmed - 1] == ' ') trimmed--
-            }
-            if (trimmed > col) {
-                builder.setLength(0)
-                for (i in col until trimmed) builder.append(chars[i])
-                val text = builder.toString()
-                modes.observeRunKey(text.hashCode() * 31 + key)
-                scope.drawText(cache.run(text, key), Color(fg), Offset(originX + col * cellWidth, y))
+            var at = col
+            while (at < end) {
+                var stop = at
+                while (stop < end && !wide(stop)) stop++
+                var trimmed = stop
+                if (key and (FONT_UNDERLINE or FONT_STRIKE) == 0) {
+                    while (trimmed > at && glyphs[trimmed - 1] == BLANK) trimmed--
+                }
+                if (trimmed > at) {
+                    builder.setLength(0)
+                    for (i in at until trimmed) if (glyphs[i] != TAIL) builder.appendGlyph(glyphs[i])
+                    val text = builder.toString()
+                    modes.observeRunKey(text.hashCode() * 31 + key)
+                    scope.drawText(cache.run(text, key), Color(fg), Offset(originX + at * cellWidth, y))
+                }
+                if (stop < end) {
+                    drawWide(scope, glyphs[stop], key, fg, originX + stop * cellWidth, y, cellWidth)
+                    at = stop + 2
+                } else {
+                    at = stop
+                }
             }
             col = end
         }
+    }
+
+    // A fallback face drawing a CJK glyph or an emoji at the terminal font's em size rarely
+    // advances exactly two cells, and the leftover shows as a gap. Centring it in the pair it owns
+    // is what a terminal does with a glyph whose advance and whose cell disagree.
+    private fun drawWide(
+        scope: DrawScope,
+        glyph: Int,
+        fontKey: Int,
+        fg: Int,
+        x: Float,
+        y: Float,
+        cellWidth: Float,
+    ) {
+        val layout = cache.glyph(glyph, fontKey)
+        val slack = (2f * cellWidth - layout.size.width) / 2f
+        scope.drawText(layout, Color(fg), Offset(x + slack, y))
     }
 
     // Skia keeps its own GPU glyph atlas; one drawText per cell is how common code reaches it
@@ -198,13 +243,18 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
                 end++
             }
             var hash = 0
-            for (i in col until end) hash = hash * 31 + chars[i].code
+            for (i in col until end) hash = hash * 31 + glyphs[i]
             modes.observeRunKey(hash * 31 + key)
             for (i in col until end) {
-                val ch = chars[i]
-                if (ch == ' ' && key and (FONT_UNDERLINE or FONT_STRIKE) == 0) continue
+                val glyph = glyphs[i]
+                if (glyph == TAIL) continue
+                if (glyph == BLANK && key and (FONT_UNDERLINE or FONT_STRIKE) == 0) continue
+                if (wide(i)) {
+                    drawWide(scope, glyph, key, styles.fg[id], originX + i * cellWidth, y, cellWidth)
+                    continue
+                }
                 scope.drawText(
-                    cache.glyph(ch, key),
+                    cache.glyph(glyph, key),
                     Color(styles.fg[id]),
                     Offset(originX + i * cellWidth, y),
                 )
@@ -224,14 +274,21 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
         cellWidth: Float,
         cellHeight: Float,
     ) {
-        if (!rows.into(index, chars, styleIds)) return
-        val id = styles.clamp(styleIds[col])
-        val x = originX + col * cellWidth
+        if (!rows.into(index, glyphs, styleIds)) return
+        // The caret sits on a glyph, not on half of one: landing on a tail column means the block
+        // covers the pair and the glyph is drawn once, from its lead.
+        val lead = if (col > 0 && glyphs[col] == TAIL) col - 1 else col
+        val span = if (wide(lead)) 2 else 1
+        val id = styles.clamp(styleIds[lead])
+        val x = originX + lead * cellWidth
         val y = originY + index * cellHeight
-        scope.drawRect(Color(styles.fg[id]), Offset(x, y), Size(cellWidth, cellHeight))
-        val ch = chars[col]
-        if (ch != ' ') {
-            scope.drawText(cache.glyph(ch, styles.fontKey[id]), Color(styles.bg[id]), Offset(x, y))
+        scope.drawRect(Color(styles.fg[id]), Offset(x, y), Size(cellWidth * span, cellHeight))
+        val glyph = glyphs[lead]
+        if (glyph == BLANK) return
+        if (span == 2) {
+            drawWide(scope, glyph, styles.fontKey[id], styles.bg[id], x, y, cellWidth)
+        } else {
+            scope.drawText(cache.glyph(glyph, styles.fontKey[id]), Color(styles.bg[id]), Offset(x, y))
         }
     }
 }

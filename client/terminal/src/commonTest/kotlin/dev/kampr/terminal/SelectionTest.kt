@@ -31,7 +31,51 @@ private fun paneOf(cols: Int, vararg lines: String): PaneState {
     return pane
 }
 
+private fun wideRow(cols: Int, vararg runs: Run): PaneState {
+    val pane = PaneState("n/w1:p1", StyleTable())
+    pane.applyReset(
+        ServerMsg.GridReset(
+            pane = pane.id,
+            cols = cols,
+            rows = 1,
+            rowsData = listOf(RowDiff(0, runs.toList())),
+            cursor = Cursor(0, 0, true),
+            links = emptyList(),
+        ),
+    )
+    return pane
+}
+
 class SelectionTest {
+    // Probe #210: a wide glyph spans two columns, so a column is no longer a string index. Copy,
+    // and the offset a tap resolves to, both have to be told apart from each other.
+    @Test
+    fun copyingAWideRowKeepsTheGlyphsAndDropsTheirTailColumns() {
+        val rows = SurfaceRows(wideRow(12, Run(0, "AB"), Run(0, "\u65e5\u672c\u8a9e", w = 2), Run(0, "CD")))
+        val logical = LogicalText(rows)
+        assertEquals("AB\u65e5\u672c\u8a9eCD", logical.rowAt(0))
+        assertEquals("\u65e5\u672c\u8a9e", logical.copy(Selection(GridPoint(0, 2), GridPoint(0, 7))))
+    }
+
+    @Test
+    fun aTapPastAWideGlyphResolvesToTheCharacterUnderIt() {
+        val rows = SurfaceRows(wideRow(30, Run(0, "\u65e5\u672c", w = 2), Run(0, " https://herdr.dev/x")))
+        val logical = LogicalText(rows)
+        val (line, offset) = logical.lineAt(0, 5)
+        assertEquals("\u65e5\u672c https://herdr.dev/x", line)
+        assertEquals(3, offset, "column 5 is the h of https, which is character 3")
+        assertEquals("https://herdr.dev/x", detectTarget(line, offset)?.text)
+    }
+
+    // Tapping the right half of a wide glyph is tapping the glyph, not the column after it.
+    @Test
+    fun theTailColumnOfAWideGlyphBelongsToItsLead() {
+        val rows = SurfaceRows(wideRow(12, Run(0, "ab"), Run(0, "\u65e5", w = 2), Run(0, "cd")))
+        val logical = LogicalText(rows)
+        assertEquals(2, logical.lineAt(0, 3).second, "the tail resolves to its lead's character")
+        assertEquals("\u65e5", logical.copy(Selection(GridPoint(0, 3), GridPoint(0, 3))))
+    }
+
     @Test
     fun copyingStripsTrailingPaddingAndKeepsRealNewlines() {
         val rows = SurfaceRows(paneOf(10, "alpha", "beta"))
@@ -67,8 +111,8 @@ class SelectionTest {
     fun aUrlWrappedAcrossTheGridEdgeIsStillOneTarget() {
         val rows = SurfaceRows(paneOf(20, "see https://herdr.de", "v/docs for more"))
         val logical = LogicalText(rows)
-        val (line, offset) = logical.lineAt(1)
-        val target = detectTarget(line, offset + 1)
+        val (line, offset) = logical.lineAt(1, 1)
+        val target = detectTarget(line, offset)
         assertEquals("https://herdr.dev/docs", target?.text)
         assertEquals(TargetKind.Url, target?.kind)
     }

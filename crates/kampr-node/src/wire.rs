@@ -162,6 +162,40 @@ mod tests {
         assert_eq!(frames[1]["rows_data"][0]["runs"][0]["s"], frames[0]["from"]);
     }
 
+    /// Probe #210: a double-width glyph spends two columns, so the run that carries it says so.
+    /// Without `w` the client can only know by recomputing character widths, and it has no
+    /// Unicode width table to do it with.
+    #[tokio::test]
+    async fn a_double_width_run_declares_its_column_span() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        let mut term = kampr_term::Emulator::new(20, 1);
+        term.feed("AB\u{65e5}\u{672c}\u{8a9e}CD".as_bytes());
+        let mut wide = reset();
+        if let PaneUpdate::Reset { rows_data, cols, .. } = &mut wide {
+            *cols = 20;
+            *rows_data = Arc::new(vec![RowDiff {
+                row: 0,
+                cells: term.grid().row(0).to_vec(),
+            }]);
+        }
+        wire.send_update("n/w1:p1", &wide);
+        let frames = drain(&outbox);
+        let runs = &frames[0]["rows_data"][0]["runs"];
+        assert_eq!(runs[0]["x"], "AB");
+        assert_eq!(runs[0].get("w"), None, "a narrow run omits the field");
+        assert_eq!(runs[1]["x"], "\u{65e5}\u{672c}\u{8a9e}");
+        assert_eq!(runs[1]["w"], 2);
+        assert_eq!(runs[2]["x"], "CD");
+        let span: u64 = runs
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["x"].as_str().unwrap().chars().count() as u64 * r["w"].as_u64().unwrap_or(1))
+            .sum();
+        assert_eq!(span, 10, "the runs cover the columns the glyphs actually occupy");
+    }
+
     /// History is append-only and the pump's cursor only moves forward, so a dropped
     /// `scrollback` is a hole nothing repairs — the `grid.reset` that replaces a purged patch
     /// queue carries the viewport and nothing above it.

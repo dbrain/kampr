@@ -40,8 +40,8 @@ class SubmitGuard(private val pane: PaneState, private val io: PaneIo, val state
     // lineAt is the copy path's joiner, so a command soft-wrapped across the grid edge arrives as
     // one string rather than two half-commands.
     fun commandLine(): String {
-        val (line, offset) = logical.lineAt(rows.historyRows + pane.cursor.row)
-        return line.take((offset + pane.cursor.col).coerceIn(0, line.length))
+        val (line, offset) = logical.lineAt(rows.historyRows + pane.cursor.row, pane.cursor.col)
+        return line.take(offset.coerceIn(0, line.length))
     }
 
     fun clear() {

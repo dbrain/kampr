@@ -18,7 +18,10 @@ async fn main() -> Result<()> {
         Some(id) => snap.pane(id).context("pane not found")?,
         None => snap.panes.first().context("no panes in session")?,
     };
-    let (cols, rows) = snap.geometry(&pane.pane_id).context("pane has no layout rect")?;
+    let (cols, rect_rows) = snap.geometry(&pane.pane_id).context("pane has no layout rect")?;
+    // The rect's height is not the PTY's, and observing at it crops the pane to its top rows
+    // (probe #205/#206) — which would read here as an emulator fault it is not.
+    let rows = pane.scroll.map_or(rect_rows, |s| s.viewport_rows as u32);
     println!(
         "pane {} — native {}x{} — agent {:?} — scrollback safe: {}",
         pane.pane_id,
@@ -105,9 +108,7 @@ fn render(term: &Emulator) -> String {
     let g = term.grid();
     let mut out = String::new();
     for r in 0..g.rows() {
-        for c in g.row(r) {
-            out.push(c.ch);
-        }
+        out.push_str(&g.row_text(r));
         out.push('\n');
     }
     out

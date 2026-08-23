@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Every event that can move a field the herd model carries.
 ///
@@ -59,6 +60,10 @@ const STATUS_EVENT: &str = "pane.agent_status_changed";
 
 /// Well past herdr's 1000-line read cap; over-asking clamps rather than failing.
 const READ_CEILING: u64 = 4096;
+
+/// The most rows one logical line is checked against. Herdr has been seen joining nineteen, and
+/// a cap keeps a pathological screen from making the search quadratic in the viewport.
+const MAX_JOIN: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct HerdrConfig {
@@ -234,19 +239,58 @@ impl Running {
 ///
 /// `floor` is a running max rather than the latest sample: terminal content shrinks between
 /// repaints, and one narrow reading must not restart the stream at a width that crops the next
-/// wide line. `exact` is the newest *proven* width and overrides the floor and the rect both.
-/// Cleared when the rect moves, which is the only cue a node gets that the pane may have been
-/// re-sized underneath it.
+/// wide line. A `proof` is a width a wrap actually laid out at, and it overrides the floor and the
+/// rect both — but only while it is still being re-proved, because nothing tells a node that the
+/// PTY moved (probe #211). All three are dropped when the rect moves.
 #[derive(Debug, Clone, Copy, Default)]
 struct Measured {
     rect: u16,
     floor: u16,
-    exact: Option<u16>,
+    proof: Option<Proof>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Proof {
+    cols: u16,
+    unconfirmed: u8,
+}
+
+/// How many readings in a row may fail to re-prove a width before it stops beating the rect.
+///
+/// A proof describes the screen it was read from, and screens do not last. The rect cannot be the
+/// cue that one is out of date — a controller that resized the PTY and detached leaves the rect
+/// exactly where it was — so the only honest limit is how long the node is willing to go on
+/// asserting a measurement nothing has repeated. At the 3 s width poll this is a minute.
+const PROOF_LIFETIME: u8 = 20;
+
 impl Measured {
+    fn record(&mut self, reading: Reading) {
+        match reading.exact {
+            // A proof dates the evidence: a floor carried over from a wider screen is stale the
+            // moment the pane proves it is narrower than that.
+            Some(cols) => {
+                self.floor = reading.floor;
+                self.proof = Some(Proof { cols, unconfirmed: 0 });
+            }
+            None => {
+                self.floor = self.floor.max(reading.floor);
+                if let Some(proof) = self.proof.as_mut() {
+                    proof.unconfirmed += 1;
+                    if proof.unconfirmed > PROOF_LIFETIME {
+                        // Letting go of a proof leaves its width behind as a floor, so it can only
+                        // ever widen the stream — a measurement that turns out to be wrong must
+                        // not be able to crop a pane on its way out.
+                        self.floor = self.floor.max(proof.cols);
+                        self.proof = None;
+                    }
+                }
+            }
+        }
+    }
+
     fn cols(&self) -> u16 {
-        self.exact.unwrap_or_else(|| self.rect.max(self.floor))
+        self.proof
+            .map_or_else(|| self.rect.max(self.floor), |proof| proof.cols)
     }
 }
 
@@ -472,13 +516,14 @@ impl Inner {
                 ..Measured::default()
             };
         }
-        entry.floor = entry.floor.max(reading.floor);
-        // The newest proof wins: an older one described a pane that may since have been resized.
-        entry.exact = reading.exact.or(entry.exact);
+        // A read that never reached herdr is not evidence either way, so it must not age a proof.
+        if let Some(reading) = reading {
+            entry.record(reading);
+        }
         entry.cols()
     }
 
-    async fn read_width(&self, pane_id: &str) -> Reading {
+    async fn read_width(&self, pane_id: &str) -> Option<Reading> {
         let rows = self
             .snapshot
             .borrow()
@@ -486,13 +531,13 @@ impl Inner {
             .and_then(|p| p.scroll)
             .map_or(0, |s| s.viewport_rows);
         if rows == 0 {
-            return Reading::default();
+            return None;
         }
         match self.herdr.read_wrapped_and_logical(pane_id, rows).await {
-            Ok((physical, logical)) => reading(&physical.text, &logical.text),
+            Ok((physical, logical)) => Some(reading(&physical.text, &logical.text)),
             Err(e) => {
                 debug!(pane = %pane_id, error = %e, "could not measure the pane width");
-                Reading::default()
+                None
             }
         }
     }
@@ -532,34 +577,119 @@ impl Inner {
         widths
             .get(pane_id)
             .filter(|m| m.rect == rect)
-            .and_then(|m| m.exact)
+            .and_then(|m| m.proof)
+            .map(|proof| proof.cols)
     }
 }
 
 /// Resolves one pair of reads into a width.
 ///
 /// `recent` returns *physical* rows, wrapped at the PTY's own width; `recent_unwrapped` returns
-/// the logical lines they came from. A logical line longer than the widest physical row proves a
-/// soft wrap happened, and a soft wrap happens at exactly the PTY width — so that widest row is
-/// the width, whatever the layout rect claims.
+/// the logical lines they came from, with every row but the last of a join padded back out to the
+/// grid width. So a logical line that spans more than one of the rows in hand gives the width
+/// away exactly: it is the stride the rows were laid out at, and it can be checked by rebuilding
+/// the line from those rows.
 ///
-/// Without a wrap there is no proof, only a floor: herdr trims each row's trailing blanks, so a
+/// **The two reads are not the same window** (probe #211). Both ask for `viewport_rows`, but a
+/// logical line is as many rows tall as it wrapped, so the logical read reaches further back into
+/// history than the physical one — and the older lines it reaches back to have no rows here to
+/// measure against. So they are walked from the bottom, where both reads are anchored, and the
+/// walk stops at the first line that cannot be rebuilt from the rows left. Anything above that is
+/// another screen, and this is not a measurement of it.
+///
+/// Without a join there is no proof, only a floor: herdr trims each row's trailing blanks, so a
 /// screen holding a short prompt reads narrow. A floor is never an over-estimate, which is what
 /// makes combining it with the rect by `max` safe.
 fn reading(physical: &str, logical: &str) -> Reading {
-    let floor = widest_row(physical);
-    let wrapped = logical.lines().any(|line| line.chars().count() > floor as usize);
+    let rows: Vec<&str> = physical.lines().collect();
+    let lines: Vec<&str> = logical.lines().collect();
+    let floor = rows.iter().map(|row| columns(row)).max().unwrap_or(0);
+    let (mut row, mut line) = (rows.len(), lines.len());
+    let (mut exact, mut short_of_a_column) = (None, None);
+    while row > 0 && line > 0 {
+        line -= 1;
+        if lines[line] == rows[row - 1] {
+            row -= 1;
+            continue;
+        }
+        let Some(join) = joined(&rows[..row], lines[line]) else {
+            break;
+        };
+        let candidate = if join.broke_before_a_wide_glyph {
+            &mut short_of_a_column
+        } else {
+            &mut exact
+        };
+        *candidate = Some(
+            candidate
+                .unwrap_or(0)
+                .max(join.cols + u16::from(join.broke_before_a_wide_glyph)),
+        );
+        row -= join.rows;
+    }
     Reading {
         floor,
-        exact: (wrapped && floor > 0).then_some(floor),
+        exact: exact.or(short_of_a_column),
     }
 }
 
-fn widest_row(text: &str) -> u16 {
-    text.lines()
-        .map(|line| line.chars().count().min(u16::MAX as usize) as u16)
-        .max()
-        .unwrap_or(0)
+struct Join {
+    rows: usize,
+    cols: u16,
+    /// The break could be a column short of the grid: a double-width glyph will not straddle the
+    /// last column, so a row of wide glyphs breaks at `cols` on a grid of `cols` **or** `cols + 1`
+    /// and the two are indistinguishable from the read. The wider reading is the safe one —
+    /// observing above the PTY pads and observing below it crops (probe #87).
+    broke_before_a_wide_glyph: bool,
+}
+
+/// The trailing rows of `rows` that rebuild `line`, and the stride they were laid out at.
+///
+/// Nothing here trusts herdr's idea of where a line began: the rows are only accepted when
+/// padding them to one width and concatenating them reproduces the logical line character for
+/// character.
+fn joined(rows: &[&str], line: &str) -> Option<Join> {
+    let total = columns(line);
+    for span in 2..=rows.len().min(MAX_JOIN) {
+        let run = &rows[rows.len() - span..];
+        let (last, rest) = run.split_last()?;
+        let Some(padded) = total.checked_sub(columns(last)) else {
+            continue;
+        };
+        let stride = padded / rest.len() as u16;
+        if stride == 0
+            || padded % rest.len() as u16 != 0
+            || rest.iter().any(|row| columns(row) > stride)
+            || !rebuilds(run, stride, line)
+        {
+            continue;
+        }
+        return Some(Join {
+            rows: span,
+            cols: stride,
+            broke_before_a_wide_glyph: run.windows(2).any(|pair| {
+                columns(pair[0]) == stride && pair[1].chars().next().and_then(|c| c.width()) == Some(2)
+            }),
+        });
+    }
+    None
+}
+
+fn rebuilds(run: &[&str], stride: u16, line: &str) -> bool {
+    let mut rebuilt = String::with_capacity(line.len());
+    let (last, rest) = run.split_last().expect("a join is at least two rows");
+    for row in rest {
+        rebuilt.push_str(row);
+        rebuilt.extend(std::iter::repeat_n(' ', (stride - columns(row)) as usize));
+    }
+    rebuilt.push_str(last);
+    rebuilt == line
+}
+
+/// Columns, not characters. A row of double-width glyphs is half as many characters as it is
+/// columns, and counting the characters called a 93-column pane 46 columns wide (probe #211).
+fn columns(text: &str) -> u16 {
+    text.width().min(u16::MAX as usize) as u16
 }
 
 #[async_trait]
@@ -839,9 +969,9 @@ enum Stop {
     ConsumerGone,
 }
 
-/// The rect the layout claims, the width the stream actually runs at, and the rows. The first two
-/// differ whenever the PTY did not follow the rect, so change detection has to watch the rect
-/// while the observer runs at the measured width.
+/// The rect the layout claims, the width the stream actually runs at, and the PTY's own rows. The
+/// first two differ whenever the PTY did not follow the rect, so change detection has to watch the
+/// rect while the observer runs at the measured width.
 #[derive(Debug, Clone, Copy)]
 struct Geometry {
     rect: u16,
@@ -915,14 +1045,31 @@ async fn resolve_geometry(
     snapshots: &mut watch::Receiver<Arc<Snapshot>>,
 ) -> Option<(u16, u16)> {
     loop {
-        if let Some((c, r)) = snapshots.borrow_and_update().geometry(pane_id)
-            && c > 0
-            && r > 0
-        {
-            return Some((c as u16, r as u16));
+        if let Some(g) = observe_geometry(&snapshots.borrow_and_update(), pane_id) {
+            return Some(g);
         }
         snapshots.changed().await.ok()?;
     }
+}
+
+/// The layout rect's width, and the height the PTY is actually running at.
+///
+/// **The rect's height is not the pane's.** A `down` split halves the rect and leaves the PTY at
+/// the size it already had (probe #205), and `observe --rows` crops to the rows it is handed
+/// rather than following the screen down (probe #206) — so sizing a stream from the rect serves
+/// the top of the pane and nothing else, for as long as the stream lives. Herdr reports the PTY
+/// honestly under `scroll.viewport_rows`; the rect is only the fallback, exactly as it is for the
+/// rows the herd model carries.
+///
+/// The width stays the rect's here because it is a seed, not an answer: [`Inner::observe_cols`]
+/// measures the real one and keys its cache on the rect it was asked about.
+fn observe_geometry(snapshot: &Snapshot, pane_id: &str) -> Option<(u16, u16)> {
+    let (rect, rect_rows) = snapshot.geometry(pane_id)?;
+    let rows = snapshot
+        .pane(pane_id)
+        .and_then(|p| p.scroll)
+        .map_or(rect_rows, |s| s.viewport_rows as u32);
+    (rect > 0 && rows > 0).then_some((rect as u16, rows as u16))
 }
 
 /// Re-measures the pane's true width while its stream runs. Nothing announces a PTY/rect
@@ -966,11 +1113,9 @@ async fn run_observer(
                 if changed.is_err() {
                     return (Stop::ConsumerGone, streamed);
                 }
-                let now = snapshots.borrow_and_update().geometry(pane_id);
-                if let Some((c, r)) = now
-                    && (c as u16, r as u16) != (geometry.rect, geometry.rows)
-                    && c > 0
-                    && r > 0
+                let now = observe_geometry(&snapshots.borrow_and_update(), pane_id);
+                if let Some(now) = now
+                    && now != (geometry.rect, geometry.rows)
                 {
                     return (Stop::GeometryChanged, streamed);
                 }
@@ -990,7 +1135,7 @@ async fn run_observer(
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, Reading, reading};
+    use super::{Measured, PROOF_LIFETIME, Proof, Reading, reading};
     use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, subscriptions};
     use kampr_herdr::Snapshot;
 
@@ -1072,6 +1217,16 @@ mod tests {
         assert_eq!(agent_panes(&a), agent_panes(&b));
     }
 
+    const PROMPT: &str = "[14:33:33 dbrain@comingclean ~]$";
+
+    fn reads(rows: &[String], lines: &[String]) -> (String, String) {
+        (rows.join("\n"), lines.join("\n"))
+    }
+
+    fn dots(n: usize) -> String {
+        format!("{n:>3}{}", ".".repeat(77))
+    }
+
     fn wide(width: usize, total: usize) -> (String, String) {
         let logical = "#".repeat(total);
         let mut physical: Vec<String> = logical
@@ -1097,7 +1252,10 @@ mod tests {
         let m = Measured {
             rect: 47,
             floor: 93,
-            exact: Some(93),
+            proof: Some(Proof {
+                cols: 93,
+                unconfirmed: 0,
+            }),
         };
         assert_eq!(m.cols(), 93, "the proof beats the rect in both directions");
     }
@@ -1116,7 +1274,7 @@ mod tests {
         let m = Measured {
             rect: 94,
             floor: 11,
-            exact: None,
+            proof: None,
         };
         assert_eq!(m.cols(), 94, "and a floor never narrows the stream");
         assert_eq!(reading("", ""), Reading::default());
@@ -1128,16 +1286,12 @@ mod tests {
     #[test]
     fn a_proof_below_the_rect_is_still_the_truth() {
         let (physical, logical) = wide(93, 400);
-        let r = reading(&physical, &logical);
-        assert_eq!(
-            Measured {
-                rect: 94,
-                floor: r.floor,
-                exact: r.exact,
-            }
-            .cols(),
-            93
-        );
+        let mut m = Measured {
+            rect: 94,
+            ..Measured::default()
+        };
+        m.record(reading(&physical, &logical));
+        assert_eq!(m.cols(), 93);
     }
 
     #[test]
@@ -1147,8 +1301,196 @@ mod tests {
         let m = Measured {
             rect: 47,
             floor: 80,
-            exact: None,
+            proof: None,
         };
         assert_eq!(m.cols(), 80);
+    }
+
+    /// Probe #211, the defect: `recent` and `recent_unwrapped` are two reads of `viewport_rows`
+    /// **lines**, and a logical line is as many rows tall as it wrapped — so the logical read
+    /// reaches further back than the physical one, and the line it reaches back to has no row in
+    /// the physical read to prove a width against. Measured live: a 372-column line above 39 rows
+    /// of 80, and the old rule called 80 the PTY's width while `stty` said 93.
+    #[test]
+    fn a_logical_line_no_row_in_the_read_accounts_for_proves_nothing() {
+        let rows: Vec<String> = (1..=39)
+            .map(dots)
+            .chain(std::iter::once(PROMPT.to_string()))
+            .collect();
+        let lines: Vec<String> = std::iter::once("#".repeat(372))
+            .chain((4..=39).map(dots))
+            .chain(std::iter::once(PROMPT.to_string()))
+            .collect();
+        let (physical, logical) = reads(&rows, &lines);
+        assert_eq!(
+            reading(&physical, &logical),
+            Reading {
+                floor: 80,
+                exact: None
+            },
+            "a wrap nothing in the physical read shows is not a measurement of this screen"
+        );
+    }
+
+    /// Measured live: 120 double-width glyphs on a 93-column PTY. The rows read back 46
+    /// characters long and 92 **columns** wide, because the last column cannot hold half a glyph.
+    /// Counting characters called that pane 46 columns wide and cropped half of every row.
+    #[test]
+    fn a_wide_glyph_row_is_measured_in_columns_and_the_last_column_is_given_back() {
+        let rows = ["日".repeat(46), "日".repeat(46), "日".repeat(28), PROMPT.into()];
+        let lines = ["日".repeat(120), PROMPT.into()];
+        let (physical, logical) = reads(&rows, &lines);
+        assert_eq!(
+            reading(&physical, &logical),
+            Reading {
+                floor: 92,
+                exact: Some(93)
+            },
+            "the break is at 92 because the next glyph needed two columns, so the grid is 93"
+        );
+    }
+
+    /// A wrap whose boundary is unambiguous outranks one that could be a column short: measured
+    /// live against a PTY held at 60 columns, where the ASCII line broke at exactly 60 and the
+    /// CJK line broke at 60 with a wide glyph waiting.
+    #[test]
+    fn an_exact_boundary_outranks_a_wide_glyph_one() {
+        let rows = [
+            "#".repeat(60),
+            "#".repeat(60),
+            "日".repeat(30),
+            "日".repeat(10),
+            PROMPT.into(),
+        ];
+        let lines = ["#".repeat(120), "日".repeat(40), PROMPT.into()];
+        let (physical, logical) = reads(&rows, &lines);
+        assert_eq!(
+            reading(&physical, &logical),
+            Reading {
+                floor: 60,
+                exact: Some(60)
+            },
+        );
+    }
+
+    /// Herdr pads a row out to the grid width when it joins it to the next one, so the blanks a
+    /// row was trimmed of come back in the logical line. Measured live: `aaa`, 90 spaces, `zzz`
+    /// reads as two rows of 3 characters and one logical line of 96.
+    #[test]
+    fn a_line_that_wrapped_across_trimmed_blanks_still_proves_the_width() {
+        let rows = ["aaa".to_string(), "zzz".to_string(), PROMPT.into()];
+        let lines = [format!("aaa{}zzz", " ".repeat(90)), PROMPT.into()];
+        let (physical, logical) = reads(&rows, &lines);
+        assert_eq!(
+            reading(&physical, &logical),
+            Reading {
+                floor: 32,
+                exact: Some(93)
+            },
+            "the widest row is 32 and the width is 93"
+        );
+    }
+
+    /// Herdr also joins rows that never wrapped — measured live on any pane whose output has
+    /// scrolled — and it lays them out at the grid width all the same. That is not a wrap, but it
+    /// is the same measurement, and it is one the rows in hand can be checked against.
+    #[test]
+    fn rows_herdr_joined_without_a_wrap_still_measure_the_grid() {
+        let rows = [dots(37), dots(38), dots(39), PROMPT.into()];
+        let joined = format!(
+            "{}{}{}{}",
+            format_args!("{}{}", dots(37), " ".repeat(13)),
+            format_args!("{}{}", dots(38), " ".repeat(13)),
+            format_args!("{}{}", dots(39), " ".repeat(13)),
+            PROMPT
+        );
+        let (physical, logical) = reads(&rows, &[joined]);
+        assert_eq!(
+            reading(&physical, &logical),
+            Reading {
+                floor: 80,
+                exact: Some(93)
+            }
+        );
+    }
+
+    #[test]
+    fn a_read_that_cannot_be_reconciled_stops_rather_than_guessing() {
+        let (physical, _) = wide(93, 400);
+        assert_eq!(
+            reading(&physical, "something else entirely\nand another line"),
+            Reading {
+                floor: 93,
+                exact: None
+            }
+        );
+    }
+
+    /// Probe #211's second half. A proof is evidence about the screen it was read from, and the
+    /// node has no event that tells it the PTY moved — so a proof that stops being re-proved
+    /// stops overriding the rect. What it leaves behind is a floor, which is why letting go of a
+    /// proof can only ever widen the stream.
+    #[test]
+    fn a_proof_that_is_never_re_proved_gives_the_rect_back_the_stream() {
+        let mut m = Measured {
+            rect: 120,
+            ..Measured::default()
+        };
+        m.record(Reading {
+            floor: 93,
+            exact: Some(93),
+        });
+        assert_eq!(m.cols(), 93);
+        for _ in 0..PROOF_LIFETIME {
+            m.record(Reading {
+                floor: 20,
+                exact: None,
+            });
+            assert_eq!(m.cols(), 93, "a proof does not expire on the first quiet read");
+        }
+        m.record(Reading {
+            floor: 20,
+            exact: None,
+        });
+        assert_eq!(m.cols(), 120, "and what it leaves behind never crops");
+    }
+
+    #[test]
+    fn an_expired_proof_still_holds_the_stream_open_against_a_narrower_rect() {
+        let mut m = Measured {
+            rect: 47,
+            ..Measured::default()
+        };
+        m.record(Reading {
+            floor: 93,
+            exact: Some(93),
+        });
+        for _ in 0..=PROOF_LIFETIME {
+            m.record(Reading {
+                floor: 20,
+                exact: None,
+            });
+        }
+        assert_eq!(m.cols(), 93, "the rect is still fiction; the floor is not");
+    }
+
+    /// Measured live: a controller that claimed the pane at 60 columns and then went away left
+    /// the PTY at 60 with the layout rect never moving — so the rect cannot be the cue that a
+    /// proof is out of date, and a fresh proof has to be able to narrow the stream.
+    #[test]
+    fn a_fresh_proof_re_bases_the_floor_a_wider_screen_left_behind() {
+        let mut m = Measured {
+            rect: 47,
+            ..Measured::default()
+        };
+        m.record(Reading {
+            floor: 93,
+            exact: Some(93),
+        });
+        m.record(Reading {
+            floor: 60,
+            exact: Some(60),
+        });
+        assert_eq!(m.cols(), 60);
     }
 }

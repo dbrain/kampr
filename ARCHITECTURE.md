@@ -229,14 +229,47 @@ at all (#87). Nothing in the socket API reports a pane's real column count: `pan
 `viewport_rows` and no columns.
 
 So the node **infers** it, from the one thing that does render at the true width: `pane.read` (#84).
-`recent` returns physical rows already wrapped at the PTY's own width, and `recent_unwrapped` returns
-the logical lines they came from. A logical line longer than the widest physical row proves a soft
-wrap happened, and a soft wrap happens at exactly the PTY width — so that widest row *is* the width,
-whatever the rect claims (#85: `recent` gave rows of `[5, 68, 93, 93, 93, 93, 28, 34]` where
-`recent_unwrapped` gave `[5, 68, 400, 34]`, and 93 was the answer). Without a wrap there is no proof,
-only a lower bound, which is why it combines with the rect by `max` and is re-measured on a poll of
-its own. This is the one place in the system that reasons from evidence rather than from a reported
+`recent` returns physical rows already wrapped at the PTY's own width, and `recent_unwrapped`
+returns the logical lines they came from, with every row but the last of a join padded back out to
+the grid width (#217). So a logical line that spans more than one of the rows in
+hand gives the width away exactly: it is the stride those rows were laid out at.
+
+**The proof has to be about the rows in hand, and that is the part that was wrong** (#211). Both
+reads ask for `viewport_rows`, but a logical line is as many rows tall as it wrapped, so the logical
+read reaches further back into history than the physical one — and the older lines it reaches back
+to have no rows here to measure against. The old rule was "some logical line is longer than the
+widest physical row", which a line from off the top of the physical read satisfies, and it then
+called the widest row on the *current* screen the PTY's width: 80 against a PTY of 93. It also
+counted characters, so a screen of double-width glyphs — every row the full width in columns and
+half of it in characters — read as 46 columns on that same 93-column pane, and the stream was
+restarted at 46.
+
+What replaces it walks both reads **from the bottom**, where they are anchored on the same row, and
+pairs each logical line with the rows that rebuild it: padded to one stride and concatenated, they
+must reproduce the line character for character. The stride is the width. The walk stops at the
+first line the remaining rows cannot rebuild, because everything above that is another screen. Two
+things it cannot pin down: a break made by a double-width glyph is a column ambiguous — the glyph
+will not straddle the last column, so a row breaking at 92 sits on a grid of 92 *or* 93 — which is
+resolved upwards, because observing above the PTY pads and observing below it crops (#87); and a
+line that is longer than the read is deep is never proof of anything.
+
+Without a join there is no proof, only a lower bound, which is why it combines with the rect by
+`max` and is re-measured on a poll of its own. And a proof is evidence about the screen it was read
+from: nothing announces a PTY resize, and a controller that resized a pane and detached leaves the
+rect exactly where it was (#219), so a proof that goes twenty readings
+without being re-proved stops overriding the rect. What it leaves behind is a floor, which is the
+point — letting go of a measurement can only ever widen the stream, never crop a pane on its way
+out. This is the one place in the system that reasons from evidence rather than from a reported
 number, and it is worth understanding before touching it.
+
+The **rows** are the same trap with an easier answer, and it was got wrong for longer. A `down`
+split halves the rect's height and leaves the PTY at the height it already had (#205), and
+`observe --rows` crops to the top of the screen rather than following it down (#206) — so a stream
+sized from the rect served every client the top half of the pane and nothing after it, permanently:
+the emulator itself is that tall, so reopening the pane repaints the same truncated screen. That was
+a phone report — *"a few lines at the start but nothing else, not the end of the terminal"* — and
+the fix is one line of the rule that was already written down for the herd model: `viewport_rows`
+is the PTY's own, herdr reports it honestly, and the rect is only the fallback (#207).
 
 ### 4.3 Frames in, cell grid out
 

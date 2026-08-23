@@ -2,6 +2,8 @@ package dev.kampr.terminal
 
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.model.TAIL
+import dev.kampr.shared.model.appendGlyph
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
@@ -29,10 +31,12 @@ private fun pane(cols: Int = 10, rows: Int = 3): PaneState {
 }
 
 private fun readRow(rows: SurfaceRows, index: Int): String {
-    val chars = CharArray(rows.cols)
+    val glyphs = IntArray(rows.cols)
     val styles = IntArray(rows.cols)
-    assertTrue(rows.into(index, chars, styles), "row $index should exist")
-    return chars.concatToString().trimEnd()
+    assertTrue(rows.into(index, glyphs, styles), "row $index should exist")
+    val builder = StringBuilder(rows.cols)
+    for (glyph in glyphs) if (glyph != TAIL) builder.appendGlyph(glyph)
+    return builder.toString().trimEnd()
 }
 
 class RenderTest {

@@ -4,6 +4,7 @@ import dev.kampr.shared.model.CellBuffer
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.wire.HerdDelta
 import dev.kampr.shared.wire.NodeInfo
@@ -28,9 +29,9 @@ class ModelTest {
         val cells = CellBuffer(10, 2)
         cells.apply(RowDiff(0, listOf(Run(0, "abcdefghij"))))
         cells.apply(RowDiff(0, listOf(Run(3, "xy"))))
-        assertEquals('x', cells.charAt(0, 0))
+        assertEquals('x'.code, cells.codePointAt(0, 0))
         assertEquals(3, cells.styleAt(1, 0))
-        assertEquals(' ', cells.charAt(2, 0))
+        assertEquals(' '.code, cells.codePointAt(2, 0))
         assertEquals(0, cells.styleAt(9, 0))
     }
 
@@ -38,7 +39,40 @@ class ModelTest {
     fun runsLongerThanTheRowAreClipped() {
         val cells = CellBuffer(4, 1)
         cells.apply(RowDiff(0, listOf(Run(1, "abcdefgh"))))
-        assertEquals('d', cells.charAt(3, 0))
+        assertEquals('d'.code, cells.codePointAt(3, 0))
+    }
+
+    // Probe #210: a double-width glyph occupies two columns, and the run that carries it says so
+    // with `w`. The client has no Unicode width table and must not need one.
+    @Test
+    fun aDoubleWidthRunClaimsTwoColumnsPerGlyph() {
+        val cells = CellBuffer(12, 1)
+        cells.apply(RowDiff(0, listOf(Run(0, "AB"), Run(0, "\u65e5\u672c\u8a9e", w = 2), Run(0, "CD"))))
+        assertEquals("AB\u65e5\u672c\u8a9eCD", cells.rowText(0))
+        assertEquals('\u65e5'.code, cells.codePointAt(2, 0))
+        assertEquals(TAIL, cells.codePointAt(3, 0), "column 3 is the other half of the glyph at column 2")
+        assertEquals('\u672c'.code, cells.codePointAt(4, 0))
+        assertEquals('C'.code, cells.codePointAt(8, 0))
+        assertEquals(' '.code, cells.codePointAt(10, 0))
+    }
+
+    // A CharArray splits an astral glyph into two surrogate halves in two cells; a code point does
+    // not. Same probe, second defect.
+    @Test
+    fun anAstralGlyphIsOneCellNotTwoSurrogateHalves() {
+        val cells = CellBuffer(8, 1)
+        cells.apply(RowDiff(0, listOf(Run(0, "XY"), Run(0, "\uD83D\uDE80", w = 2), Run(0, "ZW"))))
+        assertEquals("XY\uD83D\uDE80ZW", cells.rowText(0))
+        assertEquals(0x1F680, cells.codePointAt(2, 0))
+        assertEquals(TAIL, cells.codePointAt(3, 0))
+        assertEquals('Z'.code, cells.codePointAt(4, 0))
+    }
+
+    @Test
+    fun aWideGlyphWithOnlyOneColumnLeftIsDropped() {
+        val cells = CellBuffer(3, 1)
+        cells.apply(RowDiff(0, listOf(Run(0, "ab"), Run(0, "\u65e5", w = 2))))
+        assertEquals("ab", cells.rowText(0))
     }
 
     @Test
@@ -115,7 +149,7 @@ class ModelTest {
 
         store.markStale()
         assertTrue(pane.stale)
-        assertEquals('h', pane.cells.charAt(0, 0))
+        assertEquals('h'.code, pane.cells.codePointAt(0, 0))
         assertEquals(1, pane.cells.styleAt(0, 0))
 
         store.accept(
@@ -126,7 +160,7 @@ class ModelTest {
             )!!
         )
         assertFalse(pane.stale)
-        assertEquals('w', pane.cells.charAt(0, 0))
+        assertEquals('w'.code, pane.cells.codePointAt(0, 0))
     }
 
     @Test

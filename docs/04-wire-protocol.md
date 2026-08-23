@@ -203,11 +203,35 @@ a terminal, and there is no reading of this field that recovers from that.
 ```
 
 **RowDiff** is `{ "row": <u32>, "runs": [ Run ] }`; **Run** is `{ "s": <style_id>, "x": "<text>",
-"l": <link_id?> }`. Runs are contiguous from column 0 and cover the full row width; trailing default
-cells may be omitted, and the client pads with blanks.
+"l": <link_id?>, "w": <1|2?> }`. Runs are contiguous from column 0 and cover the full row width;
+trailing default cells may be omitted, and the client pads with blanks.
 
 `row` is `u32`, not `u16`: on `grid.*` it is a viewport row, but on `scrollback` it is an absolute
 ring index, and a deep ring overflows 16 bits.
+
+**`w` is columns per character in `x` — 1 or 2, omitted when 1 — and it is the only thing that
+makes a row's columns countable.** A double-width glyph occupies two columns, in herdr's cell
+model and therefore in the node's: herdr advances two columns for one and addresses the next glyph
+at col+2 (probe #210). A row's width is `Σ codepoints(x) × w`, **not** the length of the joined
+text, and the second column of a wide glyph carries the lead's style and link so a background or an
+underline spans the whole glyph.
+
+Three consequences a client has to implement, not derive:
+
+- **Count code points, not UTF-16 units.** An astral glyph is one cell. A `CharArray` puts its two
+  surrogate halves in two cells and renders neither.
+- **The column after a wide glyph belongs to that glyph.** Hit testing, selection ends, the caret
+  and the offset a link detector is given all resolve to the *lead* column, or they are a glyph
+  out. Column and string offset are two coordinates and stop agreeing here.
+- **`x` is exactly the text on screen.** That is why the width rides on a field rather than on a
+  sentinel character in the run: copy, find and link detection read `x` unchanged, and nothing has
+  to remember to strip anything.
+
+A run breaks on a width change as it does on a style change, so `AB日本語CD` is three runs.
+
+**The node's emulator drops zero-width characters** — combining marks, ZWJ, variation selectors —
+rather than spending a column on one. A cell holds a single code point and cannot carry a mark on
+its base; of the two wrong answers, only this one leaves the columns after it where herdr put them.
 
 **`links` may appear on `grid.patch` as well as `grid.reset`, and the two carry different things.**
 A hyperlink can first be seen mid-stream, so a client that only reads `links` from `grid.reset` will

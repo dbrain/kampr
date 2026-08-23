@@ -66,4 +66,4 @@ class LinkTableTest {
 }
 
 private fun rowText(pane: dev.kampr.shared.model.PaneState, row: Int): String =
-    (0 until pane.cells.cols).map { pane.cells.charAt(it, row) }.joinToString("")
+    pane.cells.rowText(row)

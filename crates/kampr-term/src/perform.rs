@@ -1,4 +1,5 @@
 use crate::grid::{Cell, CellAttrs, Color, Grid};
+use unicode_width::UnicodeWidthChar;
 use vte::{Params, Perform};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -41,8 +42,20 @@ impl State {
         }
     }
 
+    /// Probe #210: herdr spends two columns on a double-width glyph and addresses the next one at
+    /// col+2, so advancing one leaves a blank behind every wide character — permanently, because
+    /// herdr never repaints a cell it believes already matches.
+    ///
+    /// A zero-width character is dropped rather than given a column of its own. The grid holds one
+    /// `char` per cell and cannot carry a combining mark on its base, and of the two wrong answers
+    /// only this one keeps the columns after it where herdr put them.
     fn put(&mut self, c: char) {
-        if self.cursor.col >= self.grid.cols() {
+        let width = match c.width() {
+            Some(0) | None => return,
+            Some(2) => 2,
+            Some(_) => 1,
+        };
+        if self.cursor.col + width > self.grid.cols() {
             self.cursor.col = 0;
             self.newline();
         }
@@ -53,8 +66,8 @@ impl State {
             attrs: self.pen.attrs,
             link: self.link,
         };
-        self.grid.set(self.cursor.col, self.cursor.row, cell);
-        self.cursor.col += 1;
+        self.grid.put(self.cursor.col, self.cursor.row, cell, width);
+        self.cursor.col += width;
     }
 
     fn sgr(&mut self, params: &Params) {
@@ -184,9 +197,7 @@ impl Perform for State {
                         for r in 0..self.cursor.row {
                             self.grid.clear_row_from(r, 0);
                         }
-                        for c in 0..=self.cursor.col.min(self.grid.cols() - 1) {
-                            self.grid.set(c, self.cursor.row, Cell::default());
-                        }
+                        self.grid.clear_span(self.cursor.row, 0, self.cursor.col);
                     }
                     _ => self.grid.clear(),
                 }
@@ -195,11 +206,7 @@ impl Perform for State {
                 let mode = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
                 match mode {
                     0 => self.grid.clear_row_from(self.cursor.row, self.cursor.col),
-                    1 => {
-                        for c in 0..=self.cursor.col.min(self.grid.cols() - 1) {
-                            self.grid.set(c, self.cursor.row, Cell::default());
-                        }
-                    }
+                    1 => self.grid.clear_span(self.cursor.row, 0, self.cursor.col),
                     _ => self.grid.clear_row_from(self.cursor.row, 0),
                 }
             }
