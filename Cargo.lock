@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-auth"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-herdr"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-journal"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-mesh"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2060,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-node"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-push"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "base64 0.23.1",
  "jwt-simple",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-spike"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "kampr-herdr",
@@ -2129,11 +2129,12 @@ dependencies = [
 
 [[package]]
 name = "kampr-term"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "unicode-segmentation",
  "unicode-width",
  "vte",
 ]
@@ -4234,6 +4235,12 @@ name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unicode-width"
