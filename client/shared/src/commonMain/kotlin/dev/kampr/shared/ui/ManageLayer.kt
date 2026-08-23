@@ -82,10 +82,13 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 breakpoint = breakpoint,
                 node = node,
                 pane = sheet.paneId?.let { id -> herd.panes.firstOrNull { it.id == id } },
-                peers = herd.nodes.filter { it.id != node.id },
+                nodes = herd.nodes,
                 caps = caps[node.id] ?: caps.values.singleOrNull(),
                 outcome = outcome,
                 onManage = state::manage,
+                // A pane belongs to exactly one machine, so aiming the sheet somewhere else is
+                // also letting go of the pane it was opened from.
+                onNode = { state.openSheet(Sheet.New(it, null)) },
                 onNodePicker = { state.go(Screen.Setup) },
                 onDismiss = state::closeSheet,
                 agentArgs = state.agentArgs,

@@ -479,6 +479,29 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
         "the peer's pane never echoed {marker} back through the hub"
     );
 
+    // Making something *on* the peer, addressed by node id rather than by a pane that already
+    // lives there. Until the New sheet could be aimed at a machine, the only reachable path to
+    // this was `at` on a peer's pane — so the relay carried every verb except the one that
+    // creates the first thing on a node.
+    send(
+        &mut client,
+        json!({ "t": "manage", "op": "workspace.create", "node": peer_node_id,
+                "label": "mesh-made", "cwd": "/tmp" }),
+    )
+    .await;
+    let ack = until(&mut client, "managed", 25).await;
+    assert_eq!(ack["op"], "workspace.create");
+    assert_eq!(ack["ok"], true, "a manage op aimed at a peer: {ack}");
+    let made = ack["id"].as_str().expect("a workspace id").to_string();
+    assert!(
+        owned_by_peer(made.split('/').next().unwrap_or_default()),
+        "the workspace was made on {made}, not on the peer it was addressed to"
+    );
+    herd_becomes(&hub.node, 30, |herd| {
+        herd.panes.iter().any(|p| p.id.starts_with(&format!("{made}:")))
+    })
+    .await;
+
     // The hub's own pane is a different node in the same herd, driven over the same socket.
     send(
         &mut client,

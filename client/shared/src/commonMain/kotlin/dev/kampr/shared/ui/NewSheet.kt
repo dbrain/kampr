@@ -35,7 +35,7 @@ import dev.kampr.shared.wire.SessionInfo
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.workspaceIdOf
 
-private enum class Step { Menu, Workspace, Tab, Worktree, Session }
+private enum class Step { Menu, Workspace, Tab, Worktree, Session, Node }
 
 private enum class Pick { Workspace, Split, Agent }
 
@@ -65,10 +65,11 @@ fun NewSheet(
     breakpoint: Breakpoint,
     node: NodeInfo,
     pane: PaneInfo?,
-    peers: List<NodeInfo>,
+    nodes: List<NodeInfo>,
     caps: ServerMsg.NodeCaps?,
     outcome: ServerMsg.Managed?,
     onManage: (ManageOp) -> Unit,
+    onNode: (String) -> Unit,
     onNodePicker: () -> Unit,
     onDismiss: () -> Unit,
     agentArgs: AgentArgs = NoAgentArgs,
@@ -94,6 +95,7 @@ fun NewSheet(
     var inFlight by remember { mutableStateOf<String?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
 
+    val peers = nodes.filter { it.id != node.id }
     val kinds = caps?.agentKinds.orEmpty()
     LaunchedEffect(kinds) {
         if (kind == null) kind = kinds.firstOrNull()
@@ -168,6 +170,9 @@ fun NewSheet(
         Step.Session -> "Start session" to (sessionName.text.trim().takeIf { SESSION_NAME.matches(it) }?.let { n ->
             { run(ManageOp.SessionCreate(nodeId, n)) }
         })
+        // The rows are the action: picking one is the whole step, and a button under them would
+        // be one that is never the thing to press.
+        Step.Node -> "" to null
     }
 
     BottomSheet(breakpoint, onDismiss) {
@@ -178,6 +183,7 @@ fun NewSheet(
                 Step.Tab -> "Tab"
                 Step.Worktree -> "Worktree"
                 Step.Session -> "Named session"
+                Step.Node -> "Machine"
             },
             subtitle = listOfNotNull("on ${node.name}", pane?.workspace).joinToString(" · "),
             onBack = if (step == Step.Menu) null else ({ step = Step.Menu; refusal = null }),
@@ -189,6 +195,7 @@ fun NewSheet(
             when (step) {
                 Step.Menu -> Menu(
                     breakpoint = breakpoint,
+                    node = node,
                     pane = pane,
                     peers = peers,
                     kinds = kinds,
@@ -212,6 +219,41 @@ fun NewSheet(
                     onKeepFlags = { keepFlags = it },
                     onNodePicker = onNodePicker,
                 )
+                Step.Node -> Fields {
+                    for (machine in nodes) {
+                        SheetCard(
+                            icon = null,
+                            iconTint = null,
+                            title = machine.name,
+                            subtitle = when {
+                                !machine.online -> machine.detail ?: "unreachable"
+                                machine.id == node.id -> "what this sheet is aimed at"
+                                machine.kind == "local" -> "the node this device is connected to"
+                                else -> "a paired machine"
+                            },
+                            selected = machine.id == node.id,
+                            compact = breakpoint == Breakpoint.Landscape,
+                            onClick = if (!machine.online) null else ({
+                                onNode(machine.id)
+                                step = Step.Menu
+                                refusal = null
+                            }),
+                            label = "Create on ${machine.name}",
+                        )
+                    }
+                    SheetCard(
+                        icon = null,
+                        iconTint = null,
+                        title = "Pair a machine",
+                        subtitle = "add another node to this herd",
+                        compact = breakpoint == Breakpoint.Landscape,
+                        onClick = onNodePicker,
+                    )
+                    // A peer answers `caps` to its own clients, not to this one, so the agent
+                    // kinds and named sessions belong to the node this device is connected to.
+                    // Everything else in the sheet is addressed by id and reaches any of them.
+                    Note("Workspaces, tabs, splits and worktrees can be made on any machine here. Agents and named sessions are offered by the node this device is connected to.")
+                }
                 Step.Workspace -> Fields {
                     LabelledField("label", "kampr", label) { label = it }
                     LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
@@ -278,12 +320,14 @@ fun NewSheet(
             refusal?.let {
                 KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3)
             }
-            PrimaryAction(
-                text = if (inFlight != null) "Waiting for the node" else action.first,
-                onClick = { action.second?.invoke() },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = inFlight == null && action.second != null,
-            )
+            if (step != Step.Node) {
+                PrimaryAction(
+                    text = if (inFlight != null) "Waiting for the node" else action.first,
+                    onClick = { action.second?.invoke() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = inFlight == null && action.second != null,
+                )
+            }
         }
     }
 }
@@ -305,6 +349,7 @@ private fun Note(text: String) {
 @Composable
 private fun Menu(
     breakpoint: Breakpoint,
+    node: NodeInfo,
     pane: PaneInfo?,
     peers: List<NodeInfo>,
     kinds: List<String>,
@@ -332,13 +377,13 @@ private fun Menu(
     val agent = AgentPick(kinds, allKinds, kind, agentName, onAgentName, agentFlags, onAgentFlags, keepFlags, onKeepFlags, onKind, onMoreKinds)
     if (breakpoint == Breakpoint.Portrait) {
         Column {
-            Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
+            Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
             Column(Modifier.weight(1f)) {
-                Structure(compact, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
+                Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             }
             Column(Modifier.weight(1f)) {
                 Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
@@ -365,6 +410,8 @@ private class AgentPick(
 @Composable
 private fun Structure(
     compact: Boolean,
+    node: NodeInfo,
+    peers: List<NodeInfo>,
     pane: PaneInfo?,
     pick: Pick,
     direction: SplitDirection,
@@ -376,6 +423,19 @@ private fun Structure(
 ) {
     val tokens = Kampr.tokens
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        // First, because it governs every card under it: everything this sheet makes is made on
+        // one machine, and the herd's own New button has to aim somewhere before you have a pane
+        // to aim it from. Buried at the bottom it read as "it always uses the first server".
+        SheetCard(
+            icon = KamprIcons.nodes,
+            iconTint = tokens.color.dim,
+            title = node.name,
+            subtitle = if (peers.isEmpty()) "the only machine in this herd"
+            else "made here — tap for the other ${peers.size}",
+            compact = true,
+            onClick = { onStep(Step.Node) },
+            label = "Change machine, currently ${node.name}",
+        )
         SheetCard(
             icon = KamprIcons.workspace,
             iconTint = tokens.color.accent,
@@ -504,14 +564,6 @@ private fun Elsewhere(
             subtitleMono = sessions.isNotEmpty(),
             compact = compact,
             onClick = { onStep(Step.Session) },
-        )
-        SheetCard(
-            icon = null,
-            iconTint = null,
-            title = "Another machine",
-            subtitle = peers.takeIf { it.isNotEmpty() }?.joinToString(" · ") { it.name } ?: "pair a node",
-            compact = compact,
-            onClick = onNodePicker,
         )
     }
 }
