@@ -265,12 +265,32 @@ const PROOF_LIFETIME: u8 = 20;
 
 impl Measured {
     fn record(&mut self, reading: Reading) {
-        match reading.exact {
+        match reading.wrapped {
             // A proof dates the evidence: a floor carried over from a wider screen is stale the
             // moment the pane proves it is narrower than that.
-            Some(cols) => {
+            Some(Wrapped::At(cols)) => {
                 self.floor = reading.floor;
                 self.proof = Some(Proof { cols, unconfirmed: 0 });
+            }
+            // The break says the grid is `cols` or `cols + 1` and nothing in the read says which,
+            // so it is the weaker evidence and must not displace a standing proof of either — the
+            // proof already chose between those two widths on a screen that could tell them
+            // apart. It settles nothing about a proof it disagrees with, or one the rows in hand
+            // outgrew, so those go back to resolving upward.
+            Some(Wrapped::AtOrOneWider(cols)) => {
+                self.floor = self.floor.max(reading.floor);
+                let wider = cols.saturating_add(1);
+                match self.proof.as_mut() {
+                    Some(proof) if (cols..=wider).contains(&proof.cols) && proof.cols >= reading.floor => {
+                        proof.unconfirmed = 0;
+                    }
+                    _ => {
+                        self.proof = Some(Proof {
+                            cols: wider,
+                            unconfirmed: 0,
+                        });
+                    }
+                }
             }
             None => {
                 self.floor = self.floor.max(reading.floor);
@@ -299,8 +319,20 @@ impl Measured {
 struct Reading {
     /// A lower bound: herdr trims each rendered row, so short content reads narrow.
     floor: u16,
-    /// The width itself, when the reads prove it.
-    exact: Option<u16>,
+    /// Where the rows in hand were laid out at, when they were laid out at all.
+    wrapped: Option<Wrapped>,
+}
+
+/// The stride a join was laid out at, and how exactly the break dates it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wrapped {
+    /// A break a narrow character made, which is the grid width itself: one more column would
+    /// have held that character.
+    At(u16),
+    /// A break a double-width glyph made: the grid is that wide **or one column wider**, because
+    /// the glyph will not straddle the last column. A screen of nothing but wide glyphs reads
+    /// back identically on both of those grids (probe #220).
+    AtOrOneWider(u16),
 }
 
 pub struct HerdrProvider {
@@ -600,12 +632,16 @@ impl Inner {
 /// Without a join there is no proof, only a floor: herdr trims each row's trailing blanks, so a
 /// screen holding a short prompt reads narrow. A floor is never an over-estimate, which is what
 /// makes combining it with the rect by `max` safe.
+///
+/// A break a wide glyph made is a column ambiguous and is kept as such, because a reading is not
+/// the only evidence there is: [`Measured::record`] settles it against what this pane has already
+/// proved rather than guessing here.
 fn reading(physical: &str, logical: &str) -> Reading {
     let rows: Vec<&str> = physical.lines().collect();
     let lines: Vec<&str> = logical.lines().collect();
     let floor = rows.iter().map(|row| columns(row)).max().unwrap_or(0);
     let (mut row, mut line) = (rows.len(), lines.len());
-    let (mut exact, mut short_of_a_column) = (None, None);
+    let (mut at, mut or_one_wider) = (None::<u16>, None::<u16>);
     while row > 0 && line > 0 {
         line -= 1;
         if lines[line] == rows[row - 1] {
@@ -615,21 +651,17 @@ fn reading(physical: &str, logical: &str) -> Reading {
         let Some(join) = joined(&rows[..row], lines[line]) else {
             break;
         };
-        let candidate = if join.broke_before_a_wide_glyph {
-            &mut short_of_a_column
+        let stride = if join.broke_before_a_wide_glyph {
+            &mut or_one_wider
         } else {
-            &mut exact
+            &mut at
         };
-        *candidate = Some(
-            candidate
-                .unwrap_or(0)
-                .max(join.cols + u16::from(join.broke_before_a_wide_glyph)),
-        );
+        *stride = Some(stride.unwrap_or(0).max(join.cols));
         row -= join.rows;
     }
     Reading {
         floor,
-        exact: exact.or(short_of_a_column),
+        wrapped: at.map(Wrapped::At).or(or_one_wider.map(Wrapped::AtOrOneWider)),
     }
 }
 
@@ -638,8 +670,7 @@ struct Join {
     cols: u16,
     /// The break could be a column short of the grid: a double-width glyph will not straddle the
     /// last column, so a row of wide glyphs breaks at `cols` on a grid of `cols` **or** `cols + 1`
-    /// and the two are indistinguishable from the read. The wider reading is the safe one —
-    /// observing above the PTY pads and observing below it crops (probe #87).
+    /// and the two are indistinguishable from the read.
     broke_before_a_wide_glyph: bool,
 }
 
@@ -1135,7 +1166,7 @@ async fn run_observer(
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, PROOF_LIFETIME, Proof, Reading, reading};
+    use super::{Measured, PROOF_LIFETIME, Proof, Reading, Wrapped, reading};
     use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, subscriptions};
     use kampr_herdr::Snapshot;
 
@@ -1238,6 +1269,17 @@ mod tests {
         (physical.join("\n"), format!("$ printf\n{logical}"))
     }
 
+    /// `total` double-width glyphs laid out on a `cols`-column grid, as herdr reads them back.
+    fn cjk(cols: usize, total: usize) -> (String, String) {
+        let per_row = cols / 2;
+        let mut physical: Vec<String> = (0..total)
+            .step_by(per_row)
+            .map(|i| "日".repeat(per_row.min(total - i)))
+            .collect();
+        physical.insert(0, "$ printf".into());
+        (physical.join("\n"), format!("$ printf\n{}", "日".repeat(total)))
+    }
+
     #[test]
     fn a_wrapped_line_proves_the_width_the_rect_is_lying_about() {
         // Measured live: rect 47 after a split, PTY still 93 (probes #68, #84).
@@ -1246,7 +1288,7 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 93,
-                exact: Some(93)
+                wrapped: Some(Wrapped::At(93))
             }
         );
         let m = Measured {
@@ -1267,7 +1309,7 @@ mod tests {
             reading(screen, screen),
             Reading {
                 floor: 11,
-                exact: None
+                wrapped: None
             },
             "nothing wrapped, so the widest row is only a floor"
         );
@@ -1326,7 +1368,7 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 80,
-                exact: None
+                wrapped: None
             },
             "a wrap nothing in the physical read shows is not a measurement of this screen"
         );
@@ -1340,13 +1382,23 @@ mod tests {
         let rows = ["日".repeat(46), "日".repeat(46), "日".repeat(28), PROMPT.into()];
         let lines = ["日".repeat(120), PROMPT.into()];
         let (physical, logical) = reads(&rows, &lines);
+        let mut m = Measured {
+            rect: 47,
+            ..Measured::default()
+        };
+        m.record(reading(&physical, &logical));
         assert_eq!(
             reading(&physical, &logical),
             Reading {
                 floor: 92,
-                exact: Some(93)
+                wrapped: Some(Wrapped::AtOrOneWider(92))
             },
-            "the break is at 92 because the next glyph needed two columns, so the grid is 93"
+            "the break is at 92 because the next glyph needed two columns"
+        );
+        assert_eq!(
+            m.cols(),
+            93,
+            "and with nothing else known the grid is the wider of the two it could be"
         );
     }
 
@@ -1368,9 +1420,86 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 60,
-                exact: Some(60)
+                wrapped: Some(Wrapped::At(60))
             },
         );
+    }
+
+    /// Measured live on one pane resized between the two: 200 `日` come back as four rows of 92
+    /// columns and one of 32, over a logical line of 400, **byte for byte the same** on a
+    /// 92-column PTY and on a 93-column one (probe #220). Half a glyph will not sit in the last
+    /// column, so the wide-glyph layout is identical on a grid of `2n` and one of `2n + 1`, and
+    /// no amount of looking at these two reads can separate them.
+    #[test]
+    fn a_screen_of_wide_glyphs_reads_the_same_on_both_grids_it_could_be_on() {
+        assert_eq!(cjk(92, 200), cjk(93, 200));
+    }
+
+    /// The residual of [#218](probe log): the wide-glyph break resolves upward, so an *even* PTY
+    /// showing nothing but wide glyphs reads a column too wide. It cannot be settled from the
+    /// read — but it does not have to be, because the reading before it settled it: a break at
+    /// 92 says the grid is 92 or 93, and a pane that has already proved either one is not
+    /// contradicted by it. Measured live at both widths: the ASCII phase wraps at exactly the
+    /// PTY (rows of 92 on a 92, rows of 93 on a 93) and the CJK phase that follows reads 92 on
+    /// both.
+    #[test]
+    fn a_wide_glyph_break_confirms_the_width_the_pane_already_proved() {
+        for pty in [92, 93] {
+            let mut m = Measured {
+                rect: 47,
+                ..Measured::default()
+            };
+            let (physical, logical) = wide(pty as usize, 400);
+            m.record(reading(&physical, &logical));
+            assert_eq!(m.cols(), pty, "the ASCII wrap proves the width outright");
+
+            let (physical, logical) = cjk(pty as usize, 200);
+            m.record(reading(&physical, &logical));
+            assert_eq!(
+                m.cols(),
+                pty,
+                "a break that agrees with the proof must not widen it"
+            );
+        }
+    }
+
+    /// A break the standing proof disagrees with is a different screen, and nothing is known
+    /// about it but the bound — so it goes back to resolving upward, because observing above the
+    /// PTY pads and observing below it crops (probe #87).
+    #[test]
+    fn a_wide_glyph_break_no_proof_agrees_with_still_resolves_upward() {
+        let mut m = Measured {
+            rect: 47,
+            ..Measured::default()
+        };
+        let (physical, logical) = wide(60, 400);
+        m.record(reading(&physical, &logical));
+        let (physical, logical) = cjk(92, 200);
+        m.record(reading(&physical, &logical));
+        assert_eq!(m.cols(), 93, "60 is neither 92 nor 93");
+    }
+
+    /// The rows in hand can settle the break upward on their own: a row wider than the stride is
+    /// a grid wider than the stride, whatever the proof said last.
+    #[test]
+    fn a_row_wider_than_the_break_settles_it_against_the_proof() {
+        let mut m = Measured {
+            rect: 47,
+            ..Measured::default()
+        };
+        let (physical, logical) = wide(92, 400);
+        m.record(reading(&physical, &logical));
+        let rows = [
+            "#".repeat(93),
+            "日".repeat(46),
+            "日".repeat(46),
+            "日".repeat(28),
+            PROMPT.into(),
+        ];
+        let lines = ["#".repeat(93), "日".repeat(120), PROMPT.into()];
+        let (physical, logical) = reads(&rows, &lines);
+        m.record(reading(&physical, &logical));
+        assert_eq!(m.cols(), 93, "a 93-column row is not on a 92-column grid");
     }
 
     /// Herdr pads a row out to the grid width when it joins it to the next one, so the blanks a
@@ -1385,7 +1514,7 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 32,
-                exact: Some(93)
+                wrapped: Some(Wrapped::At(93))
             },
             "the widest row is 32 and the width is 93"
         );
@@ -1409,7 +1538,7 @@ mod tests {
             reading(&physical, &logical),
             Reading {
                 floor: 80,
-                exact: Some(93)
+                wrapped: Some(Wrapped::At(93))
             }
         );
     }
@@ -1421,7 +1550,7 @@ mod tests {
             reading(&physical, "something else entirely\nand another line"),
             Reading {
                 floor: 93,
-                exact: None
+                wrapped: None
             }
         );
     }
@@ -1438,19 +1567,19 @@ mod tests {
         };
         m.record(Reading {
             floor: 93,
-            exact: Some(93),
+            wrapped: Some(Wrapped::At(93)),
         });
         assert_eq!(m.cols(), 93);
         for _ in 0..PROOF_LIFETIME {
             m.record(Reading {
                 floor: 20,
-                exact: None,
+                wrapped: None,
             });
             assert_eq!(m.cols(), 93, "a proof does not expire on the first quiet read");
         }
         m.record(Reading {
             floor: 20,
-            exact: None,
+            wrapped: None,
         });
         assert_eq!(m.cols(), 120, "and what it leaves behind never crops");
     }
@@ -1463,12 +1592,12 @@ mod tests {
         };
         m.record(Reading {
             floor: 93,
-            exact: Some(93),
+            wrapped: Some(Wrapped::At(93)),
         });
         for _ in 0..=PROOF_LIFETIME {
             m.record(Reading {
                 floor: 20,
-                exact: None,
+                wrapped: None,
             });
         }
         assert_eq!(m.cols(), 93, "the rect is still fiction; the floor is not");
@@ -1485,11 +1614,11 @@ mod tests {
         };
         m.record(Reading {
             floor: 93,
-            exact: Some(93),
+            wrapped: Some(Wrapped::At(93)),
         });
         m.record(Reading {
             floor: 60,
-            exact: Some(60),
+            wrapped: Some(Wrapped::At(60)),
         });
         assert_eq!(m.cols(), 60);
     }

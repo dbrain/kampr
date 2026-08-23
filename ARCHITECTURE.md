@@ -247,11 +247,26 @@ restarted at 46.
 What replaces it walks both reads **from the bottom**, where they are anchored on the same row, and
 pairs each logical line with the rows that rebuild it: padded to one stride and concatenated, they
 must reproduce the line character for character. The stride is the width. The walk stops at the
-first line the remaining rows cannot rebuild, because everything above that is another screen. Two
-things it cannot pin down: a break made by a double-width glyph is a column ambiguous — the glyph
-will not straddle the last column, so a row breaking at 92 sits on a grid of 92 *or* 93 — which is
-resolved upwards, because observing above the PTY pads and observing below it crops (#87); and a
-line that is longer than the read is deep is never proof of anything.
+first line the remaining rows cannot rebuild, because everything above that is another screen.
+
+A break is only the width itself when a *narrow* character made it, because one more column would
+have held that character. A break a double-width glyph made is a column ambiguous — the glyph will
+not straddle the last column, so a row breaking at 92 sits on a grid of 92 *or* 93, and a screen of
+nothing but wide glyphs comes back from herdr byte for byte the same on both (#220 — an even PTY of
+wide glyphs is indistinguishable from the odd one above it). So that break is carried as the pair of
+widths it is rather than resolved on the spot, and it is settled by the reading before it: a pane
+that has already proved 92 outright is not contradicted by a break that says 92-or-93, so the break
+**confirms** that width instead of widening it, and the same break confirms a standing 93 just as
+well. It resolves upwards only when nothing it agrees with is standing — no proof, one that says
+some other width, or one the rows in hand have already outgrown — because observing above the PTY
+pads and observing below it crops (#87). A line that is longer than the read is deep is never proof
+of anything.
+
+What is left is the pane that has *never* shown a narrow break since the rect last moved: nothing
+in the two reads separates its two candidate widths, and nothing else on the socket does either —
+the whole 91-method schema reports a column count in exactly one place, the layout rect that #68
+established is fiction (#221). Such a pane is observed at the wider of the two,
+where the extra column is the one no wide glyph could reach anyway.
 
 Without a join there is no proof, only a lower bound, which is why it combines with the rect by
 `max` and is re-measured on a poll of its own. And a proof is evidence about the screen it was read
