@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-auth"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-cli"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-herdr"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-journal"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-mesh"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2060,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-node"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-push"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "base64 0.23.1",
  "jwt-simple",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-spike"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "kampr-herdr",
@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-term"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "serde",
