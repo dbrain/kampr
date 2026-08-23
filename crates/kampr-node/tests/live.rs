@@ -1228,6 +1228,34 @@ fn columns(runs: &Value) -> Vec<Option<char>> {
     out
 }
 
+/// The row as the client would build it: one entry per column, `None` where the column is the
+/// right half of a wide cell, and each cell's `m` entry glued back onto its base.
+fn clusters(runs: &Value) -> Vec<Option<String>> {
+    let mut out = Vec::new();
+    for run in runs.as_array().cloned().unwrap_or_default() {
+        let w = run["w"].as_u64().unwrap_or(1);
+        let marks = run["m"].as_array().cloned().unwrap_or_default();
+        for (i, ch) in run["x"].as_str().unwrap_or("").chars().enumerate() {
+            let mut cell = ch.to_string();
+            cell.push_str(marks.get(i).and_then(Value::as_str).unwrap_or(""));
+            out.push(Some(cell));
+            for _ in 1..w {
+                out.push(None);
+            }
+        }
+    }
+    out
+}
+
+fn cluster_text(cols: &[Option<String>]) -> String {
+    cols.iter()
+        .flatten()
+        .cloned()
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
 fn text_of(cols: &[Option<char>]) -> String {
     cols.iter().flatten().collect::<String>().trim_end().to_string()
 }
@@ -1296,6 +1324,74 @@ async fn a_wide_glyph_reaches_the_client_in_the_two_columns_herdr_gave_it() {
     );
     assert_eq!(emoji[3], None);
     assert_eq!(emoji[4], Some('Z'));
+}
+
+/// Probe #215, end to end against a real herdr rather than against an idea of one: herdr's cell is
+/// a grapheme, it keeps the marks on the base and addresses the next glyph at base + the cluster's
+/// width — so an emulator that drops the mark loses it for good, because herdr never repaints a
+/// cell it believes already matches.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_combining_mark_reaches_the_client_riding_on_its_base() {
+    let h = harness!("marks");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+    let script = "printf '%b\\n' 'e\\u0301f'                   'ZZ\\U0001F468\\u200d\\U0001F469\\u200d\\U0001F467XY'                   'QQ\\U0001F1EC\\U0001F1E7XY'\n";
+    send(&mut socket, json!({ "t": "input", "pane": pane, "text": script })).await;
+
+    let accent = "e\u{301}";
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let flag = "\u{1F1EC}\u{1F1E7}";
+    let mut grid: std::collections::HashMap<u64, Vec<Option<String>>> = std::collections::HashMap::new();
+    let (mut marked, mut joined, mut flagged) = (None, None, None);
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    while std::time::Instant::now() < deadline && (marked.is_none() || joined.is_none() || flagged.is_none())
+    {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        let rows = match message["t"].as_str() {
+            Some("grid.reset") => {
+                grid.clear();
+                message["rows_data"].clone()
+            }
+            Some("grid.patch") => message["rows"].clone(),
+            _ => continue,
+        };
+        for row in rows.as_array().cloned().unwrap_or_default() {
+            grid.insert(row["row"].as_u64().unwrap_or(0), clusters(&row["runs"]));
+        }
+        let want = |t: &str| grid.values().find(|c| cluster_text(c) == t).cloned();
+        marked = want(&format!("{accent}f"));
+        joined = want(&format!("ZZ{family}XY"));
+        flagged = want(&format!("QQ{flag}XY"));
+    }
+
+    let marked = marked.expect("no row came back reading e\u{301}f");
+    assert_eq!(
+        marked[0].as_deref(),
+        Some(accent),
+        "the accent rode in on its base"
+    );
+    assert_eq!(marked[1].as_deref(), Some("f"), "and f is still in column 1");
+
+    let joined = joined.expect("no row came back reading ZZ<family>XY");
+    assert_eq!(joined[2].as_deref(), Some(family), "one cell, not three emoji");
+    assert_eq!(joined[3], None, "column 3 is the family's other half");
+    assert_eq!(joined[4].as_deref(), Some("X"), "herdr addresses X at column 5");
+
+    let flagged = flagged.expect("no row came back reading QQ<flag>XY");
+    assert_eq!(
+        flagged[2].as_deref(),
+        Some(flag),
+        "a flag is one cell of two columns"
+    );
+    assert_eq!(flagged[3], None);
+    assert_eq!(flagged[4].as_deref(), Some("X"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1967,10 +2063,102 @@ async fn a_screen_of_wide_glyphs_is_not_streamed_at_half_the_pty_width() {
     let after = until_pane(&mut socket, "grid.reset", &pane, 30).await["cols"]
         .as_u64()
         .unwrap() as u16;
-    assert!(
-        (pty..=pty + 1).contains(&after),
+    assert_eq!(
+        after, pty,
         "a pane of wide glyphs came back at {after} columns against a PTY of {pty}"
     );
+}
+
+/// The residual of [#218](#), measured out (probe #220): a screen of nothing but wide glyphs
+/// reads *identically* on a grid of `2n` and one of `2n + 1` — the same rows and the same logical
+/// line, byte for byte at 92 columns and at 93 — because half a glyph will not sit in the last
+/// column. So the break cannot settle its own width, and an even-width pane was streamed a column
+/// wide for as long as the CJK stayed on it. It does not have to settle it: the ASCII this pane
+/// wrapped a moment earlier did, and a break the standing proof agrees with confirms that width
+/// rather than widening it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_even_width_pane_of_wide_glyphs_keeps_the_width_its_wrap_proved() {
+    let h = harness!("cjkeven");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    control_cols(&h._session, &local, 92).await;
+
+    // A prompt short enough to leave the bottom of the screen alone. An interactive prompt comes
+    // back from `recent_unwrapped` glued to the blanks around it as one logical line no set of
+    // rows rebuilds, and the walk stops at the bottom-most line it cannot rebuild — so the whole
+    // reading measures nothing and neither rule is exercised.
+    for line in ["exec /bin/sh\n", "PS1='$ '\n", "clear\n"] {
+        typed(&h._session, &local, line).await;
+    }
+    for _ in 0..4 {
+        typed(&h._session, &local, "printf '%.0s#' $(seq 1 400); echo\n").await;
+    }
+    let pty = filled_width(&h._session, &local).await;
+    assert_eq!(pty, 92, "the controller left the PTY at an even width");
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let before = await_grid_at(&mut socket, &pane, pty).await;
+    assert_eq!(before["cols"].as_u64().unwrap(), pty as u64);
+
+    // Enough wide-glyph lines to push every ASCII row out of the read window: one unambiguous
+    // break left in it settles the width on its own and proves nothing about the ambiguous ones.
+    typed(&h._session, &local, "clear\n").await;
+    for _ in 0..8 {
+        typed(&h._session, &local, "printf '%.0s\u{65e5}' $(seq 1 200); echo\n").await;
+    }
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let widths = drain_resets(&mut socket, &pane, Duration::from_secs(12)).await;
+    assert!(
+        widths.iter().all(|&cols| cols == pty),
+        "the node moved a {pty}-column pane to {widths:?}"
+    );
+
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let after = until_pane(&mut socket, "grid.reset", &pane, 30).await["cols"]
+        .as_u64()
+        .unwrap() as u16;
+    assert_eq!(
+        after, pty,
+        "a pane of wide glyphs came back at {after} columns against a PTY of {pty}"
+    );
+}
+
+async fn typed(session: &Session, pane: &str, text: &str) {
+    session
+        .call("pane.send_text", json!({ "pane_id": pane, "text": text }))
+        .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+}
+
+/// Resizes a pane's PTY to an even width by claiming it with a controller and letting the
+/// controller go: the PTY stays where the controller left it and the layout rect never moves
+/// (probe #219), which is the only way to reach a width nothing else in this suite produces.
+async fn control_cols(session: &Session, pane: &str, cols: u16) {
+    let rows = session.call("session.snapshot", json!({})).await["snapshot"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pane_id"] == pane)
+        .and_then(|p| p["scroll"]["viewport_rows"].as_u64())
+        .unwrap_or(40);
+    let mut controller = std::process::Command::new("herdr")
+        .args(["--session", &session.name, "terminal", "session", "control", pane])
+        .args(["--cols", &cols.to_string(), "--rows", &rows.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("herdr terminal session control");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let _ = controller.kill();
+    let _ = controller.wait();
+    tokio::time::sleep(Duration::from_secs(1)).await;
 }
 
 /// Every width a `grid.reset` carried for this pane over `window`.

@@ -31,10 +31,19 @@ pub struct Run {
     pub l: Option<u32>,
     /// Columns per character in `x`, 1 or 2. A client has no Unicode width table and must not
     /// need one: this is how it learns that the column after a double-width glyph belongs to that
-    /// glyph and not to the next one (probe #210). Omitted when 1, so `x` stays exactly the text
-    /// on screen and every path that reads it — copy, find, link detection — reads it unchanged.
+    /// glyph and not to the next one (probe #210). Omitted when 1, so `x` stays exactly one code
+    /// point per cell and every path that reads it — copy, find, link detection — reads it
+    /// unchanged rather than stripping a sentinel out of it.
     #[serde(default = "narrow", skip_serializing_if = "is_narrow")]
     pub w: u8,
+    /// The zero-width code points each cell of this run is wearing — combining marks, ZWJ,
+    /// variation selectors — by position, empty where a cell wears none and truncated after the
+    /// last one (probe #215). It rides beside `x` rather than in it so that `x` stays exactly one
+    /// code point per cell: a row is still `sum(codepoints(x) * w)` columns wide, and a client
+    /// that has never heard of this field draws the bases it already drew instead of a row shifted
+    /// one column per accent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub m: Vec<String>,
 }
 
 fn narrow() -> u8 {
@@ -432,6 +441,7 @@ impl Encoder {
         let blank = Cell::default();
         let end = cells.iter().rposition(|c| *c != blank).map_or(0, |i| i + 1);
         let mut runs: Vec<Run> = Vec::new();
+        let mut at = 0usize;
         for (i, cell) in cells[..end].iter().enumerate() {
             // The right half of a double-width glyph is carried by its lead's `w`, not by a
             // character of its own.
@@ -449,13 +459,26 @@ impl Encoder {
                 attrs: cell.attrs,
             });
             match runs.last_mut() {
-                Some(r) if r.s == s && r.l == cell.link && r.w == w => r.x.push(cell.ch),
-                _ => runs.push(Run {
-                    s,
-                    x: cell.ch.to_string(),
-                    l: cell.link,
-                    w,
-                }),
+                Some(r) if r.s == s && r.l == cell.link && r.w == w => {
+                    r.x.push(cell.ch);
+                    at += 1;
+                }
+                _ => {
+                    runs.push(Run {
+                        s,
+                        x: cell.ch.to_string(),
+                        l: cell.link,
+                        w,
+                        m: Vec::new(),
+                    });
+                    at = 0;
+                }
+            }
+            let marks = cell.marks();
+            if !marks.is_empty() {
+                let run = runs.last_mut().expect("just pushed or matched");
+                run.m.resize(at, String::new());
+                run.m.push(marks.to_string());
             }
         }
         runs

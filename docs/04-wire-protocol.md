@@ -203,8 +203,8 @@ a terminal, and there is no reading of this field that recovers from that.
 ```
 
 **RowDiff** is `{ "row": <u32>, "runs": [ Run ] }`; **Run** is `{ "s": <style_id>, "x": "<text>",
-"l": <link_id?>, "w": <1|2?> }`. Runs are contiguous from column 0 and cover the full row width;
-trailing default cells may be omitted, and the client pads with blanks.
+"l": <link_id?>, "w": <1|2?>, "m": [ "<marks>" ]? }`. Runs are contiguous from column 0 and cover
+the full row width; trailing default cells may be omitted, and the client pads with blanks.
 
 `row` is `u32`, not `u16`: on `grid.*` it is a viewport row, but on `scrollback` it is an absolute
 ring index, and a deep ring overflows 16 bits.
@@ -223,15 +223,43 @@ Three consequences a client has to implement, not derive:
 - **The column after a wide glyph belongs to that glyph.** Hit testing, selection ends, the caret
   and the offset a link detector is given all resolve to the *lead* column, or they are a glyph
   out. Column and string offset are two coordinates and stop agreeing here.
-- **`x` is exactly the text on screen.** That is why the width rides on a field rather than on a
-  sentinel character in the run: copy, find and link detection read `x` unchanged, and nothing has
-  to remember to strip anything.
+- **`x` is exactly one code point per cell.** That is why the width rides on a field rather than
+  on a sentinel character in the run — nothing has to remember to strip anything — and it is the
+  rule `m` exists to protect. For a cell wearing nothing, which is nearly all of them, `x` is also
+  exactly the text on screen.
 
 A run breaks on a width change as it does on a style change, so `AB日本語CD` is three runs.
 
-**The node's emulator drops zero-width characters** — combining marks, ZWJ, variation selectors —
-rather than spending a column on one. A cell holds a single code point and cannot carry a mark on
-its base; of the two wrong answers, only this one leaves the columns after it where herdr put them.
+**`m` is what each cell of the run is wearing on top of its base, and it is why `x` can stay one
+code point per cell.** A cell is a grapheme, not a code point: herdr keeps a combining mark, a ZWJ
+and a variation selector on the base they belong to and addresses the next glyph at base + the
+*cluster's* width (probe #215). Putting the whole cluster in `x` would break the one thing that
+makes a row countable, so the marks travel beside the text instead:
+
+```jsonc
+{ "s": 0, "x": "rese", "m": ["", "\u0301", "", "\u0301"] }   // ré-su-mé, four cells, four columns
+{ "s": 0, "x": "\ud83d\udc68", "w": 2, "m": ["\u200d\ud83d\udc69\u200d\ud83d\udc67"] }  // one family, two columns
+```
+
+- **One entry per cell, by position, and the list is truncated after the last marked cell.** An
+  entry is `""` where a cell wears nothing, and a run with no marked cell at all omits `m`
+  entirely — which is nearly every run, so the field costs nothing in the common case.
+- **`m` never changes the arithmetic.** A row is still `Σ codepoints(x) × w` columns wide, a run
+  still breaks only on style, link and width, and a marked cell never splits a run.
+- **It is additive.** A client that has never heard of `m` renders the bases it already rendered,
+  with the columns where they were — which is exactly the behaviour of every node before this
+  field existed. Nothing about `x`, `w` or `s` was reinterpreted.
+- **The tail column of a wide cluster carries no marks.** They belong to the lead, and a client
+  that read both halves would draw them twice.
+- **Copy, find and link detection read `x` *and* `m`.** `x` alone is the bases; the text on screen
+  is each cell's base followed by its marks. A client that already keeps a cell buffer has both.
+
+**What the node clusters, and what it does not.** Zero-width code points join the cell to their
+left; so does anything after a ZWJ, a skin-tone modifier, and the second of a flag's two regional
+indicators. A variation selector that widens its base to two columns takes the second column with
+it, because herdr does. Everything else starts a new cell — Hangul jamo and Indic conjuncts among
+them — which is what herdr does with them too. A mark printed with no cell to its left is dropped,
+as herdr drops it.
 
 **`links` may appear on `grid.patch` as well as `grid.reset`, and the two carry different things.**
 A hyperlink can first be seen mid-stream, so a client that only reads `links` from `grid.reset` will

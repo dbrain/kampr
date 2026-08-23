@@ -68,6 +68,47 @@ class ModelTest {
         assertEquals('Z'.code, cells.codePointAt(4, 0))
     }
 
+    // Probe #215: a cell is a grapheme. The marks ride beside the text in `m` rather than inside
+    // it, so `x` stays one code point per column and a row's width is still countable from it.
+    @Test
+    fun aCellWearsTheMarksItsRunDeclares() {
+        val cells = CellBuffer(8, 1)
+        cells.apply(RowDiff(0, listOf(Run(0, "rese", m = listOf("", "\u0301", "", "\u0301")))))
+        assertEquals("re\u0301se\u0301", cells.rowText(0))
+        assertEquals('e'.code, cells.codePointAt(1, 0), "the base is still one code point")
+        assertEquals("\u0301", cells.marksAt(1, 0))
+        assertEquals("", cells.marksAt(0, 0))
+        assertEquals('s'.code, cells.codePointAt(2, 0), "and s is still in column 2")
+    }
+
+    @Test
+    fun aWideClusterWearsItsJoinersAndKeepsItsTail() {
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"
+        val cells = CellBuffer(8, 1)
+        cells.apply(
+            RowDiff(
+                0,
+                listOf(
+                    Run(0, "ZZ"),
+                    Run(0, "\uD83D\uDC68", w = 2, m = listOf(family.substring(2))),
+                    Run(0, "XY"),
+                ),
+            ),
+        )
+        assertEquals("ZZ" + family + "XY", cells.rowText(0))
+        assertEquals(TAIL, cells.codePointAt(3, 0))
+        assertEquals("", cells.marksAt(3, 0), "the tail wears nothing; the lead wears it all")
+        assertEquals('X'.code, cells.codePointAt(4, 0))
+    }
+
+    @Test
+    fun marksAreClearedByTheNextRowThatDoesNotDeclareThem() {
+        val cells = CellBuffer(4, 1)
+        cells.apply(RowDiff(0, listOf(Run(0, "ee", m = listOf("\u0301", "\u0301")))))
+        cells.apply(RowDiff(0, listOf(Run(0, "ee"))))
+        assertEquals("ee", cells.rowText(0))
+    }
+
     @Test
     fun aWideGlyphWithOnlyOneColumnLeftIsDropped() {
         val cells = CellBuffer(3, 1)

@@ -196,6 +196,30 @@ mod tests {
         assert_eq!(span, 10, "the runs cover the columns the glyphs actually occupy");
     }
 
+    /// Probe #215: the marks ride in `m`, positionally, so `x` is still one code point per cell
+    /// and the row's width is still countable from it.
+    #[tokio::test]
+    async fn a_marked_run_carries_its_marks_beside_the_text_not_inside_it() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        let mut term = kampr_term::Emulator::new(20, 1);
+        term.feed("e\u{301}f\u{301}g".as_bytes());
+        let mut marked = reset();
+        if let PaneUpdate::Reset { rows_data, cols, .. } = &mut marked {
+            *cols = 20;
+            *rows_data = Arc::new(vec![RowDiff {
+                row: 0,
+                cells: term.grid().row(0).to_vec(),
+            }]);
+        }
+        wire.send_update("n/w1:p1", &marked);
+        let frames = drain(&outbox);
+        let run = &frames[0]["rows_data"][0]["runs"][0];
+        assert_eq!(run["x"], "efg", "x is the bases, one code point per column");
+        assert_eq!(run["m"], serde_json::json!(["\u{301}", "\u{301}"]));
+        assert_eq!(run.get("w"), None);
+    }
+
     /// History is append-only and the pump's cursor only moves forward, so a dropped
     /// `scrollback` is a hole nothing repairs — the `grid.reset` that replaces a purged patch
     /// queue carries the viewport and nothing above it.

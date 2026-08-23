@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "k", content = "v")]
@@ -37,7 +38,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cell {
     pub ch: char,
     pub fg: Color,
@@ -47,6 +48,13 @@ pub struct Cell {
     /// Index into the grid's hyperlink table; OSC 8 survives here where `pane.read` drops it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<u32>,
+    /// The zero-width code points riding on [`Self::ch`] — combining marks, ZWJ, variation
+    /// selectors (probe #215). Boxed rather than interned like `link`, because nothing outside
+    /// this grid needs an id for them and a table would have to travel beside every `RowDiff`;
+    /// `Arc<String>` is one thin pointer, so a cell that wears nothing costs 8 bytes and a row
+    /// clone stays a refcount bump.
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "marks_as_str")]
+    pub marks: Option<Arc<String>>,
 }
 
 /// The right half of a double-width glyph. Herdr's own cell model spends two columns on one
@@ -55,13 +63,44 @@ pub struct Cell {
 /// blank in the middle of a CJK line.
 const TAIL: char = '\0';
 
+/// `serde` only reaches through an `Arc` under its `rc` feature, and one field of one struct is
+/// not worth turning that on across the workspace.
+fn marks_as_str<S: serde::Serializer>(marks: &Option<Arc<String>>, s: S) -> Result<S::Ok, S::Error> {
+    match marks {
+        Some(m) => s.serialize_str(m),
+        None => s.serialize_none(),
+    }
+}
+
 impl Cell {
     pub fn is_tail(&self) -> bool {
         self.ch == TAIL
     }
 
-    fn tail(&self) -> Self {
-        Self { ch: TAIL, ..*self }
+    pub fn marks(&self) -> &str {
+        self.marks.as_deref().map_or("", String::as_str)
+    }
+
+    /// The whole grapheme this cell holds: its base and whatever rides on it.
+    pub fn cluster(&self) -> String {
+        let mut out = String::with_capacity(1 + self.marks().len());
+        self.push_cluster(&mut out);
+        out
+    }
+
+    pub fn push_cluster(&self, out: &mut String) {
+        out.push(self.ch);
+        out.push_str(self.marks());
+    }
+
+    /// The right half of a wide cell. It never carries the marks: they belong to the lead, and a
+    /// consumer that reads both halves would otherwise render the accent twice.
+    pub fn tail(&self) -> Self {
+        Self {
+            ch: TAIL,
+            marks: None,
+            ..self.clone()
+        }
     }
 }
 
@@ -73,6 +112,7 @@ impl Default for Cell {
             bg: Color::Default,
             attrs: CellAttrs::default(),
             link: None,
+            marks: None,
         }
     }
 }
@@ -114,6 +154,13 @@ impl Grid {
         self.rows
     }
 
+    pub fn cell(&self, col: u16, row: u16) -> Option<&Cell> {
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        self.cells.get(row as usize * self.cols as usize + col as usize)
+    }
+
     pub fn row(&self, row: u16) -> &[Cell] {
         let start = row as usize * self.cols as usize;
         &self.cells[start..start + self.cols as usize]
@@ -125,12 +172,10 @@ impl Grid {
         if row >= self.rows {
             return String::new();
         }
-        let text: String = self
-            .row(row)
-            .iter()
-            .filter(|c| !c.is_tail())
-            .map(|c| c.ch)
-            .collect();
+        let mut text = String::with_capacity(self.cols as usize);
+        for cell in self.row(row).iter().filter(|c| !c.is_tail()) {
+            cell.push_cluster(&mut text);
+        }
         text.trim_end().to_string()
     }
 
@@ -186,15 +231,15 @@ impl Grid {
     pub fn put(&mut self, col: u16, row: u16, cell: Cell, width: u16) {
         self.split_wide(row, col);
         self.split_wide(row, col + width);
-        self.set(col, row, cell);
         if width == 2 {
             self.set(col + 1, row, cell.tail());
         }
+        self.set(col, row, cell);
     }
 
     pub fn scroll_up(&mut self) {
         let w = self.cols as usize;
-        self.cells.copy_within(w.., 0);
+        self.cells.rotate_left(w);
         let last = self.cells.len() - w;
         self.cells[last..].fill(Cell::default());
         self.dirty.fill(true);

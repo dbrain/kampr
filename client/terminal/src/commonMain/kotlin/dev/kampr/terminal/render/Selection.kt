@@ -3,6 +3,7 @@ package dev.kampr.terminal.render
 import dev.kampr.shared.model.BLANK
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
+import dev.kampr.shared.model.glyphUnits
 
 data class GridPoint(val row: Int, val col: Int) : Comparable<GridPoint> {
     override fun compareTo(other: GridPoint): Int =
@@ -39,6 +40,7 @@ class LogicalText(private val rows: SurfaceRows) {
     private var glyphs = IntArray(0)
     private var styles = IntArray(0)
     private var links = IntArray(0)
+    private var marks = emptyArray<String>()
 
     // The pane is 80x24 until its first grid.reset, so the scratch has to follow the real width
     // rather than the one that happened to be there when the surface was created.
@@ -49,8 +51,9 @@ class LogicalText(private val rows: SurfaceRows) {
             glyphs = IntArray(cols)
             styles = IntArray(cols)
             links = IntArray(cols)
+            marks = Array(cols) { "" }
         }
-        return rows.into(index, glyphs, styles, links)
+        return rows.into(index, glyphs, styles, links, marks)
     }
 
     private fun wraps(index: Int): Boolean {
@@ -65,8 +68,13 @@ class LogicalText(private val rows: SurfaceRows) {
     }
 
     private fun appendInk(builder: StringBuilder, from: Int, to: Int) {
-        for (i in from..to) if (glyphs[i] != TAIL) builder.appendGlyph(glyphs[i])
+        for (i in from..to) if (glyphs[i] != TAIL) builder.appendGlyph(glyphs[i]).append(marks[i])
     }
+
+    // What column `col` costs the string appendInk builds: its base in UTF-16 units, plus whatever
+    // it is wearing. A column is not a string offset once either can be more than one unit.
+    private fun units(col: Int): Int =
+        if (glyphs[col] == TAIL) 0 else glyphUnits(glyphs[col]) + marks[col].length
 
     // Probe #210: a double-width glyph owns two columns, so the column a finger lands on is not
     // always the column its glyph starts in. Anything turning a column into a character resolves
@@ -122,7 +130,7 @@ class LogicalText(private val rows: SurfaceRows) {
             if (row == index) {
                 val target = lead(col.coerceIn(0, cols - 1))
                 var at = builder.length
-                for (i in 0 until minOf(target, end + 1)) if (glyphs[i] != TAIL) at++
+                for (i in 0 until minOf(target, end + 1)) at += units(i)
                 offset = at
             }
             if (end >= 0) appendInk(builder, 0, end)

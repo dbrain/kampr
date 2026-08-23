@@ -67,6 +67,33 @@ class SelectionTest {
         assertEquals("https://herdr.dev/x", detectTarget(line, offset)?.text)
     }
 
+    // Probe #215: a cell is a grapheme, so copy has to take the marks with the base — and the
+    // offset a link detector is handed is a string offset, which a mark moves and a column does not.
+    @Test
+    fun copyingAMarkedRowTakesTheMarksWithTheirBases() {
+        val rows = SurfaceRows(wideRow(12, Run(0, "rese", m = listOf("", "\u0301", "", "\u0301"))))
+        val logical = LogicalText(rows)
+        assertEquals("re\u0301se\u0301", logical.rowAt(0))
+        assertEquals("e\u0301s", logical.copy(Selection(GridPoint(0, 1), GridPoint(0, 2))))
+    }
+
+    @Test
+    fun theOffsetOfAColumnCountsTheMarksAndTheSurrogatesBeforeIt() {
+        val rows = SurfaceRows(
+            wideRow(
+                30,
+                Run(0, "e", m = listOf("\u0301")),
+                Run(0, "\uD83D\uDE80", w = 2),
+                Run(0, " https://herdr.dev/x"),
+            ),
+        )
+        val logical = LogicalText(rows)
+        val (line, offset) = logical.lineAt(0, 4)
+        assertEquals("e\u0301\uD83D\uDE80 https://herdr.dev/x", line)
+        assertEquals(5, offset, "column 4 is the h of https, at UTF-16 offset 5")
+        assertEquals("https://herdr.dev/x", detectTarget(line, offset)?.text)
+    }
+
     // Tapping the right half of a wide glyph is tapping the glyph, not the column after it.
     @Test
     fun theTailColumnOfAWideGlyphBelongsToItsLead() {

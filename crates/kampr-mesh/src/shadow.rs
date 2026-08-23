@@ -51,14 +51,23 @@ pub fn decode_row(runs: &[Run], styles: &StyleTable, cols: u16) -> Vec<Cell> {
     let mut row = Vec::with_capacity(cols as usize);
     for run in runs {
         let style = styles.get(run.s);
-        for ch in run.x.chars() {
-            row.push(Cell {
+        let width = if run.w >= 2 { 2 } else { 1 };
+        for (i, ch) in run.x.chars().enumerate() {
+            let cell = Cell {
                 ch,
                 fg: style.fg,
                 bg: style.bg,
                 attrs: style.attrs,
                 link: run.l,
-            });
+                marks: run
+                    .m
+                    .get(i)
+                    .filter(|m| !m.is_empty())
+                    .map(|m| Arc::new(m.clone())),
+            };
+            let tail = (width == 2).then(|| cell.tail());
+            row.push(cell);
+            row.extend(tail);
         }
     }
     row.resize(cols as usize, Cell::default());
@@ -258,6 +267,7 @@ mod tests {
             x: text.into(),
             l: None,
             w: 1,
+            m: Vec::new(),
         }
     }
 
@@ -372,6 +382,47 @@ mod tests {
         };
         assert_eq!(links.as_ref(), &["https://kampr.dev".to_string()]);
         assert_eq!(shadow.full().rows()[1].cells[0].fg, Color::Indexed(9));
+    }
+
+    /// A hub re-encodes what it decodes, so anything `decode_row` throws away is thrown away for
+    /// every client behind the hub. It used to spend one cell per character however wide the run
+    /// said the character was, which column-shifted every wide glyph on a relayed pane, and it had
+    /// nowhere to put a mark.
+    #[test]
+    fn a_relayed_row_keeps_its_columns_and_its_marks() {
+        let mut shadow = Shadow::default();
+        let update = shadow.reset(
+            8,
+            1,
+            &[RowRuns {
+                row: 0,
+                runs: vec![
+                    Run {
+                        s: 0,
+                        x: "e".into(),
+                        l: None,
+                        w: 1,
+                        m: vec!["\u{301}".into()],
+                    },
+                    Run {
+                        s: 0,
+                        x: "\u{65E5}".into(),
+                        l: None,
+                        w: 2,
+                        m: Vec::new(),
+                    },
+                    run(0, "f"),
+                ],
+            }],
+            Cursor::default(),
+            vec![],
+            &table(),
+        );
+        let cells = &update.rows()[0].cells;
+        assert_eq!(cells[0].cluster(), "e\u{301}");
+        assert_eq!(cells[1].ch, '\u{65E5}');
+        assert!(cells[2].is_tail(), "the wide glyph keeps its second column");
+        assert_eq!(cells[3].ch, 'f', "and f stays in column 3");
     }
 
     #[test]

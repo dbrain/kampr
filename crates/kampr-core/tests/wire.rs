@@ -10,6 +10,14 @@ fn cell(ch: char, fg: Color) -> Cell {
     }
 }
 
+fn marked(ch: char, marks: &str) -> Cell {
+    Cell {
+        ch,
+        marks: Some(std::sync::Arc::new(marks.to_string())),
+        ..Cell::default()
+    }
+}
+
 fn row(n: u32, cells: Vec<Cell>) -> RowDiff {
     RowDiff { row: n, cells }
 }
@@ -42,7 +50,7 @@ fn a_style_change_starts_a_new_run() {
 fn styles_are_interned_once_per_connection_and_only_new_ones_are_sent() {
     let mut enc = Encoder::new();
     let red = cell('x', Color::Indexed(1));
-    enc.rows(&[row(0, vec![red])]);
+    enc.rows(&[row(0, vec![red.clone()])]);
     let first = enc.take_styles().expect("style 1 is new");
     assert_eq!(first.from, 1);
     assert_eq!(first.styles.len(), 1);
@@ -261,4 +269,71 @@ fn a_shared_pane_carries_a_watcher_count_and_a_solitary_one_does_not() {
     assert!(entry(1).get("watchers").is_none(), "{}", entry(1));
     assert_eq!(entry(2)["watchers"], 2);
     assert_eq!(entry(7)["watchers"], 7);
+}
+
+/// Probe #215: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The
+/// marks ride in `m`, positionally, which leaves `x` one code point per cell — the row's width is
+/// still `sum(codepoints(x) * w)` and a client that has never heard of `m` renders what it renders
+/// today rather than a row shifted by every accent in it.
+#[test]
+fn a_run_carries_the_marks_its_cells_are_wearing() {
+    let mut enc = kampr_core::wire::Encoder::new();
+    let cells = vec![
+        cell('r', Color::Default),
+        marked('e', "\u{301}"),
+        cell('s', Color::Default),
+        marked('e', "\u{301}"),
+    ];
+    let rows = enc.rows(&[row(0, cells)]);
+    let runs = &rows[0].runs;
+    assert_eq!(runs.len(), 1, "a marked cell does not break the run");
+    assert_eq!(runs[0].x, "rese", "x stays one code point per cell");
+    assert_eq!(runs[0].m, ["", "\u{301}", "", "\u{301}"]);
+    let v = serde_json::to_value(&runs[0]).unwrap();
+    assert_eq!(v["m"], serde_json::json!(["", "\u{301}", "", "\u{301}"]));
+}
+
+#[test]
+fn an_unmarked_run_omits_the_marks_field_entirely() {
+    let mut enc = kampr_core::wire::Encoder::new();
+    let rows = enc.rows(&[row(0, "hello".chars().map(|c| cell(c, Color::Default)).collect())]);
+    let v = serde_json::to_value(&rows[0].runs[0]).unwrap();
+    assert_eq!(
+        v.get("m"),
+        None,
+        "the common cell wears nothing and costs nothing"
+    );
+}
+
+#[test]
+fn the_marks_list_stops_at_the_last_marked_cell() {
+    let mut enc = kampr_core::wire::Encoder::new();
+    let cells = vec![
+        marked('e', "\u{301}"),
+        cell('f', Color::Default),
+        cell('g', Color::Default),
+    ];
+    let rows = enc.rows(&[row(0, cells)]);
+    assert_eq!(rows[0].runs[0].m, ["\u{301}"], "trailing bare cells are implied");
+}
+
+/// The whole row of a wide cluster: the lead carries the marks, the tail carries nothing, and the
+/// run says two columns per character so the columns still count.
+#[test]
+fn a_wide_cluster_declares_two_columns_and_carries_its_joiners() {
+    let mut term = kampr_term::Emulator::new(20, 1);
+    term.feed("ZZ\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}XY".as_bytes());
+    let mut enc = kampr_core::wire::Encoder::new();
+    let rows = enc.rows(&[row(0, term.grid().row(0).to_vec())]);
+    let runs = &rows[0].runs;
+    assert_eq!(runs[0].x, "ZZ");
+    assert_eq!(runs[1].x, "\u{1F468}");
+    assert_eq!(runs[1].w, 2);
+    assert_eq!(runs[1].m, ["\u{200D}\u{1F469}\u{200D}\u{1F467}"]);
+    assert_eq!(runs[2].x, "XY");
+    let span: usize = runs.iter().map(|r| r.x.chars().count() * r.w as usize).sum();
+    assert_eq!(
+        span, 6,
+        "the family still spends exactly the two columns herdr gave it"
+    );
 }

@@ -178,4 +178,34 @@ class WideGlyphArtboardTest {
             tail = 4..5,
         )
     }
+
+    // Probe #215: the mark has to reach the screen without buying itself a column. A cell wearing
+    // one is drawn on its own for the same reason a wide glyph is (probe #214) — nothing promises
+    // the face that draws the mark advances exactly zero — so the proof is that the columns after
+    // it have not moved, and that the ink is not the ink of a bare base.
+    @Test
+    fun aMarkedCellKeepsItsSingleColumnAndTheTextAfterItKeepsThePitch() {
+        check(
+            listOf(Run(0, "AB"), Run(0, "ee", m = listOf("\u0301", "\u0302")), Run(0, "CD")),
+            "marked-cells-latin",
+            glyphCols = 2..3,
+            tail = 4..5,
+        )
+        val (marked, pitch) = render(
+            listOf(listOf(Run(0, "AB"), Run(0, "e", m = listOf("\u0301")))),
+            "marked-cells-accent",
+        )
+        val (bare, _) = render(listOf(listOf(Run(0, "ABe"))), "marked-cells-bare")
+        assertTrue(pitch > 1f)
+        assertTrue(
+            columnPixels(marked, 2, pitch) != columnPixels(bare, 2, pitch),
+            "the accented e draws the same ink as a bare e, so the mark never arrived",
+        )
+    }
+
+    private fun columnPixels(image: BufferedImage, col: Int, pitch: Float): List<Int> {
+        val from = (col * pitch).toInt()
+        val to = minOf(((col + 1) * pitch).toInt(), image.width)
+        return (from until to).flatMap { x -> (0 until image.height).map { image.getRGB(x, it) } }
+    }
 }

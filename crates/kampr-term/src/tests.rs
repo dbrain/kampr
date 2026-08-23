@@ -121,9 +121,9 @@ fn double_width_glyphs_occupy_two_columns() {
             "XY🚀ZW",
         ),
         (
-            "a zero-width mark does not consume a column",
+            "a zero-width mark rides on its base rather than taking a column",
             "e\u{301}f".as_bytes(),
-            "ef",
+            "e\u{301}f",
         ),
     ];
     for (name, bytes, want) in cases {
@@ -186,4 +186,95 @@ fn a_wide_glyph_that_does_not_fit_wraps_whole() {
     t.feed("abc日".as_bytes());
     assert_eq!(t.grid().row_text(0), "abc");
     assert_eq!(t.grid().row_text(1), "日");
+}
+
+/// Probe #215: a zero-width code point has no column of its own, and dropping it loses the accent
+/// for good — herdr keeps it on the base and addresses the next glyph at base + the *cluster's*
+/// width, so the emulator has to as well or the mark never reaches the phone.
+#[test]
+fn a_zero_width_code_point_rides_on_the_cell_before_it() {
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("a combining mark", "e\u{301}f", &["e\u{301}", "f"]),
+        ("two marks stack", "x\u{301}\u{302}y", &["x\u{301}\u{302}", "y"]),
+        ("a variation selector", "A\u{FE0F}B", &["A\u{FE0F}", "B"]),
+        (
+            "a ZWJ sequence is one cell",
+            "ZZ\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}XY",
+            &[
+                "Z",
+                "Z",
+                "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+                "",
+                "X",
+                "Y",
+            ],
+        ),
+        (
+            "a flag is one cell",
+            "QQ\u{1F1EC}\u{1F1E7}XY",
+            &["Q", "Q", "\u{1F1EC}\u{1F1E7}", "", "X", "Y"],
+        ),
+        (
+            "a third regional indicator starts a new cell",
+            "\u{1F1EC}\u{1F1E7}\u{1F1EB}",
+            &["\u{1F1EC}\u{1F1E7}", "", "\u{1F1EB}"],
+        ),
+        (
+            "a skin-tone modifier is one cell",
+            "\u{1F44D}\u{1F3FD}Z",
+            &["\u{1F44D}\u{1F3FD}", "", "Z"],
+        ),
+        (
+            "a keycap widens its base to two columns",
+            "1\u{FE0F}\u{20E3}Z",
+            &["1\u{FE0F}\u{20E3}", "", "Z"],
+        ),
+        (
+            "an emoji presentation selector widens its base to two columns",
+            "\u{2764}\u{FE0F}Z",
+            &["\u{2764}\u{FE0F}", "", "Z"],
+        ),
+        ("a mark with no base is dropped", "\u{301}ab", &["a", "b"]),
+        (
+            "the virama in a conjunct is a mark, not a joiner",
+            "\u{915}\u{94D}\u{937}",
+            &["\u{915}\u{94D}", "\u{937}"],
+        ),
+    ];
+    for (name, input, want) in cases {
+        let mut t = Emulator::new(20, 2);
+        t.feed(input.as_bytes());
+        let got: Vec<String> = t
+            .grid()
+            .row(0)
+            .iter()
+            .take(want.len())
+            .map(|c| if c.is_tail() { String::new() } else { c.cluster() })
+            .collect();
+        assert_eq!(got, *want, "{name}");
+    }
+}
+
+#[test]
+fn a_cluster_of_marks_is_erased_with_the_cell_it_rides_on() {
+    let mut t = Emulator::new(8, 1);
+    t.feed("e\u{301}f".as_bytes());
+    t.feed(b"\x1b[1;1Hx");
+    assert_eq!(t.grid().row_text(0), "xf", "the accent goes with its base");
+
+    let mut t = Emulator::new(8, 1);
+    t.feed("ab\u{301}c".as_bytes());
+    t.feed(b"\x1b[1;2H\x1b[K");
+    assert_eq!(t.grid().row_text(0), "a");
+}
+
+#[test]
+fn a_variation_selector_that_widens_its_base_takes_the_second_column_with_it() {
+    let mut t = Emulator::new(8, 1);
+    t.feed("\u{2764}\u{FE0F}Z".as_bytes());
+    let row = t.grid().row(0);
+    assert_eq!(row[0].cluster(), "\u{2764}\u{FE0F}");
+    assert!(row[1].is_tail(), "the selector bought a second column");
+    assert_eq!(row[2].ch, 'Z', "and the text after it moved over");
+    assert_eq!(t.cursor().0, 3);
 }

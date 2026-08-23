@@ -22,9 +22,16 @@ class SurfaceRows(private val pane: PaneState) {
     val complete: Boolean get() = pane.scrollback.complete
 
     // One code point per column, with TAIL where a column is the right half of the double-width
-    // glyph beside it. Scrollback rows are decoded from their runs the same way the live buffer
-    // decodes them, so the two halves of the surface read alike.
-    fun into(index: Int, glyphs: IntArray, styleIds: IntArray, linkIds: IntArray? = null): Boolean {
+    // glyph beside it, and `marks` carrying whatever each cell wears on top of that code point.
+    // Scrollback rows are decoded from their runs the same way the live buffer decodes them, so
+    // the two halves of the surface read alike.
+    fun into(
+        index: Int,
+        glyphs: IntArray,
+        styleIds: IntArray,
+        linkIds: IntArray? = null,
+        marks: Array<String>? = null,
+    ): Boolean {
         val width = cols
         if (width == 0) return false
         val history = historyRows
@@ -37,6 +44,7 @@ class SurfaceRows(private val pane: PaneState) {
                 glyphs[col] = cells.glyphs[base + col]
                 styleIds[col] = cells.styles[base + col].toInt()
                 linkIds?.set(col, cells.links[base + col] - 1)
+                marks?.set(col, cells.marks[base + col])
             }
             return true
         }
@@ -45,6 +53,7 @@ class SurfaceRows(private val pane: PaneState) {
             glyphs.fill(BLANK, 0, width)
             styleIds.fill(0, 0, width)
             linkIds?.fill(-1, 0, width)
+            marks?.fill("", 0, width)
             return true
         }
         var col = 0
@@ -53,6 +62,7 @@ class SurfaceRows(private val pane: PaneState) {
             val link = run.l ?: -1
             val glyphWidth = if (run.w >= 2) 2 else 1
             var i = 0
+            var cell = 0
             while (i < run.x.length) {
                 val glyph = glyphAt(run.x, i)
                 i += glyphUnits(glyph)
@@ -60,18 +70,22 @@ class SurfaceRows(private val pane: PaneState) {
                 glyphs[col] = glyph
                 styleIds[col] = style
                 linkIds?.set(col, link)
+                marks?.set(col, run.m.getOrElse(cell) { "" })
                 if (glyphWidth == 2) {
                     glyphs[col + 1] = TAIL
                     styleIds[col + 1] = style
                     linkIds?.set(col + 1, link)
+                    marks?.set(col + 1, "")
                 }
                 col += glyphWidth
+                cell++
             }
         }
         while (col < width) {
             glyphs[col] = BLANK
             styleIds[col] = 0
             linkIds?.set(col, -1)
+            marks?.set(col, "")
             col++
         }
         return true

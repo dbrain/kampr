@@ -1,5 +1,6 @@
 use crate::grid::{Cell, CellAttrs, Color, Grid};
-use unicode_width::UnicodeWidthChar;
+use std::sync::Arc;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use vte::{Params, Perform};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -46,10 +47,13 @@ impl State {
     /// col+2, so advancing one leaves a blank behind every wide character — permanently, because
     /// herdr never repaints a cell it believes already matches.
     ///
-    /// A zero-width character is dropped rather than given a column of its own. The grid holds one
-    /// `char` per cell and cannot carry a combining mark on its base, and of the two wrong answers
-    /// only this one keeps the columns after it where herdr put them.
+    /// Probe #215: herdr's cell is a grapheme, not a code point. A zero-width character rides on
+    /// the cell to its left instead of taking a column of its own, and dropping it — which is what
+    /// this used to do — loses the accent for the same reason.
     fn put(&mut self, c: char) {
+        if self.join(c) {
+            return;
+        }
         let width = match c.width() {
             Some(0) | None => return,
             Some(2) => 2,
@@ -65,9 +69,62 @@ impl State {
             bg: self.pen.bg,
             attrs: self.pen.attrs,
             link: self.link,
+            marks: None,
         };
         self.grid.put(self.cursor.col, self.cursor.row, cell, width);
         self.cursor.col += width;
+    }
+
+    /// The cell the cursor is sitting immediately after — the one a mark rides on. Read off the
+    /// cursor rather than remembered, so every path that moves the cursor invalidates it for free,
+    /// and a mark printed at column 0 has no base, exactly as herdr drops one.
+    fn cluster_lead(&self) -> Option<(u16, u16)> {
+        let prev = self.cursor.col.min(self.grid.cols()).checked_sub(1)?;
+        let lead = if prev > 0 && self.grid.cell(prev, self.cursor.row)?.is_tail() {
+            prev - 1
+        } else {
+            prev
+        };
+        Some((lead, self.cursor.row))
+    }
+
+    /// Appends `c` to the cluster already on screen, and says whether it belonged there.
+    fn join(&mut self, c: char) -> bool {
+        let Some((col, row)) = self.cluster_lead() else {
+            return false;
+        };
+        let Some(cell) = self.grid.cell(col, row) else {
+            return false;
+        };
+        if cell.is_tail() || !continues(cell, c) {
+            return false;
+        }
+        let mut marks = String::with_capacity(cell.marks().len() + c.len_utf8());
+        marks.push_str(cell.marks());
+        marks.push(c);
+        let mut cluster = String::with_capacity(marks.len() + cell.ch.len_utf8());
+        cluster.push(cell.ch);
+        cluster.push_str(&marks);
+        let mut joined = cell.clone();
+        joined.marks = Some(Arc::new(marks));
+
+        let was = if self.grid.cell(col + 1, row).is_some_and(Cell::is_tail) {
+            2
+        } else {
+            1
+        };
+        // A variation selector can buy its base a second column — an emoji-presentation heart, a
+        // keycap — and herdr addresses whatever follows past that column, measured.
+        let width = if cluster.width() >= 2 && col + 1 < self.grid.cols() {
+            2
+        } else {
+            1
+        };
+        self.grid.put(col, row, joined, width);
+        if width > was {
+            self.cursor.col = (self.cursor.col + width - was).min(self.grid.cols());
+        }
+        true
     }
 
     fn sgr(&mut self, params: &Params) {
@@ -121,6 +178,28 @@ impl State {
             i += 1;
         }
     }
+}
+
+const ZWJ: char = '\u{200D}';
+
+fn is_regional(c: char) -> bool {
+    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
+}
+
+fn is_emoji_modifier(c: char) -> bool {
+    ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
+}
+
+/// Grapheme clustering cut down to what a terminal has to get right (probe #215): anything of
+/// width zero, anything after a ZWJ, a skin-tone modifier, and the second of a flag's two regional
+/// indicators. Herdr's own cell model was measured to agree on all four. Everything else — Hangul
+/// jamo, Indic conjuncts — starts a new cell, which is what herdr does with them too.
+fn continues(cell: &Cell, c: char) -> bool {
+    if matches!(c.width(), Some(0) | None) || is_emoji_modifier(c) {
+        return true;
+    }
+    let marks = cell.marks();
+    marks.ends_with(ZWJ) || (marks.is_empty() && is_regional(c) && is_regional(cell.ch))
 }
 
 fn extended(rest: &[u16]) -> Option<(Color, usize)> {

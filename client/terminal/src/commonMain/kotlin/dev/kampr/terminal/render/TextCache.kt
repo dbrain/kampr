@@ -23,6 +23,7 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
     private val asciiGlyphs = arrayOfNulls<TextLayoutResult>(128 * 16)
     private val wideGlyphs = HashMap<Int, TextLayoutResult>()
     private val runs = HashMap<RunKey, TextLayoutResult>()
+    private val clusters = HashMap<RunKey, TextLayoutResult>()
     private val probeKey = RunKey("", 0)
 
     var hits = 0
@@ -50,6 +51,7 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
         asciiGlyphs.fill(null)
         wideGlyphs.clear()
         runs.clear()
+        clusters.clear()
     }
 
     // Probe #65: a resource font resolves asynchronously and Android does not gate first layout on
@@ -86,6 +88,11 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
         if (runs.size > RUN_LIMIT) runs.clear()
         return shape(text, fontKey).also { runs[RunKey(text, fontKey)] = it }
     }
+
+    // A cell wearing marks is one grapheme drawn on its own, so it is cached by its whole text and
+    // kept out of the run counters the mode selector reads: it is never a run.
+    fun cluster(text: String, fontKey: Int): TextLayoutResult =
+        clusters.getOrPut(RunKey(text, fontKey)) { shape(text, fontKey) }
 
     fun glyph(codePoint: Int, fontKey: Int): TextLayoutResult {
         if (codePoint < 128) {

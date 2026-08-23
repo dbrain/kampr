@@ -28,8 +28,18 @@ data class Style(
 @Serializable
 // `w` is columns per character in `x`, 1 or 2, omitted on the wire when 1. A double-width glyph
 // occupies two columns (probe #210) and the client has no Unicode width table to work that out for
-// itself, so the node says so. `x` stays exactly the text on screen either way.
-data class Run(val s: Int = 0, val x: String = "", val l: Int? = null, val w: Int = 1)
+// itself, so the node says so; `x` is one code point per cell either way. `m` is what each cell of
+// the run is wearing on top of its base —
+// combining marks, ZWJ, variation selectors (probe #215) — by position, empty where a cell wears
+// nothing and truncated after the last one. It rides beside `x` rather than in it so `x` stays one
+// code point per cell and the row is still `sum(codepoints(x) * w)` columns wide.
+data class Run(
+    val s: Int = 0,
+    val x: String = "",
+    val l: Int? = null,
+    val w: Int = 1,
+    val m: List<String> = emptyList(),
+)
 
 @Serializable
 data class RowDiff(val row: Int, val runs: List<Run> = emptyList())
