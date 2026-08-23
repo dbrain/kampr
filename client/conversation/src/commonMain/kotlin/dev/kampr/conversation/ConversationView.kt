@@ -52,6 +52,13 @@ import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 
+// Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
+// on a long answer opened at the start of that answer — which read as "somewhere above the
+// bottom", by however tall the newest message happened to be, or as the top outright when the
+// newest message was the whole screen. An offset past the end of any item is measured against the
+// end of the list, which is the only thing that means "the bottom" here.
+private const val END_OF_THE_ITEM = Int.MAX_VALUE
+
 @Composable
 fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
@@ -112,7 +119,9 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // changing the count — and a reader at the bottom would watch it run off the bottom.
     val tail = turns.lastOrNull()?.blocks.orEmpty().filterIsInstance<Block.Md>().sumOf { it.text.length }
     LaunchedEffect(turns.size, tail, keyboardOpen) {
-        if (atBottom && turns.isNotEmpty()) listState.requestScrollToItem(turns.lastIndex + leading)
+        if (atBottom && turns.isNotEmpty()) {
+            listState.requestScrollToItem(turns.lastIndex + leading, END_OF_THE_ITEM)
+        }
     }
 
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
