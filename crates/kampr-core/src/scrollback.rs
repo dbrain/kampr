@@ -1,5 +1,5 @@
 use crate::provider::RawScrollback;
-use kampr_term::{Emulator, RowDiff};
+use kampr_term::{Emulator, RowDiff, column_bound};
 
 /// A memory bound, not a display one. Clients must not impose a row cap of their own: a terminal
 /// surface fills the viewport and scrolls as far back as the node actually holds. At roughly 200
@@ -47,11 +47,14 @@ pub enum Ingest {
 #[derive(Debug, Clone)]
 pub struct ScrollbackRing {
     rows: Vec<String>,
-    cols: u16,
+    /// The width a wrap has actually proved, or nothing. An estimate must never sit here: the
+    /// ring restarts when this moves, and the rect moves on every pane the width probe reaches.
+    cols: Option<u16>,
     /// Absolute index of `rows[0]`. Only ever increases.
     base: u32,
     capped: bool,
     max_rows: usize,
+    rendered: Option<Vec<RowDiff>>,
 }
 
 impl Default for ScrollbackRing {
@@ -64,10 +67,11 @@ impl ScrollbackRing {
     pub fn new(max_rows: usize) -> Self {
         Self {
             rows: Vec::new(),
-            cols: 0,
+            cols: None,
             base: 0,
             capped: false,
             max_rows: max_rows.max(1),
+            rendered: None,
         }
     }
 
@@ -94,12 +98,21 @@ impl ScrollbackRing {
         if incoming.is_empty() && !self.rows.is_empty() {
             return Ingest::Stitched { added: 0 };
         }
+        self.rendered = None;
         // A width change re-wraps every stored row, so nothing older can be trusted to line up.
         // The ring adopts the new width *before* restarting on it (probe #112): a restart that
         // kept the old one would find every later read disagreeing with it too, and throw the
         // whole ring away on every read for as long as the pane stayed that width.
-        let rewrapped = raw.cols != self.cols && !self.rows.is_empty();
-        self.cols = raw.cols;
+        //
+        // **A width arriving where there was none is not a change.** The first reads of a
+        // freshly-watched pane land before anything has measured it (probe #68), and a ring that
+        // restarted when the label resolved from nothing to the PTY's own width would flush the
+        // operator's history on every split pane they opened.
+        let rewrapped =
+            matches!((raw.cols, self.cols), (Some(now), Some(was)) if now != was) && !self.rows.is_empty();
+        if let Some(cols) = raw.cols {
+            self.cols = Some(cols);
+        }
         if rewrapped {
             let dropped = self.restart(incoming);
             return Ingest::Rewrapped { dropped };
@@ -125,28 +138,20 @@ impl ScrollbackRing {
         }
     }
 
-    pub fn render(&self) -> ScrollbackDoc {
+    /// Held rather than rebuilt: a client polls this every three seconds per pane, and laying out
+    /// twenty thousand rows of ANSI is tens of milliseconds of a tokio worker with no `.await` in
+    /// it to yield at. Every path that moves a row drops the cache.
+    pub fn render(&mut self) -> ScrollbackDoc {
         // A depth, not a highest index: the ring spans `from_top .. from_top + total_rows`.
         let total_rows = self.rows.len() as u32;
-        if self.rows.is_empty() {
-            return ScrollbackDoc {
-                from_top: self.base,
-                rows: Vec::new(),
-                total_rows,
-                complete: self.base == 0,
-                capped: self.capped,
-            };
-        }
-        let mut term = Emulator::new(self.cols.max(1), self.rows.len().min(u16::MAX as usize) as u16);
-        // herdr separates rows with LF alone, which moves down without returning the carriage.
-        term.feed(self.rows.join("\r\n").as_bytes());
-        let grid = term.grid();
-        let rows = (0..grid.rows())
-            .map(|r| RowDiff {
-                row: self.base + r as u32,
-                cells: grid.row(r).to_vec(),
-            })
-            .collect();
+        let rows = match self.rendered.as_ref() {
+            Some(rows) => rows.clone(),
+            None => {
+                let rows = lay_out(&self.rows, self.base);
+                self.rendered = Some(rows.clone());
+                rows
+            }
+        };
         ScrollbackDoc {
             from_top: self.base,
             rows,
@@ -177,6 +182,28 @@ impl ScrollbackRing {
         self.base += excess as u32;
         self.capped = true;
     }
+}
+
+/// **The grid is sized by the widest row it is about to be handed, never by the pane's width.**
+/// A row wider than the grid wraps onto a second line, pushes the document past the grid's height
+/// and `Grid::scroll_up` drops rows off the *top* — while `from_top`, `total_rows` and every row
+/// index still describe the original span. That is a silent discard of exactly the kind ADR 0004
+/// exists to make loud, and the label goes too narrow routinely (probe #68).
+fn lay_out(rows: &[String], base: u32) -> Vec<RowDiff> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let cols = rows.iter().map(|r| column_bound(r)).max().unwrap_or(1).max(1);
+    let mut term = Emulator::new(cols, rows.len().min(u16::MAX as usize) as u16);
+    // herdr separates rows with LF alone, which moves down without returning the carriage.
+    term.feed(rows.join("\r\n").as_bytes());
+    let grid = term.grid();
+    (0..grid.rows())
+        .map(|r| RowDiff {
+            row: base + r as u32,
+            cells: grid.row(r).to_vec(),
+        })
+        .collect()
 }
 
 /// The rows of a read that are history: `recent` hands back the live viewport too, and that

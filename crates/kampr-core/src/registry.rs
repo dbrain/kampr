@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 pub enum PaneUpdate {
@@ -178,6 +178,7 @@ struct PaneState {
     links_sent: usize,
     pending_reset: bool,
     ready: bool,
+    cursor_sent: Cursor,
 }
 
 /// Output seen on the pane's frame stream. The poller waits on this rather than on a timer, so a
@@ -330,6 +331,7 @@ impl PaneRegistry {
             links_sent: 0,
             pending_reset: false,
             ready: false,
+            cursor_sent: Cursor::default(),
         }));
         let (tx, _) = broadcast::channel(self.config.broadcast_capacity);
         let history = Arc::new(Mutex::new(ScrollbackRing::new(self.config.scrollback_max_rows)));
@@ -367,6 +369,11 @@ impl PaneRegistry {
             .lock()
             .unwrap()
             .insert(pane_id.to_string(), Arc::downgrade(&entry));
+        // The lock is a create-once guard and nothing more, and the entry is in the map: a
+        // concurrent `watch` for this pane now takes the fast path above. Held any longer it
+        // serialises the first-frame wait across *every* pane — four silent panes opening at 2 s,
+        // 4 s, 6 s and 8 s, on the reconnect where a client re-watches all of them at once.
+        drop(_opening);
         let mut watcher = self.attach(entry);
         if let Ok(Ok(first)) = tokio::time::timeout(self.config.first_grid_wait, watcher.recv()).await
             && first.is_reset()
@@ -441,6 +448,11 @@ impl Watcher {
     }
 }
 
+fn cursor_of(state: &PaneState) -> Cursor {
+    let (col, row, visible) = state.term.cursor();
+    Cursor { col, row, visible }
+}
+
 fn full_update(state: &PaneState) -> PaneUpdate {
     let grid = state.term.grid();
     let rows_data = (0..grid.rows())
@@ -449,12 +461,11 @@ fn full_update(state: &PaneState) -> PaneUpdate {
             cells: grid.row(r).to_vec(),
         })
         .collect();
-    let (col, row, visible) = state.term.cursor();
     PaneUpdate::Reset {
         cols: grid.cols(),
         rows: grid.rows(),
         rows_data: Arc::new(rows_data),
-        cursor: Cursor { col, row, visible },
+        cursor: cursor_of(state),
         links: Arc::new(grid.links.clone()),
     }
 }
@@ -467,6 +478,7 @@ fn publish_reset(state: &Arc<Mutex<PaneState>>, tx: &broadcast::Sender<PaneUpdat
     st.pending_reset = false;
     st.ready = true;
     st.links_sent = st.term.grid().links.len();
+    st.cursor_sent = cursor_of(&st);
     let _ = tx.send(full_update(&st));
 }
 
@@ -514,17 +526,23 @@ async fn pump(
                 }
                 st.term.feed(&bytes);
                 let dirty = st.term.take_dirty();
-                let (col, row, visible) = st.term.cursor();
-                let cursor = Cursor { col, row, visible };
+                let cursor = cursor_of(&st);
+                // Probe #12: every frame ends with an absolute cursor address and carries
+                // `ESC[?25h/l`, so a frame that moves the caret and nothing else is the ordinary
+                // shape of ←/→/Home at a prompt and of a program hiding it. The client paints the
+                // caret from the last `grid.*` message and from nothing else, so a patch is owed
+                // for a cursor that moved even when no cell did.
                 if st.pending_reset {
                     st.pending_reset = false;
                     st.ready = true;
                     st.links_sent = st.term.grid().links.len();
+                    st.cursor_sent = cursor;
                     let _ = tx.send(full_update(&st));
-                } else if !dirty.is_empty() {
+                } else if !dirty.is_empty() || cursor != st.cursor_sent {
                     let links = &st.term.grid().links;
                     let new_links = links[st.links_sent.min(links.len())..].to_vec();
                     st.links_sent = links.len();
+                    st.cursor_sent = cursor;
                     let _ = tx.send(PaneUpdate::Patch {
                         rows: Arc::new(dirty),
                         cursor,
@@ -554,6 +572,7 @@ async fn accumulate_history(
     let mut previous = Instant::now();
     let mut seen_frames = activity.count();
     let mut rate = RowRate::default();
+    let mut failures = 0usize;
     loop {
         let outcome = provider.read_scrollback(&pane_id).await;
         let now = Instant::now();
@@ -565,6 +584,7 @@ async fn accumulate_history(
         seen_frames = frames;
 
         let mut gapped = false;
+        let mut failed = false;
         let added = match outcome {
             Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
                 Ingest::Fresh { rows } => rows,
@@ -586,11 +606,23 @@ async fn accumulate_history(
             // socket, so it costs nothing to keep asking at the quiet cadence — and a pane with
             // no ring *yet* is one frame away from having one.
             Ok(None) => 0,
+            // **Not the same state as a quiet pane, and it must not settle into the same
+            // cadence.** `Ok(None)` is the pane having no ring to offer; an error is this node
+            // failing to ask, and a poller that parks on the idle backstop for it stops growing
+            // history while every surface goes on looking healthy.
             Err(e) => {
-                debug!(pane = %pane_id, error = %e, "scrollback read failed");
+                failed = true;
+                if failures == 0 {
+                    warn!(pane = %pane_id, error = %e, "scrollback read failed; history has stopped growing");
+                }
+                failures += 1;
                 0
             }
         };
+        if !failed && failures > 0 {
+            info!(pane = %pane_id, failures, "scrollback reads are answering again");
+            failures = 0;
+        }
 
         let rows_per_sec = rate.observe(added, elapsed);
         let next = if gapped {
@@ -614,7 +646,7 @@ async fn accumulate_history(
         // A pane that has gone quiet waits on its own output rather than on a timer, which is
         // what makes an idle pane free. The interval is only a ceiling: any frame cuts the wait
         // short, because output starting is the one moment the estimate cannot know about yet.
-        let wait = if added == 0 && !producing && !gapped {
+        let wait = if added == 0 && !producing && !gapped && !failed {
             policy.idle
         } else {
             next

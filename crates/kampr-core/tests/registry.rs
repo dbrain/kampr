@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
 use kampr_core::registry::{HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, Watcher};
+use kampr_core::wire::Cursor;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,6 +18,7 @@ struct Scripted {
     last_read: Mutex<Option<RawScrollback>>,
     reads_done: AtomicUsize,
     stall_when_empty: std::sync::atomic::AtomicBool,
+    reads_fail: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Scripted {
@@ -30,6 +32,7 @@ impl Default for Scripted {
             last_read: Mutex::default(),
             reads_done: AtomicUsize::default(),
             stall_when_empty: std::sync::atomic::AtomicBool::new(false),
+            reads_fail: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -70,6 +73,9 @@ impl Provider for Scripted {
 
     async fn read_scrollback(&self, _pane_id: &str) -> Result<Option<RawScrollback>> {
         self.reads_done.fetch_add(1, Ordering::SeqCst);
+        if self.reads_fail.load(Ordering::SeqCst) {
+            anyhow::bail!("pane.read is not answering");
+        }
         if let Some(next) = self.reads.lock().await.pop_front() {
             *self.last_read.lock().await = Some(next.clone());
             return Ok(Some(next));
@@ -366,7 +372,7 @@ fn read(lines: &[String], viewport_rows: u16) -> RawScrollback {
 fn read_at(lines: &[String], viewport_rows: u16, cols: u16) -> RawScrollback {
     RawScrollback {
         text: lines.iter().map(|l| format!("{l}\n")).collect(),
-        cols,
+        cols: Some(cols),
         viewport_rows,
         truncated: true,
     }
@@ -794,5 +800,148 @@ async fn a_read_that_is_only_the_viewport_does_not_cost_the_ring_its_history() {
     assert_eq!(
         doc.from_top, 0,
         "nothing was discarded, so nothing may be rebased past what the client holds"
+    );
+}
+
+/// `watch` took one process-global lock and held it across the two-second first-frame wait, so
+/// four panes on a silent provider opened at 2 s, 4 s, 6 s and 8 s — and the worst case is the
+/// worst failure, because a spawn that fails sends no `Reset` at all and every pane waits the lot.
+/// The client fans out exactly this way: it re-sends `watch` for every watched pane on reconnect.
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_one_pane_does_not_wait_out_another_panes_first_frame() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            first_grid_wait: Duration::from_millis(400),
+            ..RegistryConfig::default()
+        },
+    );
+    let started = std::time::Instant::now();
+    let (a, b) = tokio::join!(reg.watch("a"), reg.watch("b"));
+    let elapsed = started.elapsed();
+    a.expect("a");
+    b.expect("b");
+    assert!(
+        elapsed < Duration::from_millis(700),
+        "two silent panes opened serially: {elapsed:?}"
+    );
+}
+
+/// Probe #12: every herdr frame ends with an absolute cursor address and carries `ESC[?25h/l`, so
+/// a frame that moves nothing but the cursor is the *normal* shape for ←/→/Home at a prompt and
+/// for a program hiding the caret. The client paints the caret from the last `grid.*` message and
+/// nothing else, so a caret with no cell change behind it sat at the wrong column until some
+/// unrelated cell moved and dragged the right cursor along with it.
+#[tokio::test]
+async fn a_frame_that_moves_only_the_cursor_is_still_published() {
+    let (p, reg) = setup().await;
+    let mut w = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 3 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"\x1b[1;1Hprompt> ".to_vec(),
+    })
+    .await
+    .unwrap();
+    let first = next(&mut w).await;
+    assert!(first.is_reset());
+
+    feed.send(PaneEvent::Bytes {
+        full: false,
+        bytes: b"\x1b[1;3H".to_vec(),
+    })
+    .await
+    .unwrap();
+    match next(&mut w).await {
+        PaneUpdate::Patch { rows, cursor, .. } => {
+            assert!(rows.is_empty(), "no cell changed, so no row should travel");
+            assert_eq!(
+                cursor,
+                Cursor {
+                    col: 2,
+                    row: 0,
+                    visible: true
+                }
+            );
+        }
+        other => panic!("a cursor-only frame published {other:?}"),
+    }
+
+    feed.send(PaneEvent::Bytes {
+        full: false,
+        bytes: b"\x1b[?25l".to_vec(),
+    })
+    .await
+    .unwrap();
+    match next(&mut w).await {
+        PaneUpdate::Patch { cursor, .. } => assert!(!cursor.visible),
+        other => panic!("a hidden caret published {other:?}"),
+    }
+}
+
+/// Nothing asserted a cursor on a *patch* — the only cursor assertions in the suite were on a
+/// hand-built `GridPatch` and on a `grid.reset` — so replacing it with `Cursor::default()` in
+/// `pump` passed the whole suite.
+#[tokio::test]
+async fn a_patch_carries_the_cursor_the_frame_left_behind() {
+    let (p, reg) = setup().await;
+    let mut w = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 3 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"\x1b[1;1Ha".to_vec(),
+    })
+    .await
+    .unwrap();
+    assert!(next(&mut w).await.is_reset());
+
+    feed.send(PaneEvent::Bytes {
+        full: false,
+        bytes: b"\x1b[2;1Hbcd".to_vec(),
+    })
+    .await
+    .unwrap();
+    match next(&mut w).await {
+        PaneUpdate::Patch { rows, cursor, .. } => {
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                cursor,
+                Cursor {
+                    col: 3,
+                    row: 1,
+                    visible: true
+                }
+            );
+        }
+        other => panic!("expected a patch, got {other:?}"),
+    }
+}
+
+/// A pane whose `pane.read` keeps failing looked exactly like a pane with nothing to say: the
+/// pacer relaxed to the idle backstop, history stopped growing and only a `debug!` knew. Quiet is
+/// a fact about the pane; a failing read is a fact about the node, and the two must not settle
+/// into the same cadence.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_whose_reads_keep_failing_is_not_treated_as_a_quiet_one() {
+    let p = Arc::new(Scripted::default());
+    p.reads_fail.store(true, Ordering::SeqCst);
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            first_grid_wait: Duration::from_millis(10),
+            history: brisk(),
+            ..RegistryConfig::default()
+        },
+    );
+    let _w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let reads = p.reads_done.load(Ordering::SeqCst);
+    assert!(
+        reads >= 4,
+        "300ms at a 40ms quiet cadence is several reads, saw {reads} — the poller parked on the \
+         idle backstop as though the pane had simply gone quiet"
     );
 }
