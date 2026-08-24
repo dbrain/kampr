@@ -43,6 +43,9 @@ pub struct Node {
     pub peers: Arc<Peers>,
     pub auth: Arc<Auth>,
     pub push: Arc<crate::push::Push>,
+    /// One per node, because the rate limit it exists for is per *desktop*: a Toaster made at the
+    /// call site has never seen the toast before it and refuses nothing.
+    pub toaster: crate::toast::Toaster,
     /// Client sessions in flight. A permit is held for the life of a socket, so this is a bound
     /// on live sessions rather than on the rate they are opened at.
     pub sockets: Arc<Semaphore>,
@@ -109,6 +112,7 @@ impl Node {
             peers,
             auth,
             push,
+            toaster: crate::toast::Toaster::default(),
             journals,
             caps: crate::caps::Caps::default(),
             herd,
@@ -153,6 +157,13 @@ impl Node {
 
     pub fn subscribe_herd(&self) -> watch::Receiver<Arc<HerdModel>> {
         self.herd.subscribe()
+    }
+
+    /// Test-visible: the model is built by [`refresh_herd`] from what a herdr reports, and a test
+    /// that needs a *particular* herd — or one that moves at a particular moment — cannot make a
+    /// herdr produce it.
+    pub fn publish_herd(&self, model: HerdModel) {
+        self.herd.send_replace(Arc::new(model));
     }
 
     /// Stops everything this node is running: the herd poller, session discovery and every

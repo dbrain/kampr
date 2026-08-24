@@ -6,8 +6,8 @@
 
 use futures_util::{SinkExt, StreamExt};
 use kampr_auth::{NodeIdentity, Role};
-use kampr_mesh::Presence;
 use kampr_mesh::dial::Hub;
+use kampr_mesh::{Incoming, Presence};
 use kampr_node::{BUILD, Config, Node, http};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -77,6 +77,25 @@ impl Harness {
 
     fn keys(&self) -> &Path {
         self.home.path()
+    }
+
+    fn state_db(&self) -> std::path::PathBuf {
+        self.home.path().join("state").join("kampr.db")
+    }
+
+    /// Makes the device store genuinely unreadable, from a second connection to the same file, so
+    /// what the node's own pool hits is a real error rather than an injected one: every device
+    /// query answers `no such table` from here on.
+    async fn break_the_store(&self, broken: bool) {
+        use sqlx::Connection;
+        let mut db = sqlx::SqliteConnection::connect(&format!("sqlite://{}", self.state_db().display()))
+            .await
+            .expect("the state db");
+        let sql = match broken {
+            true => "ALTER TABLE devices RENAME TO devices_gone",
+            false => "ALTER TABLE devices_gone RENAME TO devices",
+        };
+        sqlx::query(sql).execute(&mut db).await.expect("a rename");
     }
 
     async fn token(&self, role: Role) -> String {
@@ -320,4 +339,224 @@ async fn a_node_serves_a_bounded_number_of_sockets() {
         .await
         .expect_err("a third socket must be refused");
     assert!(refusal.contains("503"), "{refusal}");
+}
+
+/// Revocation is the product's kill switch, and the one path that can turn its failure into a
+/// plausible-looking success is the session's own re-read: `refresh` answered "keep the session"
+/// for *any* store error, and nothing distinguishes a transient one from a store that has stopped
+/// working. A full disk, a corrupt WAL, the file replaced under a restore — every one of them kept
+/// every connected device online, including devices the operator had just revoked.
+///
+/// One failure still has to be survivable; that half of the old comment was right.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_store_stays_unreadable_closes_instead_of_trusting_its_handshake() {
+    let h = Harness::start(|_| {}).await;
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+
+    // Every write verb re-reads the device row first, so the client itself sets the pace.
+    let write = json!({ "t": "input", "pane": "01J/w1:p1", "text": "x" }).to_string();
+
+    h.break_the_store(true).await;
+    socket
+        .send(tungstenite::Message::Text(write.clone().into()))
+        .await
+        .expect("a write");
+    h.break_the_store(false).await;
+    socket
+        .send(tungstenite::Message::Text(write.clone().into()))
+        .await
+        .expect("a write");
+    assert!(
+        !closed(&mut socket, 2).await,
+        "one unreadable check is a database hiccup, not a revocation"
+    );
+
+    h.break_the_store(true).await;
+    for _ in 0..6 {
+        let _ = socket
+            .send(tungstenite::Message::Text(write.clone().into()))
+            .await;
+    }
+    assert!(
+        closed(&mut socket, 5).await,
+        "a store that cannot say whether this device is still authorised must not keep it connected"
+    );
+}
+
+/// The pairing toast's rate limit was enforced by nothing: the only call site built a `Toaster`
+/// inside the task it spawned for each pairing, so `last` was always `None` and `MIN_INTERVAL`
+/// was unreachable. Anything that can put arbitrary text on someone's desktop as fast as it likes
+/// is a denial of service against the person, not the machine.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_pairings_in_a_row_put_one_toast_on_the_operators_desk() {
+    let h = Harness::start(|_| {}).await;
+    h.token(Role::Full).await;
+    assert!(
+        settles(&h, 1).await,
+        "the first pairing announces itself: {}",
+        h.node.toaster.attempts()
+    );
+    h.token(Role::Full).await;
+    assert!(
+        !settles(&h, 2).await,
+        "a second pairing inside the window is refused before it reaches herdr"
+    );
+}
+
+/// The toast is raised on a task of its own, so this waits for it rather than assuming it ran.
+async fn settles(h: &Harness, attempts: u64) -> bool {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h.node.toaster.attempts() < attempts {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// `expires_at` is half of what "currently paired" means and the inventory did not say so: the
+/// rows were serialised raw, a client read `revokedAt` alone, and a device whose token ran out
+/// weeks ago showed as connected. `Device::active` is the node's own judgement and it is what
+/// goes on the wire — additively, so an older client ignores it and reads what it read before.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_device_inventory_says_an_expired_device_is_not_active() {
+    let h = Harness::start(|_| {}).await;
+    let token = h.token(Role::Full).await;
+    let now = kampr_auth::now();
+    let store = h.node.auth.store();
+    store
+        .create_device("lapsed", Role::Full, now - 86_400, Some(now - 60), None, None)
+        .await
+        .expect("a lapsed device");
+
+    let (status, body) = request(
+        &h.origin,
+        "GET",
+        "/api/devices",
+        &[("authorization", &format!("Bearer {token}"))],
+        None,
+    )
+    .await;
+    assert!(status.contains("200"), "{status}");
+
+    let devices = body["devices"].as_array().expect("a device list");
+    let lapsed = devices
+        .iter()
+        .find(|d| d["name"] == "lapsed")
+        .expect("the lapsed device");
+    assert_eq!(
+        lapsed["revoked_at"],
+        Value::Null,
+        "the field a client used to read on its own says nothing about an expiry"
+    );
+    assert_eq!(lapsed["active"], json!(false));
+
+    let live = devices
+        .iter()
+        .find(|d| d["name"] == "limits")
+        .expect("this session's own device");
+    assert_eq!(live["active"], json!(true));
+}
+
+/// The one herd delta a client could permanently miss.
+///
+/// `greet` read the herd, sent it, and *then* awaited a database round trip; only after that was
+/// the update feed subscribed, at whatever version the model had reached by then. A rebuild
+/// landing inside that window — and rebuilds are event-driven, so another client merely opening a
+/// pane triggers one — left the client holding V while the feed started at V+1: the V→V+1 delta
+/// was never sent and every later patch diffed against a model the client had never been given. A
+/// pane added exactly then stayed invisible until it changed again.
+#[tokio::test]
+async fn a_herd_rebuilt_while_the_greeting_is_still_being_written_still_reaches_the_client() {
+    let h = Harness::start(|_| {}).await;
+    let device = h
+        .node
+        .auth
+        .store()
+        .create_device("greeted", Role::Full, kampr_auth::now(), None, None, None)
+        .await
+        .expect("a device");
+
+    h.node.publish_herd(herd_of(&["w1:p1"]));
+    let (node_side, client_side) = kampr_mesh::transport::pair();
+    let (out, incoming) = node_side.split();
+    let session = tokio::spawn(kampr_node::session::run_on(
+        out,
+        incoming,
+        h.node.clone(),
+        device,
+        "test".into(),
+    ));
+    // One poll is all it takes to reach the database read: everything before it is synchronous,
+    // and the herd the client has just been handed is already on the wire.
+    tokio::task::yield_now().await;
+    h.node.publish_herd(herd_of(&["w1:p1", "w1:p2"]));
+
+    let (_, mut from_node) = client_side.split();
+    let mut seen: Vec<String> = Vec::new();
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(text) = from_node.recv().await {
+            let msg: Value = serde_json::from_str(&text).expect("a server message");
+            seen.push(msg["t"].as_str().unwrap_or_default().to_string());
+            if mentions(&msg, "01J/w1:p2") {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    session.abort();
+
+    assert!(
+        found,
+        "the pane added during the greeting never reached the client; saw {seen:?}"
+    );
+}
+
+fn herd_of(panes: &[&str]) -> kampr_node::herd::HerdModel {
+    kampr_node::herd::HerdModel {
+        nodes: Vec::new(),
+        panes: panes
+            .iter()
+            .map(|id| {
+                kampr_core::wire::PaneEntry::new(
+                    "01J",
+                    &kampr_core::provider::PaneInfo {
+                        pane_id: (*id).to_string(),
+                        ..kampr_core::provider::PaneInfo::default()
+                    },
+                    false,
+                )
+            })
+            .collect(),
+    }
+}
+
+/// A pane reaches a client in the greeting's `herd` or in a `herd.patch`, and either is fine —
+/// what must not happen is neither.
+fn mentions(msg: &Value, pane: &str) -> bool {
+    let listed = |at: &Value| {
+        at.as_array()
+            .is_some_and(|panes| panes.iter().any(|p| p["id"] == pane))
+    };
+    listed(&msg["panes"]) || listed(&msg["added"]["panes"]) || listed(&msg["changed"]["panes"])
+}
+
+/// `enrolled` says whether this node is claimed, and it is the thing a first run branches on. The
+/// read that answers it used to fail open — `unwrap_or(0) > 0` — so an unreadable store invited a
+/// stranger to claim a node that is already somebody's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_that_cannot_read_its_devices_does_not_say_nobody_is_enrolled() {
+    let h = Harness::start(|_| {}).await;
+    h.token(Role::Full).await;
+    let (status, body) = request(&h.origin, "GET", "/api/node", &[], None).await;
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(body["enrolled"], json!(true));
+
+    h.break_the_store(true).await;
+    let (status, body) = request(&h.origin, "GET", "/api/node", &[], None).await;
+    assert!(status.contains("500"), "{status}");
+    assert_ne!(body["enrolled"], json!(false), "a guess is not an answer");
 }

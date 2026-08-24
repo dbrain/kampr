@@ -1,4 +1,4 @@
-use crate::caps::{SessionEntry, sessions as list_sessions};
+use crate::caps::{SessionEntry, SessionListError, sessions as list_sessions};
 use crate::config::Config;
 use kampr_core::registry::RegistryConfig;
 use kampr_core::{HerdrConfig, HerdrProvider, PaneRegistry};
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::Notify;
-use tracing::info;
+use tracing::{info, warn};
 
 /// A named herdr session is a whole separate server with its own socket (probe #49), so it is a
 /// separate node in the herd model rather than more panes on this one. Polled rather than
@@ -134,7 +134,22 @@ impl Sessions {
     /// Adds and drops providers to match what is running on the host, leaving every other
     /// session's watchers untouched — a dead session is one node going offline, not this one.
     pub async fn reconcile(&self) {
-        let found = list_sessions(&self.config.herdr.binary).await;
+        self.apply(list_sessions(&self.config.herdr.binary).await);
+    }
+
+    /// **`Err` is no information, and no information may not evict.** A named session *is* a node
+    /// (`ARCHITECTURE.md` §2), so treating one failed `herdr session list` as "there are none"
+    /// dropped every extra server on the host out of every client's herd — tearing down its
+    /// watchers — until the next sweep put them back. Adding on a partial read is still safe;
+    /// only removal has to stand on an answer.
+    fn apply(&self, found: Result<Vec<SessionEntry>, SessionListError>) {
+        let found = match found {
+            Ok(found) => found,
+            Err(e) => {
+                warn!(error = %e, "could not list herdr sessions; keeping the ones already served");
+                return;
+            }
+        };
         let wanted = self.wanted(&found);
         let mut changed = false;
 
@@ -245,5 +260,46 @@ mod tests {
         assert_eq!(default.local_pane("01J.agents/w1:p1"), None);
         assert_eq!(agents.local_pane("01J/w1:p1"), None);
         assert!(default.owns("01J") && !default.owns("01J.agents"));
+    }
+
+    fn entry(name: &str, socket: &str) -> SessionEntry {
+        SessionEntry {
+            name: name.into(),
+            running: true,
+            socket_path: Some(socket.into()),
+        }
+    }
+
+    fn sessions() -> Arc<Sessions> {
+        let mut config = Config::bootstrap("host");
+        config.node_id = "01J".into();
+        config.herdr.socket = "/nowhere/default/herdr.sock".into();
+        Sessions::open(&config)
+    }
+
+    /// One `herdr session list` that could not be read used to read as "there are no named
+    /// sessions", and a named session *is* a node: every extra herdr server on the host — with
+    /// every pane in it — left every client's herd and its watchers came down, until the next
+    /// sweep put them back. This is #233's shape applied to the multi-server feature.
+    #[tokio::test]
+    async fn a_session_list_that_could_not_be_read_does_not_empty_the_herd() {
+        let sessions = sessions();
+        sessions.apply(Ok(vec![entry("agents", "/nowhere/sessions/agents/herdr.sock")]));
+        assert_eq!(sessions.all().len(), 2, "the named session joined the herd");
+
+        sessions.apply(Err(SessionListError::Unreadable("not json".into())));
+        assert_eq!(
+            sessions.all().len(),
+            2,
+            "a list nobody could read is not a host with no named sessions"
+        );
+
+        // And an answer that really does say so still evicts, or a stopped session would never go.
+        sessions.apply(Ok(Vec::new()));
+        assert_eq!(
+            sessions.all().len(),
+            1,
+            "a read answer still removes what it omits"
+        );
     }
 }

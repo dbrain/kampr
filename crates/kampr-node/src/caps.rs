@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tracing::warn;
 
 /// `caps` is answered from here rather than from the host, because a client may send it as often
 /// as it likes and one of the two answers costs a process. Long enough that a socket cannot turn
@@ -61,6 +62,15 @@ impl Caps {
         self.spawns.load(Ordering::Relaxed)
     }
 
+    fn last_sessions(&self) -> Value {
+        self.cached
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, _, value)| value["sessions"].clone())
+            .unwrap_or_else(|| Value::Array(Vec::new()))
+    }
+
     /// `served` is the set of session names this node actually reaches. Listing a session the
     /// node cannot serve is what made this capability a promise nothing kept.
     pub async fn get(&self, node_id: &str, herdr: &Herdr, binary: &str, served: &[String]) -> Value {
@@ -72,17 +82,26 @@ impl Caps {
             return value.clone();
         }
         self.spawns.fetch_add(1, Ordering::Relaxed);
-        let sessions: Vec<Value> = sessions(binary)
-            .await
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "running": s.running,
-                    "served": served.iter().any(|n| n == &s.name),
+        let sessions: Value = match sessions(binary).await {
+            Ok(found) => found
+                .into_iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "running": s.running,
+                        "served": served.iter().any(|n| n == &s.name),
+                    })
                 })
-            })
-            .collect();
+                .collect(),
+            Err(e) => {
+                warn!(error = %e, "could not list herdr sessions");
+                // No information about the session list is not "this host has no named
+                // sessions": what was last read is closer to true. The rest of the answer is
+                // still built fresh, and it is still cached, because the TTL is what keeps a
+                // client polling a node whose herdr is gone from becoming an amplifier.
+                self.last_sessions()
+            }
+        };
         let value = serde_json::json!({
             "t": "caps",
             "node": node_id,
@@ -125,41 +144,77 @@ pub async fn agent_kinds(herdr: &Herdr) -> Vec<String> {
     kinds
 }
 
+/// Long enough that a loaded machine is not mistaken for a broken one, short enough that a herdr
+/// wedged on its own socket does not hold a manage op open for the whole of [`SESSION_SETTLE`].
+const LIST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Why the host could not be asked what sessions it has.
+///
+/// Three failures used to be one empty list, and an empty list is a *fact* about the host that
+/// callers act on — [`crate::sessions::Sessions::reconcile`] evicts every named session on one.
+/// No information is not the same fact and must not be handled as if it were (#233 is this shape:
+/// a spawned-binary failure indistinguishable from a legitimate nothing).
+#[derive(Debug, thiserror::Error)]
+pub enum SessionListError {
+    #[error("could not run {program}: {source}")]
+    Spawn { program: String, source: std::io::Error },
+    #[error("{program} session list did not answer in time")]
+    Timeout { program: String },
+    #[error("{program} session list exited {status}: {stderr}")]
+    Exit {
+        program: String,
+        status: String,
+        stderr: String,
+    },
+    #[error("unreadable session list: {0}")]
+    Unreadable(String),
+}
+
 /// A named session is a whole separate Herdr server with its own socket, created by the CLI and
 /// absent from the socket API (probe #49) — so this is the one discovery that shells out.
-pub async fn sessions(binary: &str) -> Vec<SessionEntry> {
-    let Ok(output) = Command::new(kampr_herdr::locate::program(binary))
+pub async fn sessions(binary: &str) -> Result<Vec<SessionEntry>, SessionListError> {
+    let program = kampr_herdr::locate::program(binary);
+    let name = program.display().to_string();
+    let run = Command::new(&program)
         .args(["session", "list", "--json"])
-        .output()
-        .await
-    else {
-        return Vec::new();
+        .output();
+    let output = match tokio::time::timeout(LIST_TIMEOUT, run).await {
+        Err(_) => return Err(SessionListError::Timeout { program: name }),
+        Ok(Err(source)) => {
+            return Err(SessionListError::Spawn {
+                program: name,
+                source,
+            });
+        }
+        Ok(Ok(output)) => output,
     };
     if !output.status.success() {
-        return Vec::new();
+        return Err(SessionListError::Exit {
+            program: name,
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
     }
     parse_sessions(&String::from_utf8_lossy(&output.stdout))
 }
 
-pub fn parse_sessions(json: &str) -> Vec<SessionEntry> {
-    let Ok(value) = serde_json::from_str::<Value>(json) else {
-        return Vec::new();
-    };
-    value["sessions"]
+pub fn parse_sessions(json: &str) -> Result<Vec<SessionEntry>, SessionListError> {
+    let value =
+        serde_json::from_str::<Value>(json).map_err(|e| SessionListError::Unreadable(e.to_string()))?;
+    let entries = value["sessions"]
         .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|e| {
-                    Some(SessionEntry {
-                        name: e["name"].as_str()?.to_string(),
-                        running: e["running"].as_bool().unwrap_or(false),
-                        socket_path: e["socket_path"].as_str().map(PathBuf::from),
-                    })
-                })
-                .collect()
+        .ok_or_else(|| SessionListError::Unreadable("no sessions array".into()))?;
+    // An entry with no name is one session this node cannot address, not an unreadable list.
+    Ok(entries
+        .iter()
+        .filter_map(|e| {
+            Some(SessionEntry {
+                name: e["name"].as_str()?.to_string(),
+                running: e["running"].as_bool().unwrap_or(false),
+                socket_path: e["socket_path"].as_str().map(PathBuf::from),
+            })
         })
-        .unwrap_or_default()
+        .collect())
 }
 
 #[cfg(test)]
@@ -171,7 +226,7 @@ mod tests {
         let json = r#"{"sessions":[
           {"default":true,"name":"default","running":true,"session_dir":"/c/herdr","socket_path":"/c/herdr/herdr.sock"},
           {"default":false,"name":"agents","running":false,"session_dir":"/c/a","socket_path":"/c/a/herdr.sock"}]}"#;
-        let sessions = parse_sessions(json);
+        let sessions = parse_sessions(json).expect("a session list");
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].name, "default");
         assert!(sessions[0].running);
@@ -216,10 +271,17 @@ mod tests {
         assert_eq!(caps.spawns(), 2, "and the fresh answer is cached again");
     }
 
+    /// A list nothing could be read out of and a list that named nothing are different answers,
+    /// and only the second one is a fact about the host.
     #[test]
-    fn junk_from_the_cli_is_no_sessions_rather_than_a_panic() {
-        assert!(parse_sessions("not json").is_empty());
-        assert!(parse_sessions("{}").is_empty());
-        assert!(parse_sessions(r#"{"sessions":[{"running":true}]}"#).is_empty());
+    fn junk_from_the_cli_is_no_information_rather_than_no_sessions() {
+        assert!(parse_sessions("not json").is_err());
+        assert!(parse_sessions("{}").is_err());
+        assert!(parse_sessions(r#"{"sessions":[]}"#).expect("a list").is_empty());
+        assert!(
+            parse_sessions(r#"{"sessions":[{"running":true}]}"#)
+                .expect("a list")
+                .is_empty()
+        );
     }
 }

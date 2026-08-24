@@ -100,7 +100,13 @@ fn below_floor(version: &str) -> bool {
 
 async fn sessions_check(config: &Config, socket: &Path, reachable: bool) -> Check {
     let primary = session_name_of(socket);
-    let found = sessions(&config.herdr.binary).await;
+    let found = match sessions(&config.herdr.binary).await {
+        Ok(found) => found,
+        // Distinct from a list that named nothing, and `doctor` is the surface that says which:
+        // the same message under either heading is what made a broken binary look like an ordinary
+        // single-session host.
+        Err(e) => return Check::warn("sessions", e.to_string()).fix("herdr"),
+    };
     if found.is_empty() {
         let detail = format!("`{} session list` named none", config.herdr.binary);
         return match reachable {

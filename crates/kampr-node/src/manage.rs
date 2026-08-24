@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tracing::debug;
 
 /// Everything you would do at the keyboard. Every field is optional at this layer so an unknown
 /// or malformed op is a `bad_request` to one client rather than a decode failure that kills the
@@ -46,6 +47,7 @@ pub struct ManageOp {
 /// Sixteen times the worst stop measured in #241, and a thousand times the worst create in #240.
 const SESSION_SETTLE: Duration = Duration::from_secs(5);
 const SESSION_POLL: Duration = Duration::from_millis(20);
+const SESSION_POLL_MAX: Duration = Duration::from_millis(320);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManageError {
@@ -292,6 +294,7 @@ impl Manager<'_> {
         let name = session_name(op)?;
         let socket = crate::caps::sessions(self.binary)
             .await
+            .map_err(|e| ManageError::Herdr(e.to_string()))?
             .into_iter()
             .find(|s| s.name == name)
             .and_then(|s| s.socket_path)
@@ -325,21 +328,30 @@ impl Manager<'_> {
 /// while `session list` goes on reporting `running: true` for another 52-303 ms (#240, #241).
 /// The `managed` ack is the cue for the client to re-ask `caps`, so acking before the host has
 /// caught up hands back the state the operator was trying to change — which is what "the session
-/// doesn't close when done" was. `session list --json` costs 1 ms, so polling it is cheap.
+/// doesn't close when done" was.
+///
+/// The wait backs off rather than running flat out. Those two numbers are three orders apart, so a
+/// fixed 20 ms interval spent nearly all of its ~250 subprocesses on the stop's long tail;
+/// doubling from [`SESSION_POLL`] answers the create just as quickly for a tenth of the processes.
 async fn settled(binary: &str, name: &str, running: bool) -> bool {
     let deadline = Instant::now() + SESSION_SETTLE;
+    let mut wait = SESSION_POLL;
     loop {
-        let listed = crate::caps::sessions(binary)
-            .await
-            .iter()
-            .any(|s| s.name == name && s.running);
-        if listed == running {
-            return true;
+        match crate::caps::sessions(binary).await {
+            // No answer is not "the op did not take": the host was not asked, so the deadline is
+            // what settles it rather than a list nobody read.
+            Err(e) => debug!(session = %name, error = %e, "could not read the session list"),
+            Ok(found) => {
+                if found.iter().any(|s| s.name == name && s.running) == running {
+                    return true;
+                }
+            }
         }
         if Instant::now() >= deadline {
             return false;
         }
-        tokio::time::sleep(SESSION_POLL).await;
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(SESSION_POLL_MAX);
     }
 }
 

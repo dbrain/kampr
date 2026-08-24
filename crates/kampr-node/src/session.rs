@@ -30,6 +30,18 @@ const PENDING_ATTEMPTS: u32 = 12;
 /// nothing announces at all.
 const DEVICE_RECHECK: Duration = Duration::from_secs(2);
 
+/// How many consecutive re-reads of the session's own device row may fail before the socket is
+/// closed.
+///
+/// A transient database error is not a revocation and one must stay survivable — but nothing here
+/// can tell transient from permanent, and *every* condition that keeps the store unreadable (a
+/// full disk, a corrupt WAL, the file replaced under a restore, permissions changed) looks the
+/// same from this side. Failing open on all of them kept every connected device online for as
+/// long as it lasted, revoked ones included, which turns the product's kill switch into a
+/// plausible-looking success. A session that has gone this many checks without an answer closes
+/// instead, and a client that reconnects is refused at the door for the same reason.
+const DEVICE_READ_FAILURES: u32 = 3;
+
 const MAX_PREFS_BYTES: usize = 2048;
 
 /// Every `t` [`ClientMsg`] decodes, kept beside it because the enum's own refusal of an unknown
@@ -90,9 +102,17 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
         device,
         peer,
         panes: HashMap::new(),
+        unreadable: 0,
     };
-    session.greet().await;
-    let herd_task = tokio::spawn(herd_updates(node.clone(), wire.clone()));
+    // **Subscribed before the herd is read, and the read is the subscription's own.** `greet`
+    // awaits a database round trip after it has sent the model, and a rebuild landing in that
+    // window used to be seen by neither: the client held V while the feed started at V+1, so the
+    // V→V+1 delta was never sent and every later patch diffed against a model the client had
+    // never been given. `state.rs` calls out the same trap one file over.
+    let mut herd_rx = node.subscribe_herd();
+    let greeting = herd_rx.borrow_and_update().clone();
+    session.greet(&greeting).await;
+    let herd_task = tokio::spawn(herd_updates(herd_rx, greeting, wire.clone()));
     let _herd_guard = crate::mesh::AbortOnDrop(herd_task.abort_handle());
 
     let mut changes = node.auth.device_changes();
@@ -168,15 +188,16 @@ struct Session {
     device: Device,
     peer: String,
     panes: HashMap<String, PaneHandle>,
+    unreadable: u32,
 }
 
 impl Session {
     /// `hello`, the herd, and this device's stored preferences — unasked, because there is no
     /// other way for a client to learn the zoom it left a pane at. A client that has to ask has
     /// already rendered the pane at the wrong size.
-    async fn greet(&self) {
+    async fn greet(&self, herd: &crate::herd::HerdModel) {
         self.wire.send_json(&hello(&self.node, &self.device));
-        self.wire.send(&self.node.herd().message());
+        self.wire.send(&herd.message());
         self.wire.send_json(&self.stored_prefs().await);
         self.audit("session.opened", None, None);
     }
@@ -228,14 +249,32 @@ impl Session {
     }
 
     /// Re-reads this session's device. `false` means the socket must close: the row is gone,
-    /// revoked, or past its expiry. A transient database error is not a revocation, so it leaves
-    /// the session alone and the next tick tries again.
+    /// revoked, past its expiry — or unreadable for [`DEVICE_READ_FAILURES`] checks running, which
+    /// is a store that cannot be asked whether this device is still allowed.
     async fn refresh(&mut self) -> bool {
         let device = match self.node.auth.store().device(&self.device.id).await {
-            Ok(device) => device,
+            Ok(device) => {
+                self.unreadable = 0;
+                device
+            }
             Err(e) => {
-                debug!(error = %e, "could not re-read the session device");
-                return true;
+                self.unreadable += 1;
+                if self.unreadable < DEVICE_READ_FAILURES {
+                    debug!(error = %e, "could not re-read the session device");
+                    return true;
+                }
+                tracing::error!(
+                    error = %e,
+                    device = %self.device.id,
+                    checks = self.unreadable,
+                    "the device store cannot say whether this device is still authorised; closing"
+                );
+                self.audit(
+                    "session.unverifiable",
+                    None,
+                    Some(json!({ "checks": self.unreadable })),
+                );
+                return false;
             }
         };
         match device.filter(|d| d.active(kampr_auth::now())) {
@@ -866,9 +905,11 @@ fn hello(node: &Node, device: &Device) -> Value {
 
 /// A herd outage has to be *visible*: without this a client watching a pane through a herdr that
 /// died just froze, with `online` still true and no error at all (probe #70).
-async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
-    let mut rx = node.subscribe_herd();
-    let mut last = node.herd();
+async fn herd_updates(
+    mut rx: tokio::sync::watch::Receiver<Arc<crate::herd::HerdModel>>,
+    mut last: Arc<crate::herd::HerdModel>,
+    wire: Arc<Wire>,
+) {
     loop {
         if rx.changed().await.is_err() {
             return;
