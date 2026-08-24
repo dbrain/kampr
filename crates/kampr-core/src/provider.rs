@@ -43,6 +43,10 @@ pub struct PaneInfo {
     pub rows: u16,
     /// Rows of history *above* the viewport, and zero whenever reading them would be unsafe.
     pub scrollback_rows: u32,
+    /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
+    /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
+    /// itself when the fault does.
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

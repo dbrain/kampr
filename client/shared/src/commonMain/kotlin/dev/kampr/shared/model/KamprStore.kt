@@ -126,6 +126,17 @@ class KamprStore {
         paneStates.values.forEach { it.markStale() }
     }
 
+    // `stream_unavailable` is the one refusal nobody did anything to earn, and the one that has an
+    // end nothing else announces: the node has no frame meaning "never mind", so the herd entry
+    // clearing is the recovery signal. Every other code stays until it is dismissed, because every
+    // other code is an answer to something the operator asked for.
+    private fun dropRepairedFault() {
+        val failure = _failure.value ?: return
+        if (failure.code != "stream_unavailable") return
+        val pane = failure.pane ?: return
+        if (paneInfo(pane)?.detail == null) _failure.value = null
+    }
+
     fun accept(msg: ServerMsg) {
         when (msg) {
             is ServerMsg.Hello -> {
@@ -141,8 +152,14 @@ class KamprStore {
                 }
                 _status.value = ConnectionStatus.Live(msg.role)
             }
-            is ServerMsg.Herd -> _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
-            is ServerMsg.HerdPatch -> _herd.value = _herd.value.applyPatch(msg)
+            is ServerMsg.Herd -> {
+                _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
+                dropRepairedFault()
+            }
+            is ServerMsg.HerdPatch -> {
+                _herd.value = _herd.value.applyPatch(msg)
+                dropRepairedFault()
+            }
             is ServerMsg.Styles -> styles.append(msg.from, msg.styles)
             is ServerMsg.GridReset -> pane(msg.pane).applyReset(msg)
             is ServerMsg.GridPatch -> pane(msg.pane).applyPatch(msg)

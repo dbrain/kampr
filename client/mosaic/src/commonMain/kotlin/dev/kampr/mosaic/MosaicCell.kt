@@ -63,6 +63,7 @@ import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneSurfaces
+import dev.kampr.shared.ui.StreamNotice
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.WatchNotice
@@ -191,7 +192,14 @@ fun MosaicCell(
         }
 
         // Under the header, not over it: the cell is unreachable, its controls are not.
-        if (offline) CellUnavailable(node.name, node.detail ?: "${node.name} is not connected")
+        if (offline) {
+            CellUnavailable(node.name, node.detail ?: "${node.name} is not connected")
+        } else {
+            // A node can be online and still unable to stream — the socket answers and the
+            // binary that carries the screens does not. A blank cell is the same lie here as it
+            // is on the pane screen, and the wording it needs is the one the node already sent.
+            streamFault(pane, info)?.let { CellNoStream(it) }
+        }
 
         CellHeader(
             pane, info, node, presence, focused, onRemove, drag, place, onDrop, onMove,
@@ -262,6 +270,24 @@ private fun CellHeader(
             chip = 20.dp,
             onClick = onRemove,
         )
+    }
+}
+
+// Why this pane will never paint, when there is no grid on its surface to read instead.
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
+    info?.detail?.takeUnless { pane.painted }
+
+// The same words the pane screen shows, over the same wash the offline cell uses. One notice, two
+// placements: a cell that phrased this itself would be a second copy of the one thing on this
+// surface an operator has to act on.
+@Composable
+private fun CellNoStream(detail: String) {
+    val tokens = Kampr.tokens
+    Box(
+        Modifier.fillMaxSize().background(tokens.color.bg.copy(alpha = UNAVAILABLE_WASH)),
+        contentAlignment = Alignment.Center,
+    ) {
+        StreamNotice(detail, Modifier.padding(horizontal = 14.dp))
     }
 }
 

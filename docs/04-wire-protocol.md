@@ -110,6 +110,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a transcript for this pane resolves on disk
                "watchers": 2,                        // ABSENT below 2 — see below
+               "detail": null,                       // why this pane has no picture — see below
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -185,6 +186,31 @@ whether anyone's hands are on the keys, and a client must not say they are.
 
 Under-counting is deliberate. A phone that claims company when there is none has told a lie about
 a terminal, and there is no reading of this field that recovers from that.
+
+**`panes[].detail` is why this pane has no picture, and it is absent whenever it has one.** The
+pane-level twin of `nodes[].detail`, in the operator's own words, for the state that is neither
+"the herd is up" nor "the herd is down".
+
+A node reaches Herdr **two** ways and can have exactly one of them working: a socket for the
+model, and a spawned `herdr terminal session observe` for the screens. A node whose PATH has lost
+the binary serves a correct herd, accepts input, answers every health check — and streams nothing.
+Every symptom points at the half that works. What that looked like on a phone was a blank grid
+with a flashing cursor, in every pane, for ever, on two of three machines for months (probe #233).
+
+- **It is a state, not an event.** The supervisor behind it retries for ever, so the field clears
+  itself the moment a pane can paint again — a `herd.patch` with the entry and no `detail`. A
+  client renders it for as long as it is there and takes it down when it goes.
+- **It is node-scoped even though it rides on panes.** A spawn that fails is the configured binary
+  missing or not executable, which no pane can cause and no pane can fix, so every pane of that
+  node carries the same reason rather than only the one somebody happened to open.
+- **A pane with no `detail` is not a pane with a picture.** An empty pane is an ordinary thing — a
+  brand-new workspace's really is nearly blank (probe #212) — and this field never says so.
+- **Additive.** A client that has never heard of it behaves exactly as it does today, and the
+  arrival is announced on the frame it already understands: `error{stream_unavailable}`.
+
+**No `grid.reset` is sent for a pane in this state.** The geometry is a promise that rows are
+coming, and it is made *after* the stream exists rather than before — a client that has been told
+`74×30` has laid out a grid, drawn the caret and started waiting.
 
 ### `grid.reset` — full repaint; drop any prior state for this pane
 ```jsonc
@@ -476,7 +502,8 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
 ```
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `bad_request` ·
-`not_found` · `revoked` · `unsupported` (the node does not implement that op).
+`not_found` · `revoked` · `unsupported` (the node does not implement that op) ·
+`stream_unavailable` (the herd is reachable and this pane's *screen* is not).
 
 There is no `rate_limited` error code. Pairing throttling is an HTTP **429**, so nothing ever
 emitted one and a client written to expect it was written against a code that does not exist.
@@ -486,6 +513,15 @@ verbatim, so a newer peer's code reaches a client unchanged rather than being dr
 `herdr_unavailable` and `node_offline` are both emitted for a herd outage: the first names the
 cause on the connection, the second says which node went with it, and an op addressed at a pane on
 a node that is down is refused with `node_offline` rather than left to time out.
+
+`stream_unavailable` is **not** an outage and is deliberately its own code: the node is answering,
+the pane list is right, and only the frames are missing. It always names a `pane`, it carries the
+same words as that pane's `herd` `detail`, and it is sent **once per fault**, on the edge — a
+supervisor retrying for ever must not raise a strip for ever. Recovery has no frame of its own:
+the `herd` entry clearing is what takes the notice down, and `error` has no form that means
+*never mind*. A client that only knows the v1 code list shows `message`, which is the rule this
+list already runs on, so a 0.1.9 phone gets the diagnosis and the fix in the error strip it
+already draws.
 
 `code` is an open string, not a closed enum: a client must handle an unrecognised code by showing
 `message` rather than failing. `revoked` is one such: the node re-reads the device behind a live
@@ -557,6 +593,9 @@ Values are opaque to the node: it stores and returns whatever JSON it is given, 
 
 - Per pane the node sends exactly one `grid.reset` before any `grid.patch`, and re-sends `grid.reset`
   after any gap it cannot patch across (observer restart, herdr reconnect, native geometry change).
+- **`grid.reset` is sent once the stream exists, never before it.** The geometry is a promise that
+  rows are coming; a pane the node cannot stream gets `error{stream_unavailable}` and a `detail` in
+  the herd instead, and no grid at all until it can keep the promise.
 - Geometry changes arrive as a fresh `grid.reset` with new `cols`/`rows`. Herdr's own `full:true`
   frames map to this one-to-one, and cost nothing: only the first frame of a stream is `full`
   (probe #53).

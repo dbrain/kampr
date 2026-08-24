@@ -316,6 +316,16 @@ size, and a `full` flag. Only the first frame of a stream is `full` (#53); the r
 cursor-addressed partial repaints, and every frame is wrapped in synchronised-output markers and ends
 with an absolute cursor address (#12).
 
+The two planes fail independently, and for months only one of them was checked. The unit pins
+`HERDR_SOCKET_PATH`, so the socket plane works under a service manager whatever the environment;
+the child was resolved through `PATH`, and a `systemd --user` manager's `PATH` has no
+`~/.local/bin` in it — where `install.sh` puts both binaries. A node in that state serves a correct
+herd, accepts input, passes every version check over the socket, and shows a blank grid in every
+pane for ever. So `kampr-herdr/src/locate.rs` resolves a bare name through `HERDR_BIN_PATH`, then
+`PATH`, then the directory kampr's own executable sits in, then the usual install prefixes; `kampr
+init` and `kampr service install` write the absolute path into `config.toml`; and `kampr doctor`
+runs that binary rather than asking the socket what version it is.
+
 `crates/kampr-term` applies them. It is deliberately small — about 450 lines over `vte` — because
 Herdr's serialiser emits a small subset: absolute cursor addressing, SGR, erase, and the
 sync/hyperlink markers. There are no scroll regions, no save/restore, no alt-screen handling, because

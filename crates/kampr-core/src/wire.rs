@@ -171,6 +171,18 @@ pub struct PaneEntry {
     /// owns this clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Why this pane has no picture, in the operator's words — the pane-level twin of
+    /// [`NodeEntry::detail`], and absent for exactly the same reason: nothing is wrong.
+    ///
+    /// A node reaches herdr two ways, over a socket for the model and over a spawned binary for
+    /// the screens, and it can have exactly one of them working. A node in that state serves a
+    /// correct herd and streams nothing, which is a blank grid and a flashing cursor for ever —
+    /// so the half that is broken has to be *said*, on the pane the operator is looking at.
+    ///
+    /// Additive: a client that has never heard of the field is a client that behaves as it does
+    /// today. It clears itself, because the supervisor behind it retries for ever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl PaneEntry {
@@ -192,6 +204,7 @@ impl PaneEntry {
             has_conversation,
             watchers: None,
             updated_at: None,
+            detail: p.detail.clone(),
         }
     }
 
@@ -351,6 +364,10 @@ pub enum ErrorCode {
     /// `manage` only: an op this node has no verb for. Not on the v1 list, because v1 had no
     /// `manage`.
     Unsupported,
+    /// The herd is reachable and this pane's *screen* is not. Distinct from `herdr_unavailable`,
+    /// which is the socket being down and the whole herd with it: here the node is answering, the
+    /// pane list is right, and only the frames are missing.
+    StreamUnavailable,
 }
 
 #[derive(Debug, Clone, Deserialize)]

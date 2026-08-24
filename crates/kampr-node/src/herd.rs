@@ -126,6 +126,7 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.scrollback_rows == b.scrollback_rows
         && a.has_conversation == b.has_conversation
         && a.watchers == b.watchers
+        && a.detail == b.detail
 }
 
 #[cfg(test)]

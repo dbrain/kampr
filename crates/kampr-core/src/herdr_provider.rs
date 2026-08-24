@@ -154,6 +154,13 @@ struct Inner {
     /// Panes with a live stream. The sweep reads it to pick its cadence and waits on it, so the
     /// first watcher speeds the herd up without waiting out the slow interval it is parked in.
     watching: watch::Sender<usize>,
+    /// Why no pane on this node can be streamed, once a spawn has proved it.
+    ///
+    /// **Node-scoped because the fault is.** `Observer::spawn` failing is the configured binary
+    /// missing or not executable, which nothing about a pane can cause and nothing about a pane
+    /// can fix — so one watched pane proving it is proof for all of them, and every entry in the
+    /// herd says so rather than only the one that happened to be opened.
+    stream_fault: Mutex<Option<String>>,
 }
 
 /// One watched pane, for as long as its stream lives.
@@ -366,6 +373,7 @@ impl HerdrProvider {
             processes: Mutex::new(HashMap::new()),
             probed: AtomicBool::new(false),
             watching: watch::channel(0).0,
+            stream_fault: Mutex::new(None),
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
         let liveness_task = tokio::spawn(liveness(inner.clone()));
@@ -465,6 +473,38 @@ impl Inner {
         if recovered {
             info!(socket = %self.herdr.socket().display(), "herdr is answering");
         }
+    }
+
+    /// Records that `herdr terminal session observe` will not start, and publishes it.
+    ///
+    /// The revision bump is the whole point: it is what rebuilds the herd, which is what carries
+    /// the reason to every client. A `warn!` in a journal tells nobody — one node logged 163 of
+    /// them in a day while its operator, on a phone, watched a blank grid and reported a
+    /// rendering bug (probe #233). Which is also why the loud line fires on the edge rather than
+    /// on every retry: the log is for what changed, the herd is for what is.
+    fn cannot_stream(&self, pane_id: &str, error: &anyhow::Error) {
+        let detail = cannot_run_herdr(error);
+        let mut fault = self.stream_fault.lock().unwrap();
+        if fault.as_deref() == Some(detail.as_str()) {
+            debug!(pane = %pane_id, "observe still will not start; retrying");
+            return;
+        }
+        *fault = Some(detail.clone());
+        drop(fault);
+        warn!(pane = %pane_id, "{detail}");
+        self.revision.send_modify(|r| *r += 1);
+    }
+
+    fn can_stream(&self) {
+        if self.stream_fault.lock().unwrap().take().is_none() {
+            return;
+        }
+        info!(binary = %self.config.binary, "herdr observe runs again; panes can paint");
+        self.revision.send_modify(|r| *r += 1);
+    }
+
+    fn stream_fault(&self) -> Option<String> {
+        self.stream_fault.lock().unwrap().clone()
     }
 
     /// Which process each agent pane is running, refreshed against herdr.
@@ -820,6 +860,21 @@ impl Provider for HerdrProvider {
     }
 }
 
+/// What an operator reads on a phone when a node cannot run herdr.
+///
+/// It leads with the symptom they are looking at rather than with the call that failed — "could
+/// not spawn observe" names a function nobody outside this file has heard of — and it names the
+/// fix, because a journal line on the machine is exactly what they cannot reach. `{error:#}` and
+/// not `{error}`: anything short of the whole chain drops the diagnosis and keeps the context.
+fn cannot_run_herdr(error: &anyhow::Error) -> String {
+    format!(
+        "No pane on this node can show a screen: Kampr cannot run herdr — {error:#}. \
+         Put herdr on the node's PATH, or set herdr.binary in its config to the full path; \
+         kampr doctor on that machine says where it looked. \
+         Kampr keeps retrying, and the panes come back on their own."
+    )
+}
+
 fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> PaneInfo {
     let (rect, rect_rows) = snapshot.geometry(&pane.pane_id).unwrap_or((0, 0));
     // The rect is the desk's idea of the pane; the PTY is what the program inside it writes to,
@@ -855,6 +910,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         } else {
             0
         },
+        detail: inner.stream_fault(),
     }
 }
 
@@ -1056,9 +1112,6 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
             return;
         };
         let cols = inner.observe_cols(&pane_id, rect).await;
-        if tx.send(PaneEvent::Reset { cols, rows }).await.is_err() {
-            return;
-        }
         let observer = Observer::spawn(
             &inner.config.binary,
             inner.herdr.socket(),
@@ -1067,13 +1120,23 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
             rows as u32,
         );
         let mut observer = match observer {
-            Ok(o) => o,
+            Ok(o) => {
+                inner.can_stream();
+                o
+            }
             Err(e) => {
-                warn!(pane = %pane_id, error = %e, "could not spawn observe");
+                inner.cannot_stream(&pane_id, &e);
                 backoff.sleep().await;
                 continue;
             }
         };
+        // **After the spawn, never before.** The geometry is a promise that rows are coming, and
+        // a node that sends it before it has a stream has told every client to lay out a grid it
+        // will then leave blank with a cursor blinking in it — for ever, silently, which is what
+        // this cost on two machines for months.
+        if tx.send(PaneEvent::Reset { cols, rows }).await.is_err() {
+            return;
+        }
         // The probe is its own task: two socket round-trips inside the stream loop would stall
         // the frames it is meant to be sizing.
         let (width_tx, width_rx) = watch::channel(cols);

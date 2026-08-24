@@ -115,6 +115,11 @@ data class PaneInfo(
     // every client behind it, so this can undercount a relayed pane and never overcounts.
     val watchers: Int? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
+    // Why this pane has no picture, in the node's own words — `NodeInfo.detail` one level down. A
+    // node reaches herdr over a socket for the model and over a spawned binary for the screens and
+    // can have exactly one of them working, which is a right herd and a blank grid for ever. Null
+    // is the ordinary state; an empty pane is not a faulted one.
+    val detail: String? = null,
 )
 
 @Serializable

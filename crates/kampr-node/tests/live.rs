@@ -477,6 +477,16 @@ async fn a_paired_device_drives_a_pane_end_to_end() {
     // `cols` is absent until a wrap has proved the PTY width. The layout rect is not it: headless,
     // a pane whose rect reads 47 is really 93 wide (probe #68).
     assert!(herd["panes"][0]["cols"].as_u64().is_none_or(|cols| cols > 0));
+    // A brand-new workspace's pane really is nearly empty (probe #212), and empty is not a fault:
+    // `detail` is absent for every pane a node can actually stream.
+    assert!(
+        herd["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["detail"].is_null()),
+        "a healthy node marked a pane unstreamable: {herd}"
+    );
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
     let reset = until(&mut socket, "grid.reset", 15).await;
@@ -4304,4 +4314,145 @@ async fn a_detected_agent_pane_delivers_its_history_too() {
         .filter_map(|run| run["x"].as_str().map(str::to_string))
         .collect();
     assert!(text.contains("100"), "an agent pane's ring is a ring: {history}");
+}
+
+/// The reported defect, and the half of it that made it survive for months: a node whose PATH has
+/// no herdr serves a correct herd, accepts input and answers every health check, while every pane
+/// shows a blank grid and a flashing cursor for ever. The grid was a promise the node made before
+/// it knew it could keep it, and the failure to keep it went to a journal that nobody holding a
+/// phone can read.
+///
+/// This is the same machine `transfer.rs` builds, minus the part that hid it: that harness points
+/// the socket at nothing too, so its supervisor parks waiting for geometry and never reaches the
+/// spawn at all. A node has two ways to reach herdr and can have exactly one of them working.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_that_cannot_run_herdr_says_so_instead_of_promising_a_grid() {
+    let nowhere = std::env::temp_dir().join(format!("kampr-no-herdr-{}", std::process::id()));
+    let h = harness!("noobserve", |c: &mut Config| {
+        c.herdr.binary = nowhere.display().to_string();
+    });
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let herd = until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    assert_eq!(
+        herd["nodes"][0]["online"], true,
+        "the socket is fine and the herd is right — that is what made this invisible: {herd}"
+    );
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut refusal: Option<Value> = None;
+    let mut detail: Option<String> = None;
+    let mut promised = false;
+    while tokio::time::Instant::now() < deadline && (refusal.is_none() || detail.is_none()) {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        match message["t"].as_str() {
+            Some("grid.reset") if message["pane"] == pane.as_str() => promised = true,
+            Some("error") if message["pane"] == pane.as_str() => refusal = Some(message),
+            Some("herd") | Some("herd.patch") => detail = detail.or(pane_detail(&message, &pane)),
+            _ => {}
+        }
+    }
+
+    let refusal = refusal.expect("a node that cannot stream a pane has to say so to the client");
+    assert_eq!(refusal["code"], "stream_unavailable", "{refusal}");
+    let said = refusal["message"].as_str().unwrap_or_default();
+    eprintln!("what the operator reads on the phone:\n{said}");
+    assert!(
+        said.contains("herdr"),
+        "the message has to name what is wrong: {said}"
+    );
+    assert!(
+        said.contains("PATH") || said.contains("herdr.binary"),
+        "the operator is holding a phone and cannot read a journal, so it has to name the fix: {said}"
+    );
+    assert!(
+        !promised,
+        "the node sent a grid it had no stream for; the geometry is a promise it cannot keep"
+    );
+    let detail = detail.expect("the herd has to carry the state, not just announce the event");
+    assert!(detail.contains("herdr"), "{detail}");
+}
+
+/// Retrying for ever is right; saying nothing while retrying for ever is not — and neither is
+/// leaving the notice up once the pane can paint again. A binary appearing is the recovery this
+/// supervisor already retries for, so the whole story has to clear itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_recovers_on_its_own_once_herdr_can_be_run() {
+    let Some(real) = which("herdr") else {
+        eprintln!("skipping: no herdr on PATH");
+        return;
+    };
+    let bin = tempfile::tempdir().expect("a bin dir");
+    let shim = bin.path().join("herdr");
+    let h = harness!("recover", |c: &mut Config| {
+        c.herdr.binary = shim.display().to_string();
+    });
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    let refusal = until_pane(&mut socket, "error", &pane, 30).await;
+    assert_eq!(refusal["code"], "stream_unavailable", "{refusal}");
+
+    std::fs::write(&shim, format!("#!/bin/sh\nexec {} \"$@\"\n", real.display())).expect("a shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    // Both halves in one pass: the herd clears at the spawn and the grid arrives at the first
+    // frame after it, so waiting for one and then the other misses whichever came first.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut painted = false;
+    let mut cleared = false;
+    while tokio::time::Instant::now() < deadline && !(painted && cleared) {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        match message["t"].as_str() {
+            Some("grid.reset") if message["pane"] == pane.as_str() => {
+                assert!(message["rows"].as_u64().unwrap_or(0) > 0, "{message}");
+                painted = true;
+            }
+            Some("herd") | Some("herd.patch") if names(&message, &pane) => {
+                cleared = pane_detail(&message, &pane).is_none();
+            }
+            _ => {}
+        }
+    }
+    assert!(painted, "the pane never painted once herdr could be run");
+    assert!(cleared, "the notice outlived the fault it was about");
+}
+
+/// Whether a herd message says anything about this pane at all, so "no detail" is read off an
+/// entry that is present rather than off one that simply is not in the patch.
+fn names(message: &Value, pane: &str) -> bool {
+    pane_entries(message).any(|p| p["id"] == pane)
+}
+
+fn pane_detail(message: &Value, pane: &str) -> Option<String> {
+    pane_entries(message)
+        .find(|p| p["id"] == pane)
+        .and_then(|p| p["detail"].as_str().map(str::to_string))
+}
+
+fn pane_entries(message: &Value) -> impl Iterator<Item = &Value> {
+    ["panes", "added", "changed"]
+        .into_iter()
+        .flat_map(move |key| match message[key].as_array() {
+            Some(panes) => panes.iter().collect::<Vec<_>>(),
+            None => message[key]["panes"]
+                .as_array()
+                .map_or_else(Vec::new, |p| p.iter().collect()),
+        })
 }

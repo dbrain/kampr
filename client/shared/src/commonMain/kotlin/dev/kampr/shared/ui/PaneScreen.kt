@@ -49,6 +49,10 @@ private val PaneInfo?.talks: Boolean get() = this?.hasConversation == true
 private fun viewOn(info: PaneInfo?, view: PaneView): PaneView =
     if (info.talks) view else PaneView.Terminal
 
+// Why this pane will never paint, when there is nothing on its surface to read instead.
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
+    info?.detail?.takeUnless { pane.painted }
+
 private fun statusLabel(status: AgentStatus): String? = when (status) {
     AgentStatus.Blocked, AgentStatus.Working, AgentStatus.Done -> statusWord(status)
     else -> null
@@ -76,6 +80,7 @@ private fun StatusChip(info: PaneInfo?) {
 @Composable
 private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean) {
     val tokens = Kampr.tokens
+    if (info?.detail != null) StreamBadge()
     if (pane.stale) StaleBadge()
     if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
     if (readOnly) {
@@ -191,6 +196,13 @@ fun PaneScreenMobile(
                     surfaces.Zoom(pane, Modifier)
                 }
             }
+        }
+
+        // A pane that can never paint, in the space it was never going to fill. Gated on
+        // `painted` rather than on the fault alone: a grid that arrived before the node lost its
+        // herdr is still the last true thing about the pane, and `stale` is what says so.
+        streamFault(pane, info)?.let {
+            StreamNotice(it, Modifier.align(Alignment.Center).readingOrder(-0.4f).padding(24.dp))
         }
 
         // Over the surface, never in the chrome: the terminal insets its scrollable content by
@@ -357,6 +369,7 @@ fun PaneScreenDesktop(
                 KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
                 KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
             }
+            if (info?.detail != null) StreamBadge()
             if (pane.stale) StaleBadge()
             if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
             StatusChip(info)
@@ -384,6 +397,10 @@ fun PaneScreenDesktop(
                     what = "view",
                 )
             }
+        }
+
+        streamFault(pane, info)?.let {
+            StreamNotice(it, Modifier.align(Alignment.Center).readingOrder(-0.4f).padding(24.dp))
         }
 
         WatchNotice(

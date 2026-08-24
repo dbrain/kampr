@@ -895,6 +895,10 @@ async fn herd_updates(node: Arc<Node>, wire: Arc<Wire>) {
     }
 }
 
+fn pane_fault(herd: &crate::herd::HerdModel, pane: &str) -> Option<String> {
+    herd.pane(pane).and_then(|p| p.detail.clone())
+}
+
 /// A write that failed while the session is down is the herd being unreachable, not a bad pane.
 fn offline_code(session: &crate::sessions::SessionNode) -> ErrorCode {
     if session.online() {
@@ -940,6 +944,17 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         }
     };
     if watcher.is_ready() && !wire.send_update(&global, watcher.initial()) {
+        return;
+    }
+
+    // A pane that cannot be streamed carries its reason in the herd, and the herd is state rather
+    // than news: a client joining a pane that has been unstreamable for a week would otherwise be
+    // handed the state with nothing saying it had arrived. So the state is read once here and the
+    // transitions are announced below, which is exactly how an outage is already told.
+    let mut fault = pane_fault(&herd.borrow(), &global);
+    if let Some(detail) = &fault
+        && !wire.error(ErrorCode::StreamUnavailable, detail, Some(&global))
+    {
         return;
     }
 
@@ -995,10 +1010,20 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if changed.is_err() {
                     return;
                 }
-                let status = herd
-                    .borrow_and_update()
-                    .pane(&global)
-                    .map(|p| p.agent_status);
+                let (status, detail) = {
+                    let model = herd.borrow_and_update();
+                    (model.pane(&global).map(|p| p.agent_status), pane_fault(&model, &global))
+                };
+                if detail != fault {
+                    fault = detail;
+                    // Recovery says nothing: the herd entry clearing is what takes the notice
+                    // down, and an `error` frame has no form that means "never mind".
+                    if let Some(detail) = &fault
+                        && !wire.error(ErrorCode::StreamUnavailable, detail, Some(&global))
+                    {
+                        return;
+                    }
+                }
                 let now_blocked = status == Some(kampr_core::provider::AgentStatus::Blocked);
                 if now_blocked != blocked {
                     blocked = now_blocked;
