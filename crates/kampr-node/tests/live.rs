@@ -2832,19 +2832,7 @@ async fn every_client_op_lands_on_a_real_herd() {
     .await;
     // Never leave a herdr session behind: wait for the socket to go, then keep removing until the
     // directory stays gone — a shutting-down herdr writes into it after the socket has vanished.
-    for _ in 0..100 {
-        if !session_dir.join("herdr.sock").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    for _ in 0..20 {
-        let _ = std::fs::remove_dir_all(&session_dir);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if !session_dir.exists() {
-            break;
-        }
-    }
+    forget_session(&session_dir).await;
     assert!(!session_dir.exists(), "left {session_dir:?} behind");
 
     // Closing the workspace takes its panes with it, and the client hears about it as a patch.
@@ -3155,19 +3143,7 @@ async fn a_created_session_leaves_the_nodes_process_group() {
     // client would then try to watch.
     assert_eq!(stopped["id"], session.as_str(), "{stopped}");
 
-    for _ in 0..100 {
-        if !session_dir.join("herdr.sock").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    for _ in 0..20 {
-        let _ = std::fs::remove_dir_all(&session_dir);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if !session_dir.exists() {
-            break;
-        }
-    }
+    forget_session(&session_dir).await;
 
     assert_ne!(
         theirs, ours,
@@ -3228,20 +3204,82 @@ async fn caps_answers_a_session_op_with_the_session_set_that_op_produced() {
         "the session is still advertised as running after its own stop was acknowledged: {stopped}"
     );
 
+    forget_session(&session_dir).await;
+    assert!(!session_dir.exists(), "left {session_dir:?} behind");
+}
+
+/// The settle that makes a session op's ack honest is a wait of up to five seconds, and it used
+/// to run on the dispatch loop. Dispatch is sequential, so a `server.stop` that goes on being
+/// listed as running for another 300 ms (#241) was 300 ms in which this socket answered nothing
+/// at all — no input to any other pane, no watch, no caps — because somebody stopped a session.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settling_session_op_does_not_stop_the_socket_answering_anything_else() {
+    let h = harness!("settling");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let session = format!("kampr-settling-{}", std::process::id());
+    let session_dir = herdr_home().join("sessions").join(&session);
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.stop", "node": node, "name": &session }),
+    )
+    .await;
+    send(&mut socket, json!({ "t": "ping", "n": 41 })).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut answered = false;
+    let ack = loop {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never saw the stop acknowledged"
+        );
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "pong" && message["n"] == 41 {
+            answered = true;
+        }
+        if message["t"] == "managed" && message["op"] == "session.stop" {
+            break message;
+        }
+    };
+    assert!(
+        answered,
+        "the socket answered nothing until the stop had settled: {ack}"
+    );
+    assert_eq!(ack["ok"], true, "{ack}");
+    assert_eq!(ack["id"], session.as_str(), "{ack}");
+
+    forget_session(&session_dir).await;
+    assert!(!session_dir.exists(), "left {session_dir:?} behind");
+}
+
+/// A stopped session keeps its directory until something removes it (#242), and a node serves
+/// every session it can find (#97) — so a test that leaves one behind changes the next one's herd.
+async fn forget_session(dir: &Path) {
     for _ in 0..100 {
-        if !session_dir.join("herdr.sock").exists() {
+        if !dir.join("herdr.sock").exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     for _ in 0..20 {
-        let _ = std::fs::remove_dir_all(&session_dir);
+        let _ = std::fs::remove_dir_all(dir);
         tokio::time::sleep(Duration::from_millis(200)).await;
-        if !session_dir.exists() {
+        if !dir.exists() {
             break;
         }
     }
-    assert!(!session_dir.exists(), "left {session_dir:?} behind");
 }
 
 /// `session.create` used to answer on the spawn alone, which made it a `managed{ok}` for a

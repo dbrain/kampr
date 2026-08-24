@@ -103,8 +103,55 @@ pub struct Manager<'a> {
     pub binary: &'a str,
 }
 
+/// What a manage op produced, and — for a session op — the wait that has to finish before its
+/// ack means anything. `session.rs` is what spawns that wait rather than serving it inline.
+pub struct Managed {
+    pub reply: Value,
+    pub settle: Option<Settle>,
+}
+
+/// The wait for the host to agree that a named session is, or is not, running.
+///
+/// Both session ops finish before the state they changed is visible: `herdr server --session` is
+/// listed running 3-4 ms after the spawn, and `server.stop` answers `ok` in under a millisecond
+/// while `session list` goes on reporting `running: true` for another 52-303 ms (#240, #241).
+/// The `managed` ack is the cue for the client to re-ask `caps`, so acking before the host has
+/// caught up hands back the state the operator was trying to change — which is what "the session
+/// doesn't close when done" was.
+///
+/// Owned rather than borrowed because it is awaited off the dispatch loop.
+pub struct Settle {
+    binary: String,
+    node_id: String,
+    name: String,
+    running: bool,
+    failure: String,
+}
+
+impl Settle {
+    pub async fn wait(self) -> Result<(), ManageError> {
+        let agreed = settled(&self.binary, &self.name, self.running).await;
+        crate::caps::sessions_changed(&self.node_id);
+        if agreed {
+            return Ok(());
+        }
+        Err(ManageError::Herdr(self.failure))
+    }
+}
+
 impl Manager<'_> {
-    pub async fn run(&self, op: &ManageOp) -> Result<Value, ManageError> {
+    pub async fn run(&self, op: &ManageOp) -> Result<Managed, ManageError> {
+        match op.op.as_str() {
+            "session.create" => self.create_session(op).await,
+            "session.stop" => self.stop_session(op).await,
+            _ => Ok(Managed {
+                reply: self.structural(op).await?,
+                settle: None,
+            }),
+        }
+    }
+
+    async fn structural(&self, op: &ManageOp) -> Result<Value, ManageError> {
         match op.op.as_str() {
             "workspace.create" => {
                 let mut params = json!({ "label": op.label, "cwd": op.cwd, "focus": false });
@@ -229,8 +276,6 @@ impl Manager<'_> {
                 )
                 .await
             }
-            "session.create" => self.create_session(op).await,
-            "session.stop" => self.stop_session(op).await,
             other => Err(ManageError::Unsupported(other.to_string())),
         }
     }
@@ -267,7 +312,7 @@ impl Manager<'_> {
     /// process group and dies with it — a Ctrl-C on a foreground `kampr serve` signals the whole
     /// group, and systemd's default `KillMode` signals the whole cgroup. The unit answers the
     /// cgroup half with `KillMode=process`; this answers the group half.
-    async fn create_session(&self, op: &ManageOp) -> Result<Value, ManageError> {
+    async fn create_session(&self, op: &ManageOp) -> Result<Managed, ManageError> {
         let name = session_name(op)?;
         let mut command = Command::new(kampr_herdr::locate::program(self.binary));
         command
@@ -278,19 +323,16 @@ impl Manager<'_> {
         #[cfg(unix)]
         command.process_group(0);
         command.spawn().map_err(|e| ManageError::Herdr(e.to_string()))?;
-        let listed = settled(self.binary, &name, true).await;
-        crate::caps::sessions_changed(self.node_id);
-        if !listed {
-            return Err(ManageError::Herdr(format!(
-                "{name} was started but never appeared in the session list"
-            )));
-        }
-        Ok(json!({ "session": name }))
+        let failure = format!("{name} was started but never appeared in the session list");
+        Ok(Managed {
+            reply: json!({ "session": name }),
+            settle: Some(self.settle(name, true, failure)),
+        })
     }
 
     /// A named session has its own socket, so stopping one is an ordinary `server.stop` addressed
     /// somewhere other than this node's own herdr.
-    async fn stop_session(&self, op: &ManageOp) -> Result<Value, ManageError> {
+    async fn stop_session(&self, op: &ManageOp) -> Result<Managed, ManageError> {
         let name = session_name(op)?;
         let socket = crate::caps::sessions(self.binary)
             .await
@@ -303,14 +345,21 @@ impl Manager<'_> {
             .call::<Value>("server.stop", json!({}))
             .await
             .map_err(|e| ManageError::Herdr(e.to_string()))?;
-        let stopped = settled(self.binary, &name, false).await;
-        crate::caps::sessions_changed(self.node_id);
-        if !stopped {
-            return Err(ManageError::Herdr(format!(
-                "server.stop was accepted but {name} is still running"
-            )));
+        let failure = format!("server.stop was accepted but {name} is still running");
+        Ok(Managed {
+            reply: json!({ "session": name }),
+            settle: Some(self.settle(name, false, failure)),
+        })
+    }
+
+    fn settle(&self, name: String, running: bool, failure: String) -> Settle {
+        Settle {
+            binary: self.binary.to_string(),
+            node_id: self.node_id.to_string(),
+            name,
+            running,
+            failure,
         }
-        Ok(json!({ "session": name }))
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, ManageError> {
@@ -322,13 +371,6 @@ impl Manager<'_> {
 }
 
 /// Waits until the host agrees that `name` is (or is not) running, and answers whether it ever did.
-///
-/// Both session ops finish before the state they changed is visible: `herdr server --session` is
-/// listed running 3-4 ms after the spawn, and `server.stop` answers `ok` in under a millisecond
-/// while `session list` goes on reporting `running: true` for another 52-303 ms (#240, #241).
-/// The `managed` ack is the cue for the client to re-ask `caps`, so acking before the host has
-/// caught up hands back the state the operator was trying to change — which is what "the session
-/// doesn't close when done" was.
 ///
 /// The wait backs off rather than running flat out. Those two numbers are three orders apart, so a
 /// fixed 20 ms interval spent nearly all of its ~250 subprocesses on the stop's long tail;

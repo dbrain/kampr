@@ -1,5 +1,5 @@
 use crate::convo::{self, ConvoCtx};
-use crate::manage::{self, ManageOp, Manager};
+use crate::manage::{self, ManageOp, Managed, Manager, Settle};
 use crate::outbox::Outbox;
 use crate::pending;
 use crate::state::{BUILD, Node};
@@ -686,14 +686,7 @@ impl Session {
             binary: &self.node.config.herdr.binary,
         };
         match manager.run(&op).await {
-            Ok(reply) => {
-                // A named session is its own node, and the discovery loop would otherwise take up
-                // to `DISCOVERY_POLL` to notice one appear or go. The ack is what a client acts
-                // on, so it has to mean the herd already knows — this is the op that changed the
-                // session set, and it is the only thing in the process that knows it did.
-                if op.op.starts_with("session.") {
-                    self.node.sessions.reconcile().await;
-                }
+            Ok(Managed { reply, settle }) => {
                 // A session is named rather than addressed, so its name is the id; everything
                 // else herdr creates is a container this node qualifies with its own id.
                 let id = match reply["session"].as_str() {
@@ -707,25 +700,67 @@ impl Session {
                 if op.op == "layout.export" {
                     ack["layout"] = reply["layout"].clone();
                 }
-                if let Some(rid) = rid {
-                    ack["rid"] = rid;
+                if let Some(rid) = &rid {
+                    ack["rid"] = rid.clone();
                 }
-                self.wire.send_json(&ack);
+                match settle {
+                    Some(settle) => self.spawn_settle(settle, &op, ack, rid),
+                    None => {
+                        self.wire.send_json(&ack);
+                    }
+                }
             }
             Err(e) => self.refuse(&op.op, op.at.as_deref(), e.code(), &e.to_string(), rid.as_ref()),
         }
     }
 
-    /// The `managed` ack and the `error` frame that follows it, in the order the protocol names
-    /// them, with the caller's correlation token on the ack wherever there is one.
+    /// A session op's ack waits for the host to catch up, and that wait is up to five seconds
+    /// long — but `dispatch` is sequential, so serving it here means this socket answers nothing
+    /// else in the meantime: no input to any other pane, no watch, no caps, because somebody
+    /// stopped a session. The herdr call itself stays inline and in dispatch order, so two
+    /// creates still cannot race; only the waiting moves, and the ack still follows its *own*
+    /// settle.
+    ///
+    /// Acks of different ops may therefore interleave. The wire already allows for that — `rid`
+    /// exists because a hub relays for several clients at once — and the client correlates a
+    /// `managed` by its `op`, never by arrival order.
+    fn spawn_settle(&mut self, settle: Settle, op: &ManageOp, ack: Value, rid: Option<Value>) {
+        let node = self.node.clone();
+        let wire = self.wire.clone();
+        let name = op.op.clone();
+        let at = op.at.clone();
+        let task = tokio::spawn(async move {
+            match settle.wait().await {
+                Ok(()) => {
+                    // A named session is its own node, and the discovery loop would otherwise
+                    // take up to `DISCOVERY_POLL` to notice one appear or go. The ack is what a
+                    // client acts on, so it has to mean the herd already knows — this is the op
+                    // that changed the session set, and it is the only thing in the process that
+                    // knows it did.
+                    node.sessions.reconcile().await;
+                    wire.send_json(&ack);
+                }
+                Err(e) => refuse_on(
+                    &wire,
+                    &name,
+                    at.as_deref(),
+                    e.code(),
+                    &e.to_string(),
+                    rid.as_ref(),
+                ),
+            }
+        });
+        // **Detached on purpose.** `reconcile` and the `sessions_changed` inside the settle are
+        // node-wide truths, not this socket's: they are what stops every *other* client seeing the
+        // session set the op already changed. Tying the task to the socket that asked would mean a
+        // client hanging up inside the 52-303 ms window (#241) left the herd stale for everyone
+        // until the next discovery poll. The wait is bounded by `SESSION_SETTLE` and the ack lands
+        // in an outbox that is already gone, which costs nothing.
+        drop(task);
+    }
+
     fn refuse(&self, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
-        let mut ack = json!({ "t": "managed", "op": op, "ok": false,
-                              "code": code, "message": message });
-        if let Some(rid) = rid {
-            ack["rid"] = rid.clone();
-        }
-        self.wire.send_json(&ack);
-        self.wire.error(code, message, at);
+        refuse_on(&self.wire, op, at, code, message, rid);
     }
 
     /// A structural op against a pane on another host. Unlike input this one has an answer, so
@@ -819,6 +854,18 @@ impl Session {
         }
         self.wire.send_json(&self.stored_prefs().await);
     }
+}
+
+/// The `managed` ack and the `error` frame that follows it, in the order the protocol names
+/// them, with the caller's correlation token on the ack wherever there is one.
+fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
+    let mut ack = json!({ "t": "managed", "op": op, "ok": false,
+                          "code": code, "message": message });
+    if let Some(rid) = rid {
+        ack["rid"] = rid.clone();
+    }
+    wire.send_json(&ack);
+    wire.error(code, message, at);
 }
 
 fn manage_detail(op: &ManageOp) -> Value {
