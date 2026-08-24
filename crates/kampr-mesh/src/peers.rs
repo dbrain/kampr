@@ -1,13 +1,14 @@
 use crate::handshake::Accepted;
 use crate::shadow::{History, Shadow, StyleTable};
 use crate::transport::{Incoming, Outgoing};
+use kampr_auth::Store;
 use kampr_core::registry::PaneUpdate;
 use kampr_core::scrollback::ScrollbackDoc;
 use kampr_core::wire::{Cursor, ErrorCode, HerdDelta, NodeEntry, PaneEntry, RowRuns, Styles};
 use kampr_term::RowDiff;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -24,6 +25,12 @@ const REQUEST_QUEUE: usize = 256;
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MANAGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Keepalive rounds a peer may leave unanswered before the link is dropped. At the default five
+/// second interval that is fifteen seconds of silence: long enough to sit out a stalled writer or
+/// a paused process, short enough that a client is told a node is gone rather than left reading a
+/// frozen grid and an `rtt_ms` that stopped moving.
+const MISSED_PONGS: u64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RelayError {
@@ -137,13 +144,15 @@ impl Peers {
         id.split_once('/').map_or(id, |(node, _)| node)
     }
 
+    /// The handshake is the only thing that says which link answers for a node id, so it is asked
+    /// first and the peer's own advertisement is only the fallback.
     pub fn link_for(&self, id: &str) -> Option<Arc<PeerLink>> {
         let node = Self::node_of(id);
-        self.links
-            .lock()
-            .unwrap()
+        let links = self.links.lock().unwrap();
+        links
             .iter()
-            .find(|link| link.serves(node))
+            .find(|link| link.node_id == node)
+            .or_else(|| links.iter().find(|link| link.advertises(node)))
             .cloned()
     }
 
@@ -237,8 +246,32 @@ impl Peers {
             manages: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
+            closed_reason: Mutex::new(None),
+            superseded: AtomicBool::new(false),
         });
+        // A key is a node's identity, so a second link holding the same one is that node dialling
+        // again before this hub noticed the first socket die. Two rows for one peer publish it
+        // twice and route to whichever the scan reaches first, which may be the dead one.
+        for stale in self.take_links(|other| other.pubkey == link.pubkey) {
+            stale.superseded.store(true, Ordering::Relaxed);
+            stale.close("the same node dialled again");
+        }
+        // Nothing after the handshake constrains what a peer says about itself, so the node id a
+        // link answers for is the authenticated one and no two links may hold it. An enrolled but
+        // hostile machine claiming another's id would otherwise be handed its watch, input and
+        // manage traffic — one compromised host reading another's terminals through the hub that
+        // exists to join them.
+        if let Some(holder) = self.holder_of(&link.node_id) {
+            warn!(
+                node = %link.node_id, name = %link.name,
+                fingerprint = %accepted.node.fingerprint(),
+                held_by = %holder.name, "refused a mesh link claiming a node id another link holds",
+            );
+            out.close().await;
+            return;
+        }
         self.links.lock().unwrap().push(link.clone());
+        self.evict_claims(&link);
         // Forget the old record by key *and* by node id: a node that regenerated its identity is
         // a new row here, and leaving the previous one would list it twice, once offline forever.
         self.remembered.lock().unwrap().retain(|key, remembered| {
@@ -255,7 +288,11 @@ impl Peers {
             }
             out.close().await;
         });
-        let pinger = tokio::spawn(ping(link.clone(), self.config.ping_interval));
+        let pinger = tokio::spawn(keepalive(
+            link.clone(),
+            self.config.ping_interval,
+            accepted.store.clone(),
+        ));
 
         let closed = link.closed.clone();
         let reason = loop {
@@ -264,7 +301,12 @@ impl Peers {
                     let Some(text) = text else { break "the peer closed the link".to_string() };
                     self.receive(&link, &text);
                 }
-                () = closed.notified() => break "the link was closed by this hub".to_string(),
+                () = closed.notified() => break link
+                    .closed_reason
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| "the link was closed by this hub".into()),
             }
         };
 
@@ -283,14 +325,18 @@ impl Peers {
         for pane in link.panes.lock().unwrap().values().filter_map(Weak::upgrade) {
             pane.fail("node_offline", &detail);
         }
-        self.remembered.lock().unwrap().insert(
-            link.pubkey.clone(),
-            Remembered {
-                nodes: state.nodes.clone(),
-                panes: state.panes.clone(),
-                detail: detail.clone(),
-            },
-        );
+        // A superseded link is the same node's previous socket, and its successor is already
+        // serving: remembering it would list that node twice, once offline for ever.
+        if !link.superseded.load(Ordering::Relaxed) {
+            self.remembered.lock().unwrap().insert(
+                link.pubkey.clone(),
+                Remembered {
+                    nodes: state.nodes.clone(),
+                    panes: state.panes.clone(),
+                    detail: detail.clone(),
+                },
+            );
+        }
         drop(state);
         warn!(node = %link.node_id, name = %link.name, %reason, "peer left the herd");
         self.publish();
@@ -305,16 +351,21 @@ impl Peers {
         };
         match message["t"].as_str().unwrap_or_default() {
             "herd" => {
+                let mut nodes: Vec<NodeEntry> = from_value(message.get("nodes"));
+                let mut panes: Vec<PaneEntry> = from_value(message.get("panes"));
+                self.keep_own(link, &mut nodes, &mut panes);
                 let mut state = link.state.lock().unwrap();
-                state.nodes = from_value(message.get("nodes"));
-                state.panes = from_value(message.get("panes"));
+                state.nodes = nodes;
+                state.panes = panes;
                 drop(state);
                 self.publish();
             }
             "herd.patch" => {
-                let added: HerdDelta = from_one(message.get("added"));
-                let changed: HerdDelta = from_one(message.get("changed"));
+                let mut added: HerdDelta = from_one(message.get("added"));
+                let mut changed: HerdDelta = from_one(message.get("changed"));
                 let removed: Vec<String> = from_value(message.get("removed_ids"));
+                self.keep_own(link, &mut added.nodes, &mut added.panes);
+                self.keep_own(link, &mut changed.nodes, &mut changed.panes);
                 let mut state = link.state.lock().unwrap();
                 state.apply(added, changed, &removed);
                 drop(state);
@@ -322,7 +373,14 @@ impl Peers {
             }
             "styles" => {
                 if let Ok(styles) = serde_json::from_value::<Styles>(message) {
-                    link.state.lock().unwrap().styles.absorb(&styles);
+                    let absorbed = link.state.lock().unwrap().styles.absorb(&styles);
+                    if !absorbed {
+                        warn!(
+                            node = %link.node_id, from = styles.from,
+                            "a peer's styles did not continue the table it was appending to",
+                        );
+                        link.close("a styles message skipped past the table it appends to");
+                    }
                 }
             }
             "grid.reset" => link.grid_reset(&message),
@@ -342,6 +400,63 @@ impl Peers {
             // `hello` carries nothing the handshake did not already establish, and an unknown `t`
             // is ignored rather than refused — the same forward-compatibility rule as everywhere.
             _ => {}
+        }
+    }
+
+    fn take_links(&self, doomed: impl Fn(&Arc<PeerLink>) -> bool) -> Vec<Arc<PeerLink>> {
+        let mut links = self.links.lock().unwrap();
+        let (taken, kept) = links.iter().cloned().partition(doomed);
+        *links = kept;
+        taken
+    }
+
+    fn holder_of(&self, node_id: &str) -> Option<Arc<PeerLink>> {
+        self.links().into_iter().find(|link| link.node_id == node_id)
+    }
+
+    /// Drops everything a peer advertised that belongs to some *other* link's authenticated node.
+    /// A `herd` message is the peer's own words about itself and nothing verifies them, so it may
+    /// name any node it likes and only its own id is evidence.
+    fn keep_own(&self, link: &Arc<PeerLink>, nodes: &mut Vec<NodeEntry>, panes: &mut Vec<PaneEntry>) {
+        let claimed = |id: &str| {
+            self.links()
+                .iter()
+                .any(|other| !Arc::ptr_eq(other, link) && other.node_id == id)
+        };
+        nodes.retain(|node| {
+            let mine = !claimed(&node.id);
+            if !mine {
+                warn!(
+                    node = %link.node_id, name = %link.name, claimed = %node.id,
+                    "a peer advertised a node another link authenticated as; dropping it",
+                );
+            }
+            mine
+        });
+        panes.retain(|pane| !claimed(&pane.node_id) && !claimed(Self::node_of(&pane.id)));
+    }
+
+    /// A link that authenticates as a node id takes it back from anything that had merely claimed
+    /// it, so the order two peers connected in cannot decide which one a client reaches.
+    fn evict_claims(&self, link: &Arc<PeerLink>) {
+        for other in self.links() {
+            if Arc::ptr_eq(&other, link) {
+                continue;
+            }
+            let mut state = other.state.lock().unwrap();
+            let before = state.nodes.len() + state.panes.len();
+            state.nodes.retain(|node| node.id != link.node_id);
+            state
+                .panes
+                .retain(|pane| pane.node_id != link.node_id && Self::node_of(&pane.id) != link.node_id);
+            let dropped = before - (state.nodes.len() + state.panes.len());
+            drop(state);
+            if dropped > 0 {
+                warn!(
+                    node = %other.node_id, name = %other.name, claimed = %link.node_id,
+                    dropped, "a peer had advertised a node that has now authenticated elsewhere",
+                );
+            }
         }
     }
 
@@ -432,6 +547,8 @@ pub struct PeerLink {
     manages: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     next_request: AtomicU64,
     closed: Arc<tokio::sync::Notify>,
+    closed_reason: Mutex<Option<String>>,
+    superseded: AtomicBool,
 }
 
 impl PeerLink {
@@ -443,16 +560,26 @@ impl PeerLink {
         self.state.lock().unwrap().rtt_ms
     }
 
-    pub fn serves(&self, node_id: &str) -> bool {
-        let state = self.state.lock().unwrap();
-        // Before the peer's first `herd` message the handshake id is all there is, and a client
-        // may address it in that window.
-        self.node_id == node_id || state.nodes.iter().any(|n| n.id == node_id)
+    /// What the peer says it holds, which is evidence about nothing until it has been checked
+    /// against what the links around it authenticated as. Its own [`Self::node_id`] is the part
+    /// the handshake proved, and a client may address that before the first `herd` message.
+    fn advertises(&self, node_id: &str) -> bool {
+        self.state.lock().unwrap().nodes.iter().any(|n| n.id == node_id)
     }
 
+    /// The reason reaches a client: it is what the herd shows beside a node that has gone, and
+    /// "revoked" or "it stopped answering keepalives" is the whole of what an operator can act on.
     pub fn close(&self, reason: &str) {
         debug!(node = %self.node_id, %reason, "closing a mesh link");
-        self.closed.notify_waiters();
+        self.closed_reason
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| reason.to_string());
+        // `notify_one` leaves a permit behind, and that is the whole point: the serving loop only
+        // waits on this between messages, so a `notify_waiters` fired while it was busy would be
+        // dropped on the floor — and a revocation that is dropped on the floor is a peer that
+        // keeps typing into terminals it has been cut off from.
+        self.closed.notify_one();
     }
 
     fn request(&self, message: Value) -> Result<(), RelayError> {
@@ -466,7 +593,10 @@ impl PeerLink {
         message["rid"] = json!(id);
         let (tx, rx) = oneshot::channel();
         self.manages.lock().unwrap().insert(id, tx);
-        self.request(message)?;
+        if let Err(e) = self.request(message) {
+            self.manages.lock().unwrap().remove(&id);
+            return Err(e);
+        }
         match tokio::time::timeout(MANAGE_TIMEOUT, rx).await {
             Ok(Ok(reply)) => Ok(reply),
             _ => {
@@ -494,11 +624,25 @@ impl PeerLink {
     ) -> Result<RemoteWatcher, RelayError> {
         let mut panes = self.panes.lock().unwrap();
         if let Some(existing) = panes.get(pane).and_then(Weak::upgrade) {
+            let upgrade = conversation && !existing.conversation.load(Ordering::Relaxed);
+            drop(panes);
+            // One `watch` per pane per link is what keeps the WAN hop carrying one copy, so the
+            // first viewer decides what the peer sends. A later one asking for the transcript has
+            // to say so, or it lands on the agent pane's default surface with nothing in it.
+            // Recorded only once the ask is away, because a request that was never sent has bought
+            // this pane nothing.
+            if upgrade {
+                self.request(json!({
+                    "t": "watch", "pane": pane, "scrollback": true, "conversation": true
+                }))?;
+                existing.conversation.store(true, Ordering::Relaxed);
+            }
             return Ok(RemoteWatcher::attach(existing));
         }
         let (tx, _) = broadcast::channel(fanout);
         let remote = Arc::new(RemotePane {
             pane: pane.to_string(),
+            conversation: AtomicBool::new(conversation),
             shadow: Mutex::new(Shadow::default()),
             history: Mutex::new(History::default()),
             tx,
@@ -617,22 +761,69 @@ fn cursor(message: &Value) -> Cursor {
 }
 
 /// The link's own round trip, measured over the same socket the frames use, so a client's
-/// `rtt_ms` for a peer is the number that actually explains why its pane feels slower.
-async fn ping(link: Arc<PeerLink>, interval: Duration) {
+/// `rtt_ms` for a peer is the number that actually explains why its pane feels slower — and the
+/// tick that notices a peer has stopped answering, or has been revoked since it dialled in.
+async fn keepalive(link: Arc<PeerLink>, interval: Duration, store: Store) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut n = 0u64;
+    let mut wedged = 0u64;
     loop {
         ticker.tick().await;
-        n += 1;
-        {
-            let mut state = link.state.lock().unwrap();
-            state.pings.insert(n, Instant::now());
-            // An answer that never came is not a measurement; keeping them would grow the map.
-            state.pings.retain(|id, _| n.saturating_sub(*id) < 4);
-        }
-        if link.request(json!({ "t": "ping", "n": n })).is_err() {
+        if revoked(&store, &link.pubkey).await {
+            link.close("revoked");
             return;
+        }
+        n += 1;
+        let silent = {
+            let mut state = link.state.lock().unwrap();
+            // An answer that never came is not a measurement; keeping one past the deadline it is
+            // evidence for would only grow the map.
+            state.pings.retain(|id, _| n.saturating_sub(*id) <= MISSED_PONGS);
+            state.pings.keys().any(|id| n.saturating_sub(*id) >= MISSED_PONGS)
+        };
+        if silent {
+            warn!(node = %link.node_id, name = %link.name, "a peer stopped answering keepalives");
+            link.close("it stopped answering keepalives");
+            return;
+        }
+        match link.requests.try_send(json!({ "t": "ping", "n": n }).to_string()) {
+            // Only a ping that left the hub is evidence about the peer, so only that one is held
+            // against the deadline above.
+            Ok(()) => {
+                wedged = 0;
+                link.state.lock().unwrap().pings.insert(n, Instant::now());
+            }
+            // A full queue is a moment of congestion on a link that is otherwise alive, and
+            // ending the task here froze `rtt_ms` at its last reading for the life of the link —
+            // which reads to a client as a node that is nearby and merely slow. A queue that
+            // stays full for as long as the pong deadline is the wedged link its bound names.
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                wedged += 1;
+                debug!(node = %link.node_id, wedged, "the outbound queue to a peer is full");
+                if wedged >= MISSED_PONGS {
+                    warn!(node = %link.node_id, name = %link.name, "a peer's outbound queue never drained");
+                    link.close("its outbound queue never drained");
+                    return;
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => return,
+        }
+    }
+}
+
+/// Whether this hub still serves that key. Asked on every tick because the operator's `kampr mesh
+/// revoke` runs in a different process and only writes SQLite: nothing tells a live link.
+///
+/// A row that is *gone* counts as revoked — `kampr mesh forget` is the same decision spelled
+/// differently — but a database that cannot be read counts as nothing, because dropping every
+/// mesh link on a transient sqlite error is worse than asking again on the next tick.
+async fn revoked(store: &Store, pubkey: &str) -> bool {
+    match store.mesh().node(pubkey).await {
+        Ok(node) => !node.is_some_and(|node| node.active()),
+        Err(e) => {
+            warn!(error = %e, "could not check whether a peer is still enrolled");
+            false
         }
     }
 }
@@ -640,6 +831,7 @@ async fn ping(link: Arc<PeerLink>, interval: Duration) {
 #[derive(Debug)]
 struct RemotePane {
     pane: String,
+    conversation: AtomicBool,
     shadow: Mutex<Shadow>,
     history: Mutex<History>,
     tx: broadcast::Sender<RemoteEvent>,
@@ -748,5 +940,82 @@ impl RemoteWatcher {
     pub fn resync(&self) -> Option<PaneUpdate> {
         let shadow = self.pane.shadow.lock().unwrap();
         shadow.is_ready().then(|| shadow.full())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kampr_auth::MeshRole;
+
+    const KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    async fn enrolled() -> Store {
+        let store = Store::open_memory().await.expect("a store");
+        store
+            .mesh()
+            .enrol(KEY, "01JA", "laptop", MeshRole::Peer, None, kampr_auth::now())
+            .await
+            .expect("an enrolment");
+        store
+    }
+
+    fn link(requests: mpsc::Sender<String>) -> Arc<PeerLink> {
+        Arc::new(PeerLink {
+            node_id: "01JA".into(),
+            name: "laptop".into(),
+            pubkey: KEY.into(),
+            build: "0.1.0".into(),
+            requests,
+            state: Mutex::new(LinkState::default()),
+            panes: Mutex::new(HashMap::new()),
+            manages: Mutex::new(HashMap::new()),
+            next_request: AtomicU64::new(1),
+            closed: Arc::new(tokio::sync::Notify::new()),
+            closed_reason: Mutex::new(None),
+            superseded: AtomicBool::new(false),
+        })
+    }
+
+    /// The waiter is registered before the request is sent, so the send failing has to unregister
+    /// it. It used to return through `?`, and every manage op against a congested link left a
+    /// sender behind that nothing would ever remove.
+    #[tokio::test]
+    async fn a_manage_op_that_never_left_the_hub_leaves_no_waiter_behind() {
+        let (requests, rx) = mpsc::channel(1);
+        drop(rx);
+        let link = link(requests);
+
+        let error = link
+            .manage(json!({ "t": "manage", "op": "pane.close" }))
+            .await
+            .expect_err("nothing can be sent on a closed link");
+        assert!(matches!(error, RelayError::Wedged), "{error}");
+        assert!(
+            link.manages.lock().unwrap().is_empty(),
+            "a manage op that was never sent is still waiting for an answer",
+        );
+    }
+
+    #[tokio::test]
+    async fn one_full_outbound_queue_does_not_end_the_keepalives() {
+        let store = enrolled().await;
+        let (requests, mut rx) = mpsc::channel(2);
+        requests.try_send("a queued watch".into()).expect("room");
+        requests.try_send("a queued input".into()).expect("room");
+        let link = link(requests);
+
+        // The first tick is due immediately and finds nowhere to put its ping.
+        let task = tokio::spawn(keepalive(link.clone(), Duration::from_millis(500), store));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(rx.recv().await.expect("the queue"), "a queued watch");
+        assert_eq!(rx.recv().await.expect("the queue"), "a queued input");
+
+        let text = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("the keepalives ended at the first full queue")
+            .expect("a ping");
+        assert_eq!(serde_json::from_str::<Value>(&text).expect("json")["t"], "ping",);
+        task.abort();
     }
 }

@@ -4,7 +4,7 @@
 //! real peer's client session does over a WebSocket — so these tests exercise the relay, the
 //! shadow and the herd merge without a socket, a terminal or a herd.
 
-use kampr_auth::{MeshNode, MeshRole};
+use kampr_auth::{MeshRole, Store};
 use kampr_core::registry::PaneUpdate;
 use kampr_core::wire::ErrorCode;
 use kampr_mesh::handshake::Accepted;
@@ -17,21 +17,10 @@ use std::time::Duration;
 const KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const OTHER: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
-fn accepted(pubkey: &str, node_id: &str, name: &str) -> Accepted {
-    Accepted {
-        node: MeshNode {
-            pubkey: pubkey.into(),
-            node_id: node_id.into(),
-            name: name.into(),
-            role: MeshRole::Peer,
-            url: None,
-            created_at: 0,
-            last_seen_at: None,
-            revoked_at: None,
-        },
-        build: "0.1.0".into(),
-        enrolled: false,
-    }
+/// The hub's enrolment table. A link is only served while its key is in here, so every test needs
+/// one — and the one about revocation writes to it while the link is up, as an operator does.
+async fn store() -> Store {
+    Store::open_memory().await.expect("a store")
 }
 
 struct Peer {
@@ -65,21 +54,46 @@ impl Peer {
     async fn close(self) {
         drop(self.link);
     }
+
+    /// Whether the hub hung up on this peer. `None` from the read half is the socket closing,
+    /// which is all a refused or revoked peer is ever told.
+    async fn hung_up(&mut self) -> bool {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while self.link.incoming.recv().await.is_some() {}
+        })
+        .await
+        .is_ok()
+    }
 }
 
-fn join(peers: &Arc<Peers>, pubkey: &str, node_id: &str, name: &str) -> Peer {
+/// One authenticated peer, enrolled exactly as the handshake would have left it.
+async fn join(peers: &Arc<Peers>, store: &Store, pubkey: &str, node_id: &str, name: &str) -> Peer {
+    let node = store
+        .mesh()
+        .enrol(pubkey, node_id, name, MeshRole::Peer, None, kampr_auth::now())
+        .await
+        .expect("an enrolment");
     let (hub_side, peer_side) = pair();
     let (out, incoming) = hub_side.split();
-    let accepted = accepted(pubkey, node_id, name);
+    let accepted = Accepted {
+        node,
+        build: "0.1.0".into(),
+        enrolled: false,
+        store: store.clone(),
+    };
     let peers = peers.clone();
     tokio::spawn(async move { peers.serve(accepted, out, incoming).await });
     Peer { link: peer_side }
 }
 
 fn peers() -> Arc<Peers> {
+    // Keepalives are measured elsewhere; here they would only be noise in the request stream.
+    peers_ticking(Duration::from_secs(3600))
+}
+
+fn peers_ticking(ping_interval: Duration) -> Arc<Peers> {
     Peers::new(PeersConfig {
-        // Keepalives are measured elsewhere; here they would only be noise in the request stream.
-        ping_interval: Duration::from_secs(3600),
+        ping_interval,
         pane_fanout: 8,
     })
 }
@@ -127,6 +141,17 @@ async fn settle(peers: &Arc<Peers>, want: impl Fn(&kampr_mesh::PeerHerd) -> bool
     .expect("the herd never reached the expected state");
 }
 
+/// Waits until the hub is serving `count` links, so a test never races `serve`'s own spawn.
+async fn linked(peers: &Arc<Peers>, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while peers.links().len() != count {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the hub never reached that many links");
+}
+
 fn text_of(update: &PaneUpdate) -> Vec<String> {
     update
         .rows()
@@ -151,7 +176,8 @@ async fn next_update(watcher: &mut kampr_mesh::RemoteWatcher) -> PaneUpdate {
 #[tokio::test]
 async fn a_peers_nodes_join_the_herd_marked_as_peers() {
     let peers = peers();
-    let mut peer = join(&peers, KEY, "01JA", "laptop");
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
 
@@ -175,8 +201,9 @@ async fn a_peers_nodes_join_the_herd_marked_as_peers() {
 #[tokio::test]
 async fn a_peers_own_verdict_on_its_version_crosses_the_hub_untouched() {
     let peers = peers();
-    let mut stale = join(&peers, KEY, "01JA", "laptop");
-    let mut quiet = join(&peers, OTHER, "01JB", "desk");
+    let store = store().await;
+    let mut stale = join(&peers, &store, KEY, "01JA", "laptop").await;
+    let mut quiet = join(&peers, &store, OTHER, "01JB", "desk").await;
     let mut says = herd("01JA", &["w1:p1"]);
     says["nodes"][0]["update"] = json!("0.1.2");
     stale.send(says).await;
@@ -208,7 +235,8 @@ async fn a_peers_own_verdict_on_its_version_crosses_the_hub_untouched() {
 #[tokio::test]
 async fn a_pane_is_watched_once_upstream_however_many_clients_look_at_it() {
     let peers = peers();
-    let mut peer = join(&peers, KEY, "01JA", "laptop");
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
 
@@ -247,7 +275,8 @@ async fn a_pane_is_watched_once_upstream_however_many_clients_look_at_it() {
 #[tokio::test]
 async fn input_for_a_peer_pane_is_relayed_as_the_client_sent_it() {
     let peers = peers();
-    let mut peer = join(&peers, KEY, "01JA", "laptop");
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
 
@@ -272,8 +301,9 @@ async fn a_pane_on_a_node_nobody_serves_is_unknown_rather_than_offline() {
 #[tokio::test]
 async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
     let peers = peers();
-    let mut laptop = join(&peers, KEY, "01JA", "laptop");
-    let mut workshop = join(&peers, OTHER, "01JB", "workshop");
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    let mut workshop = join(&peers, &store, OTHER, "01JB", "workshop").await;
     laptop.send(herd("01JA", &["w1:p1"])).await;
     workshop.send(herd("01JB", &["w1:p1"])).await;
     settle(&peers, |h| h.panes.len() == 2).await;
@@ -332,13 +362,14 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
 #[tokio::test]
 async fn a_peer_that_comes_back_is_online_again_with_no_help() {
     let peers = peers();
-    let mut laptop = join(&peers, KEY, "01JA", "laptop");
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
     laptop.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
     laptop.close().await;
     settle(&peers, |h| h.nodes.iter().any(|n| !n.online)).await;
 
-    let mut again = join(&peers, KEY, "01JA", "laptop");
+    let mut again = join(&peers, &store, KEY, "01JA", "laptop").await;
     again.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| h.nodes.iter().all(|n| n.online)).await;
 
@@ -351,7 +382,8 @@ async fn a_peer_that_comes_back_is_online_again_with_no_help() {
 #[tokio::test]
 async fn history_is_stitched_by_index_and_a_joiner_gets_all_of_it() {
     let peers = peers();
-    let mut peer = join(&peers, KEY, "01JA", "laptop");
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
     peer.send(herd("01JA", &["w1:p1"])).await;
     settle(&peers, |h| !h.panes.is_empty()).await;
     let mut first = peers.watch("01JA/w1:p1", false).expect("live");
@@ -397,4 +429,271 @@ async fn history_is_stitched_by_index_and_a_joiner_gets_all_of_it() {
         .expect("a joiner is handed the history the hub holds");
     assert_eq!(history.from_top, 0);
     assert_eq!(history.total_rows, 3, "stitched, not the last message alone");
+}
+
+/// The handshake authenticates a *key* and binds it to one node id. Everything after it — the
+/// `herd` message included — is the peer's own words about itself, so an enrolled machine can name
+/// any node it likes and be believed. On a shared hub that is one host asking for another's
+/// terminals: its watches, its keystrokes and its manage ops.
+#[tokio::test]
+async fn a_peer_cannot_claim_another_peers_node_id() {
+    let peers = peers();
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    laptop.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut impostor = join(&peers, &store, OTHER, "01JB", "workshop").await;
+    let mut claim = herd("01JB", &["w1:p1"]);
+    claim["nodes"].as_array_mut().unwrap().push(json!({
+        "id": "01JA", "name": "not the laptop", "kind": "local", "online": true,
+        "herdr_version": "0.8.2", "build": "0.1.0",
+    }));
+    claim["panes"].as_array_mut().unwrap().push(json!({
+        "id": "01JA/w1:p1", "node_id": "01JA", "cols": 8, "rows": 2, "agent_status": "unknown",
+    }));
+    impostor.send(claim).await;
+    settle(&peers, |h| h.nodes.iter().any(|n| n.id == "01JB")).await;
+
+    let herd = peers.herd();
+    assert_eq!(
+        herd.nodes.iter().filter(|n| n.id == "01JA").count(),
+        1,
+        "the herd listed the laptop twice, once as somebody else",
+    );
+    assert_eq!(herd.panes.iter().filter(|p| p.id == "01JA/w1:p1").count(), 1);
+    assert_eq!(
+        peers.link_for("01JA/w1:p1").expect("a live link").pubkey,
+        KEY,
+        "the laptop's pane resolved to the link that merely claimed it",
+    );
+
+    peers
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "sudo rm -rf /\r" }),
+        )
+        .expect("a live peer");
+    assert_eq!(laptop.request_but_ping().await["t"], "input");
+    // And the impostor's own node is untouched: it is refused an id, not disbelieved wholesale.
+    assert!(herd.nodes.iter().any(|n| n.id == "01JB"));
+    assert_eq!(peers.link_for("01JB/w1:p1").expect("live").pubkey, OTHER);
+}
+
+/// Connection order decided this before: the first link to name an id got everything addressed to
+/// it, so an impostor only had to be there first.
+#[tokio::test]
+async fn an_impostor_that_claimed_an_id_first_still_loses_it_to_the_node_that_owns_it() {
+    let peers = peers();
+    let store = store().await;
+    let mut impostor = join(&peers, &store, OTHER, "01JB", "workshop").await;
+    let mut claim = herd("01JB", &["w1:p1"]);
+    claim["nodes"].as_array_mut().unwrap().push(json!({
+        "id": "01JA", "name": "not the laptop", "kind": "local", "online": true,
+        "herdr_version": "0.8.2", "build": "0.1.0",
+    }));
+    claim["panes"].as_array_mut().unwrap().push(json!({
+        "id": "01JA/w1:p1", "node_id": "01JA", "cols": 8, "rows": 2, "agent_status": "unknown",
+    }));
+    impostor.send(claim).await;
+    settle(&peers, |h| h.nodes.iter().any(|n| n.id == "01JA")).await;
+
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    linked(&peers, 2).await;
+    laptop.send(herd("01JA", &["w1:p1"])).await;
+    // The laptop names itself "01JA"; the impostor called the node it claimed something else.
+    settle(&peers, |h| {
+        h.nodes.iter().any(|n| n.id == "01JA" && n.name == "01JA")
+    })
+    .await;
+
+    assert_eq!(peers.link_for("01JA/w1:p1").expect("a live link").pubkey, KEY,);
+    let herd = peers.herd();
+    assert_eq!(
+        herd.nodes.iter().filter(|n| n.id == "01JA").count(),
+        1,
+        "the claim outlived the arrival of the node that authenticated as it",
+    );
+    assert!(herd.nodes.iter().all(|n| n.name != "not the laptop"));
+    assert_eq!(herd.panes.iter().filter(|p| p.id == "01JA/w1:p1").count(), 1);
+}
+
+#[tokio::test]
+async fn a_second_link_claiming_a_live_node_id_is_refused() {
+    let peers = peers();
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    laptop.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut impostor = join(&peers, &store, OTHER, "01JA", "also the laptop").await;
+    assert!(
+        impostor.hung_up().await,
+        "the hub served two links for one node id"
+    );
+    assert_eq!(peers.links().len(), 1);
+    assert_eq!(peers.link_for("01JA").expect("a live link").pubkey, KEY);
+
+    // The link that holds the id keeps holding it.
+    peers
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }),
+        )
+        .expect("a live peer");
+    assert_eq!(laptop.request_but_ping().await["t"], "input");
+}
+
+/// A peer that reconnects before the hub notices the old socket died used to be in the list twice,
+/// and every lookup took whichever the scan reached first — sometimes the dead one.
+#[tokio::test]
+async fn a_peer_that_dials_again_replaces_its_link_rather_than_joining_it() {
+    let peers = peers();
+    let store = store().await;
+    let mut first = join(&peers, &store, KEY, "01JA", "laptop").await;
+    first.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut again = join(&peers, &store, KEY, "01JA", "laptop").await;
+    again.send(herd("01JA", &["w1:p1"])).await;
+    assert!(first.hung_up().await, "the hub kept the socket it had replaced");
+    settle(&peers, |h| h.nodes.len() == 1).await;
+
+    assert_eq!(
+        peers.links().len(),
+        1,
+        "one link per node, not one per connection"
+    );
+    let herd = peers.herd();
+    assert_eq!(herd.nodes.len(), 1);
+    assert!(
+        herd.nodes[0].online,
+        "the replaced link was remembered as an offline twin"
+    );
+    assert_eq!(herd.panes.len(), 1);
+
+    peers
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }),
+        )
+        .expect("a live peer");
+    assert_eq!(
+        again.request_but_ping().await["t"],
+        "input",
+        "the traffic went to the socket that had already closed",
+    );
+}
+
+/// `kampr mesh revoke` writes SQLite in another process and prints that a running node drops the
+/// link within seconds. Nothing made that true: the authenticated socket stayed up, relaying panes
+/// and input, until the node restarted.
+#[tokio::test]
+async fn a_revoked_peer_loses_the_link_it_already_had() {
+    let peers = peers_ticking(Duration::from_millis(50));
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    laptop.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    store
+        .mesh()
+        .revoke(KEY, kampr_auth::now())
+        .await
+        .expect("the revocation")
+        .expect("the enrolled node");
+
+    settle(&peers, |h| {
+        h.nodes.iter().any(|n| {
+            n.id == "01JA" && !n.online && n.detail.as_deref().unwrap_or_default().contains("revoked")
+        })
+    })
+    .await;
+    assert!(laptop.hung_up().await, "a revoked peer kept its socket");
+    assert!(peers.links().is_empty());
+    assert_eq!(
+        peers.watch("01JA/w1:p1", false).unwrap_err().code(),
+        ErrorCode::NodeOffline,
+    );
+}
+
+/// Unanswered pings were retained for four rounds and then forgotten, so a peer that stopped
+/// answering entirely was never disconnected — it kept its place in the herd, its panes, and the
+/// last round trip it ever measured.
+#[tokio::test]
+async fn a_peer_that_stops_answering_keepalives_is_dropped() {
+    let peers = peers_ticking(Duration::from_millis(50));
+    let store = store().await;
+    let mut laptop = join(&peers, &store, KEY, "01JA", "laptop").await;
+    laptop.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    settle(&peers, |h| {
+        h.nodes.iter().any(|n| {
+            n.id == "01JA" && !n.online && n.detail.as_deref().unwrap_or_default().contains("keepalives")
+        })
+    })
+    .await;
+    assert!(peers.links().is_empty());
+}
+
+/// One `watch` per pane per link is what keeps the WAN hop carrying one copy, and it used to mean
+/// the first viewer decided for everybody: a second viewer asking for the transcript was attached
+/// to a stream that was never asked for one. Agent panes default to the conversation view, so that
+/// viewer lands on the product's default surface with nothing in it.
+#[tokio::test]
+async fn a_second_viewer_asking_for_the_conversation_is_sent_one() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let _terminal = peers.watch("01JA/w1:p1", false).expect("a live peer");
+    let opened = peer.request_but_ping().await;
+    assert_eq!(opened["t"], "watch");
+    assert_eq!(opened["conversation"], false);
+
+    let _conversation = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    let upgraded = peer.request_but_ping().await;
+    assert_eq!(
+        upgraded["t"], "watch",
+        "the second viewer never asked for a transcript"
+    );
+    assert_eq!(upgraded["pane"], "01JA/w1:p1");
+    assert_eq!(upgraded["conversation"], true);
+
+    // And it is asked for once: a third viewer wanting the same thing costs no round trip.
+    let _third = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peers
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }),
+        )
+        .expect("a live peer");
+    assert_eq!(
+        peer.request_but_ping().await["t"],
+        "input",
+        "the hub asked for the same transcript twice",
+    );
+}
+
+/// `styles.from` is a `u32` straight off the peer's frame, and the table was resized to it. Forty
+/// bytes of JSON — well under any size ceiling — asked the hub for four billion entries, and the
+/// hub is the front node the whole herd is reached through.
+#[tokio::test]
+async fn a_styles_message_that_skips_past_the_table_closes_the_link() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    peer.send(json!({ "t": "styles", "from": 1_000_000, "styles": [] }))
+        .await;
+    assert!(
+        peer.hung_up().await,
+        "the hub sized a table from a number the peer chose",
+    );
+    settle(&peers, |h| h.nodes.iter().any(|n| !n.online)).await;
 }

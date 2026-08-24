@@ -91,6 +91,10 @@ pub struct Accepted {
     /// True when this connection is the one that spent a join code — worth an audit line and a
     /// console notice, and nothing else.
     pub enrolled: bool,
+    /// Carried onto the link so the hub can keep asking whether this node is *still* enrolled.
+    /// An operator revokes a peer in a different process, which only writes SQLite, so a link
+    /// that checked once at the handshake would serve a revoked node until the node restarts.
+    pub store: Store,
 }
 
 /// What the peer learned about the hub it dialled.
@@ -254,6 +258,7 @@ pub async fn accept<O: Outgoing, I: Incoming>(
         node,
         build: hello.build,
         enrolled,
+        store: store.clone(),
     })
 }
 

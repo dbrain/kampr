@@ -26,10 +26,21 @@ impl Default for StyleTable {
 impl StyleTable {
     /// `from` is where the far end says this batch starts, so the table is resized to it before
     /// the batch is appended — id 0 stays the default pen whatever arrives.
-    pub fn absorb(&mut self, message: &Styles) {
+    ///
+    /// A batch that starts *past* the end of this table is refused, because ids are minted
+    /// append-only by one encoder per link and there is no honest way to skip: the number would
+    /// only ever be the peer's own count of what it has already sent. Resizing to it instead
+    /// would let `{"t":"styles","from":4294967295,"styles":[]}` — a message of forty bytes, well
+    /// under any size ceiling — ask the hub for four billion entries in one allocation.
+    #[must_use]
+    pub fn absorb(&mut self, message: &Styles) -> bool {
+        if message.from as usize > self.entries.len() {
+            return false;
+        }
         self.entries
             .resize((message.from as usize).max(1), Style::default());
         self.entries.extend(message.styles.iter().copied());
+        true
     }
 
     pub fn get(&self, id: u32) -> Style {
@@ -273,13 +284,13 @@ mod tests {
 
     fn table() -> StyleTable {
         let mut styles = StyleTable::default();
-        styles.absorb(&Styles {
+        assert!(styles.absorb(&Styles {
             from: 1,
             styles: vec![Style {
                 fg: Color::Indexed(9),
                 ..Style::default()
             }],
-        });
+        }));
         styles
     }
 
@@ -302,13 +313,13 @@ mod tests {
     #[test]
     fn a_second_styles_message_appends_rather_than_replacing() {
         let mut styles = table();
-        styles.absorb(&Styles {
+        assert!(styles.absorb(&Styles {
             from: 2,
             styles: vec![Style {
                 fg: Color::Indexed(4),
                 ..Style::default()
             }],
-        });
+        }));
         assert_eq!(styles.get(1).fg, Color::Indexed(9));
         assert_eq!(styles.get(2).fg, Color::Indexed(4));
         assert_eq!(styles.len(), 3);

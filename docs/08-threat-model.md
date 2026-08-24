@@ -194,6 +194,26 @@ fingerprint.
 impersonate a node and a revoked device has no bearing on a link. That separation is the single most
 important property here.
 
+**One enrolled peer may not impersonate another.** A herd on a shared hub is several machines that
+trust the hub and not each other, so the boundary that matters most here is the one between two
+peers. The handshake authenticates a *key* and binds it to the one node id that key dialled in
+with; everything a peer says afterwards is its own words about itself, and its `herd` message can
+name any node it likes. Three checks hold the boundary, and all three are on the hub:
+
+- A link whose authenticated node id is already held by a live link is **refused and closed**, so
+  an enrolled machine cannot dial in as its neighbour and race for the traffic.
+- An advertised node or pane whose id belongs to a *different* live link is **dropped** as it
+  arrives, and a link that authenticates as an id takes it back from anything that had merely
+  claimed it. Connection order therefore decides nothing.
+- A pane is routed by the **authenticated** node id first, and only then by what a peer advertised.
+
+Without them, an enrolled-but-hostile machine that connected first could advertise a victim's node
+id and be handed that victim's `watch`, `input` and `manage` traffic — one host reading and typing
+into another's terminals, through the hub that exists to join them.
+
+A revoked peer also loses the link it already holds: the hub re-reads the enrolment row on every
+keepalive tick, because `kampr mesh revoke` runs in a different process and only writes SQLite.
+
 **Not defended, and worth stating:** first-connection key pinning is trust-on-first-use. If the join
 code is intercepted *and* the attacker answers at the URL before the operator's node does, the
 fingerprint the operator is shown is the attacker's. Compare it out of band if the join crosses a
