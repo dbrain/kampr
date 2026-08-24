@@ -73,11 +73,17 @@ class TerminalViewState {
     var scrolled = false
         private set
 
+    // The live edge is not scroll zero. `caretFloor` holds the surface off the bottom of the grid
+    // by however far the caret sits above it, so a reader riding the edge of a shell pane rests at
+    // a positive scrollY — which is the one thing every "am I at the edge" test here has to ask
+    // about, and the reason they all ask it through this.
+    private val atLiveEdge: Boolean get() = scrollY <= minScroll + FOLLOW_SLACK
+
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
     // scrollY is measured from that bottom — so standing still means moving with it. A reader
     // pinned to the bottom is pinned deliberately and must not be carried off it.
     fun carryHistory(rowsAdded: Int, cellHeight: Float) {
-        if (rowsAdded == 0 || scrollY <= 0f) return
+        if (rowsAdded == 0 || atLiveEdge) return
         scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
     }
 
@@ -89,7 +95,7 @@ class TerminalViewState {
         if (dx != 0f) pannedAway = true
         panX = (panX + dx).coerceIn(minPanX, 0f)
         scrollY = (scrollY + dy).coerceIn(minScroll, maxScroll)
-        following = scrollY <= minScroll + FOLLOW_SLACK
+        following = atLiveEdge
     }
 
     // The horizontal half of `following`, and it was missing. `followCursorPan` puts the caret a
@@ -151,7 +157,7 @@ class TerminalViewState {
         panX = panX * applied + tx
         scrollY = (scrollY * applied + ty + contentBottom * (applied - 1f))
             .coerceIn(minScroll, maxScroll.coerceAtLeast(minScroll))
-        following = scrollY <= minScroll + FOLLOW_SLACK
+        following = atLiveEdge
         zoom = target
     }
 }

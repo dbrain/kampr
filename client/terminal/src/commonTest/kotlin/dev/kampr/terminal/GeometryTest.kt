@@ -205,6 +205,25 @@ class GeometryTest {
         close(view.scrollY, 0f)
     }
 
+    // The report, from a server pane right after a `docker compose up`: "the terminal is showing
+    // lines a full screen earlier and none of the new stuff. typing in the terminal doesn't appear
+    // on the app either."
+    //
+    // The live edge is not scroll zero. `caretFloor` holds the surface off the bottom of the grid
+    // by however far the caret sits above it (#175), so a reader riding the edge of a shell pane
+    // rests at a *positive* scrollY — and the carry read that as "parked in history" and moved
+    // them by everything that arrived. Nothing brings them back: the floor does not change when
+    // history arrives, because the caret's index grows with the surface.
+    @Test
+    fun aReaderRidingAFlooredLiveEdgeIsNotCarriedByHistoryArriving() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.minScroll = 17 * CELL_H
+        view.scrollY = view.minScroll
+        view.carryHistory(400, CELL_H)
+        close(view.scrollY, view.minScroll)
+    }
+
     // The report, verbatim: "scroll direction on terminal screen is reversed, i need to swipe up
     // to go into history and swipe down to go back to current".
     //
