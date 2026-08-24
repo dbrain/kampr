@@ -72,7 +72,10 @@ pub enum PaneEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawScrollback {
     pub text: String,
-    pub cols: u16,
+    /// The width the rows were wrapped at, and `None` until one has been *proved*. The layout
+    /// rect is not an answer (probe #68), and a ring restarted on a rect that resolves to the
+    /// PTY's own width a moment later throws away history nothing was wrong with.
+    pub cols: Option<u16>,
     pub viewport_rows: u16,
     /// Set by herdr when more history existed than it returned — the read cap, in practice.
     pub truncated: bool,

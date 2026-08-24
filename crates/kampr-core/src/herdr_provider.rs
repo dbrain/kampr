@@ -483,7 +483,10 @@ impl Inner {
     /// rendering bug (probe #233). Which is also why the loud line fires on the edge rather than
     /// on every retry: the log is for what changed, the herd is for what is.
     fn cannot_stream(&self, pane_id: &str, error: &anyhow::Error) {
-        let detail = cannot_run_herdr(error);
+        self.stream_faulted(pane_id, cannot_run_herdr(error));
+    }
+
+    fn stream_faulted(&self, pane_id: &str, detail: String) {
         let mut fault = self.stream_fault.lock().unwrap();
         if fault.as_deref() == Some(detail.as_str()) {
             debug!(pane = %pane_id, "observe still will not start; retrying");
@@ -632,18 +635,10 @@ impl Inner {
         }
     }
 
-    /// The corrected width without touching the socket, for callers that only have a snapshot.
-    fn known_cols(&self, pane_id: &str, rect: u16) -> u16 {
-        let widths = self.widths.lock().unwrap();
-        match widths.get(pane_id) {
-            Some(m) if m.rect == rect => m.cols(),
-            _ => rect,
-        }
-    }
-
-    /// The width a wrap has actually proved, or nothing. [`Self::known_cols`] falls back to the
-    /// rect because an observe stream has to be sized at *something*; the herd model does not,
-    /// and reporting the rect there is reporting a width the PTY never had.
+    /// The width a wrap has actually proved, or nothing. [`Self::observe_cols`] falls back to the
+    /// rect because an observe stream has to be sized at *something*; neither the herd model nor
+    /// a scrollback label does, and reporting the rect there is reporting a width the PTY never
+    /// had.
     fn proven_cols(&self, pane_id: &str, rect: u16) -> Option<u16> {
         let widths = self.widths.lock().unwrap();
         widths
@@ -835,10 +830,10 @@ impl Provider for HerdrProvider {
             return Ok(None);
         }
         let scroll = pane.scroll.context("pane reported no scroll state")?;
-        // The ring is re-wrapped at this width, so it has to be the width the PTY actually
-        // wrapped at, not the rect (probe #68).
+        // The ring is re-wrapped at this width, so it has to be a width the PTY was actually
+        // proved to have wrapped at, and never the rect (probe #68).
         let (rect, _) = snapshot.geometry(pane_id).context("pane has no layout rect")?;
-        let cols = self.inner.known_cols(pane_id, rect as u16);
+        let cols = self.inner.proven_cols(pane_id, rect as u16);
         // Over-asking clamps to herdr's own cap (probe #51), so the request is deliberately far
         // past it: `truncated` then means "history exists above this", independent of how fresh
         // the cached snapshot's ring depth happens to be.
@@ -871,6 +866,19 @@ fn cannot_run_herdr(error: &anyhow::Error) -> String {
         "No pane on this node can show a screen: Kampr cannot run herdr — {error:#}. \
          Put herdr on the node's PATH, or set herdr.binary in its config to the full path; \
          kampr doctor on that machine says where it looked. \
+         Kampr keeps retrying, and the panes come back on their own."
+    )
+}
+
+/// The other half of [`cannot_run_herdr`]: the binary starts and then goes away before it has
+/// sent anything, which is a different fault with a different fix and must not be reported as a
+/// missing binary.
+fn observe_produced_nothing(reason: &str) -> String {
+    format!(
+        "No pane on this node can show a screen: `herdr terminal session observe` starts and then \
+         stops without sending a frame — {reason}. That is a herdr too old for the subcommand, or \
+         one that cannot read this node's socket; kampr doctor on that machine says which herdr it \
+         runs and which socket it dials. \
          Kampr keeps retrying, and the panes come back on their own."
     )
 }
@@ -1081,6 +1089,16 @@ async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) ->
 
 enum Stop {
     Closed(String),
+    /// A frame went missing. Probe #53: only the *first* frame of a stream is `full`, so every
+    /// later one is a cursor-addressed partial repaint and a single lost or undecodable frame
+    /// leaves the emulator disagreeing with the pane for the life of the stream, in cells herdr
+    /// believes it has already delivered. Nothing downstream can repair that — republishing the
+    /// node's own grid republishes the stale cells — so the stream is restarted, and the fresh
+    /// one opens with a `full` frame, which is the only thing that can resynchronise it.
+    FrameGap {
+        expected: u64,
+        got: u64,
+    },
     GeometryChanged,
     /// The PTY turned out to be wider than the stream was sized for — probe #68, where the rect
     /// is fiction and the divergence only shows once content fills the real width.
@@ -1119,11 +1137,14 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
             cols as u32,
             rows as u32,
         );
+        // **A spawn that returns `Ok` proves that `fork` and `exec` worked, and nothing else.**
+        // Clearing the fault here called the binary half healthy before a single frame had
+        // arrived, so a herdr that execs and exits — too old for the subcommand, unable to read
+        // the socket — promised every client a grid, delivered nothing, and said nothing. That is
+        // probe #233's symptom with the guard keyed on the wrong event; the fault clears at the
+        // first frame instead, in `run_observer`.
         let mut observer = match observer {
-            Ok(o) => {
-                inner.can_stream();
-                o
-            }
+            Ok(o) => o,
             Err(e) => {
                 inner.cannot_stream(&pane_id, &e);
                 backoff.sleep().await;
@@ -1142,6 +1163,7 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
         let (width_tx, width_rx) = watch::channel(cols);
         let prober = tokio::spawn(probe_width(inner.clone(), pane_id.clone(), rect, width_tx));
         let (stop, streamed) = run_observer(
+            &inner,
             &mut observer,
             &tx,
             &mut snapshots,
@@ -1152,7 +1174,9 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
         .await;
         prober.abort();
         observer.shutdown().await;
-        if streamed {
+        // A gap must not reset the backoff, or a herdr whose sequence numbers are not what this
+        // reads them to be would respawn `observe` as fast as it can start.
+        if streamed && !matches!(stop, Stop::FrameGap { .. }) {
             backoff.reset();
         }
         match stop {
@@ -1161,8 +1185,19 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
             Stop::WidthChanged { was, now } => {
                 debug!(pane = %pane_id, was, now, "the pane is wider than the rect claimed; restarting")
             }
+            Stop::FrameGap { expected, got } => {
+                warn!(pane = %pane_id, expected, got, "a frame went missing; restarting the stream to resynchronise");
+                backoff.sleep().await;
+            }
             Stop::Closed(reason) => {
                 debug!(pane = %pane_id, %reason, "observer closed; restarting");
+                // A stream that started and closed without ever delivering a frame is the
+                // binary half of the node being broken while the socket half answers perfectly
+                // (probe #233) — the state where every client lays out a correctly-sized blank
+                // grid and every surface reports the node healthy.
+                if !streamed {
+                    inner.stream_faulted(&pane_id, observe_produced_nothing(&reason));
+                }
                 backoff.sleep().await;
             }
         }
@@ -1218,6 +1253,7 @@ async fn probe_width(inner: Arc<Inner>, pane_id: String, rect: u16, tx: watch::S
 }
 
 async fn run_observer(
+    inner: &Arc<Inner>,
     observer: &mut Observer,
     tx: &mpsc::Sender<PaneEvent>,
     snapshots: &mut watch::Receiver<Arc<Snapshot>>,
@@ -1226,10 +1262,22 @@ async fn run_observer(
     geometry: Geometry,
 ) -> (Stop, bool) {
     let mut streamed = false;
+    let mut last_seq: Option<u64> = None;
     loop {
         tokio::select! {
             event = observer.events.recv() => match event {
-                Some(StreamEvent::Frame { full, bytes, .. }) => {
+                Some(StreamEvent::Frame { seq, full, bytes, .. }) => {
+                    if let Some(last) = last_seq
+                        && seq != last + 1
+                    {
+                        return (Stop::FrameGap { expected: last + 1, got: seq }, streamed);
+                    }
+                    last_seq = Some(seq);
+                    // The frame, not the spawn: this is the first thing that proves the binary
+                    // half of the node reaches herdr at all.
+                    if !streamed {
+                        inner.can_stream();
+                    }
                     streamed = true;
                     if tx.send(PaneEvent::Bytes { full, bytes }).await.is_err() {
                         return (Stop::ConsumerGone, streamed);
