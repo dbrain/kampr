@@ -82,6 +82,11 @@ fn install(config: &Config, version: Option<&str>) -> Result<()> {
         // that ran this, because what it switches off is the only thing standing between a
         // tampered download and a process that can type into every terminal on this host.
         .env_remove("KAMPR_ALLOW_UNVERIFIED")
+        // The same rule, and the larger hole of the two: the base supplies the tarball *and* the
+        // SHA256SUMS it is checked against, so a base set in the caller's environment chooses what
+        // kampr becomes and gets "checksum verified: yes" printed underneath it. An operator
+        // installing from their own base runs `install.sh` and sets it there, deliberately.
+        .env_remove("KAMPR_BASE_URL")
         .status()
         .context("running the installer — is `sh` on this host?")?;
 

@@ -12,7 +12,10 @@
 #   KAMPR_PREFIX          where to put the binary (default ~/.local/bin)
 #   KAMPR_REPO            owner/repo (default dbrain/kampr)
 #   KAMPR_VERSION         tag, or `latest` (default latest)
-#   KAMPR_BASE_URL        override the whole download base — a file:// URL works, for testing
+#   KAMPR_BASE_URL        override the whole download base — a file:// URL works, for testing.
+#                         It sources the checksums as well as the tarball, so it is a trust
+#                         decision: `kampr update` clears it, and a base you set yourself is
+#                         the only one where a missing signature is not fatal
 #   KAMPR_MODE            plugin | update | standalone (default standalone)
 #                         plugin stops after installing; update also restarts the service but
 #                         drops the first-run epilogue, and is what `kampr update` runs
@@ -42,8 +45,13 @@ case "$(uname -m)" in
 esac
 
 asset="kampr-${arch}-${os}.tar.gz"
+# `own_base` is the whole difference between "the operator pointed this at their own directory"
+# and "these bytes came from the release the project publishes". A base supplies the tarball *and*
+# the SHA256SUMS it is checked against, so on any other base a matching checksum proves nothing.
+own_base=
 if [ -n "${KAMPR_BASE_URL:-}" ]; then
   base="$KAMPR_BASE_URL"
+  own_base=1
 elif [ "$VERSION" = latest ]; then
   base="https://github.com/${REPO}/releases/latest/download"
 else
@@ -118,6 +126,14 @@ if fetch "${base}/SHA256SUMS" "$tmp/SHA256SUMS" optional; then
       signature_state="skipped — cosign is not installed (https://docs.sigstore.dev/cosign/installation)"
     fi
   else
+    # An absent signature is the one downgrade an attacker gets for free: serve a tarball, serve
+    # checksums that match it, publish no bundle, and the installer says "checksum verified: yes".
+    # Every release from this repo is signed by its workflow, so at the canonical base an absent
+    # bundle is not an unsigned release — it is not this repo's release.
+    [ -n "$own_base" ] || die "no signature alongside SHA256SUMS at ${base} — refusing to install.
+       Every kampr release is signed by its release workflow. The checksums that just matched came
+       from wherever this tarball did, so without the signature they say nothing about who built it.
+       Do not run this file. Report it at https://github.com/${REPO}/issues"
     signature_state="skipped — this release publishes no signature"
   fi
 else

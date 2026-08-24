@@ -1,5 +1,11 @@
 //! `kampr update`, driven the way an operator drives it: the real binary, replacing itself, out
-//! of a release built on disk and reached over `file://`.
+//! of a release built on disk.
+//!
+//! The release is served by a `curl` on `PATH` that answers only for the canonical
+//! `https://github.com/dbrain/kampr/releases/…` and 404s everything else — so these tests fetch
+//! nothing, and the URL the command actually asks for is asserted rather than assumed. The
+//! installer's own `KAMPR_BASE_URL` is deliberately *not* the seam here: `kampr update` clears it,
+//! because a base decides the tarball and the checksums it is checked against together.
 //!
 //! Nothing here touches the network, the operator's `~/.local/bin`, or any systemd unit — `HOME`
 //! and `XDG_CONFIG_HOME` are redirected into the test's own directory, so the unit the installer
@@ -12,6 +18,8 @@ use std::process::{Command, Output};
 struct Release {
     dir: PathBuf,
     asset: String,
+    /// A directory holding the `curl` that serves this release, to go on the front of `PATH`.
+    shim: PathBuf,
 }
 
 impl Release {
@@ -43,9 +51,69 @@ impl Release {
             .expect("tar");
         assert!(tar.success(), "could not build {asset}");
 
-        let release = Self { dir, asset };
+        let release = Self {
+            dir,
+            asset,
+            shim: root.join("shim"),
+        };
         release.write_sums(&release.sha256());
+        release.write_bundle();
+        release.write_shim();
         release
+    }
+
+    /// Every release this project publishes is signed, and the installer refuses one from the
+    /// canonical base that is not. The bundle is never verified here — cosign is not on a test
+    /// runner — but its absence is fatal, so it has to be served.
+    fn write_bundle(&self) {
+        std::fs::write(self.dir.join("SHA256SUMS.cosign.bundle"), "{}\n").expect("a bundle");
+    }
+
+    fn drop_bundle(&self) {
+        std::fs::remove_file(self.dir.join("SHA256SUMS.cosign.bundle")).expect("a bundle");
+    }
+
+    /// Stands in for `curl`, and refuses anything that is not the canonical release base — so a
+    /// command that could be talked into fetching from anywhere else fails here rather than
+    /// quietly succeeding against whatever the test set up.
+    /// The shim in front of whatever this test runner already has, so `sh`, `tar` and
+    /// `sha256sum` still resolve.
+    fn path(&self) -> String {
+        format!(
+            "{}:{}",
+            self.shim.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    }
+
+    fn write_shim(&self) {
+        std::fs::create_dir_all(&self.shim).expect("a shim dir");
+        let curl = self.shim.join("curl");
+        std::fs::write(
+            &curl,
+            format!(
+                r#"#!/bin/sh
+url=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  https://github.com/dbrain/kampr/releases/*) ;;
+  *) echo "curl: refusing $url" >&2; exit 22 ;;
+esac
+name="${{url##*/}}"
+[ -f "{dir}/$name" ] || exit 22
+cp "{dir}/$name" "$out"
+"#,
+                dir = self.dir.display()
+            ),
+        )
+        .expect("a curl shim");
+        chmod_x(&curl);
     }
 
     fn sha256(&self) -> String {
@@ -67,10 +135,6 @@ impl Release {
 
     fn drop_sums(&self) {
         std::fs::remove_file(self.dir.join("SHA256SUMS")).expect("SHA256SUMS");
-    }
-
-    fn base_url(&self) -> String {
-        format!("file://{}", self.dir.display())
     }
 }
 
@@ -111,9 +175,10 @@ impl Installed {
             // rather than on the developer's own unit.
             .env("HOME", self.home.path())
             .env("XDG_CONFIG_HOME", self.home.path().join("xdg"))
-            .env_remove("KAMPR_ALLOW_UNVERIFIED");
+            .env_remove("KAMPR_ALLOW_UNVERIFIED")
+            .env_remove("KAMPR_BASE_URL");
         if let Some(release) = release {
-            command.env("KAMPR_BASE_URL", release.base_url());
+            command.env("PATH", release.path());
         }
         output(&mut command)
     }
@@ -166,6 +231,7 @@ fn text(out: &Output) -> String {
 
 const WORKS: &str = "#!/bin/sh\necho 'kampr 99.9.9'\n";
 const BROKEN: &str = "#!/bin/sh\nexit 1\n";
+const TAMPERED: &str = "#!/bin/sh\necho 'kampr 0.0.0-tampered'\n";
 
 #[test]
 fn update_replaces_the_binary_it_is_running_from() {
@@ -247,7 +313,7 @@ fn a_release_with_no_checksums_is_refused_and_the_bypass_is_not_inherited() {
         .arg("update")
         .env("HOME", installed.home.path())
         .env("XDG_CONFIG_HOME", installed.home.path().join("xdg"))
-        .env("KAMPR_BASE_URL", release.base_url())
+        .env("PATH", release.path())
         .env("KAMPR_ALLOW_UNVERIFIED", "1");
     let out = output(&mut command);
     let said = text(&out);
@@ -432,5 +498,99 @@ fn status_names_an_available_release_without_asking_anyone() {
         said.lines()
             .any(|line| line.starts_with("kampr ") && line.contains("99.9.9")),
         "status did not say a release was waiting on the line that names the build:\n{said}"
+    );
+}
+
+/// The hole the checksum cannot see: a base decides where the tarball comes from *and* where the
+/// SHA256SUMS it is checked against comes from, so an attacker who can leave one environment
+/// variable in the shell that later runs `kampr update` gets a binary of their choosing installed
+/// with "checksum verified: yes" printed underneath it. `kampr update` clears the variable for the
+/// same reason it clears `KAMPR_ALLOW_UNVERIFIED`.
+#[test]
+fn a_base_url_in_the_environment_cannot_choose_what_this_host_installs() {
+    let installed = Installed::new();
+    let genuine = Release::built(installed.home.path(), WORKS);
+
+    // A whole release of the attacker's own: their tarball, and checksums that match it.
+    let theirs = installed.home.path().join("theirs");
+    let stage = theirs.join("stage");
+    std::fs::create_dir_all(&stage).expect("a stage dir");
+    let binary = stage.join("kampr");
+    std::fs::write(&binary, TAMPERED).expect("a tampered binary");
+    chmod_x(&binary);
+    let tar = Command::new("tar")
+        .args(["-czf"])
+        .arg(theirs.join(&genuine.asset))
+        .arg("-C")
+        .arg(&stage)
+        .arg("kampr")
+        .status()
+        .expect("tar");
+    assert!(tar.success(), "could not build the attacker's release");
+    let digest = Command::new("sha256sum")
+        .arg(theirs.join(&genuine.asset))
+        .output()
+        .expect("sha256sum");
+    let digest = String::from_utf8_lossy(&digest.stdout)
+        .split_whitespace()
+        .next()
+        .expect("a digest")
+        .to_string();
+    std::fs::write(
+        theirs.join("SHA256SUMS"),
+        format!("{digest}  {}\n", genuine.asset),
+    )
+    .expect("their SHA256SUMS");
+
+    let mut command = Command::new(&installed.binary);
+    command
+        .arg("update")
+        .arg("--config-dir")
+        .arg(installed.home.path().join("config"))
+        .arg("--state-dir")
+        .arg(installed.home.path().join("state"))
+        .env("HOME", installed.home.path())
+        .env("XDG_CONFIG_HOME", installed.home.path().join("xdg"))
+        .env("PATH", genuine.path())
+        .env("KAMPR_BASE_URL", format!("file://{}", theirs.display()));
+    let out = output(&mut command);
+    let said = text(&out);
+
+    assert_ne!(
+        installed.version(),
+        "kampr 0.0.0-tampered",
+        "one environment variable redirected the whole verification chain and this host is now \
+         running a binary an attacker chose:\n{said}"
+    );
+    assert!(
+        !said.contains("0.0.0-tampered"),
+        "the installer went to the base the environment named:\n{said}"
+    );
+}
+
+/// An absent signature is the free downgrade: serve a tarball, serve checksums that match it, and
+/// publish no bundle. At the canonical base that is not an unsigned release — it is not this
+/// project's release, because the workflow signs every one of them.
+#[test]
+fn a_release_from_the_canonical_base_with_no_signature_is_refused() {
+    let installed = Installed::new();
+    let release = Release::built(installed.home.path(), WORKS);
+    release.drop_bundle();
+    let before = installed.digest();
+
+    let out = installed.run(&["update"], Some(&release));
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "an unsigned release was installed:\n{said}"
+    );
+    assert!(
+        said.contains("signature"),
+        "the refusal did not say what was missing:\n{said}"
+    );
+    assert_eq!(
+        installed.digest(),
+        before,
+        "the binary was replaced anyway:\n{said}"
     );
 }
