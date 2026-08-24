@@ -39,6 +39,10 @@ url.workspace = true
 async-trait.workspace = true
 getrandom.workspace = true
 rcgen.workspace = true
+# One test makes the device store genuinely unreadable — a table renamed out from under the
+# node's own pool — because a store that fails once and a store that has stopped working are the
+# same thing from the session's side and only the second one may close a socket.
+sqlx.workspace = true
 tokio-rustls.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

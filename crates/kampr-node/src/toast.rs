@@ -1,5 +1,6 @@
 use kampr_herdr::Herdr;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -22,6 +23,10 @@ const MAX_BODY: usize = 200;
 #[derive(Debug, Default)]
 pub struct Toaster {
     last: Mutex<Option<Instant>>,
+    /// Test-visible: what the rate limit has to mean is "did not reach herdr", not "returned a
+    /// variant". The limit is per instance, so a count of attempts is also what proves the node
+    /// shares one rather than making a fresh one per pairing.
+    attempts: AtomicU64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -37,6 +42,10 @@ pub enum Toast {
 }
 
 impl Toaster {
+    pub fn attempts(&self) -> u64 {
+        self.attempts.load(Ordering::Relaxed)
+    }
+
     /// `who` names what raised it, and it is prefixed by the node rather than taken from a client.
     pub async fn show(&self, herdr: &Herdr, who: &str, title: &str, body: Option<&str>) -> Toast {
         {
@@ -46,6 +55,7 @@ impl Toaster {
             }
             *last = Some(Instant::now());
         }
+        self.attempts.fetch_add(1, Ordering::Relaxed);
         let params = json!({
             "title": format!("kampr · {}", clip(who, MAX_TITLE)),
             "body": clip(&title_body(title, body), MAX_BODY),

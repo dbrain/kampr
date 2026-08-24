@@ -476,13 +476,15 @@ async fn revoke_mesh_node(
 
 /// What a client needs before it has a token: the node's name, and what this origin can and
 /// cannot do. Deliberately says nothing about who is enrolled.
-async fn node_info(State(node): State<Arc<Node>>) -> Json<Value> {
+async fn node_info(State(node): State<Arc<Node>>) -> Response {
     let tier = node.auth.tier();
-    let enrolled = node
-        .auth
-        .devices()
-        .await
-        .map(|d| d.iter().filter(|d| d.active(kampr_auth::now())).count());
+    // Whether the node is claimed is the one thing on this page a first run branches on, and an
+    // unreadable store cannot answer it. Saying "nobody is enrolled" would invite a stranger to
+    // claim a node that is already somebody's.
+    let enrolled = match node.auth.devices().await {
+        Ok(devices) => devices.iter().any(|d| d.active(kampr_auth::now())),
+        Err(e) => return store_failure("node_info", &e),
+    };
     Json(json!({
         "node_id": node.config.node_id,
         "node_name": node.config.node_name,
@@ -498,8 +500,9 @@ async fn node_info(State(node): State<Arc<Node>>) -> Json<Value> {
             "installable": tier.installable,
             "unlocks": tier.locked(),
         },
-        "enrolled": enrolled.unwrap_or(0) > 0,
+        "enrolled": enrolled,
     }))
+    .into_response()
 }
 
 /// What this device may do about notifications, and what it has already asked for.
@@ -563,14 +566,19 @@ async fn attachment(
     if node_id.is_empty() || local.is_empty() || id.is_empty() {
         return missing();
     }
-    let Some(transcript) = transcript_of(&node, &format!("{node_id}/{local}")) else {
-        return missing();
-    };
-    let journals = node.journals();
+    let pane = format!("{node_id}/{local}");
     let id = id.to_string();
-    // A record is read off disk and base64-decoded, and both are bounded but neither is instant.
-    match tokio::task::spawn_blocking(move || attach::serve(&journals, &transcript, &id)).await {
-        Ok(response) => response,
+    // Both halves are file IO and the *first* is the expensive one: a miss walks every project
+    // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
+    // of megabytes of synchronous reads on a tokio worker for a request any device may make.
+    let served = tokio::task::spawn_blocking(move || {
+        let transcript = transcript_of(&node, &pane)?;
+        Some(attach::serve(&node.journals(), &transcript, &id))
+    })
+    .await;
+    match served {
+        Ok(Some(response)) => response,
+        Ok(None) => missing(),
         Err(_) => refuse(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the attachment could not be read",
@@ -788,11 +796,12 @@ async fn redeem_pairing(
             // device just paired, on the same screen the code was printed on. A pairing that
             // nobody expected is the one worth noticing, and this is the only channel that
             // reaches somebody who is not holding the phone.
-            let session = node.primary();
             let name = e.device.name.clone();
-            let role = e.device.role.as_str();
+            let role = e.device.role.as_str().to_string();
+            let node = node.clone();
             tokio::spawn(async move {
-                crate::toast::Toaster::default()
+                let session = node.primary();
+                node.toaster
                     .show(
                         &session.herdr,
                         "pairing",
@@ -839,7 +848,22 @@ async fn devices(State(node): State<Arc<Node>>, auth: Authenticated) -> Response
         return response;
     }
     match node.auth.devices().await {
-        Ok(devices) => private_json(json!({ "devices": devices })),
+        Ok(devices) => {
+            let now = kampr_auth::now();
+            // Additive, and the node's judgement rather than the client's: currently paired is
+            // `revoked_at` *and* `expires_at`, and a client reading only the first showed a
+            // device whose token ran out weeks ago as still connected. An older client ignores
+            // the field and keeps its old reading.
+            let devices: Vec<Value> = devices
+                .iter()
+                .map(|device| {
+                    let mut row = json!(device);
+                    row["active"] = json!(device.active(now));
+                    row
+                })
+                .collect();
+            private_json(json!({ "devices": devices }))
+        }
         Err(e) => store_failure("devices", &e),
     }
 }
