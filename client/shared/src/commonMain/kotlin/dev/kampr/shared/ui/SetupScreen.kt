@@ -82,7 +82,8 @@ private fun ladderFor(
     }
     // `onPasskeys` is the effective answer: the socket may not be up yet, and `/api/node` says the
     // same thing without a token.
-    if (security.passkeys || onPasskeys != null) {
+    val reachableByName = security.passkeys || onPasskeys != null
+    if (reachableByName) {
         add(
             Rung(
                 KamprIcons.lock,
@@ -103,7 +104,10 @@ private fun ladderFor(
             )
         )
     }
-    if (security.tier < 3) {
+    // Whether this node is reachable from outside the house is a deployment posture nothing on
+    // the wire can detect — `security.tier` is `u8::from(passkeys)` and carries 0 or 1 — so this
+    // rung is offered while the origin is still an address and retired once it is a name.
+    if (!reachableByName) {
         add(
             Rung(
                 KamprIcons.globe,

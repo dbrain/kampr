@@ -183,7 +183,7 @@ class ThemeMatrixTest {
     @Test
     fun devicesSheet() = eachGround { ground ->
         sheet(phone.first, phone.second, ground, TypeScale.Phone, "devices") {
-            DevicesScreen(devices, "d1", NOW, {}, {})
+            DevicesScreen(devices, "d1", NOW, {}, {}, {})
         }
     }
 

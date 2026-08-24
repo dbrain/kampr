@@ -59,9 +59,20 @@ fun MosaicScreen(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         MosaicBar(mosaic, herd, onHerd, onAdd)
-        Box(Modifier.weight(1f).fillMaxWidth().background(tokens.color.line)) {
+        // The ground still runs under the side bars; the cells do not. Insetting the grid rather
+        // than each cell keeps the interior boundaries where they are — a cell's own header
+        // carries the Remove at its right edge, and the outermost one sat under the navigation
+        // buttons in landscape.
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(tokens.color.line)
+                .absolutePadding(left = safe.left, right = safe.right),
+        ) {
             // The status row below is what ends at the window, so a cell owes nothing at its own
             // bottom edge — and a terminal that paid anyway floated its controls a gesture
             // handle's worth above the grid it belongs to.

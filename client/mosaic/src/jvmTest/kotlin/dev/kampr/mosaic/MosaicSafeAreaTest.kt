@@ -35,7 +35,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 // A gesture handle's worth of system furniture, and a status bar's — the API 37 AVD's own numbers.
-private val BARS = SafeArea(top = 32.dp, bottom = 46.dp)
+// Rotated, the three-button navigation bar goes to one end of the screen and the cutout to the
+// other, which is the case a top-and-bottom fixture cannot see at all.
+private val BARS = SafeArea(top = 32.dp, bottom = 46.dp, left = 24.dp, right = 48.dp)
 
 private fun testTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
     .let { KamprTokens(SoftTheme, it, typography(it, SoftTheme.label, TypeScale.Phone)) }
@@ -213,6 +215,44 @@ class MosaicSafeAreaTest {
             switcher(landscape = false, probe = probe)
             assertEquals(BARS.bottom, probe.bottom, "the switcher has nothing under it and must pay")
         }
+    }
+
+    // The bar above the grid and the status row below it both paid for the side bars, and the grid
+    // between them spanned the whole window — so in landscape the outermost cell's Remove sat
+    // underneath the navigation buttons.
+    @Test
+    fun theMosaicGridKeepsItsCellControlsOutOfASideNavigationBar() = runComposeUiTest {
+        val fixture = Fixture().apply { fourPanes() }
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides testTokens(),
+                LocalPaneIo provides ArtboardIo,
+                LocalSafeArea provides BARS,
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    MosaicScreen(
+                        store = fixture.store,
+                        mosaic = fixture.mosaic,
+                        herd = fixture.store.herd.value,
+                        connectionStatus = ConnectionStatus.Live("full"),
+                        build = "0.1.0",
+                        surfaces = TerminalSurfaces(),
+                        onHerd = {},
+                        onAdd = {},
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        val screen = onRoot().getUnclippedBoundsInRoot()
+        val controls = boundsOf(listOf("Remove "))
+        val left = with(density) { controls.minOf { it.left }.toDp() }
+        val right = with(density) { controls.maxOf { it.right }.toDp() }
+        assertTrue(left >= BARS.left, "a cell control starts at $left, inside the ${BARS.left} left bar")
+        assertTrue(
+            right <= screen.right - BARS.right,
+            "a cell control reaches $right of ${screen.right}, inside the ${BARS.right} right bar",
+        )
     }
 
     @Test
