@@ -15,10 +15,16 @@ const MIN_HERDR_VERSION: &str = "0.8.2";
 /// A herdr that is up answers this in microseconds; one that is wedged never answers at all.
 const PING_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub async fn checks(config: &Config) -> Vec<Check> {
+pub async fn checks(config: &Config, service_installed: bool) -> Vec<Check> {
     let socket = socket_of(config);
     let (herdr_check, reachable) = herdr(&socket).await;
-    vec![herdr_check, sessions_check(config, &socket, reachable).await]
+    vec![
+        herdr_check,
+        // Immediately after the socket, because the two are one herdr and only one of them was
+        // ever checked.
+        super::observe::check(config, service_installed).await,
+        sessions_check(config, &socket, reachable).await,
+    ]
 }
 
 fn socket_of(config: &Config) -> PathBuf {

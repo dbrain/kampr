@@ -116,6 +116,16 @@ Then, on every box, install the service:
 kampr service install    # systemd --user unit, or a launchd agent on macOS
 ```
 
+`install` also writes down **which `herdr` it resolved**. A node reaches Herdr two ways — the
+socket, for the herd and for input, and a spawned `herdr terminal session observe`, which is the
+entire grid stream — and only the socket is pinned by the unit. A `systemd --user` manager's `PATH`
+is `/usr/local/bin:/usr/bin:/bin` with no `~/.local/bin` in it, so a node that resolved the binary
+through `PATH` served a correct herd, accepted input, and showed a blank grid in every pane, for
+ever. So `init` and `service install` both record the absolute path in `config.toml`, a bare
+`binary = "herdr"` also looks in the directory kampr itself was installed to — put both binaries in
+the same prefix and nothing has to be configured — and `kampr doctor` runs the binary the observer
+will run, the way it will run it.
+
 This also enables **linger** for your user, which is what lets a `systemd --user` unit keep running
 after you log out and start again at boot. Without it a node simply disappears at the next reboot,
 so if `kampr service install` cannot enable it — it needs a privileged bus — it prints the exact
@@ -297,7 +307,7 @@ installed the app.
 | | |
 |---|---|
 | `kampr status` | What this node is, whether it is reachable, which tier, how many devices |
-| `kampr doctor` | 12 checks on everything that has to be true; `--json` for scripts |
+| `kampr doctor` | One `ok`/`warn`/`fail` line per thing that has to be true, each with the command that fixes it; `--json` for scripts |
 | `kampr setup` | The interactive ladder — pair, list, revoke, install the service |
 | `kampr pair [--readonly]` | A pairing code, without the menu |
 | `kampr recover` | Get back in when no paired device is left |

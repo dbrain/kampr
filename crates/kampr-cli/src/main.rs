@@ -1,5 +1,6 @@
 mod dirs;
 mod doctor;
+mod herdr_bin;
 mod init;
 mod mesh;
 mod pairing;
@@ -257,7 +258,10 @@ async fn main() -> Result<()> {
                 // Loaded rather than guessed: `serve` resolves the state directory from the
                 // config, so a unit that guessed the XDG default would supervise a node that
                 // came up on an empty database and a fresh VAPID key.
-                let config = Config::load(&dirs.config())?;
+                let mut config = Config::load(&dirs.config())?;
+                // Before the unit is written, and whether or not writing it succeeds: a login
+                // shell can find herdr and the manager the unit runs under cannot.
+                let pin = herdr_bin::record(&mut config, &dirs.config())?;
                 let installed = service::install(
                     &std::env::current_exe()?,
                     &dirs.config(),
@@ -265,6 +269,10 @@ async fn main() -> Result<()> {
                     std::env::var("HERDR_SOCKET_PATH").ok().as_deref(),
                 )?;
                 println!("installed {}", installed.path.display());
+                match pin.found() {
+                    true => println!("herdr     {}", pin.note()),
+                    false => eprintln!("kampr: {}", pin.note()),
+                }
                 println!("start it with: {}", service::start_hint());
                 if let Some(note) = installed.reboot.note() {
                     println!();

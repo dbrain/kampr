@@ -8,6 +8,7 @@ mod cert;
 mod exposure;
 mod herd;
 mod host;
+mod observe;
 mod origin;
 mod render;
 
@@ -117,13 +118,13 @@ async fn collect(dirs: &Dirs) -> Report {
         "config",
         format!("{}", Config::path(&config_dir).display()),
     )];
-    checks.extend(herd::checks(&config).await);
+    let service = crate::service::details();
+    checks.extend(herd::checks(&config, service.installed).await);
     checks.extend(exposure::checks(&config));
     checks.push(origin::check(&config).await);
     checks.push(assetlinks::check(&config).await);
     checks.extend(host::files(&config_dir, &state_dir));
     checks.push(host::bundle());
-    let service = crate::service::details();
     checks.push(host::service(&config, &service).await);
     checks.push(host::linger(&service));
 

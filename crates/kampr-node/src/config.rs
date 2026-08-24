@@ -151,6 +151,9 @@ pub struct Tls {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Herdr {
+    /// A path with a separator in it is used verbatim; a bare name is resolved by
+    /// `kampr_herdr::locate` — which looks past `PATH`, because a service manager's is not the
+    /// installing shell's. `kampr init` and `kampr service install` write what they resolved here.
     pub binary: String,
     /// Empty means herdr's own resolution order: `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default.
     pub socket: String,

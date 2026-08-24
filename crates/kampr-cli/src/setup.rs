@@ -1,9 +1,11 @@
+use crate::herdr_bin;
 use crate::pairing;
 use crate::recovery;
 use crate::report::{self, Local};
 use crate::service;
 use anyhow::Result;
 use kampr_auth::Role;
+use kampr_node::Config;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use time::OffsetDateTime;
@@ -161,8 +163,11 @@ fn devices_listing(devices: &[kampr_auth::Device]) {
 fn install(config_dir: &Path, state_dir: &Path) -> Result<()> {
     let binary = std::env::current_exe()?;
     let socket = std::env::var("HERDR_SOCKET_PATH").ok();
+    let mut config = Config::load(config_dir)?;
+    let pin = herdr_bin::record(&mut config, config_dir)?;
     let installed = service::install(&binary, config_dir, state_dir, socket.as_deref())?;
     println!("  installed {}", installed.path.display());
+    println!("  herdr     {}", pin.note());
     if let Some(note) = installed.reboot.note() {
         println!();
         println!("{note}");

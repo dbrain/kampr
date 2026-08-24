@@ -10,6 +10,8 @@ struct Cli {
     socket: std::path::PathBuf,
     xdg: std::path::PathBuf,
     nowhere: std::path::PathBuf,
+    binary: std::path::PathBuf,
+    env: Vec<(String, String)>,
     _dir: tempfile::TempDir,
 }
 
@@ -22,8 +24,22 @@ impl Cli {
             socket: dir.path().join("herdr.sock"),
             xdg: dir.path().join("xdg"),
             nowhere: dir.path().join("nowhere"),
+            binary: std::path::PathBuf::from(env!("CARGO_BIN_EXE_kampr")),
+            env: Vec::new(),
             _dir: dir,
         }
+    }
+
+    /// A kampr somewhere other than the build directory, for the questions that are about where
+    /// the binary sits.
+    fn binary(mut self, path: &Path) -> Self {
+        self.binary = path.to_path_buf();
+        self
+    }
+
+    fn with_env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_string(), value.to_string()));
+        self
     }
 
     fn against(mut self, socket: &Path) -> Self {
@@ -46,12 +62,18 @@ impl Cli {
     }
 
     fn spawn(&self, args: &[&str], stdin: &str, state_dir: bool) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_kampr"));
+        let mut command = Command::new(&self.binary);
         command.args(args).arg("--config-dir").arg(&self.config);
         if state_dir {
             command.arg("--state-dir").arg(&self.state);
         }
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
         let mut child = command
+            // Herdr sets this in every process it spawns, so a suite run from inside a pane would
+            // otherwise resolve the herdr binary differently from one run in a plain terminal.
+            .env_remove("HERDR_BIN_PATH")
             // The doctor reports on the environment the node would run in, so a test points it
             // at a socket that is not the developer's own herd.
             .env("HERDR_SOCKET_PATH", &self.socket)
@@ -909,5 +931,170 @@ fn doctor_is_quiet_about_asset_links_on_a_node_that_cannot_do_passkeys_at_all() 
     assert!(
         check["fix"].is_null(),
         "there is nothing to fix at tier 0: {check:#}"
+    );
+}
+
+/// A herdr installed where a service manager cannot see it. Both binaries land in the same
+/// prefix, which is the whole of what makes the fallback work.
+struct Prefix {
+    dir: tempfile::TempDir,
+}
+
+impl Prefix {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("a prefix");
+        std::fs::create_dir_all(dir.path().join("bin")).expect("a bin dir");
+        Self { dir }
+    }
+
+    fn bin(&self) -> std::path::PathBuf {
+        self.dir.path().join("bin")
+    }
+
+    /// Answers `--version` the way herdr does and nothing else, which is all any of this asks of
+    /// it: `session list --json` returning junk is already a supported state.
+    fn herdr(&self) -> std::path::PathBuf {
+        let path = self.bin().join("herdr");
+        std::fs::write(&path, "#!/bin/sh\necho 'herdr 0.8.2'\n").expect("a herdr");
+        chmod_x(&path);
+        path
+    }
+
+    fn kampr(&self) -> std::path::PathBuf {
+        let path = self.bin().join("kampr");
+        std::fs::copy(env!("CARGO_BIN_EXE_kampr"), &path).expect("a kampr");
+        chmod_x(&path);
+        path
+    }
+
+    fn home(&self) -> String {
+        self.dir.path().display().to_string()
+    }
+}
+
+fn chmod_x(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+/// A herdr installed for everyone would be found by the prefix search and make these tests say
+/// nothing, so they skip rather than pass for the wrong reason.
+fn system_herdr() -> bool {
+    ["/usr/local/bin/herdr", "/opt/homebrew/bin/herdr"]
+        .iter()
+        .any(|p| Path::new(p).exists())
+}
+
+/// The machine this came from: the socket answers, so the `herdr` line was green and the node
+/// passed `kampr doctor` — while the binary that streams every grid was nowhere the node could
+/// find it, and every pane was blank for ever.
+#[test]
+fn doctor_fails_when_the_binary_that_streams_every_grid_is_nowhere_to_be_found() {
+    if system_herdr() {
+        eprintln!("skipped: this host has a herdr installed system-wide");
+        return;
+    }
+    let Some(herd) = Herd::start("observe") else {
+        eprintln!("skipped: herdr is not on PATH");
+        return;
+    };
+    let empty = Prefix::new();
+    let cli = Cli::new()
+        .against(&herd.socket)
+        .with_env("PATH", "")
+        .with_env("HOME", &empty.home());
+    cli.init();
+
+    let out = cli.run(&["doctor", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(
+        check(&json, "herdr")["status"],
+        "ok",
+        "the socket is the half that was never broken: {json:#}"
+    );
+    let observe = check(&json, "observe");
+    assert_eq!(observe["status"], "fail", "{json:#}");
+    let detail = observe["detail"].as_str().unwrap();
+    assert!(detail.contains("herdr"), "{detail}");
+    assert!(detail.contains("blank") || detail.contains("stream"), "{detail}");
+    assert!(
+        observe["fix"].as_str().unwrap().contains("install herdr"),
+        "{observe:#}"
+    );
+    assert!(
+        !out.status.success(),
+        "a node that can never show a pane is not a healthy node"
+    );
+}
+
+/// The operator whose node broke months ago and who does nothing but update: their `config.toml`
+/// still says `binary = \"herdr\"` and their service's PATH still has no `~/.local/bin` in it.
+#[test]
+fn a_herdr_beside_the_kampr_binary_is_found_with_nothing_on_the_path_at_all() {
+    if system_herdr() {
+        eprintln!("skipped: this host has a herdr installed system-wide");
+        return;
+    }
+    let prefix = Prefix::new();
+    let herdr = prefix.herdr();
+    let kampr = prefix.kampr();
+    let cli = Cli::new()
+        .binary(&kampr)
+        .with_env("PATH", "")
+        .with_env("HOME", &prefix.home());
+
+    let init = cli.init();
+    assert!(init.contains(&herdr.display().to_string()), "{init}");
+    assert!(
+        cli.config_text().contains(&herdr.display().to_string()),
+        "init records what it resolved:\n{}",
+        cli.config_text()
+    );
+
+    // Back to what a config written before any of this says, which is the state on the machines
+    // that are broken today.
+    set_config(
+        &cli,
+        &format!("binary = \"{}\"", herdr.display()),
+        "binary = \"herdr\"",
+    );
+    let json = cli.json(&["doctor", "--json"]);
+    let observe = check(&json, "observe");
+    assert_eq!(observe["status"], "ok", "{json:#}");
+    let detail = observe["detail"].as_str().unwrap();
+    assert!(detail.contains(&herdr.display().to_string()), "{detail}");
+    assert!(detail.contains("beside the kampr binary"), "{detail}");
+    assert!(detail.contains("herdr 0.8.2"), "it ran the binary: {detail}");
+}
+
+/// `HERDR_SOCKET_PATH` is pinned into the unit because the environment that installs a service is
+/// not the environment that runs it. The binary is the other half of that fact.
+#[test]
+fn service_install_records_the_herdr_it_resolved_rather_than_leaving_a_bare_name() {
+    let prefix = Prefix::new();
+    let herdr = prefix.herdr();
+    let cli = Cli::new().with_env("PATH", "").with_env("HOME", &prefix.home());
+    cli.init();
+    assert_eq!(
+        field(&cli.config_text(), "binary"),
+        "herdr",
+        "nothing to resolve, so nothing is written down"
+    );
+
+    let found = Cli {
+        env: vec![
+            ("PATH".into(), prefix.bin().display().to_string()),
+            ("HOME".into(), prefix.home()),
+        ],
+        ..cli
+    };
+    let out = found.run(&["service", "install"]);
+    let said = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(said.contains(&herdr.display().to_string()), "{said}");
+    assert_eq!(
+        field(&found.config_text(), "binary"),
+        herdr.display().to_string(),
+        "the unit's manager has its own PATH, so the path is recorded where every entry point \
+         reads it"
     );
 }

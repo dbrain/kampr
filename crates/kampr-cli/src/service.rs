@@ -341,6 +341,38 @@ fn launchd_state() -> State {
     }
 }
 
+/// The `PATH` the node will actually have under its own unit, which is not the one that installed
+/// it: a `systemd --user` manager's is `/usr/local/bin:/usr/bin:/bin` and friends, with no
+/// `~/.local/bin` — where `install.sh` puts both kampr and herdr.
+pub fn manager_path() -> Option<String> {
+    if Supervisor::detect() != Supervisor::Systemd {
+        return None;
+    }
+    run_output("systemctl", &["--user", "show-environment"])
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("PATH="))
+        .map(str::to_string)
+}
+
+/// The kampr the unit runs, which need not be the one running this command.
+pub fn unit_binary() -> Option<PathBuf> {
+    if Supervisor::detect() != Supervisor::Systemd {
+        return None;
+    }
+    exec_start_path(&run_output("systemctl", &["--user", "show", UNIT, "--property=ExecStart"]).ok()?)
+}
+
+fn exec_start_path(shown: &str) -> Option<PathBuf> {
+    let path = shown
+        .split_once("path=")?
+        .1
+        .split(&[' ', ';'][..])
+        .next()
+        .filter(|p| !p.is_empty())?;
+    Some(PathBuf::from(path))
+}
+
 pub fn start_hint() -> &'static str {
     match Supervisor::detect() {
         Supervisor::Systemd => "systemctl --user start kampr.service",
@@ -430,6 +462,23 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `systemctl show` renders ExecStart as a record, not a command line.
+    #[test]
+    fn the_binary_the_unit_runs_is_read_out_of_the_exec_start_record() {
+        let shown = "ExecStart={ path=/home/x/.local/bin/kampr ; argv[]=/home/x/.local/bin/kampr \
+                     serve --config-dir /home/x/.config/kampr ; ignore_errors=no ; pid=766702 }";
+        assert_eq!(
+            exec_start_path(shown),
+            Some(PathBuf::from("/home/x/.local/bin/kampr"))
+        );
+        assert_eq!(
+            exec_start_path("ExecStart="),
+            None,
+            "a unit nothing loaded names no binary"
+        );
+        assert_eq!(exec_start_path(""), None);
+    }
 
     #[test]
     fn the_unit_template_is_fully_substituted() {

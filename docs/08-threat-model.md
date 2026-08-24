@@ -477,8 +477,13 @@ local build. That is the right shape. **It has never run against a real publishe
 no tag has been pushed, so the workflow itself — cross-compilation, signing, publication — is
 unexercised. Treat the first release as unproven and check the signature by hand.
 
-Separately, `herdr` is invoked by name and resolved through `PATH`. That is operator-controlled and
-never wire-controlled, but a poisoned `PATH` in the service environment is a full compromise.
+Separately, the `herdr` binary is resolved rather than named: `[herdr] binary`, then
+`HERDR_BIN_PATH`, then `PATH`, then the directory kampr's own executable sits in, then the usual
+install prefixes (`kampr-herdr/src/locate.rs`). That is operator-controlled and never
+wire-controlled, but a poisoned `PATH` — or a writable directory beside the kampr binary — in the
+service environment is a full compromise. `kampr init` and `kampr service install` record the
+absolute path they resolved in `config.toml`, and a configured path with a separator in it is used
+verbatim and never searched for, so a pinned node does not consult the environment at all.
 
 ### 7.9 A notification puts the agent's question on a locked screen
 

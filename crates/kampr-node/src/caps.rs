@@ -89,7 +89,7 @@ pub async fn agent_kinds(herdr: &Herdr) -> Vec<String> {
 /// A named session is a whole separate Herdr server with its own socket, created by the CLI and
 /// absent from the socket API (probe #49) — so this is the one discovery that shells out.
 pub async fn sessions(binary: &str) -> Vec<SessionEntry> {
-    let Ok(output) = Command::new(binary)
+    let Ok(output) = Command::new(kampr_herdr::locate::program(binary))
         .args(["session", "list", "--json"])
         .output()
         .await

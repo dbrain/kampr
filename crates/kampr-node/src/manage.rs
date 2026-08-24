@@ -262,7 +262,7 @@ impl Manager<'_> {
     /// cgroup half with `KillMode=process`; this answers the group half.
     async fn create_session(&self, op: &ManageOp) -> Result<Value, ManageError> {
         let name = session_name(op)?;
-        let mut command = Command::new(self.binary);
+        let mut command = Command::new(kampr_herdr::locate::program(self.binary));
         command
             .args(["server", "--session", &name])
             .stdin(std::process::Stdio::null())

@@ -1,3 +1,4 @@
+use crate::herdr_bin;
 use crate::pairing;
 use crate::recovery;
 use crate::report::{self, Local};
@@ -52,6 +53,9 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     config
         .bind_addr()
         .with_context(|| format!("server.bind {:?} is not host:port", config.server.bind))?;
+    // Written down at the one moment a login shell is answering: the node this config starts will
+    // run under a service manager whose PATH does not have `~/.local/bin` in it.
+    let herdr = herdr_bin::resolve(&mut config);
     let path = config.save(dirs_config)?;
     kampr_auth::private_dir(dirs_state)?;
 
@@ -69,6 +73,7 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
     println!("Kampr node {} ({})", local.config.node_name, local.config.node_id);
     println!("  config      {}", path.display());
     println!("  state       {}", dirs_state.display());
+    println!("  herdr       {}", herdr.note());
     println!("  identity    {}", identity.fingerprint());
     println!("  push key    {}", vapid.public_key_b64());
     println!();

@@ -1,7 +1,9 @@
+pub mod locate;
 pub mod model;
 pub mod observe;
 pub mod rpc;
 
+pub use locate::{Found, Origin, Search};
 pub use model::{AgentStatus, Pane, ProcessInfo, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};
 pub use rpc::{Herdr, Sub};
