@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.theme.Kampr
@@ -30,6 +31,7 @@ fun DevicesScreen(
     now: Double,
     onBack: () -> Unit,
     onRevoke: (String) -> Unit,
+    onRenew: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -37,6 +39,7 @@ fun DevicesScreen(
     // to a shell on the host to pair again.
     var confirming by remember { mutableStateOf<String?>(null) }
     val live = devices.filter { it.active }
+    val expired = devices.filter { it.expired }
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 16.dp, end = 20.dp, bottom = 12.dp),
@@ -50,76 +53,118 @@ fun DevicesScreen(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).widthIn(max = 620.dp).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-            if (live.isEmpty()) {
+            if (live.isEmpty() && expired.isEmpty()) {
                 KText("No devices reported by this node.", tokens.type.caption, tokens.color.mute)
             }
             for (device in live) {
                 val current = device.id == currentId
-                Surface(Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Badge(
-                                34.dp,
-                                17.dp,
-                                KamprIcons.lock,
-                                if (current) tokens.color.accent else tokens.color.dim,
-                                "Paired device",
+                DeviceCard(
+                    device = device,
+                    now = now,
+                    tint = if (current) tokens.color.accent else tokens.color.dim,
+                    badgeLabel = "Paired device",
+                    trailing = {
+                        if (current) {
+                            StatusBadge(
+                                "this device", tokens.color.done, tokens.color.surface2,
+                                label = "This is the device you are using",
                             )
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                KText(device.name, tokens.type.bodyStrong, tokens.color.text)
-                                KText(
-                                    listOfNotNull(
-                                        device.role,
-                                        device.lastSeenAt?.let { "seen ${relativeSeconds(it, now)}" },
-                                        device.origin,
-                                    ).joinToString(" · "),
-                                    tokens.type.meta,
-                                    tokens.color.mute,
-                                    maxLines = 2,
-                                )
-                            }
-                            if (current) {
-                                StatusBadge(
-                                    "this device", tokens.color.done, tokens.color.surface2,
-                                    label = "This is the device you are using",
-                                )
-                            } else {
-                                QuietAction(
-                                    "Revoke", { confirming = device.id }, Modifier.widthIn(min = 92.dp),
-                                    label = "Revoke ${device.name} — it loses access to this node",
-                                )
-                            }
+                        } else {
+                            QuietAction(
+                                "Revoke", { confirming = device.id }, Modifier.widthIn(min = 92.dp),
+                                label = "Revoke ${device.name} — it loses access to this node",
+                            )
                         }
-                        if (confirming == device.id) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                                KText(
-                                    "It loses access within seconds, on any socket it already has open.",
-                                    tokens.type.captionSmall,
-                                    tokens.color.dim,
-                                    Modifier.weight(1f),
-                                    maxLines = 2,
-                                )
-                                QuietAction("Keep", { confirming = null }, Modifier.widthIn(min = 84.dp), label = "Keep ${device.name}")
-                                PrimaryAction(
-                                    "Revoke it",
-                                    { confirming = null; onRevoke(device.id) },
-                                    Modifier.widthIn(min = 96.dp),
-                                    tokens.type.buttonSmall,
-                                    10.dp,
-                                    label = "Revoke ${device.name} now",
-                                )
-                            }
+                    },
+                ) {
+                    if (confirming == device.id) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                            KText(
+                                "It loses access within seconds, on any socket it already has open.",
+                                tokens.type.captionSmall,
+                                tokens.color.dim,
+                                Modifier.weight(1f),
+                                maxLines = 2,
+                            )
+                            QuietAction("Keep", { confirming = null }, Modifier.widthIn(min = 84.dp), label = "Keep ${device.name}")
+                            PrimaryAction(
+                                "Revoke it",
+                                { confirming = null; onRevoke(device.id) },
+                                Modifier.widthIn(min = 96.dp),
+                                tokens.type.buttonSmall,
+                                10.dp,
+                                label = "Revoke ${device.name} now",
+                            )
                         }
                     }
+                }
+            }
+            if (expired.isNotEmpty()) {
+                // Renew is `extend_device` and nothing else: it gives the row another term on the
+                // node, and a device whose token has already lapsed still pairs again until the
+                // node renews that with it (threat model §7.5). So this says term, never access.
+                KText(
+                    "Expired. A Tier-0 token runs out on purpose, and the node stopped honouring " +
+                        "these when it did.",
+                    tokens.type.captionSmall,
+                    tokens.color.mute,
+                    Modifier.padding(top = 8.dp),
+                    maxLines = 3,
+                )
+                for (device in expired) {
+                    DeviceCard(
+                        device = device,
+                        now = now,
+                        tint = tokens.color.working,
+                        badgeLabel = "Expired device",
+                        trailing = {
+                            QuietAction(
+                                "Renew", { onRenew(device.id) }, Modifier.widthIn(min = 92.dp),
+                                label = "Renew ${device.name} — another term on this node",
+                            )
+                        },
+                    )
                 }
             }
             Box(Modifier.padding(bottom = 18.dp))
         }
     }
 }
+
+@Composable
+private fun DeviceCard(
+    device: DeviceRecord,
+    now: Double,
+    tint: Color,
+    badgeLabel: String,
+    trailing: @Composable () -> Unit,
+    footer: @Composable () -> Unit = {},
+) {
+    val tokens = Kampr.tokens
+    Surface(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Badge(34.dp, 17.dp, KamprIcons.lock, tint, badgeLabel)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    KText(device.name, tokens.type.bodyStrong, tokens.color.text)
+                    KText(facts(device, now), tokens.type.meta, tokens.color.mute, maxLines = 2)
+                }
+                trailing()
+            }
+            footer()
+        }
+    }
+}
+
+private fun facts(device: DeviceRecord, now: Double): String = listOfNotNull(
+    device.role,
+    if (device.expired) device.expiresAt?.let { "expired ${relativeSeconds(it, now)} ago" } ?: "expired"
+    else device.lastSeenAt?.let { "seen ${relativeSeconds(it, now)}" },
+    device.origin,
+).joinToString(" · ")

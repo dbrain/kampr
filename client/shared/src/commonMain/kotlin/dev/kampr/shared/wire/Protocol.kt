@@ -162,8 +162,16 @@ data class Turn(
     val blocks: List<Block> = emptyList(),
 )
 
+// `served` is whether this node reaches that session as a node of its own — a session can be
+// running and unserved, and a pane on one will never appear in the herd. True by default: a node
+// that says nothing, or a peer relayed through a hub on an older build, must not be drawn as
+// unreachable.
 @Serializable
-data class SessionInfo(val name: String, val running: Boolean = false)
+data class SessionInfo(
+    val name: String,
+    val running: Boolean = false,
+    val served: Boolean = true,
+)
 
 sealed interface ServerMsg {
     data class Hello(

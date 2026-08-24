@@ -725,11 +725,18 @@ private fun SessionList(sessions: List<SessionInfo>, onStop: (String) -> Unit) {
                 KText(
                     session.name,
                     tokens.type.meta,
-                    tokens.color.text,
+                    if (session.served) tokens.color.text else tokens.color.mute,
                     Modifier.weight(1f).named(
-                        "${session.name}, ${if (session.running) "running" else "stopped"}",
+                        "${session.name}, ${if (session.running) "running" else "stopped"}" +
+                            if (session.served) "" else ", not served by this node",
                     ),
                 )
+                // An operator may restrict the set this node serves, and a session outside it
+                // never joins the herd however healthy it looks here — so it is named as
+                // somewhere no pane of this client's will ever open.
+                if (!session.served) {
+                    KText("not served", tokens.type.metaSmall, tokens.color.mute)
+                }
                 if (session.running) {
                     Chip("stop", false, { onStop(session.name) }, quiet = true, label = "Stop the ${session.name} session")
                 }

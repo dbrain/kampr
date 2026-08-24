@@ -109,6 +109,25 @@ class NewSheetSessionTest {
         onNodeWithContentDescription("agents, stopped").assertExists()
     }
 
+    // `served` is the set of session names this node actually reaches, and the wire protocol is
+    // explicit that a client must not offer to open a pane on a session that will never appear in
+    // the herd. The node had computed it for months and no client had ever read it.
+    @Test
+    fun aSessionThisNodeDoesNotServeSaysSoRatherThanReadingLikeTheRest() = runComposeUiTest {
+        val sheet = Sheet()
+        sheet.caps.value = capsOf(
+            SessionInfo("default", running = true),
+            SessionInfo("agents", running = true, served = false),
+        )
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
+
+        onNodeWithContentDescription("Named session,", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        waitForIdle()
+        onNodeWithContentDescription("default, running").assertExists()
+        onNodeWithContentDescription("agents, running, not served by this node").assertExists()
+    }
+
     // Everything else this sheet makes appears behind it, so the ack still closes it. Guards the
     // lazy version of the fix — never closing at all.
     @Test

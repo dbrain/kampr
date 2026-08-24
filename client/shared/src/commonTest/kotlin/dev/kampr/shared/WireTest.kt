@@ -165,6 +165,20 @@ class WireTest {
         assertEquals("""{"t":"resync"}""", Wire.encode(ClientMsg.Resync))
     }
 
+    // `served` says whether this node reaches that session as a node of its own. Additive, so a
+    // node — or a peer relayed through a hub on an older build — that says nothing serves what it
+    // lists, and is never wrongly drawn as unreachable.
+    @Test
+    fun capsSaysWhichOfItsSessionsThisNodeActuallyServes() {
+        val caps = Wire.decode(
+            """{"t":"caps","node":"01JA","agent_kinds":["claude"],"sessions":[
+               {"name":"default","running":true,"served":true},
+               {"name":"agents","running":true,"served":false},
+               {"name":"legacy","running":false}]}"""
+        ) as ServerMsg.NodeCaps
+        assertEquals(listOf(true, false, true), caps.sessions.map { it.served })
+    }
+
     // A node reports the release that supersedes its own build. The field is additive on the
     // wire, so a herd from a node that has never heard of it must still decode.
     @Test

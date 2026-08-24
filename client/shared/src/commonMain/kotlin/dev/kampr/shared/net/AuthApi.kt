@@ -39,9 +39,15 @@ data class DeviceRecord(
     @SerialName("revoked_at") val revokedAt: Long? = null,
     @SerialName("user_agent") val userAgent: String? = null,
     val origin: String? = null,
+    // Whether this row still opens the door, decided by the node: it returns revoked and expired
+    // rows alike, and expiry is its clock to judge rather than a phone's. Additive, so a node that
+    // has never sent it leaves this client reading exactly what it could read before — that the
+    // row was not revoked.
+    @SerialName("active") private val activeFlag: Boolean? = null,
 ) {
-    // The node returns revoked rows too, and expiry is the node's clock to judge, not a phone's.
-    val active: Boolean get() = revokedAt == null
+    val active: Boolean get() = activeFlag ?: (revokedAt == null)
+
+    val expired: Boolean get() = !active && revokedAt == null
 }
 
 // `/auth/pair` answers with the device it just enrolled, and that id is the only way a client can
@@ -89,6 +95,10 @@ class AuthApi(
     // routed — reports success and the device stays in the list, still connected.
     suspend fun revoke(id: String): Boolean = runCatching {
         client.post("${endpoint.httpBase}/api/devices/$id/revoke") { auth() }.status.isSuccess()
+    }.getOrDefault(false)
+
+    suspend fun renew(id: String): Boolean = runCatching {
+        client.post("${endpoint.httpBase}/api/devices/$id/renew") { auth() }.status.isSuccess()
     }.getOrDefault(false)
 
     // A code minted by an already-enrolled device is armed by construction, so the browser wizard
