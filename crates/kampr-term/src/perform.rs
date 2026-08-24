@@ -1,8 +1,8 @@
 use crate::grid::{Cell, CellAttrs, Color, Grid};
 use std::sync::Arc;
 use unicode_segmentation::GraphemeCursor;
-use unicode_width::UnicodeWidthStr;
-use vte::{Params, Perform};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use vte::{Params, ParamsIter, Perform};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Cursor {
@@ -36,6 +36,14 @@ impl State {
         }
     }
 
+    fn last_col(&self) -> u16 {
+        self.grid.cols().saturating_sub(1)
+    }
+
+    fn last_row(&self) -> u16 {
+        self.grid.rows().saturating_sub(1)
+    }
+
     fn newline(&mut self) {
         if self.cursor.row + 1 >= self.grid.rows() {
             self.grid.scroll_up();
@@ -59,7 +67,7 @@ impl State {
         if width == 0 {
             return;
         }
-        if self.cursor.col + width > self.grid.cols() {
+        if self.cursor.col.saturating_add(width) > self.grid.cols() {
             self.cursor.col = 0;
             self.newline();
         }
@@ -132,55 +140,58 @@ impl State {
         true
     }
 
+    /// **A parameter is a slice, and flattening it is wrong twice over.** `CSI 4:3 m` is undercurl
+    /// and reads as italic once its subparameter becomes a parameter of its own; `38:2::r:g:b`
+    /// reads the colourspace id as red. The walk is over `ParamsIter` rather than a collected
+    /// `Vec` because this is the emulator's hot path and the `Vec` was the one allocation on it
+    /// (#58-#62).
     fn sgr(&mut self, params: &Params) {
-        let flat: Vec<u16> = params.iter().flat_map(|p| p.iter().copied()).collect();
-        if flat.is_empty() {
+        if params.is_empty() {
             self.pen = Pen::default();
             return;
         }
-        let mut i = 0;
-        while i < flat.len() {
-            match flat[i] {
-                0 => self.pen = Pen::default(),
-                1 => self.pen.attrs.bold = true,
-                2 => self.pen.attrs.dim = true,
-                3 => self.pen.attrs.italic = true,
-                4 => self.pen.attrs.underline = true,
-                5 | 6 => self.pen.attrs.blink = true,
-                7 => self.pen.attrs.reverse = true,
-                8 => self.pen.attrs.hidden = true,
-                9 => self.pen.attrs.strike = true,
-                21 | 22 => {
-                    self.pen.attrs.bold = false;
-                    self.pen.attrs.dim = false;
-                }
-                23 => self.pen.attrs.italic = false,
-                24 => self.pen.attrs.underline = false,
-                25 => self.pen.attrs.blink = false,
-                27 => self.pen.attrs.reverse = false,
-                28 => self.pen.attrs.hidden = false,
-                29 => self.pen.attrs.strike = false,
-                30..=37 => self.pen.fg = Color::Indexed((flat[i] - 30) as u8),
-                38 => {
-                    if let Some((c, used)) = extended(&flat[i..]) {
-                        self.pen.fg = c;
-                        i += used - 1;
-                    }
-                }
-                39 => self.pen.fg = Color::Default,
-                40..=47 => self.pen.bg = Color::Indexed((flat[i] - 40) as u8),
-                48 => {
-                    if let Some((c, used)) = extended(&flat[i..]) {
-                        self.pen.bg = c;
-                        i += used - 1;
-                    }
-                }
-                49 => self.pen.bg = Color::Default,
-                90..=97 => self.pen.fg = Color::Indexed((flat[i] - 90 + 8) as u8),
-                100..=107 => self.pen.bg = Color::Indexed((flat[i] - 100 + 8) as u8),
-                _ => {}
+        let mut rest = params.iter();
+        while let Some(param) = rest.next() {
+            let code = param.first().copied().unwrap_or(0);
+            match (code, param.len()) {
+                (4, 2..) => self.pen.attrs.underline = param[1] != 0,
+                (38, 1) => self.pen.fg = colour(&mut rest).unwrap_or(self.pen.fg),
+                (48, 1) => self.pen.bg = colour(&mut rest).unwrap_or(self.pen.bg),
+                (38, _) => self.pen.fg = sub_colour(param).unwrap_or(self.pen.fg),
+                (48, _) => self.pen.bg = sub_colour(param).unwrap_or(self.pen.bg),
+                _ => self.attribute(code),
             }
-            i += 1;
+        }
+    }
+
+    fn attribute(&mut self, code: u16) {
+        match code {
+            0 => self.pen = Pen::default(),
+            1 => self.pen.attrs.bold = true,
+            2 => self.pen.attrs.dim = true,
+            3 => self.pen.attrs.italic = true,
+            4 => self.pen.attrs.underline = true,
+            5 | 6 => self.pen.attrs.blink = true,
+            7 => self.pen.attrs.reverse = true,
+            8 => self.pen.attrs.hidden = true,
+            9 => self.pen.attrs.strike = true,
+            21 | 22 => {
+                self.pen.attrs.bold = false;
+                self.pen.attrs.dim = false;
+            }
+            23 => self.pen.attrs.italic = false,
+            24 => self.pen.attrs.underline = false,
+            25 => self.pen.attrs.blink = false,
+            27 => self.pen.attrs.reverse = false,
+            28 => self.pen.attrs.hidden = false,
+            29 => self.pen.attrs.strike = false,
+            30..=37 => self.pen.fg = Color::Indexed((code - 30) as u8),
+            39 => self.pen.fg = Color::Default,
+            40..=47 => self.pen.bg = Color::Indexed((code - 40) as u8),
+            49 => self.pen.bg = Color::Default,
+            90..=97 => self.pen.fg = Color::Indexed((code - 90 + 8) as u8),
+            100..=107 => self.pen.bg = Color::Indexed((code - 100 + 8) as u8),
+            _ => {}
         }
     }
 }
@@ -193,6 +204,49 @@ fn is_boundary(cluster: &str, at: usize) -> bool {
     GraphemeCursor::new(at, cluster.len(), true)
         .is_boundary(cluster, 0)
         .unwrap_or(true)
+}
+
+/// The most columns the emulator can spend laying `text` out, escape sequences and all.
+///
+/// A bound rather than a count, because what it sizes is a grid the rows are about to be laid out
+/// on: over-estimating costs cells, and under-estimating wraps a row and loses one off the top.
+/// A code point either opens a cluster, costing [`cluster_width`], or joins the one before it,
+/// costing at most the single column that cluster can grow into.
+pub fn column_bound(text: &str) -> u16 {
+    let mut cols: usize = 0;
+    let mut rest = text.chars();
+    while let Some(c) = rest.next() {
+        match c {
+            '\u{1b}' => skip_sequence(&mut rest),
+            '\t' => cols = (cols / 8 + 1) * 8,
+            c if c.is_control() => {}
+            c if is_regional(c) => cols += 2,
+            c => cols += c.width().unwrap_or(0).max(1),
+        }
+    }
+    cols.min(u16::MAX as usize) as u16
+}
+
+fn skip_sequence(rest: &mut std::str::Chars<'_>) {
+    match rest.next() {
+        Some('[') => {
+            for c in rest {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    return;
+                }
+            }
+        }
+        Some(']') => {
+            let mut after_escape = false;
+            for c in rest {
+                if c == '\u{7}' || (after_escape && c == '\\') {
+                    return;
+                }
+                after_escape = c == '\u{1b}';
+            }
+        }
+        _ => {}
+    }
 }
 
 fn is_regional(c: char) -> bool {
@@ -210,12 +264,27 @@ fn cluster_width(cluster: &str) -> u16 {
     cluster.width().min(2) as u16
 }
 
-fn extended(rest: &[u16]) -> Option<(Color, usize)> {
-    match rest.get(1)? {
-        5 => Some((Color::Indexed(*rest.get(2)? as u8), 3)),
-        2 => Some((
-            Color::Rgb(*rest.get(2)? as u8, *rest.get(3)? as u8, *rest.get(4)? as u8),
-            5,
+/// `38;5;n` and `38;2;r;g;b`, whose parts arrive as parameters of their own.
+fn colour(rest: &mut ParamsIter<'_>) -> Option<Color> {
+    let mut next = || rest.next().and_then(|p| p.first().copied());
+    match next()? {
+        5 => Some(Color::Indexed(next()? as u8)),
+        2 => Some(Color::Rgb(next()? as u8, next()? as u8, next()? as u8)),
+        _ => None,
+    }
+}
+
+/// `38:5:n` and `38:2:<colourspace>:r:g:b`, whose parts are subparameters of one parameter. The
+/// colourspace id is all but always empty and is skipped by length rather than by value, because
+/// the four-part form without it is what several emitters actually send.
+fn sub_colour(param: &[u16]) -> Option<Color> {
+    match param.get(1)? {
+        5 => Some(Color::Indexed(*param.get(2)? as u8)),
+        2 if param.len() >= 6 => Some(Color::Rgb(param[3] as u8, param[4] as u8, param[5] as u8)),
+        2 => Some(Color::Rgb(
+            *param.get(2)? as u8,
+            *param.get(3)? as u8,
+            *param.get(4)? as u8,
         )),
         _ => None,
     }
@@ -239,7 +308,12 @@ impl Perform for State {
         match byte {
             b'\n' => self.newline(),
             b'\r' => self.cursor.col = 0,
-            b'\t' => self.cursor.col = (self.cursor.col / 8 + 1) * 8,
+            b'\t' => {
+                self.cursor.col = (self.cursor.col / 8)
+                    .saturating_add(1)
+                    .saturating_mul(8)
+                    .min(self.last_col())
+            }
             0x08 => self.cursor.col = self.cursor.col.saturating_sub(1),
             _ => {}
         }
@@ -261,16 +335,32 @@ impl Perform for State {
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let private = intermediates.first() == Some(&b'?');
         match (action, private) {
+            // Every one of these is clamped into the grid it is addressing, and none of them
+            // reshapes it: herdr's serialiser only ever addresses inside the geometry the stream
+            // was opened at, so a parameter that lands outside is hostile input rather than a
+            // pane that grew (ADR 0002).
             ('H', false) | ('f', false) => {
-                self.cursor.row = arg(params, 0, 1).saturating_sub(1);
-                self.cursor.col = arg(params, 1, 1).saturating_sub(1);
+                self.cursor.row = arg(params, 0, 1).saturating_sub(1).min(self.last_row());
+                self.cursor.col = arg(params, 1, 1).saturating_sub(1).min(self.last_col());
             }
             ('A', false) => self.cursor.row = self.cursor.row.saturating_sub(arg(params, 0, 1)),
-            ('B', false) => self.cursor.row = (self.cursor.row + arg(params, 0, 1)).min(self.grid.rows() - 1),
-            ('C', false) => self.cursor.col = (self.cursor.col + arg(params, 0, 1)).min(self.grid.cols() - 1),
+            ('B', false) => {
+                self.cursor.row = self
+                    .cursor
+                    .row
+                    .saturating_add(arg(params, 0, 1))
+                    .min(self.last_row())
+            }
+            ('C', false) => {
+                self.cursor.col = self
+                    .cursor
+                    .col
+                    .saturating_add(arg(params, 0, 1))
+                    .min(self.last_col())
+            }
             ('D', false) => self.cursor.col = self.cursor.col.saturating_sub(arg(params, 0, 1)),
-            ('G', false) => self.cursor.col = arg(params, 0, 1).saturating_sub(1),
-            ('d', false) => self.cursor.row = arg(params, 0, 1).saturating_sub(1),
+            ('G', false) => self.cursor.col = arg(params, 0, 1).saturating_sub(1).min(self.last_col()),
+            ('d', false) => self.cursor.row = arg(params, 0, 1).saturating_sub(1).min(self.last_row()),
             ('J', false) => {
                 let mode = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
                 match mode {

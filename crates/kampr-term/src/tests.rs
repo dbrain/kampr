@@ -476,3 +476,83 @@ fn a_cluster_ends_where_herdr_ends_it_and_no_earlier() {
         assert_eq!(t.cursor().0, *cursor, "{name}: columns spent");
     }
 }
+
+/// Every one of these panics in a debug build and wraps silently in a release one, and `feed`
+/// runs inside the `Mutex<PaneState>` a pane's whole surface is served from — so a poisoned lock
+/// takes attach, screen and the lag path with it.
+#[test]
+fn a_hostile_cursor_address_cannot_take_the_emulator_arithmetic_past_the_grid() {
+    let cases: &[(&str, &[u8])] = &[
+        ("absolute column then forward", b"\x1b[65535G\x1b[65535C"),
+        ("absolute row then down", b"\x1b[65535d\x1b[65535B"),
+        (
+            "absolute column then a wide glyph",
+            "\x1b[65535G\u{65E5}".as_bytes(),
+        ),
+        ("absolute column then a tab", b"\x1b[65535G\t"),
+        ("absolute address past both edges", b"\x1b[65535;65535Hx"),
+    ];
+    for (name, bytes) in cases {
+        let mut t = Emulator::new(80, 24);
+        t.feed(bytes);
+        let (col, row, _) = t.cursor();
+        // A column *equal* to the width is the pending-wrap position a glyph in the last cell
+        // leaves behind, and every path that reads the cursor already expects it.
+        assert!(col <= 80, "{name}: cursor at column {col} of an 80-column grid");
+        assert!(row < 24, "{name}: cursor at row {row} of a 24-row grid");
+    }
+
+    let mut t = Emulator::new(80, 24);
+    t.feed(b"\x1b[65535;65535Hx");
+    assert_eq!(t.grid().row_text(23), " ".repeat(79) + "x");
+}
+
+/// A pane herdr reported before it had a size at all. Nothing may divide, subtract or index its
+/// way off a grid with no cells in it.
+#[test]
+fn an_empty_grid_survives_being_driven() {
+    let mut t = Emulator::new(0, 0);
+    t.feed(b"\x1b[5B\x1b[5C\x1b[2Jhello\r\n\t\x1b[1;1H");
+    assert_eq!(t.grid().rows(), 0);
+}
+
+/// `CSI 4:3 m` is undercurl. Flattened, its subparameter reads as a top-level `3` and turns the
+/// run italic; `38:2::r:g:b` reads the colourspace id as red.
+#[test]
+fn a_colon_separated_subparameter_is_not_a_parameter_of_its_own() {
+    let mut t = Emulator::new(20, 1);
+    t.feed(b"\x1b[4:3mA\x1b[0m\x1b[38:2::10:20:30mB\x1b[0m\x1b[38:5:196mC\x1b[0m\x1b[4:0mD");
+    let row = t.grid().row(0);
+    assert!(row[0].attrs.underline, "4:3 is an underline style");
+    assert!(!row[0].attrs.italic, "4:3 must not read its 3 as SGR 3");
+    assert_eq!(row[1].fg, Color::Rgb(10, 20, 30));
+    assert_eq!(row[2].fg, Color::Indexed(196));
+    assert!(!row[3].attrs.underline, "4:0 turns it off");
+}
+
+/// What a scrollback ring sizes its grid from. Under by one column wraps a row and loses one off
+/// the top of the document, with every row index still claiming otherwise.
+#[test]
+fn a_column_bound_is_never_under_what_the_emulator_actually_spends() {
+    let cases = [
+        "plain ascii",
+        "\x1b[1;31mcoloured\x1b[0m and \x1b[38;2;1;2;3mtrue\x1b[m",
+        "\u{65E5}\u{672C}\u{8A9E} wide",
+        "e\u{301}f a combining mark",
+        "\u{1F1EC}\u{1F1E7} a flag and \u{1F1EC} half of one",
+        "\u{1100}\u{1161}\u{11A8} jamo",
+        "\x1b]8;;https://herdr.dev\x1b\\LINK\x1b]8;;\x1b\\ after",
+        "\ta\tb",
+        "",
+    ];
+    for case in cases {
+        let bound = crate::column_bound(case);
+        let mut t = Emulator::new(bound.max(1), 1);
+        t.feed(case.as_bytes());
+        assert!(
+            t.cursor().0 <= bound,
+            "{case:?}: bound {bound}, emulator reached {}",
+            t.cursor().0
+        );
+    }
+}

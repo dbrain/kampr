@@ -337,3 +337,52 @@ fn a_wide_cluster_declares_two_columns_and_carries_its_joiners() {
         "the family still spends exactly the two columns herdr gave it"
     );
 }
+
+/// Style ids are stable for the life of a connection, so the table can never be evicted from —
+/// which made it an unbounded per-connection allocation. A 24-bit gradient (`lolcat` on a stream,
+/// an animated progress renderer) produces a new `(fg, bg, attrs)` triple per cell per frame, so
+/// a long-lived socket watching one grew by thousands of pens a frame with no ceiling.
+#[test]
+fn a_true_colour_animation_cannot_grow_the_style_table_for_ever() {
+    let mut enc = Encoder::new();
+    let mut sent = 1usize;
+    let mut named = Vec::new();
+    for i in 0..40_000u32 {
+        let fg = Color::Rgb((i >> 16) as u8, (i >> 8) as u8, i as u8);
+        let runs = enc.rows(&[row(0, vec![cell('x', fg)])]);
+        named.push(runs[0].runs[0].s);
+        if let Some(styles) = enc.take_styles() {
+            assert_eq!(styles.from as usize, sent);
+            sent += styles.styles.len();
+        }
+    }
+    assert!(sent <= 4096, "the table reached {sent} pens");
+    assert!(
+        named.iter().all(|id| (*id as usize) < sent),
+        "a run named a pen the client was never told about"
+    );
+}
+
+/// Past the ceiling a cell is drawn with the nearest pen the client already has, so a gradient
+/// degrades in colour rather than in correctness. Falling back to the default pen for everything
+/// would blank a whole animated pane.
+#[test]
+fn a_pen_past_the_ceiling_is_drawn_with_the_nearest_one_already_sent() {
+    let mut enc = Encoder::new();
+    for i in 0..40_000u32 {
+        enc.rows(&[row(
+            0,
+            vec![cell('x', Color::Rgb((i >> 16) as u8, (i >> 8) as u8, i as u8))],
+        )]);
+    }
+    let mut styles = vec![kampr_core::wire::Style::default()];
+    while let Some(s) = enc.take_styles() {
+        styles.extend(s.styles);
+    }
+    let runs = enc.rows(&[row(0, vec![cell('x', Color::Rgb(9, 9, 9))])]);
+    let drawn = styles[runs[0].runs[0].s as usize].fg;
+    assert!(
+        matches!(drawn, Color::Rgb(r, g, b) if r < 64 && g < 64 && b < 64),
+        "a near-black pen was drawn as {drawn:?}"
+    );
+}

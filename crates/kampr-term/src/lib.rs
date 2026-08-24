@@ -15,6 +15,7 @@ mod perform;
 mod tests;
 
 pub use grid::{Cell, CellAttrs, Color, Grid, RowDiff};
+pub use perform::column_bound;
 
 use vte::Parser;
 

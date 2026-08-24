@@ -46,6 +46,24 @@ pub struct Run {
     pub m: Vec<String>,
 }
 
+fn coarse(style: Style) -> Style {
+    Style {
+        fg: quantise(style.fg),
+        bg: quantise(style.bg),
+        attrs: style.attrs,
+    }
+}
+
+fn quantise(colour: Color) -> Color {
+    match colour {
+        Color::Rgb(r, g, b) => {
+            let mask = !0u8 << (8 - COARSE_BITS);
+            Color::Rgb(r & mask, g & mask, b & mask)
+        }
+        other => other,
+    }
+}
+
 fn narrow() -> u8 {
     1
 }
@@ -403,6 +421,18 @@ pub enum ClientMsg {
     Ping { n: u64 },
 }
 
+/// How many pens one connection may be told about.
+///
+/// The wire says ids are stable for the life of a connection, so nothing can ever be evicted from
+/// the table — which makes it an unbounded per-connection allocation, and a 24-bit gradient on a
+/// 93x40 pane mints up to 3700 pens *per frame*. Real content uses hundreds, so this is far above
+/// anything a terminal produces on purpose and still a ceiling.
+const MAX_STYLES: usize = 4096;
+
+/// How many bits of each RGB channel survive the fallback lookup. Three is 512 buckets a channel,
+/// which puts a gradient's neighbours in the same bucket — the whole point of the degradation.
+const COARSE_BITS: u8 = 3;
+
 /// Per-connection style interning. Ids are stable for the life of a connection, and style 0 is
 /// always the default pen, so a client can render before the first `styles` message arrives.
 #[derive(Debug, Default)]
@@ -410,6 +440,8 @@ pub struct Encoder {
     entries: Vec<Style>,
     index: HashMap<Style, u32>,
     sent: u32,
+    /// Built once the table fills, and never after: the entries it indexes cannot change again.
+    nearest: HashMap<Style, u32>,
 }
 
 impl Encoder {
@@ -419,6 +451,7 @@ impl Encoder {
             entries: vec![default],
             index: HashMap::from([(default, 0)]),
             sent: 1,
+            nearest: HashMap::new(),
         }
     }
 
@@ -426,10 +459,25 @@ impl Encoder {
         if let Some(id) = self.index.get(&style) {
             return *id;
         }
+        if self.entries.len() >= MAX_STYLES {
+            return self.nearest_to(style);
+        }
         let id = self.entries.len() as u32;
         self.entries.push(style);
         self.index.insert(style, id);
         id
+    }
+
+    /// The closest pen the client already holds. Additive and invisible to an old client: the
+    /// wire still only ever names an id it was told about, and a gradient past the ceiling
+    /// degrades in colour rather than in correctness.
+    fn nearest_to(&mut self, style: Style) -> u32 {
+        if self.nearest.is_empty() {
+            for (id, held) in self.entries.iter().enumerate() {
+                self.nearest.entry(coarse(*held)).or_insert(id as u32);
+            }
+        }
+        self.nearest.get(&coarse(style)).copied().unwrap_or(0)
     }
 
     pub fn take_styles(&mut self) -> Option<Styles> {
