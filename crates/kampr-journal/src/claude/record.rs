@@ -89,7 +89,7 @@ pub fn result_atts(content: &Value) -> Vec<Att<'_>> {
         .collect()
 }
 
-fn image(source: &Value) -> Option<Att<'_>> {
+pub fn image(source: &Value) -> Option<Att<'_>> {
     Some(Att {
         kind: IMAGE,
         mime: source.get("media_type").and_then(Value::as_str),

@@ -18,7 +18,7 @@ use crate::store::TurnStore;
 use crate::summary::{count_lines, image_marker, marker_of, summarise};
 use crate::tail::TranscriptParser;
 
-use record::{Content, ContentBlock, Record, image_subtype, result_atts, result_text, unified_patch};
+use record::{Content, ContentBlock, Record, image, image_subtype, result_atts, result_text, unified_patch};
 
 pub const AGENT: &str = "claude";
 
@@ -213,7 +213,7 @@ impl ClaudeParser {
             ContentBlock::Text { text } => turn.blocks.push(Block::md(text)),
             ContentBlock::Image { source } => turn.blocks.push(Block::Md {
                 text: image_marker(image_subtype(&source)),
-                att: atts.next(),
+                att: image(&source).and_then(|_| atts.next()),
             }),
             ContentBlock::ToolUse { id, name, input } => {
                 turn.blocks.push(Block::Tool {

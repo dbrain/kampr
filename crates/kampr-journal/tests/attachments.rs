@@ -360,3 +360,64 @@ fn an_id_whose_record_no_longer_holds_what_it_named_is_refused() {
         "a record that has been replaced must not answer with what took its place"
     );
 }
+
+fn markers(turns: &[Turn]) -> Vec<(&str, bool)> {
+    turns
+        .iter()
+        .flat_map(|t| &t.blocks)
+        .filter_map(|b| match b {
+            Block::Md { text, att } => Some((text.as_str(), att.is_some())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The walk that mints the headers skips an image block with nothing behind it, so the walk that
+/// hangs them on markers has to skip it too. A marker that takes a locator it was never minted
+/// one for is off by one for the rest of its record — and the picture it then shows is another
+/// picture, correctly fetched, which is exactly the shape of a wrong answer that looks right.
+#[test]
+fn an_image_with_no_data_does_not_take_the_next_ones_locator() {
+    let record = json!({
+        "type": "user",
+        "uuid": "0f2b1a44-1f2f-4a10-9b6a-9a1f0f2b1a44",
+        "timestamp": "2026-08-20T02:56:27.681Z",
+        "message": { "role": "user", "content": [
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png" } },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/gif", "data": GIF } }
+        ] }
+    });
+    let mut scratch = scratch_claude("att-dataless", &[record]);
+    let turns = scratch.turns();
+
+    assert_eq!(
+        markers(&turns),
+        vec![("[image · png]", false), ("[image · gif]", true)]
+    );
+    let att = only(&turns);
+    assert_eq!(att.mime.as_deref(), Some("image/gif"));
+    let got = attach::fetch(&scratch.journals, &att.id, &scratch.transcript).expect("the gif");
+    assert_eq!(got.data, decoded(GIF));
+}
+
+/// The same disagreement in the other adapter: an `input_image` whose url is not a base64 data
+/// url mints no header, so it must not consume one either.
+#[test]
+fn a_codex_image_with_no_bytes_behind_it_does_not_take_the_next_ones_locator() {
+    let record = json!({
+        "type": "response_item",
+        "timestamp": "2026-08-18T14:11:36.000Z",
+        "payload": { "type": "message", "role": "user", "content": [
+            { "type": "input_image", "image_url": "https://example.invalid/shot.png" },
+            { "type": "input_image", "image_url": format!("data:image/gif;base64,{GIF}") }
+        ] }
+    });
+    let mut scratch = scratch_codex("att-codex-dataless", &[record]);
+    let turns = scratch.turns();
+
+    assert_eq!(markers(&turns), vec![("[image]", false), ("[image · gif]", true)]);
+    let att = only(&turns);
+    assert_eq!(att.mime.as_deref(), Some("image/gif"));
+    let got = attach::fetch(&scratch.journals, &att.id, &scratch.transcript).expect("the gif");
+    assert_eq!(got.data, decoded(GIF));
+}

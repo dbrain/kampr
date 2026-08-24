@@ -88,7 +88,7 @@ pub fn output_atts(output: &Value) -> Vec<Att<'_>> {
         .collect()
 }
 
-fn data_url_att(url: &str) -> Option<Att<'_>> {
+pub fn data_url_att(url: &str) -> Option<Att<'_>> {
     let (meta, data) = url.strip_prefix("data:")?.split_once(',')?;
     if !meta.split(';').any(|p| p == "base64") {
         return None;

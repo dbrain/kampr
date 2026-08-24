@@ -18,8 +18,8 @@ use crate::summary::{count_lines, image_marker, marker_of, one_line, summarise};
 use crate::tail::TranscriptParser;
 
 use record::{
-    PATCH_PREFIX, Payload, Record, data_url_subtype, envelope_output, output_failed, output_text,
-    patch_target,
+    PATCH_PREFIX, Payload, Record, data_url_att, data_url_subtype, envelope_output, output_failed,
+    output_text, patch_target,
 };
 
 pub const AGENT: &str = "codex";
@@ -196,7 +196,11 @@ impl CodexParser {
                         }
                         "input_image" => turn.blocks.push(Block::Md {
                             text: image_marker(item.image_url.as_deref().and_then(data_url_subtype)),
-                            att: atts.next(),
+                            att: item
+                                .image_url
+                                .as_deref()
+                                .and_then(data_url_att)
+                                .and_then(|_| atts.next()),
                         }),
                         _ => {}
                     }
