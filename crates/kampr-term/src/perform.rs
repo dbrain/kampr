@@ -56,7 +56,7 @@ impl State {
     /// col+2, so advancing one leaves a blank behind every wide character — permanently, because
     /// herdr never repaints a cell it believes already matches.
     ///
-    /// Probe #215: herdr's cell is a grapheme, not a code point, so a mark rides on the cell to
+    /// Probe #223: herdr's cell is a grapheme, not a code point, so a mark rides on the cell to
     /// its left instead of taking a column of its own — see [`is_boundary`] for where the grapheme
     /// ends and [`cluster_width`] for how many columns herdr spends on it.
     fn put(&mut self, c: char) {

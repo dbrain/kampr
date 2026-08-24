@@ -38,7 +38,7 @@ pub struct Run {
     pub w: u8,
     /// The zero-width code points each cell of this run is wearing — combining marks, ZWJ,
     /// variation selectors — by position, empty where a cell wears none and truncated after the
-    /// last one (probe #215). It rides beside `x` rather than in it so that `x` stays exactly one
+    /// last one (probe #223). It rides beside `x` rather than in it so that `x` stays exactly one
     /// code point per cell: a row is still `sum(codepoints(x) * w)` columns wide, and a client
     /// that has never heard of this field draws the bases it already drew instead of a row shifted
     /// one column per accent.

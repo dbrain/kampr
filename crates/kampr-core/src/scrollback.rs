@@ -91,7 +91,7 @@ impl ScrollbackRing {
         let incoming = history_rows(raw);
         // A read that comes back as the live viewport and nothing else is not history that
         // disagrees with what is held — it is no news about history at all. A full-screen program
-        // has the pane and herdr has no ring to offer for as long as it does (#240). The ring is
+        // has the pane and herdr has no ring to offer for as long as it does (#244). The ring is
         // the node's own accumulation and outlives that; treating the silence as a gap threw the
         // operator's whole scrollback away and rebased the ring, and a rebase is indistinguishable
         // from growth to every consumer downstream, so each of them dropped its copy too.

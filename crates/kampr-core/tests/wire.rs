@@ -271,7 +271,7 @@ fn a_shared_pane_carries_a_watcher_count_and_a_solitary_one_does_not() {
     assert_eq!(entry(7)["watchers"], 7);
 }
 
-/// Probe #215: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The
+/// Probe #223: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The
 /// marks ride in `m`, positionally, which leaves `x` one code point per cell — the row's width is
 /// still `sum(codepoints(x) * w)` and a client that has never heard of `m` renders what it renders
 /// today rather than a row shifted by every accent in it.

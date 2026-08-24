@@ -259,7 +259,7 @@ A run breaks on a width change as it does on a style change, so `AB日本語CD` 
 **`m` is what each cell of the run is wearing on top of its base, and it is why `x` can stay one
 code point per cell.** A cell is a grapheme, not a code point: herdr keeps a combining mark, a ZWJ
 and a variation selector on the base they belong to and addresses the next glyph at base + the
-*cluster's* width (probe #215). Putting the whole cluster in `x` would break the one thing that
+*cluster's* width (probe #223). Putting the whole cluster in `x` would break the one thing that
 makes a row countable, so the marks travel beside the text instead:
 
 ```jsonc

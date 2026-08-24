@@ -756,7 +756,7 @@ async fn a_single_width_change_costs_a_single_restart() {
 }
 
 /// A full-screen program has the pane, so herdr answers `pane.read recent` with the live viewport
-/// and nothing above it (#240). The node used to read that silence as history disagreeing with the
+/// and nothing above it (#244, #246). The node used to read that silence as history disagreeing with the
 /// ring: it discarded every row and rebased, and a rebase is indistinguishable from growth on the
 /// wire, so the client threw its own copy away and was handed the same rows back at a new base a
 /// moment later. On a phone that is pressing ↑ for shell history and landing in scrollback.

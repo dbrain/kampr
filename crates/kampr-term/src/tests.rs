@@ -188,7 +188,7 @@ fn a_wide_glyph_that_does_not_fit_wraps_whole() {
     assert_eq!(t.grid().row_text(1), "日");
 }
 
-/// Probe #215: a zero-width code point has no column of its own, and dropping it loses the accent
+/// Probe #223: a zero-width code point has no column of its own, and dropping it loses the accent
 /// for good — herdr keeps it on the base and addresses the next glyph at base + the *cluster's*
 /// width, so the emulator has to as well or the mark never reaches the phone.
 #[test]

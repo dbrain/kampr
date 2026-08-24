@@ -49,7 +49,7 @@ pub struct Cell {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<u32>,
     /// The zero-width code points riding on [`Self::ch`] — combining marks, ZWJ, variation
-    /// selectors (probe #215). Boxed rather than interned like `link`, because nothing outside
+    /// selectors (probe #223). Boxed rather than interned like `link`, because nothing outside
     /// this grid needs an id for them and a table would have to travel beside every `RowDiff`;
     /// `Arc<String>` is one thin pointer, so a cell that wears nothing costs 8 bytes and a row
     /// clone stays a refcount bump.
