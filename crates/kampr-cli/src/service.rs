@@ -455,6 +455,9 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <dict><key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <!-- 63 is 0o077. launchd takes this as a decimal integer, and sqlite creates the
+       write-ahead log beside the database at whatever umask the process was given. -->
+  <key>Umask</key><integer>63</integer>
 </dict>
 </plist>
 "#;

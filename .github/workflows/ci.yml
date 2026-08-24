@@ -35,7 +35,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: herdr --version
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test — a skipped integration suite is a failure, not a pass
         run: |
           set -euo pipefail
@@ -74,7 +74,7 @@ jobs:
       # Not `build`: that packages the *release* variant, and `checkReleaseSigning` correctly
       # refuses to produce an unsigned APK on a runner with no keystore. The key stays on the
       # operator's machine, so CI verifies everything except the one step that needs it.
-      - run: ./gradlew check :webApp:stageNodeBundle :androidApp:assembleDebug
+      - run: env -u GRADLE_HOME ./gradlew check :webApp:stageNodeBundle :androidApp:assembleDebug
         working-directory: client
         env:
           KAMPR_QR_DECODE: '1'
@@ -103,7 +103,7 @@ jobs:
             -H 'content-type: application/json' \
             -d "{\"code\":\"$code\",\"device_name\":\"ci\"}" | jq -er .token)
           KAMPR_URL=http://127.0.0.1:8794 KAMPR_TOKEN="$token" \
-            ./client/gradlew -p client :shared:jvmTest \
+            env -u GRADLE_HOME ./client/gradlew -p client :shared:jvmTest \
               --tests 'dev.kampr.shared.LiveNodeTest.theClientReadsTheAuthSurfaceOfARealNode' \
               --tests 'dev.kampr.shared.LiveNodeTest.preferencesWrittenOnOneConnectionComeBackOnTheNext'
       - uses: actions/upload-artifact@v7

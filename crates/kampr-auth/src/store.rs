@@ -119,8 +119,22 @@ impl Store {
             .foreign_keys(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(std::time::Duration::from_secs(5));
+        let db = path.to_path_buf();
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
+            // sqlite unlinks `-wal` and `-shm` when the last connection closes and recreates them
+            // at the process umask when the next one opens, so an idle node's credential digests
+            // come back 0644 on a default host. Keeping one connection for the life of the
+            // process means the sidecars `restrict` tightened are the ones that stay.
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            // And for every connection past that one, because a sidecar sqlite recreated is
+            // recreated by whichever connection opened it.
+            .after_connect(move |_, _| {
+                let db = db.clone();
+                Box::pin(async move { restrict(&db).map_err(sqlx::Error::Io) })
+            })
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
@@ -705,6 +719,64 @@ mod tests {
             assert!(p.exists(), "{sidecar} should exist");
             assert_eq!(mode(&p), 0o600, "{sidecar} carries pairing digests");
         }
+    }
+
+    /// `restrict` runs once, at open. Every connection opened after that can find sidecars sqlite
+    /// recreated for itself at the process umask, and the one that opens them is the one that has
+    /// to tighten them.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_sidecar_that_comes_back_at_the_umask_is_made_private_by_the_connection_that_opens_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("state");
+        let path = dir.join("kampr.db");
+        let s = Store::open(&path).await.unwrap();
+        s.create_pairing(Role::Full, NOW, NOW + 600, Some(NOW + 600))
+            .await
+            .unwrap();
+
+        let wal = dir.join("kampr.db-wal");
+        chmod(&wal, 0o644).unwrap();
+
+        // Enough handles at once that the pool has to open a connection it did not already hold.
+        let mut held = Vec::new();
+        for _ in 0..s.pool().options().get_max_connections() {
+            held.push(s.pool().acquire().await.unwrap());
+        }
+        drop(held);
+
+        let mode = std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "a pairing digest was left world-readable in the write-ahead log"
+        );
+    }
+
+    /// Asserted as configuration rather than measured: the defect is a ten-minute idle timeout and
+    /// a thirty-minute lifetime, and a test cannot wait either of them out. What it buys is that
+    /// the last connection never closes, so sqlite never unlinks `-wal` and never recreates it at
+    /// whatever umask the node happens to have.
+    #[tokio::test]
+    async fn the_pool_never_drops_to_zero_connections_and_so_never_tears_the_write_ahead_log_down() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("state").join("kampr.db");
+        let s = Store::open(&path).await.unwrap();
+        let options = s.pool().options();
+        assert!(
+            options.get_min_connections() >= 1,
+            "the pool empties itself when idle"
+        );
+        assert_eq!(
+            options.get_idle_timeout(),
+            None,
+            "an idle connection is still closed"
+        );
+        assert_eq!(
+            options.get_max_lifetime(),
+            None,
+            "a live connection is still retired"
+        );
     }
 
     #[tokio::test]

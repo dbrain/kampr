@@ -23,6 +23,9 @@ KillMode=process
 # cannot see, and that vanishes under them on restart. It bought nothing against a process that
 # already drives every pane on the machine.
 NoNewPrivileges=yes
+# sqlite recreates `-wal` and `-shm` for itself, and the audit found them world-readable with
+# pairing and token digests in them. The store chmods what it opens; this is the floor under it.
+UMask=0077
 Environment=HERDR_SOCKET_PATH=@SOCKET@
 
 [Install]
