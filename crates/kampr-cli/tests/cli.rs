@@ -114,6 +114,21 @@ impl Cli {
         self.xdg.join("systemd/user/kampr.service")
     }
 
+    /// The binary half of herdr, pinned in config the way `kampr service install` pins it.
+    fn pin_herdr(&self, binary: &Path) {
+        let text = self.config_text();
+        let pinned: String = text
+            .lines()
+            .map(|line| match line.starts_with("binary = ") {
+                true => format!("binary = {:?}", binary.display().to_string()),
+                false => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(pinned.contains(&binary.display().to_string()), "{pinned}");
+        std::fs::write(self.config.join("config.toml"), pinned).expect("config.toml");
+    }
+
     fn config_text(&self) -> String {
         std::fs::read_to_string(self.config.join("config.toml")).expect("config.toml")
     }
@@ -235,6 +250,24 @@ impl Herd {
     }
 }
 
+impl Herd {
+    /// A new named session is running within milliseconds and holds no panes at all (#240), and
+    /// `terminal session observe` needs one.
+    fn with_a_pane(self) -> Self {
+        let made = Command::new("herdr")
+            .args(["workspace", "create", "--label", "kampr-doctor", "--cwd"])
+            .arg(std::env::temp_dir())
+            .env("HERDR_SOCKET_PATH", &self.socket)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("herdr workspace create");
+        assert!(made.success(), "could not make a pane to observe");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        self
+    }
+}
+
 impl Drop for Herd {
     fn drop(&mut self) {
         let _ = Command::new("herdr")
@@ -289,6 +322,61 @@ fn doctor_reads_the_version_off_a_live_herdr_and_checks_it_against_the_floor() {
     let detail = herdr["detail"].as_str().unwrap();
     assert!(detail.contains("protocol"), "{detail}");
     assert!(detail.contains("floor"), "{detail}");
+}
+
+/// #233: the node that served a correct herd, accepted input, reported green, and showed a
+/// blank grid in every client, because the half of herdr that streams is a spawned binary and
+/// nothing had ever run it. `--version` answering is not that half.
+#[test]
+fn doctor_fails_a_herdr_that_answers_version_and_cannot_observe() {
+    let Some(herd) = Herd::start("blind").map(Herd::with_a_pane) else {
+        eprintln!("skipped: herdr is not on PATH");
+        return;
+    };
+    let cli = Cli::new().against(&herd.socket);
+    cli.init();
+    let shim = cli.nowhere.join("herdr");
+    std::fs::create_dir_all(&cli.nowhere).expect("a directory for the shim");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\ncase \"$1\" in --version) echo 'herdr 0.8.2' ;; *) exit 1 ;; esac\n",
+    )
+    .expect("a shim herdr");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    cli.pin_herdr(&shim);
+
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
+    let observe = check(&json, "observe");
+    assert_eq!(observe["status"], "fail", "{observe:#}");
+    let detail = observe["detail"].as_str().unwrap();
+    assert!(detail.contains("does not stream"), "{detail}");
+    assert!(
+        detail.contains("herdr 0.8.2"),
+        "the version it did answer: {detail}"
+    );
+}
+
+/// And the other side of it: against a real herdr the check is only green because a frame came
+/// back off a real `terminal session observe`.
+#[test]
+fn doctor_proves_the_stream_against_a_live_herdr_rather_than_asking_its_version() {
+    let Some(herd) = Herd::start("stream").map(Herd::with_a_pane) else {
+        eprintln!("skipped: herdr is not on PATH");
+        return;
+    };
+    let cli = Cli::new().against(&herd.socket);
+    cli.init();
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
+    let observe = check(&json, "observe");
+    assert_eq!(observe["status"], "ok", "{observe:#}");
+    let detail = observe["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("streamed a"),
+        "no frame was ever asked for: {detail}"
+    );
 }
 
 #[test]
@@ -1060,11 +1148,14 @@ fn a_herdr_beside_the_kampr_binary_is_found_with_nothing_on_the_path_at_all() {
     );
     let json = cli.json(&["doctor", "--json"]);
     let observe = check(&json, "observe");
-    assert_eq!(observe["status"], "ok", "{json:#}");
+    // Not green, and this is the point of the check: resolution is half of it, and there is no
+    // herd here to run the other half against.
+    assert_eq!(observe["status"], "warn", "{json:#}");
     let detail = observe["detail"].as_str().unwrap();
     assert!(detail.contains(&herdr.display().to_string()), "{detail}");
     assert!(detail.contains("beside the kampr binary"), "{detail}");
     assert!(detail.contains("herdr 0.8.2"), "it ran the binary: {detail}");
+    assert!(detail.contains("not established"), "{detail}");
 }
 
 /// `HERDR_SOCKET_PATH` is pinned into the unit because the environment that installs a service is

@@ -44,8 +44,10 @@ fn not_after(der: &[u8]) -> Result<i64> {
         rest = after(rest)?;
     }
     for tag in [INTEGER, SEQUENCE, SEQUENCE] {
-        if rest.first() != Some(&tag) {
-            bail!("unexpected tag {:#04x} where {tag:#04x} belongs", rest[0]);
+        match rest.first() {
+            Some(&found) if found == tag => {}
+            Some(&found) => bail!("unexpected tag {found:#04x} where {tag:#04x} belongs"),
+            None => bail!("the certificate ends where {tag:#04x} belongs"),
         }
         rest = after(rest)?;
     }
@@ -102,7 +104,12 @@ fn timestamp(input: &[u8]) -> Result<i64> {
     if rest.len() < 10 {
         bail!("truncated time {text}");
     }
-    let field = |at: usize| -> Result<u8> { Ok(rest[at..at + 2].parse()?) };
+    let field = |at: usize| -> Result<u8> {
+        let digits = rest
+            .get(at..at + 2)
+            .ok_or_else(|| anyhow::anyhow!("truncated time {text}"))?;
+        Ok(digits.parse()?)
+    };
     let date = Date::from_calendar_date(year, Month::try_from(field(0)?)?, field(2)?)?;
     let time = Time::from_hms(field(4)?, field(6)?, field(8)?)?;
     Ok(PrimitiveDateTime::new(date, time).assume_utc().unix_timestamp())
@@ -149,5 +156,30 @@ mod tests {
         .unwrap();
         assert!(expiry(&path).is_err());
         assert!(expiry(&dir.path().join("absent.pem")).is_err());
+    }
+
+    /// `kampr doctor` is the command an operator runs when something is already wrong, and
+    /// `exposure` is written to turn this error into a `tls` finding. A panic here takes the
+    /// whole report with it.
+    #[test]
+    fn a_truncated_certificate_fails_the_check_instead_of_aborting_doctor() {
+        let dir = tempfile::tempdir().unwrap();
+        // SEQUENCE { SEQUENCE {} } — a certificate that runs out exactly where the serial number
+        // belongs, which is what a half-written or truncated PEM looks like.
+        let path = dir.path().join("stub.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nMAIwAA==\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        assert!(expiry(&path).is_err());
+
+        let garbage = dir.path().join("garbage.pem");
+        std::fs::write(
+            &garbage,
+            "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAA\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        assert!(expiry(&garbage).is_err());
     }
 }

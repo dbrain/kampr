@@ -22,7 +22,7 @@ pub async fn checks(config: &Config, service_installed: bool) -> Vec<Check> {
         herdr_check,
         // Immediately after the socket, because the two are one herdr and only one of them was
         // ever checked.
-        super::observe::check(config, service_installed).await,
+        super::observe::check(config, &socket, service_installed).await,
         sessions_check(config, &socket, reachable).await,
     ]
 }

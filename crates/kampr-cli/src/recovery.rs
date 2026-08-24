@@ -79,20 +79,47 @@ pub async fn redeem(local: &Local, device_name: &str) -> Result<()> {
 /// Echo is off while the code is typed: `kampr recover` is run from a Herdr pane often enough,
 /// and a read-only device receives every frame of every pane. A mistyped code is still live.
 fn prompt_for_code() -> Result<Option<String>> {
+    let hidden = conceal(std::io::stdin().is_terminal(), || echo(false))?;
     println!();
     println!("  Type the recovery code from your paper record.");
     print!("  code  ");
     std::io::stdout().flush()?;
-    let hidden = std::io::stdin().is_terminal() && echo(false);
     let mut line = String::new();
     let read = std::io::stdin().read_line(&mut line);
-    if hidden {
-        echo(true);
+    if hidden.is_some() {
         println!();
     }
+    drop(hidden);
     read?;
     let code = line.trim().to_string();
     Ok((!code.is_empty()).then_some(code))
+}
+
+/// A console whose echo cannot be turned off is refused rather than fallen back on. The prompt
+/// renders identically either way, so the operator's first sign that the code went to every
+/// screen watching this pane would be seeing it there, after typing it.
+fn conceal(console: bool, off: impl FnOnce() -> bool) -> Result<Option<Echo>> {
+    if !console {
+        return Ok(None);
+    }
+    if !off() {
+        bail!(
+            "this console will not turn echo off, so the recovery code would be typed in the \
+             clear — and `kampr recover` is run from a herdr pane often enough, where every \
+             read-only device receives the frame it lands in. Run it from a console where \
+             `stty -echo` works."
+        );
+    }
+    Ok(Some(Echo))
+}
+
+/// Echo goes back on however the prompt ends, including an unwind out of the read.
+struct Echo;
+
+impl Drop for Echo {
+    fn drop(&mut self) {
+        echo(true);
+    }
 }
 
 fn echo(on: bool) -> bool {
@@ -100,4 +127,24 @@ fn echo(on: bool) -> bool {
         .arg(if on { "echo" } else { "-echo" })
         .status()
         .is_ok_and(|s| s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_console_that_cannot_hide_the_code_is_refused_rather_than_echoing_it() {
+        let Err(refused) = conceal(true, || false) else {
+            panic!("a prompt that echoes the code was accepted");
+        };
+        let said = refused.to_string();
+        assert!(said.contains("echo"), "{said}");
+        assert!(said.contains("read-only") || said.contains("pane"), "{said}");
+    }
+
+    #[test]
+    fn a_stdin_that_is_not_a_console_has_no_screen_to_keep_the_code_off() {
+        assert!(conceal(false, || false).expect("a pipe needs no stty").is_none());
+    }
 }
