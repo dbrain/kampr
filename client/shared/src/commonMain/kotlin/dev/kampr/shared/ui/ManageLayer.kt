@@ -9,6 +9,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 
@@ -84,7 +85,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 node = node,
                 pane = sheet.paneId?.let { id -> herd.panes.firstOrNull { it.id == id } },
                 nodes = herd.nodes,
-                caps = caps[node.id] ?: caps.values.singleOrNull(),
+                caps = capsFor(node.id, caps, herd),
                 outcome = outcome,
                 onManage = state::manage,
                 // A pane belongs to exactly one machine, so aiming the sheet somewhere else is

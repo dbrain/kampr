@@ -196,7 +196,7 @@ class DesktopPaneMemoryTest {
                         surfaces = ProbeSurfaces(),
                         mosaic = NoMosaic,
                         now = NOW,
-                        auth = AuthSurface(null, emptyList(), null, null, null, {}, {}, {}),
+                        auth = AuthSurface(null, emptyList(), null, null, null, {}, {}, {}, {}),
                         connectionStatus = ConnectionStatus.Live("full"),
                         deepLink = null,
                     )

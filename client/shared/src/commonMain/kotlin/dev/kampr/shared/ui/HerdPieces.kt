@@ -119,7 +119,12 @@ fun nodeFacts(node: NodeInfo, withStatus: Boolean = false): List<String> = listO
 )
 
 @Composable
-fun NodeListSheet(nodes: List<NodeInfo>, breakpoint: Breakpoint, onDismiss: () -> Unit) {
+fun NodeListSheet(
+    nodes: List<NodeInfo>,
+    breakpoint: Breakpoint,
+    onResync: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val tokens = Kampr.tokens
     val compact = breakpoint != Breakpoint.Portrait
     val online = nodes.count { it.online }
@@ -164,6 +169,15 @@ fun NodeListSheet(nodes: List<NodeInfo>, breakpoint: Breakpoint, onDismiss: () -
                     },
                 )
             }
+            // `resync` is the protocol's recovery from a herd delta this client never saw, and
+            // this list is where a missing machine is noticed. Nothing else in the client could
+            // send one, which left the escape hatch bolted shut.
+            QuietAction(
+                "Refresh",
+                onResync,
+                Modifier.padding(top = 4.dp),
+                label = "Ask this node for the whole herd again",
+            )
         }
     }
 }

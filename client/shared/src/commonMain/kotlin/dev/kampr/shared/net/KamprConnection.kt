@@ -23,6 +23,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val CAPS_MIN_INTERVAL_MS = 10_000.0
+
+// How long a socket has to stay open before the retry ladder is walked back down to its first
+// step. Long enough that a node crash-looping on start cannot pass for health at any rung of the
+// ladder, short enough that an ordinary session — a phone changing network, a laptop waking —
+// always does.
+private const val HEALTHY_SESSION_MS = 5_000.0
 private const val DEFAULT_OWNER = "screen"
 
 private const val REFUSED =
@@ -59,6 +65,7 @@ class KamprConnection(
     private val pingSentAt = HashMap<Int, Double>()
     private var capsWanted = false
     private var capsAskedAt = 0.0
+    private var openedAt = 0.0
 
     var endpoint: Endpoint? = null
         private set
@@ -117,9 +124,15 @@ class KamprConnection(
         try {
             while (scope.isActive) {
                 store.status(ConnectionStatus.Connecting)
+                openedAt = 0.0
                 val outcome = runCatching { session(client, target) }
                 if (outcome.exceptionOrNull() is CancellationException) throw outcome.exceptionOrNull()!!
                 store.markStale()
+                // A session that stayed up is the only evidence there is that this address works,
+                // and it is what the ladder exists to find. Without it the delay only ever grew:
+                // a phone that lost its network a handful of times over a day waited the full
+                // ceiling before every attempt after that.
+                if (openedAt != 0.0 && nowMillis() - openedAt >= HEALTHY_SESSION_MS) backoff.reset()
                 val wait = backoff.next()
                 val reason = outcome.exceptionOrNull()?.message ?: "connection closed"
                 // A socket that will not open says nothing about why. Asking the same token over
@@ -148,6 +161,7 @@ class KamprConnection(
             val pump = launch { pump(this@webSocket, queue) }
             val heartbeat = launch { heartbeat() }
             live = true
+            openedAt = nowMillis()
             try {
                 capsWanted = false
                 capsAskedAt = 0.0

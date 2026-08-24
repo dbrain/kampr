@@ -101,13 +101,25 @@ class ManageTest {
     }
 
     @Test
-    fun capsFallBackToTheOneAnswerTheNodeGives() {
+    fun capsComeFromTheAddressedMachineAndNeverFromAnother() {
         val store = KamprStore()
         assertNull(store.capsFor("01JNODE"))
+        store.accept(
+            Wire.decode(
+                """{"t":"herd","panes":[],"nodes":[
+                   {"id":"01JNODE","name":"comingclean","kind":"local"},
+                   {"id":"01JNODE.agents","name":"comingclean/agents","kind":"local"},
+                   {"id":"01JPEER","name":"haymaker"}]}"""
+            )!!
+        )
         store.accept(Wire.decode("""{"t":"caps","node":"01JNODE","agent_kinds":["claude"]}""")!!)
         assertEquals(listOf("claude"), store.capsFor("01JNODE")?.agentKinds)
-        // A named session is its own node id; the node still answers caps under its own.
+        // A named session is its own node id and its own herdr server, and the node answers caps
+        // only for the primary — so the host in the two names is what says they are one machine.
         assertEquals(listOf("claude"), store.capsFor("01JNODE.agents")?.agentKinds)
+        // The window after connecting to a hub and before its peers have answered is exactly when
+        // the map holds one entry, and it is not this machine's.
+        assertNull(store.capsFor("01JPEER"), "a pane on haymaker was offered comingclean's capabilities")
     }
 
     // The node is authoritative: an ack changes nothing in the herd, and the patch that follows

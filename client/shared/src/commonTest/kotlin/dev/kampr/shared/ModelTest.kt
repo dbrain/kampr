@@ -173,6 +173,24 @@ class ModelTest {
         assertEquals("n1/p2", groups[0].panes[0].id)
     }
 
+    // The node publishes `pending` on a blocked-state edge, and its first attempt at a newly
+    // blocked pane carries nothing at all — the question is not readable yet. So a reconnect onto
+    // a pane that is blocked again shows the previous connection's question until the retry lands,
+    // and answering it lands on a pane with nothing matching to answer.
+    @Test
+    fun aDroppedSocketTakesEveryPanesPendingQuestionWithIt() {
+        val store = KamprStore()
+        store.accept(ServerMsg.Herd(listOf(NodeInfo("n1", "one", kind = "local")), listOf(pane("n1/p1", "n1", "blocked"))))
+        store.accept(ServerMsg.Pending("n1/p1", "Apply this patch?", emptyList(), "screen"))
+        assertEquals("Apply this patch?", store.triage().single().question)
+
+        store.markStale()
+        assertNull(
+            store.triage().single().question,
+            "the previous connection's question survived the socket that carried it",
+        )
+    }
+
     @Test
     fun cachedGridSurvivesADropAndIsMarkedStaleUntilTheNextReset() {
         val store = KamprStore()

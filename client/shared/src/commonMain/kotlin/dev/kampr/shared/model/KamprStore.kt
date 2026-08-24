@@ -72,10 +72,7 @@ class KamprStore {
 
     val security: Security get() = _hello.value?.security ?: Security()
 
-    // The node answers `caps` for itself only, so a herd whose nodes are named sessions of one
-    // host has a single reply covering all of them. Falling back to it beats parsing an opaque id.
-    fun capsFor(nodeId: String?): ServerMsg.NodeCaps? =
-        _nodeCaps.value[nodeId] ?: _nodeCaps.value.values.singleOrNull()
+    fun capsFor(nodeId: String?): ServerMsg.NodeCaps? = capsFor(nodeId, _nodeCaps.value, _herd.value)
 
     fun clearManaged() {
         _managed.value = null
@@ -182,6 +179,25 @@ class KamprStore {
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
             is ServerMsg.Pong -> Unit
         }
+    }
+}
+
+// The node answers `caps` for itself only, and a named session is its own herdr server joining
+// the same herd as a node of its own — so one host's reply is the answer for every session it
+// runs, matched by the host in the node's *name* because an id is opaque and never a prefix. What
+// this must not do is answer for a machine that has not replied: the map holds one entry for as
+// long as it takes a hub's peers to answer, and borrowing that one handed a pane on peer B the
+// affordances of peer A.
+fun capsFor(
+    nodeId: String?,
+    caps: Map<String, ServerMsg.NodeCaps>,
+    herd: Herd,
+): ServerMsg.NodeCaps? {
+    if (nodeId == null) return null
+    caps[nodeId]?.let { return it }
+    val host = herd.nodes.firstOrNull { it.id == nodeId }?.host ?: return null
+    return caps.values.firstOrNull { answer ->
+        herd.nodes.firstOrNull { it.id == answer.node }?.host == host
     }
 }
 

@@ -150,5 +150,10 @@ class PaneState(val id: String, val styles: StyleTable) {
 
     fun markStale() {
         if (painted) stale = true
+        // Nothing carried across a dropped socket is trustworthy, and a question least of all: the
+        // node publishes `pending` on a blocked-state edge and its first attempt at a newly blocked
+        // pane carries nothing, so a reconnect would triage the previous connection's question and
+        // answer it into a pane with nothing matching to answer.
+        pending = null
     }
 }

@@ -97,6 +97,45 @@ class HerdNodeListTest {
         )
     }
 
+    // `resync` is the wire's documented recovery from a herd delta this client never received,
+    // and no client code could send one: the message was encodable and never constructed outside
+    // a test. The machine list is where a missing machine is noticed, so it is where the way out
+    // of that belongs — on every layout, because a control that exists on one of three is dead on
+    // the other two.
+    @Test
+    fun everyHerdLayoutCanAskTheNodeForTheWholeHerdAgain() {
+        val asked = mutableListOf<String>()
+        val layouts = listOf<Pair<String, @Composable () -> Unit>>(
+            "portrait" to {
+                Box(Modifier.size(420.dp, 900.dp)) {
+                    HerdPortrait(HERD, 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "portrait" })
+                }
+            },
+            "landscape" to {
+                Box(Modifier.size(900.dp, 420.dp)) {
+                    HerdLandscape(HERD, 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "landscape" })
+                }
+            },
+            "sidebar" to {
+                Box(Modifier.size(300.dp, 900.dp)) {
+                    HerdSidebar(
+                        HERD, 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {},
+                        onResync = { asked += "sidebar" },
+                    )
+                }
+            },
+        )
+        for ((name, layout) in layouts) runComposeUiTest {
+            setContent { Themed { layout() } }
+            waitForIdle()
+            onNodeWithContentDescription("nodes online", substring = true).performClick()
+            waitForIdle()
+            onNodeWithContentDescription("Ask this node for the whole herd again").performClick()
+            waitForIdle()
+            assertTrue(name in asked, "the $name machine list could not ask for the herd again")
+        }
+    }
+
     // Three layouts share the pill, and a sheet that only opens on one of them is a control that
     // is dead on the other two.
     @Test

@@ -39,6 +39,7 @@ fun HerdPortrait(
     triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
     onApprove: ((String) -> Unit)?,
+    onResync: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -81,7 +82,7 @@ fun HerdPortrait(
                 Box(Modifier.height(16.dp))
             }
         }
-        if (listing) NodeListSheet(herd.nodes, Breakpoint.Portrait) { listing = false }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Portrait, onResync) { listing = false }
     }
 }
 
@@ -93,6 +94,7 @@ fun HerdLandscape(
     triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
     onApprove: ((String) -> Unit)?,
+    onResync: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -142,7 +144,7 @@ fun HerdLandscape(
                 }
             }
         }
-        if (listing) NodeListSheet(herd.nodes, Breakpoint.Landscape) { listing = false }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Landscape, onResync) { listing = false }
     }
 }
 
@@ -175,6 +177,7 @@ fun HerdSidebar(
     deviceDetail: String,
     onOpenPane: (String) -> Unit,
     onSettings: () -> Unit,
+    onResync: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -244,7 +247,7 @@ fun HerdSidebar(
                 IconGlyph(KamprIcons.gear, 14.dp, tokens.color.mute)
             }
         }
-        if (listing) NodeListSheet(herd.nodes, Breakpoint.Desktop) { listing = false }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Desktop, onResync) { listing = false }
     }
 }
 

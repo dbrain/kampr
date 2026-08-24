@@ -136,6 +136,12 @@ fun KamprApp(
                 deviceRefresh++
             }
         },
+        onRenew = { id ->
+            scope.launch {
+                if (withApi { it.renew(id) } != true) authFailure = "That device was not renewed."
+                deviceRefresh++
+            }
+        },
         onDismissFailure = { authFailure = null },
     )
 
@@ -169,6 +175,7 @@ internal class AuthSurface(
     val failure: String?,
     val onPairingCode: () -> Unit,
     val onRevoke: (String) -> Unit,
+    val onRenew: (String) -> Unit,
     val onDismissFailure: () -> Unit,
 )
 
@@ -299,6 +306,7 @@ internal fun AppScaffold(
                             deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
                             onOpenPane = { state.openPane(it) },
                             onSettings = { state.go(Screen.Setup) },
+                            onResync = { state.connection.send(ClientMsg.Resync) },
                         )
                         ScreenBody(Modifier.weight(1f).fillMaxSize(), bottomChrome(breakpoint, state.screen)) {
                             when (val screen = state.screen) {
@@ -333,7 +341,7 @@ internal fun AppScaffold(
                                 )
                                 Screen.Devices -> DevicesScreen(
                                     auth.devices, auth.currentDeviceId, now,
-                                    { state.go(Screen.Setup) }, auth.onRevoke,
+                                    { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                                 )
                                 Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                                 Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
@@ -383,11 +391,14 @@ internal fun AppScaffold(
                         )
                         Screen.Devices -> DevicesScreen(
                             auth.devices, auth.currentDeviceId, now,
-                            { state.go(Screen.Setup) }, auth.onRevoke,
+                            { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                         )
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                        Screen.Herd, Screen.Mosaic -> HerdLandscape(herd, now, localRtt, triage, state::openPane, null)
+                        Screen.Herd, Screen.Mosaic -> HerdLandscape(
+                            herd, now, localRtt, triage, state::openPane, null,
+                            onResync = { state.connection.send(ClientMsg.Resync) },
+                        )
                     }
                 }
 
@@ -426,7 +437,7 @@ internal fun AppScaffold(
                         )
                         Screen.Devices -> DevicesScreen(
                             auth.devices, auth.currentDeviceId, now,
-                            { state.go(Screen.Setup) }, auth.onRevoke,
+                            { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                         )
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
@@ -434,6 +445,7 @@ internal fun AppScaffold(
                             herd, now, localRtt, triage,
                             state::openPane,
                             if (readOnly) null else { paneId: String -> answer(paneId, "1") },
+                            onResync = { state.connection.send(ClientMsg.Resync) },
                         )
                     }
                 }
