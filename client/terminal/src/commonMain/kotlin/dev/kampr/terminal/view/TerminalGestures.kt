@@ -33,10 +33,14 @@ internal suspend fun PointerInputScope.terminalGestures(
         val tracker = VelocityTracker()
         val down = awaitFirstDown(requireUnconsumed = false)
         tracker.addPosition(down.uptimeMillis, down.position)
+        // Every scrolling surface takes a touch during a fling as a brake. This one took it as a
+        // tap on the grid as well, so stopping a scroll you had overshot cost you the keyboard.
+        val braking = abs(view.velocityX) > 1f || abs(view.velocityY) > 1f
         view.velocityX = 0f
         view.velocityY = 0f
 
-        val held = awaitStillLongPress(down)
+        val press = awaitStillPress(down)
+        val held = press.held
         if (held != null) {
             val anchor = probe.cellAt(held.position)
             view.selection = Selection(anchor, anchor, view.blockSelect)
@@ -51,15 +55,19 @@ internal suspend fun PointerInputScope.terminalGestures(
             return@awaitEachGesture
         }
 
-        // awaitStillLongPress consumes the release, so a quick tap ends the gesture here
-        // and never reaches the pan loop below — waiting for another event would hang it.
+        // awaitStillPress consumes the release, so a quick tap ends the gesture here and never
+        // reaches the pan loop below — waiting for another event would hang it.
         if (currentEvent.changes.none { it.pressed }) {
-            onTap(down.position)
+            if (press.travel <= viewConfiguration.touchSlop && !braking) onTap(down.position)
             session.reclaimKeyboard()
             return@awaitEachGesture
         }
 
-        var moved = false
+        // What makes a gesture a scroll is how far the finger went, not how fast it was going at
+        // any one moment — and the distance carries over from the press, which is where most of a
+        // scroll is measured. Restarting the count here is what let a gesture already past the
+        // slop end as a tap.
+        var travel = press.travel
         var multi = false
         var event: PointerEvent
         do {
@@ -71,18 +79,18 @@ internal suspend fun PointerInputScope.terminalGestures(
                 multi = true
                 val centroid = event.calculateCentroid(useCurrent = true)
                 view.pinch(centroid.x, centroid.y, pan.x, pan.y, event.calculateZoom())
-                moved = true
             } else if (pan != Offset.Zero) {
                 view.scrollBy(pan.x, pan.y)
-                if (abs(pan.x) + abs(pan.y) > 1f) moved = true
+                travel += abs(pan.x) + abs(pan.y)
             }
             pressed.firstOrNull()?.let { tracker.addPosition(it.uptimeMillis, it.position) }
             event.changes.forEach { if (it.positionChanged()) it.consume() }
         } while (event.changes.any { it.pressed })
 
         view.settle(presets, paint.contentBottom)
+        val dragged = travel > viewConfiguration.touchSlop
         when {
-            !moved && !multi -> onTap(down.position)
+            !dragged && !multi -> if (!braking) onTap(down.position)
             !multi -> {
                 val velocity = tracker.calculateVelocity()
                 view.velocityX = velocity.x
@@ -94,27 +102,35 @@ internal suspend fun PointerInputScope.terminalGestures(
     }
 }
 
+// How far the finger went before the gesture was handed on, and whether it stayed still long
+// enough to be a long press. The distance has to come back out: a gesture that leaves here past
+// the touch slop is already a drag, and the pan loop that inherits it would otherwise start
+// counting from zero.
+private class StillPress(val held: PointerInputChange?, val travel: Float)
+
 // A long press is a press that stayed still, and only that. Asking `awaitLongPressOrCancellation`
 // alone asks how long the finger has been down and nothing about where it went — so a pinch, which
 // is never over in the 500ms the platform allows, arrived as a selection and the zoom never moved.
 // Travel past the touch slop, or a second finger, means the gesture belongs to the pan loop.
-private suspend fun AwaitPointerEventScope.awaitStillLongPress(
-    down: PointerInputChange,
-): PointerInputChange? = try {
-    withTimeout(viewConfiguration.longPressTimeoutMillis) {
-        var last = down.position
-        var travel = 0f
-        while (true) {
-            val event = awaitPointerEvent()
-            if (event.changes.count { it.pressed } > 1) break
-            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-            if (!change.pressed) break
-            travel += (change.position - last).getDistance()
-            last = change.position
-            if (travel > viewConfiguration.touchSlop) break
+private suspend fun AwaitPointerEventScope.awaitStillPress(down: PointerInputChange): StillPress {
+    var travel = 0f
+    val held = try {
+        withTimeout(viewConfiguration.longPressTimeoutMillis) {
+            var last = down.position
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.changes.count { it.pressed } > 1) break
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                // Counted before the release is examined, because a flick fast enough to arrive
+                // as one move and an up carries its whole distance on the event that ends it.
+                travel += (change.position - last).getDistance()
+                last = change.position
+                if (!change.pressed || travel > viewConfiguration.touchSlop) break
+            }
+            null
         }
-        null
+    } catch (_: PointerEventTimeoutCancellationException) {
+        down
     }
-} catch (_: PointerEventTimeoutCancellationException) {
-    down
+    return StillPress(held, travel)
 }

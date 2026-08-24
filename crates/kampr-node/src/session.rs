@@ -648,6 +648,13 @@ impl Session {
         };
         match manager.run(&op).await {
             Ok(reply) => {
+                // A named session is its own node, and the discovery loop would otherwise take up
+                // to `DISCOVERY_POLL` to notice one appear or go. The ack is what a client acts
+                // on, so it has to mean the herd already knows — this is the op that changed the
+                // session set, and it is the only thing in the process that knows it did.
+                if op.op.starts_with("session.") {
+                    self.node.sessions.reconcile().await;
+                }
                 // A session is named rather than addressed, so its name is the id; everything
                 // else herdr creates is a container this node qualifies with its own id.
                 let id = match reply["session"].as_str() {

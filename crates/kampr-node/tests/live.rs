@@ -3176,6 +3176,114 @@ async fn a_created_session_leaves_the_nodes_process_group() {
     assert_eq!(theirs, spawned as i32, "a detached session leads its own group");
 }
 
+/// Reported from a phone, twice: "creating a new session — session doesn't open when done" and
+/// "closing a session — session doesn't close when done". Both ops did exactly what they said.
+/// What was wrong was the answer to the question the client asks next: the New sheet's session
+/// list is `caps.sessions`, and `caps` was cached for ten seconds *and* acked before the host
+/// agreed with it — `server.stop` answers in under a millisecond while `session list` goes on
+/// reporting `running: true` for up to 300 ms (#241). So the one refresh that could have shown
+/// the operator anything was handed the session set from before the op, by two mechanisms at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn caps_answers_a_session_op_with_the_session_set_that_op_produced() {
+    let h = harness!("capsfresh");
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let session = format!("kampr-capsfresh-{}", std::process::id());
+    let session_dir = herdr_home().join("sessions").join(&session);
+
+    // Warmed the way a client warms it — on `hello`, long before the operator types a name — so
+    // what follows is the answer they would really have been given.
+    send(&mut socket, json!({ "t": "caps" })).await;
+    let before = until(&mut socket, "caps", 10).await;
+    assert_eq!(session_state(&before, &session), None, "{before}");
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    send(&mut socket, json!({ "t": "caps" })).await;
+    let created = until(&mut socket, "caps", 10).await;
+    assert_eq!(
+        session_state(&created, &session),
+        Some(true),
+        "the session the operator just made is missing from the refresh their client sends on its ack: {created}"
+    );
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.stop", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    send(&mut socket, json!({ "t": "caps" })).await;
+    let stopped = until(&mut socket, "caps", 10).await;
+    assert_eq!(
+        session_state(&stopped, &session),
+        Some(false),
+        "the session is still advertised as running after its own stop was acknowledged: {stopped}"
+    );
+
+    for _ in 0..100 {
+        if !session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for _ in 0..20 {
+        let _ = std::fs::remove_dir_all(&session_dir);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !session_dir.exists() {
+            break;
+        }
+    }
+    assert!(!session_dir.exists(), "left {session_dir:?} behind");
+}
+
+/// `session.create` used to answer on the spawn alone, which made it a `managed{ok}` for a
+/// session that may not exist — the shape of #233, a failure wearing a plausible success. Driven
+/// with a herdr that starts, says nothing and leaves: the operator has to be told.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_session_that_never_starts_is_refused_rather_than_acknowledged() {
+    let bin = tempfile::tempdir().expect("a bin dir");
+    let shim = bin.path().join("herdr");
+    std::fs::write(&shim, "#!/bin/sh\nexit 0\n").expect("a shim");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let h = harness!("nosession", |c: &mut Config| {
+        c.herdr.binary = shim.display().to_string();
+    });
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": "kampr-never" }),
+    )
+    .await;
+    let ack = managed(&mut socket, "session.create", 30).await;
+    assert_eq!(ack["ok"], false, "{ack}");
+    assert_eq!(ack["code"], "herdr_unavailable", "{ack}");
+    let said = ack["message"].as_str().unwrap_or_default();
+    assert!(said.contains("kampr-never"), "the refusal has to name it: {said}");
+}
+
+/// `Some(running)` when `caps` lists the session at all — a stopped one stays listed for ever
+/// as `running: false` and is only forgotten when its directory goes (#242), so "gone" and
+/// "stopped" are two different answers and the sheet draws them differently.
+fn session_state(caps: &Value, name: &str) -> Option<bool> {
+    caps["sessions"].as_array()?.iter().find(|s| s["name"] == name)?["running"].as_bool()
+}
+
 /// `has_conversation` promised a transcript and delivered `not_found`: it was derived from the
 /// pane's *harness*, so a `claude` started a minute ago — the pane the New sheet creates, opening
 /// on the Conversation view by default — advertised a conversation nothing could load.
@@ -4455,4 +4563,81 @@ fn pane_entries(message: &Value) -> impl Iterator<Item = &Value> {
                 .as_array()
                 .map_or_else(Vec::new, |p| p.iter().collect()),
         })
+}
+
+/// A named session joins the herd as its own node, and it did so only on the next discovery poll
+/// — up to fifteen seconds after the operator watched their own create succeed, with the herd
+/// screen showing nothing in between (#240). The op is the one thing that *knows* the session set
+/// changed, so it reconciles rather than leaving the loop to find out for itself.
+///
+/// Four seconds is not an arbitrary bound. `discover` polls on a `tokio::time::interval`, whose
+/// first tick fires the moment the node starts, so its ticks land at node start + 0, +15, +30.
+/// Both ops here land two to four seconds in, which is the middle of that window — without the
+/// reconcile there is no tick anywhere near this deadline, and with it the herd moves in
+/// milliseconds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
+    let session = format!("kampr-herdjoin-{}", std::process::id());
+    // The harness serves only its own session, for the reason its comment gives. This one has to
+    // serve the session it is about to make as well — and nothing else, so a throwaway herd
+    // belonging to another test running beside it is still not this test's herd (#97).
+    let allowed = session.clone();
+    let h = harness!("herdjoin", |c: &mut Config| {
+        c.herdr.sessions = Some(vec![allowed.clone()]);
+    });
+    let node = h.node.node_id().to_string();
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let joined = format!("{node}.{session}");
+    let session_dir = herdr_home().join("sessions").join(&session);
+    let serving = async |want: bool| {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+        loop {
+            if h.node.herd().nodes.iter().any(|n| n.id == joined) == want {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    assert!(
+        serving(false).await,
+        "the session is in the herd before it was made"
+    );
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    assert!(
+        serving(true).await,
+        "the session was acknowledged and the herd waited for the poll to hear about it"
+    );
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "session.stop", "node": node, "name": &session }),
+        20,
+    )
+    .await;
+    assert!(
+        serving(false).await,
+        "the session was stopped and is still an online node"
+    );
+
+    for _ in 0..100 {
+        if !session_dir.join("herdr.sock").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = std::process::Command::new("herdr")
+        .args(["session", "delete", &session])
+        .output();
 }

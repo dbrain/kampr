@@ -97,6 +97,26 @@ class MarkdownTest {
         assertEquals("go", unsafe.text)
     }
 
+    // Kampr cannot carry image bytes, so a picture in agent prose is named rather than shown. It
+    // used to render as a bare `!` beside link-styled alt text, and as nothing but `!` when the
+    // alt was empty — a broken-looking artefact where a screenshot had been.
+    @Test
+    fun anImageIsNamedRatherThanRenderedAsABangAndALink() {
+        val styles = testInlineStyles()
+        val named = inlineText("before ![Screenshot](/tmp/shot.png) after", styles)
+        assertEquals("before [image · Screenshot] after", named.text)
+        assertEquals(0, linkCount(named))
+        assertEquals("[image]", inlineText("![](https://kampr.dev/a.png)", styles).text)
+    }
+
+    // The node names a transcript image with this exact marker, in an ordinary md block, because
+    // an older client drops a `b` value it does not know. The renderer must leave it alone.
+    @Test
+    fun theNodesImageMarkerSurvivesTheInlineParser() {
+        val styles = testInlineStyles()
+        assertEquals("[image · png]", inlineText("[image · png]", styles).text)
+    }
+
     @Test
     fun unterminatedMarkupIsRenderedLiterally() {
         val styles = testInlineStyles()

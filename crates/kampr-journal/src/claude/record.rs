@@ -40,6 +40,10 @@ pub enum ContentBlock {
         #[serde(default)]
         input: Value,
     },
+    Image {
+        #[serde(default)]
+        source: Value,
+    },
     ToolResult {
         tool_use_id: String,
         #[serde(default)]
@@ -49,6 +53,13 @@ pub enum ContentBlock {
     },
     #[serde(other)]
     Other,
+}
+
+pub fn image_subtype(source: &Value) -> Option<&str> {
+    source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .and_then(|m| m.strip_prefix("image/"))
 }
 
 pub fn result_text(content: &Value) -> String {

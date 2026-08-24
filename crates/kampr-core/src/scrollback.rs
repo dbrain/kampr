@@ -85,6 +85,15 @@ impl ScrollbackRing {
 
     pub fn ingest(&mut self, raw: &RawScrollback) -> Ingest {
         let incoming = history_rows(raw);
+        // A read that comes back as the live viewport and nothing else is not history that
+        // disagrees with what is held — it is no news about history at all. A full-screen program
+        // has the pane and herdr has no ring to offer for as long as it does (#240). The ring is
+        // the node's own accumulation and outlives that; treating the silence as a gap threw the
+        // operator's whole scrollback away and rebased the ring, and a rebase is indistinguishable
+        // from growth to every consumer downstream, so each of them dropped its copy too.
+        if incoming.is_empty() && !self.rows.is_empty() {
+            return Ingest::Stitched { added: 0 };
+        }
         // A width change re-wraps every stored row, so nothing older can be trusted to line up.
         // The ring adopts the new width *before* restarting on it (probe #112): a restart that
         // kept the old one would find every later read disagreeing with it too, and throw the

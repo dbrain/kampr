@@ -258,3 +258,42 @@ fn a_restarted_ring_renders_at_the_width_it_restarted_at() {
     ring.ingest(&raw(&["0123456789abcdefghij", "viewport"], 40, 1, false));
     assert_eq!(lines_of(&ring), ["0123456789abcdefghij"]);
 }
+
+/// A full-screen program takes the pane and `pane.read recent` comes back as the live viewport
+/// and nothing else. A read with no history in it is *no news about history* — not history that
+/// disagrees with what the ring holds — and treating it as a gap discarded the operator's whole
+/// scrollback and rebased the ring, which every consumer downstream then read as a restart.
+#[test]
+fn a_read_that_carries_no_history_leaves_the_ring_exactly_where_it_was() {
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&raw(&refs(&numbered(1, 6)), 10, 1, false));
+    assert_eq!(ring.len(), 5);
+
+    assert_eq!(
+        ring.ingest(&raw(&["only-the-viewport"], 10, 1, false)),
+        Ingest::Stitched { added: 0 }
+    );
+
+    assert_eq!(ring.len(), 5);
+    assert_eq!(lines_of(&ring), numbered(1, 5));
+    assert!(!ring.capped(), "nothing was lost, so nothing is unreachable");
+    let doc = ring.render();
+    assert_eq!(doc.from_top, 0, "nothing was discarded, so nothing was rebased");
+    assert_eq!(doc.total_rows, 5);
+}
+
+/// The other half: the pane comes back and the read overlaps what the ring kept, so it stitches
+/// rather than starting a second unrelated stretch of history at a new base.
+#[test]
+fn history_the_alt_screen_hid_is_stitched_back_rather_than_started_again() {
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&raw(&refs(&numbered(1, 6)), 10, 1, false));
+    ring.ingest(&raw(&["only-the-viewport"], 10, 1, false));
+
+    assert_eq!(
+        ring.ingest(&raw(&refs(&numbered(1, 8)), 10, 1, false)),
+        Ingest::Stitched { added: 2 }
+    );
+    assert_eq!(ring.render().from_top, 0);
+    assert_eq!(lines_of(&ring), numbered(1, 7));
+}

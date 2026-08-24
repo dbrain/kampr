@@ -48,6 +48,7 @@ private class Inline(
                     pending.append(src[at + 1]); at += 2
                 }
                 c == '`' -> { flush(); if (!code()) pending.append(src[at++]) }
+                c == '!' && src.startsWith("![", at) -> { flush(); if (!image()) pending.append(src[at++]) }
                 c == '[' -> { flush(); if (!link()) pending.append(src[at++]) }
                 c == '<' -> { flush(); if (!autolink()) pending.append(src[at++]) }
                 c == '~' && src.startsWith("~~", at) -> {
@@ -69,6 +70,19 @@ private class Inline(
         val body = src.substring(at + ticks, close).trim(' ')
         out.withStyle(styles.code) { append(body) }
         at = close + ticks
+        return true
+    }
+
+    // Kampr carries no image bytes, so a picture is named where it stood. Left to the link rule
+    // this rendered as a stray `!` beside link-styled alt text, and as nothing but `!` when the
+    // alt was empty. The node names a transcript image the same way.
+    private fun image(): Boolean {
+        val close = matching(at + 1, '[', ']') ?: return false
+        if (close + 1 >= src.length || src[close + 1] != '(') return false
+        val end = matching(close + 1, '(', ')') ?: return false
+        val alt = src.substring(at + 2, close).trim()
+        out.append(if (alt.isEmpty()) "[image]" else "[image · $alt]")
+        at = end + 1
         return true
     }
 

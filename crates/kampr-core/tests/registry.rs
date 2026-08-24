@@ -748,3 +748,51 @@ async fn a_single_width_change_costs_a_single_restart() {
     );
     assert_eq!(again.total_rows, 6, "the rows the restart kept are still there");
 }
+
+/// A full-screen program has the pane, so herdr answers `pane.read recent` with the live viewport
+/// and nothing above it (#240). The node used to read that silence as history disagreeing with the
+/// ring: it discarded every row and rebased, and a rebase is indistinguishable from growth on the
+/// wire, so the client threw its own copy away and was handed the same rows back at a new base a
+/// moment later. On a phone that is pressing ↑ for shell history and landing in scrollback.
+#[tokio::test]
+async fn a_read_that_is_only_the_viewport_does_not_cost_the_ring_its_history() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: brisk(),
+            ..RegistryConfig::default()
+        },
+    );
+    let numbered =
+        |from: usize, to: usize| -> Vec<String> { (from..=to).map(|i| format!("line-{i}")).collect() };
+    {
+        let mut q = p.reads.lock().await;
+        q.push_back(read(&numbered(1, 5), 1));
+        // Every read from here on is this one: the program keeps the screen.
+        q.push_back(read(&["only-the-viewport".into()], 1));
+    }
+
+    let _w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(220)).await;
+
+    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    let lines: Vec<String> = doc
+        .rows
+        .iter()
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(lines, numbered(1, 4), "the operator's history is still there");
+    assert_eq!(doc.total_rows, 4);
+    assert_eq!(
+        doc.from_top, 0,
+        "nothing was discarded, so nothing may be rebased past what the client holds"
+    );
+}

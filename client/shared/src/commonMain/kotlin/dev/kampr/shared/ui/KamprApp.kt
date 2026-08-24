@@ -161,7 +161,7 @@ fun KamprApp(
 
 // The node's auth surface as one screen sees it. Eight parameters threaded through two layouts
 // was the alternative, and every one of them is about the same three HTTP calls.
-private class AuthSurface(
+internal class AuthSurface(
     val setup: SetupStatus?,
     val devices: List<DeviceRecord>,
     val currentDeviceId: String?,
@@ -181,7 +181,7 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
 }
 
 @Composable
-private fun AppScaffold(
+internal fun AppScaffold(
     state: AppState,
     breakpoint: Breakpoint,
     surfaces: PaneSurfaces,
@@ -242,8 +242,11 @@ private fun AppScaffold(
             target != null -> state.go(target)
             (deepLink?.view != null || deepLink?.pane != null) && chosen != null ->
                 state.openPane(chosen.id, view)
+            // A view, not a layout: whatever this device last chose for that pane, and the
+            // terminal when it has chosen nothing. Opening every pane in Split made the choice
+            // unkeepable — the next open overwrote it — and is the wrong answer for most panes.
             breakpoint == Breakpoint.Desktop && state.screen is Screen.Herd && chosen != null ->
-                state.openPane(chosen.id, PaneView.Split)
+                state.openPane(chosen.id)
         }
     }
 
@@ -293,7 +296,7 @@ private fun AppScaffold(
                             // The role off the store, not off the greeting: this caption is the
                             // only place the desktop says what this device may do.
                             deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
-                            onOpenPane = { state.openPane(it, PaneView.Split) },
+                            onOpenPane = { state.openPane(it) },
                             onSettings = { state.go(Screen.Setup) },
                         )
                         ScreenBody(Modifier.weight(1f).fillMaxSize(), bottomChrome(breakpoint, state.screen)) {
@@ -308,24 +311,23 @@ private fun AppScaffold(
                                     onAnswer = { answer(screen.paneId, it) },
                                 )
                                 Screen.Setup -> SetupScreen(
-                                    auth.setup,
-                                    security,
-                                    connectionStatus is ConnectionStatus.Live,
-                                    state.endpoint,
-                                    herd.nodes,
-                                    auth.pairingCode,
-                                    state.pairingError,
-                                    state::useEndpoint,
-                                    auth.onPairingCode,
-                                    { state.go(Screen.Herd) },
-                                    { state.go(Screen.Devices) },
-                                    { state.go(Screen.Appearance) },
-                                    { state.go(Screen.Notifications) },
-                                    passkeys,
-                                    passkeySignIn,
-                                    install,
-                                    state.recentAddresses,
-                                    deepLink?.pair,
+                                    status = auth.setup,
+                                    security = security,
+                                    running = connectionStatus is ConnectionStatus.Live,
+                                    endpoint = state.endpoint,
+                                    nodes = herd.nodes,
+                                    pairingCode = auth.pairingCode,
+                                    pairingError = state.pairingError,
+                                    onConnect = state::useEndpoint,
+                                    onPairingCode = auth.onPairingCode,
+                                    onDevices = { state.go(Screen.Devices) },
+                                    onAppearance = { state.go(Screen.Appearance) },
+                                    onNotifications = { state.go(Screen.Notifications) },
+                                    onPasskeys = passkeys,
+                                    onPasskeySignIn = passkeySignIn,
+                                    onInstall = install,
+                                    recentAddresses = state.recentAddresses,
+                                    offeredCode = deepLink?.pair,
                                     wide = true,
                                 )
                                 Screen.Devices -> DevicesScreen(
@@ -359,24 +361,23 @@ private fun AppScaffold(
                             onAnswer = { answer(screen.paneId, it) },
                         )
                         Screen.Setup -> SetupScreen(
-                            auth.setup,
-                            security,
-                            connectionStatus is ConnectionStatus.Live,
-                            state.endpoint,
-                            herd.nodes,
-                            auth.pairingCode,
-                            state.pairingError,
-                            state::useEndpoint,
-                            auth.onPairingCode,
-                            { state.go(Screen.Herd) },
-                            { state.go(Screen.Devices) },
-                            { state.go(Screen.Appearance) },
-                            { state.go(Screen.Notifications) },
-                            passkeys,
-                            passkeySignIn,
-                            install,
-                            state.recentAddresses,
-                            deepLink?.pair,
+                            status = auth.setup,
+                            security = security,
+                            running = connectionStatus is ConnectionStatus.Live,
+                            endpoint = state.endpoint,
+                            nodes = herd.nodes,
+                            pairingCode = auth.pairingCode,
+                            pairingError = state.pairingError,
+                            onConnect = state::useEndpoint,
+                            onPairingCode = auth.onPairingCode,
+                            onDevices = { state.go(Screen.Devices) },
+                            onAppearance = { state.go(Screen.Appearance) },
+                            onNotifications = { state.go(Screen.Notifications) },
+                            onPasskeys = passkeys,
+                            onPasskeySignIn = passkeySignIn,
+                            onInstall = install,
+                            recentAddresses = state.recentAddresses,
+                            offeredCode = deepLink?.pair,
                             wide = false,
                         )
                         Screen.Devices -> DevicesScreen(
@@ -403,24 +404,23 @@ private fun AppScaffold(
                             onAnswer = { answer(screen.paneId, it) },
                         )
                         Screen.Setup -> SetupScreen(
-                            auth.setup,
-                            security,
-                            connectionStatus is ConnectionStatus.Live,
-                            state.endpoint,
-                            herd.nodes,
-                            auth.pairingCode,
-                            state.pairingError,
-                            state::useEndpoint,
-                            auth.onPairingCode,
-                            { state.go(Screen.Herd) },
-                            { state.go(Screen.Devices) },
-                            { state.go(Screen.Appearance) },
-                            { state.go(Screen.Notifications) },
-                            passkeys,
-                            passkeySignIn,
-                            install,
-                            state.recentAddresses,
-                            deepLink?.pair,
+                            status = auth.setup,
+                            security = security,
+                            running = connectionStatus is ConnectionStatus.Live,
+                            endpoint = state.endpoint,
+                            nodes = herd.nodes,
+                            pairingCode = auth.pairingCode,
+                            pairingError = state.pairingError,
+                            onConnect = state::useEndpoint,
+                            onPairingCode = auth.onPairingCode,
+                            onDevices = { state.go(Screen.Devices) },
+                            onAppearance = { state.go(Screen.Appearance) },
+                            onNotifications = { state.go(Screen.Notifications) },
+                            onPasskeys = passkeys,
+                            onPasskeySignIn = passkeySignIn,
+                            onInstall = install,
+                            recentAddresses = state.recentAddresses,
+                            offeredCode = deepLink?.pair,
                             wide = false,
                         )
                         Screen.Devices -> DevicesScreen(

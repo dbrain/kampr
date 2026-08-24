@@ -377,19 +377,22 @@ fun PaneScreenDesktop(
             PaneManageAction(pane.id)
             Box(Modifier.weight(1f))
             if (info.talks) {
+                // Terminal first and Split last, in the order a pane is actually opened in: the
+                // switch led with the one view a pane never opens as, so the two that matter sat
+                // where the eye arrives second.
                 Segmented(
-                    listOf("Split", "Terminal", "Conversation"),
+                    listOf("Terminal", "Conversation", "Split"),
                     when (shown) {
-                        PaneView.Split -> 0
-                        PaneView.Terminal -> 1
-                        PaneView.Conversation -> 2
+                        PaneView.Terminal -> 0
+                        PaneView.Conversation -> 1
+                        PaneView.Split -> 2
                     },
                     { index ->
                         onView(
                             when (index) {
-                                0 -> PaneView.Split
-                                1 -> PaneView.Terminal
-                                else -> PaneView.Conversation
+                                0 -> PaneView.Terminal
+                                1 -> PaneView.Conversation
+                                else -> PaneView.Split
                             }
                         )
                     },

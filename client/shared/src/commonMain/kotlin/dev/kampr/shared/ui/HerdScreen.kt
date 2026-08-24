@@ -17,6 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,42 +42,46 @@ fun HerdPortrait(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    Column(modifier.fillMaxSize().background(tokens.color.bg)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 11.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            KText("Herd", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                NodeCountPill(herd.nodes.count { it.online }, compact = false)
-                MosaicAction()
-                NewAction()
-            }
-        }
-        if (triage.isNotEmpty()) {
-            Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
-                TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove)
-            }
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            herd.groups().forEachIndexed { index, group ->
-                NodeHeader(
-                    group.node,
-                    localRtt,
-                    PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
-                )
-                Column(
-                    Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    for (pane in group.panes) {
-                        PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
-                    }
+    var listing by remember { mutableStateOf(false) }
+    Box(modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 11.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KText("Herd", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    NodeCountPill(herd.nodes.count { it.online }, compact = false) { listing = true }
+                    MosaicAction()
+                    NewAction()
                 }
             }
-            Box(Modifier.height(16.dp))
+            if (triage.isNotEmpty()) {
+                Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
+                    TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove)
+                }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                herd.groups().forEachIndexed { index, group ->
+                    NodeHeader(
+                        group.node,
+                        localRtt,
+                        PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
+                    )
+                    Column(
+                        Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        for (pane in group.panes) {
+                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+                Box(Modifier.height(16.dp))
+            }
         }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Portrait) { listing = false }
     }
 }
 
@@ -89,48 +97,52 @@ fun HerdLandscape(
 ) {
     val tokens = Kampr.tokens
     val columns = herd.groups().chunkedColumns()
-    Column(modifier.fillMaxSize().background(tokens.color.bg)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 18.dp, top = 10.dp, end = 18.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            KText("Herd", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-            NodeCountPill(herd.nodes.count { it.online }, compact = true)
-            MosaicAction(LANDSCAPE_TOUCH)
-            NewAction(target = LANDSCAPE_TOUCH)
-            Box(Modifier.weight(1f))
-            if (triage.isNotEmpty()) {
-                StatusBadge(
-                    if (triage.size > 1) "Needs you · ${triage.size}" else "Needs you",
-                    tokens.color.blocked,
-                    tokens.color.blockedBg,
-                    label = if (triage.size > 1) "${triage.size} agents need you" else "One agent needs you",
-                )
+    var listing by remember { mutableStateOf(false) }
+    Box(modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 18.dp, top = 10.dp, end = 18.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KText("Herd", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
+                NodeCountPill(herd.nodes.count { it.online }, compact = true) { listing = true }
+                MosaicAction(LANDSCAPE_TOUCH)
+                NewAction(target = LANDSCAPE_TOUCH)
+                Box(Modifier.weight(1f))
+                if (triage.isNotEmpty()) {
+                    StatusBadge(
+                        if (triage.size > 1) "Needs you · ${triage.size}" else "Needs you",
+                        tokens.color.blocked,
+                        tokens.color.blockedBg,
+                        label = if (triage.size > 1) "${triage.size} agents need you" else "One agent needs you",
+                    )
+                }
             }
-        }
-        Row(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            for (column in columns) {
-                Column(Modifier.weight(1f)) {
-                    if (column === columns.first() && triage.isNotEmpty()) {
-                        Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                            TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+            Row(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                for (column in columns) {
+                    Column(Modifier.weight(1f)) {
+                        if (column === columns.first() && triage.isNotEmpty()) {
+                            Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                                TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                            }
                         }
-                    }
-                    for (group in column) {
-                        NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            for (pane in group.panes) {
-                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                        for (group in column) {
+                            NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                for (pane in group.panes) {
+                                    PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Landscape) { listing = false }
     }
 }
 
@@ -167,68 +179,73 @@ fun HerdSidebar(
 ) {
     val tokens = Kampr.tokens
     val safe = LocalSafeArea.current
+    var listing by remember { mutableStateOf(false) }
+    Box(modifier.width(SIDEBAR_WIDTH).fillMaxHeight()) {
     Column(
-        modifier
-            .width(296.dp)
-            .fillMaxHeight()
-            .background(tokens.color.bar)
-            .readingOrder(-1f)
-            .edgeEnd(),
-    ) {
-        Row(
             Modifier
-                .fillMaxWidth()
-                .padding(start = 18.dp, top = 18.dp + safe.top, end = 18.dp, bottom = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxSize()
+                .background(tokens.color.bar)
+                .readingOrder(-1f)
+                .edgeEnd(),
         ) {
-            KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                NodeCountPill(herd.nodes.count { it.online }, compact = true)
-                MosaicAction(LANDSCAPE_TOUCH)
-                NewAction(target = LANDSCAPE_TOUCH)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, top = 18.dp + safe.top, end = 18.dp, bottom = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    NodeCountPill(herd.nodes.count { it.online }, compact = true) { listing = true }
+                    MosaicAction(LANDSCAPE_TOUCH)
+                    NewAction(target = LANDSCAPE_TOUCH)
+                }
             }
-        }
-        if (triage.isNotEmpty()) {
-            Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+            if (triage.isNotEmpty()) {
+                Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
+                    TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                }
             }
-        }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            herd.groups().forEachIndexed { index, group ->
-                NodeHeader(
-                    group.node,
-                    localRtt,
-                    PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
-                )
-                Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    for (pane in group.panes) {
-                        PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                herd.groups().forEachIndexed { index, group ->
+                    NodeHeader(
+                        group.node,
+                        localRtt,
+                        PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
+                    )
+                    Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        for (pane in group.panes) {
+                            PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                        }
                     }
                 }
             }
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .edgeTop()
-                .touchable()
-                .action("Settings — $deviceName, $deviceDetail", onSettings)
-                .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-        ) {
-            Box(
-                Modifier.size(26.dp).background(tokens.color.raise, RoundedCornerShape(tokens.radii.sm)),
-                contentAlignment = Alignment.Center,
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .edgeTop()
+                    .touchable()
+                    .action("Settings — $deviceName, $deviceDetail", onSettings)
+                    .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                IconGlyph(KamprIcons.lockSmall, 13.dp, tokens.color.dim)
+                Box(
+                    Modifier.size(26.dp).background(tokens.color.raise, RoundedCornerShape(tokens.radii.sm)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconGlyph(KamprIcons.lockSmall, 13.dp, tokens.color.dim)
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    KText(deviceName, tokens.type.captionSmall.copy(fontWeight = tokens.label.weight), tokens.color.text)
+                    KText(deviceDetail, tokens.type.micro, tokens.color.mute)
+                }
+                IconGlyph(KamprIcons.gear, 14.dp, tokens.color.mute)
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                KText(deviceName, tokens.type.captionSmall.copy(fontWeight = tokens.label.weight), tokens.color.text)
-                KText(deviceDetail, tokens.type.micro, tokens.color.mute)
-            }
-            IconGlyph(KamprIcons.gear, 14.dp, tokens.color.mute)
         }
+        if (listing) NodeListSheet(herd.nodes, Breakpoint.Desktop) { listing = false }
     }
 }
+
+private val SIDEBAR_WIDTH = 296.dp

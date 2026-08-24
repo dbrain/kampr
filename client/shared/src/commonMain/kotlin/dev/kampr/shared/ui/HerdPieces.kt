@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,16 +82,89 @@ fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     watchersPhrase(othersWatching(pane)),
 ).joinToString(", ")
 
+// The count is the door to the list behind it: a pill that only ever said a number was a control
+// with nothing under it, and "1 nodes" is what an unconditional plural reads as on a herd of one.
 @Composable
-fun NodeCountPill(online: Int, compact: Boolean) {
+fun NodeCountPill(online: Int, compact: Boolean, onClick: () -> Unit) {
     val tokens = Kampr.tokens
-    Pill(
-        Modifier.named(if (online == 1) "1 node online" else "$online nodes online"),
-        horizontal = if (compact) 11.dp else 13.dp,
-        vertical = if (compact) 5.dp else 7.dp,
+    val counted = if (online == 1) "1 node" else "$online nodes"
+    Box(
+        Modifier
+            .touchable(if (compact) LANDSCAPE_TOUCH else TOUCH)
+            .action("Machines — $counted online", onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Dot(tokens.color.done, 7.dp)
-        KText("$online nodes", tokens.type.pill, tokens.color.dim)
+        Pill(
+            horizontal = if (compact) 11.dp else 13.dp,
+            vertical = if (compact) 5.dp else 7.dp,
+        ) {
+            Dot(tokens.color.done, 7.dp)
+            KText(counted, tokens.type.pill, tokens.color.dim)
+        }
+    }
+}
+
+// One vocabulary for a machine wherever one is listed — the herd's own sheet and the settings
+// screen — so a peer cannot be a "peer" on one surface and something else on the other.
+// `withStatus` adds the one fact the eye takes from the mark beside the row and the ear takes
+// from nothing at all.
+fun nodeFacts(node: NodeInfo, withStatus: Boolean = false): List<String> = listOfNotNull(
+    if (node.kind == "local") "this machine" else "peer",
+    node.session.takeIf { it != "default" }?.let { "session $it" },
+    if (withStatus) (if (node.online) "online" else "offline") else null,
+    node.build?.let { "kampr $it" },
+    node.update?.let { "$it available" },
+    node.herdrVersion?.let { "herdr $it" },
+    node.detail,
+)
+
+@Composable
+fun NodeListSheet(nodes: List<NodeInfo>, breakpoint: Breakpoint, onDismiss: () -> Unit) {
+    val tokens = Kampr.tokens
+    val compact = breakpoint != Breakpoint.Portrait
+    val online = nodes.count { it.online }
+    BottomSheet(breakpoint, onDismiss) {
+        SheetHeader(
+            title = "Machines",
+            subtitle = if (nodes.isEmpty()) "none yet" else "$online of ${nodes.size} online",
+            onBack = null,
+            onClose = onDismiss,
+            compact = compact,
+        )
+        Column(
+            Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (nodes.isEmpty()) {
+                KText(
+                    "This device is not connected to a node yet.",
+                    tokens.type.captionSmall,
+                    tokens.color.mute,
+                    maxLines = 2,
+                )
+            }
+            // Reachability is painted as well as spoken here: this sheet exists to answer "is that
+            // machine up", and `detail` is the node's own account of why it is not.
+            for (node in nodes) {
+                SheetCard(
+                    icon = null,
+                    iconTint = null,
+                    title = node.name,
+                    subtitle = nodeFacts(node, withStatus = true).joinToString(" · "),
+                    compact = compact,
+                    trailing = {
+                        Mark(
+                            if (node.online) tokens.color.done else tokens.color.blocked,
+                            if (node.online) MarkShape.Bar else MarkShape.Ring,
+                            9.dp,
+                        )
+                    },
+                )
+            }
+        }
     }
 }
 

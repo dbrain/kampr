@@ -174,7 +174,6 @@ class ConnectPanelTest {
                         pairingError = null,
                         onConnect = {},
                         onPairingCode = {},
-                        onOpenHerd = {},
                         onDevices = {},
                         onAppearance = {},
                         onNotifications = {},

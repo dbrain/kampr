@@ -2,6 +2,7 @@ use kampr_core::wire::ErrorCode;
 use kampr_herdr::Herdr;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 /// Everything you would do at the keyboard. Every field is optional at this layer so an unknown
@@ -41,6 +42,10 @@ pub struct ManageOp {
     #[serde(default)]
     pub layout: Option<Value>,
 }
+
+/// Sixteen times the worst stop measured in #241, and a thousand times the worst create in #240.
+const SESSION_SETTLE: Duration = Duration::from_secs(5);
+const SESSION_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManageError {
@@ -271,6 +276,13 @@ impl Manager<'_> {
         #[cfg(unix)]
         command.process_group(0);
         command.spawn().map_err(|e| ManageError::Herdr(e.to_string()))?;
+        let listed = settled(self.binary, &name, true).await;
+        crate::caps::sessions_changed(self.node_id);
+        if !listed {
+            return Err(ManageError::Herdr(format!(
+                "{name} was started but never appeared in the session list"
+            )));
+        }
         Ok(json!({ "session": name }))
     }
 
@@ -288,6 +300,13 @@ impl Manager<'_> {
             .call::<Value>("server.stop", json!({}))
             .await
             .map_err(|e| ManageError::Herdr(e.to_string()))?;
+        let stopped = settled(self.binary, &name, false).await;
+        crate::caps::sessions_changed(self.node_id);
+        if !stopped {
+            return Err(ManageError::Herdr(format!(
+                "server.stop was accepted but {name} is still running"
+            )));
+        }
         Ok(json!({ "session": name }))
     }
 
@@ -296,6 +315,31 @@ impl Manager<'_> {
             .call::<Value>(method, params)
             .await
             .map_err(|e| ManageError::Herdr(e.to_string()))
+    }
+}
+
+/// Waits until the host agrees that `name` is (or is not) running, and answers whether it ever did.
+///
+/// Both session ops finish before the state they changed is visible: `herdr server --session` is
+/// listed running 3-4 ms after the spawn, and `server.stop` answers `ok` in under a millisecond
+/// while `session list` goes on reporting `running: true` for another 52-303 ms (#240, #241).
+/// The `managed` ack is the cue for the client to re-ask `caps`, so acking before the host has
+/// caught up hands back the state the operator was trying to change — which is what "the session
+/// doesn't close when done" was. `session list --json` costs 1 ms, so polling it is cheap.
+async fn settled(binary: &str, name: &str, running: bool) -> bool {
+    let deadline = Instant::now() + SESSION_SETTLE;
+    loop {
+        let listed = crate::caps::sessions(binary)
+            .await
+            .iter()
+            .any(|s| s.name == name && s.running);
+        if listed == running {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(SESSION_POLL).await;
     }
 }
 

@@ -354,19 +354,38 @@ class AppState(
         screen = target
     }
 
+    // True while the pane on screen is showing a default nobody asked for. `prefs` is the third
+    // frame of the greeting and lands after `herd`, so anything that opens a pane the moment the
+    // herd arrives reads a memory that is not there yet — and without this the guess would stand
+    // for the rest of the session, which is the whole of "it forgot what I picked".
+    private var awaitingRemembered = false
+
+    // What this device last chose for this pane, and the terminal when it has chosen nothing. The
+    // old default read the pane instead — an agent with no ring opened in Conversation — and a
+    // ring of zero says only that there is no history above the grid, not that there is no grid:
+    // the observe stream paints one either way, and every live Claude pane reports zero because
+    // the harness clears the scrollback when it takes the screen (#30, #231). So that branch was
+    // spending the operator's own choice on a guess about a pane with something to show regardless.
     fun openPane(paneId: String, prefer: PaneView? = null) {
-        val info = store.paneInfo(paneId)
-        val noRing = (info?.scrollbackRows ?: 0) == 0
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
-        val view = prefer
-            ?: remembered
-            ?: if (info?.hasConversation == true && noRing) PaneView.Conversation else PaneView.Terminal
-        go(Screen.Pane(paneId, view))
+        awaitingRemembered = prefer == null && remembered == null
+        go(Screen.Pane(paneId, prefer ?: remembered ?: PaneView.Terminal))
+    }
+
+    private fun adoptRememberedView() {
+        if (!awaitingRemembered) return
+        val current = screen as? Screen.Pane ?: return
+        val view = store.prefsFor(current.paneId).view?.let(::viewOf) ?: return
+        awaitingRemembered = false
+        // Not `go`: the pane is the one already being watched, and re-entering it would churn the
+        // watch. Not `setPaneView` either — this is the node's own memory arriving, not a write.
+        screen = current.copy(view = view)
     }
 
     fun setPaneView(view: PaneView) {
         val current = screen
         if (current !is Screen.Pane) return
+        awaitingRemembered = false
         screen = current.copy(view = view)
         connection.send(ClientMsg.SetPrefs(current.paneId, mapOf("view" to view.key)))
     }
@@ -375,6 +394,12 @@ class AppState(
 
     fun back() {
         go(Screen.Herd)
+    }
+
+    // Last in the class on purpose: an Unconfined collector runs its first emission inside the
+    // constructor, and `adoptRememberedView` reads `screen`.
+    init {
+        scope.launch { store.prefs.collect { adoptRememberedView() } }
     }
 }
 

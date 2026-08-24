@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.util.bypassesSafety
 import dev.kampr.shared.util.commandLine
@@ -72,6 +73,8 @@ fun NewSheet(
     onNode: (String) -> Unit,
     onNodePicker: () -> Unit,
     onDismiss: () -> Unit,
+    panes: List<PaneInfo> = emptyList(),
+    onRefreshCaps: () -> Unit = {},
     agentArgs: AgentArgs = NoAgentArgs,
 ) {
     val tokens = Kampr.tokens
@@ -88,6 +91,7 @@ fun NewSheet(
     var sessionName by remember { mutableStateOf(TextFieldValue()) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
+    var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
     var agentName by remember { mutableStateOf(TextFieldValue()) }
     var agentFlags by remember { mutableStateOf(TextFieldValue()) }
     var keepFlags by remember { mutableStateOf(true) }
@@ -96,6 +100,11 @@ fun NewSheet(
     var refusal by remember { mutableStateOf<String?>(null) }
 
     val peers = nodes.filter { it.id != node.id }
+    // An agent starts *in* a pane, and the herd's own + opens this sheet without one. The panes
+    // to offer are the ones on the machine the sheet is aimed at: `caps.agentKinds` is that
+    // node's answer and a peer's harnesses are its own.
+    val ownPanes = if (pane != null) emptyList() else panes.filter { it.nodeId == node.id }
+    val agentTarget = pane ?: ownPanes.firstOrNull { it.id == agentPane }
     val kinds = caps?.agentKinds.orEmpty()
     LaunchedEffect(kinds) {
         if (kind == null) kind = kinds.firstOrNull()
@@ -108,11 +117,26 @@ fun NewSheet(
 
     // The node is authoritative: the sheet closes on its ack, and the herd redraws from the
     // `herd.patch` that follows — never from anything guessed here.
+    //
+    // A named session is the exception, and it is why "session doesn't open when done" and
+    // "doesn't close when done" were the same report twice. Everything else this sheet makes is
+    // a pane or a container, and closing reveals it behind the sheet; a session is its own herdr
+    // server that joins the herd as a node with no panes at all, and the only surface that shows
+    // one is this sheet's own list. Closing on the ack took the operator away from the single
+    // place the result was about to appear — and it appears only if something re-asks, because
+    // the list is `caps.sessions` and the node caches that answer.
     LaunchedEffect(outcome) {
         val ack = outcome ?: return@LaunchedEffect
         if (ack.op != inFlight) return@LaunchedEffect
         inFlight = null
-        if (ack.ok) onDismiss() else refusal = ack.message ?: ack.code
+        when {
+            !ack.ok -> refusal = ack.message ?: ack.code
+            ack.op.startsWith("session.") -> {
+                sessionName = TextFieldValue()
+                onRefreshCaps()
+            }
+            else -> onDismiss()
+        }
     }
 
     fun run(op: ManageOp) {
@@ -135,14 +159,14 @@ fun NewSheet(
                 { run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd)) }
             })
             Pick.Agent -> "Start ${kind ?: "an agent"}" to (
-                if (pane != null && kind != null) {
+                if (agentTarget != null && kind != null) {
                     {
                         val chosen = kind!!
                         val typed = agentFlags.text.trim()
                         agentArgs.remember(chosen, if (keepFlags) typed.ifEmpty { null } else null)
                         run(
                             ManageOp.AgentStart(
-                                pane.id,
+                                agentTarget.id,
                                 chosen,
                                 agentName.text.trim().ifEmpty { null },
                                 parseArgs(typed),
@@ -211,6 +235,10 @@ fun NewSheet(
                     onRatio = { ratio = it },
                     onKind = { kind = it; pick = Pick.Agent },
                     onMoreKinds = { allKinds = true },
+                    agentPanes = ownPanes,
+                    agentTarget = agentTarget,
+                    agentPane = agentPane,
+                    onAgentPane = { agentPane = it; pick = Pick.Agent },
                     agentName = agentName,
                     onAgentName = { agentName = it },
                     agentFlags = agentFlags,
@@ -317,6 +345,23 @@ fun NewSheet(
                     maxLines = 3,
                 )
             }
+            // A "Start claude" that cannot be pressed, with the reason a scroll away in the card
+            // above it, is what the operator read as a broken button. The reason belongs beside
+            // the button that is refusing.
+            if (step == Step.Menu && pick == Pick.Agent && agentTarget == null) {
+                val why = if (ownPanes.isEmpty()) {
+                    "There is no pane on ${node.name} to start ${kind ?: "an agent"} in — make a workspace first."
+                } else {
+                    "Pick the pane ${kind ?: "the agent"} starts in."
+                }
+                KText(
+                    why,
+                    tokens.type.captionSmall,
+                    tokens.color.working,
+                    Modifier.announce(why),
+                    maxLines = 3,
+                )
+            }
             refusal?.let {
                 KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3)
             }
@@ -365,6 +410,10 @@ private fun Menu(
     onRatio: (Double) -> Unit,
     onKind: (String) -> Unit,
     onMoreKinds: () -> Unit,
+    agentPanes: List<PaneInfo>,
+    agentTarget: PaneInfo?,
+    agentPane: String?,
+    onAgentPane: (String) -> Unit,
     agentName: TextFieldValue,
     onAgentName: (TextFieldValue) -> Unit,
     agentFlags: TextFieldValue,
@@ -374,7 +423,10 @@ private fun Menu(
     onNodePicker: () -> Unit,
 ) {
     val compact = breakpoint == Breakpoint.Landscape
-    val agent = AgentPick(kinds, allKinds, kind, agentName, onAgentName, agentFlags, onAgentFlags, keepFlags, onKeepFlags, onKind, onMoreKinds)
+    val agent = AgentPick(
+        kinds, allKinds, kind, agentName, onAgentName, agentFlags, onAgentFlags, keepFlags,
+        onKeepFlags, onKind, onMoreKinds, node.name, agentPanes, agentTarget, agentPane, onAgentPane,
+    )
     if (breakpoint == Breakpoint.Portrait) {
         Column {
             Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
@@ -405,6 +457,11 @@ private class AgentPick(
     val onKeep: (Boolean) -> Unit,
     val onKind: (String) -> Unit,
     val onMoreKinds: () -> Unit,
+    val nodeName: String,
+    val panes: List<PaneInfo>,
+    val target: PaneInfo?,
+    val paneId: String?,
+    val onPane: (String) -> Unit,
 )
 
 @Composable
@@ -523,14 +580,22 @@ private fun Elsewhere(
                         }
                     }
                 }
+                if (pane == null && pick == Pick.Agent && agent.panes.isNotEmpty()) {
+                    PanePick(agent)
+                }
                 val chosen = agent.kind
-                if (pane != null && pick == Pick.Agent && chosen != null) {
+                if (agent.target != null && pick == Pick.Agent && chosen != null) {
                     KField("name it, or take the harness's own", agent.name, onChange = agent.onName)
                     AgentLaunch(chosen, agent)
                 }
                 KText(
-                    if (pane == null) "Open a pane first — an agent starts in one."
-                    else "Offered by the node, not baked into the app — whatever Herdr can detect on that machine.",
+                    when {
+                        agent.target != null ->
+                            "Offered by the node, not baked into the app — whatever Herdr can detect on that machine."
+                        agent.panes.isEmpty() ->
+                            "There is no pane on ${agent.nodeName} to start one in — make a workspace first."
+                        else -> "An agent starts inside a pane. Pick the one on ${agent.nodeName} it runs in."
+                    },
                     tokens.type.captionSmall,
                     tokens.color.mute,
                     maxLines = 3,
@@ -565,6 +630,26 @@ private fun Elsewhere(
             compact = compact,
             onClick = { onStep(Step.Session) },
         )
+    }
+}
+
+// The panes of the machine this sheet is aimed at, because `agent.start` takes a pane and the
+// herd's + has none to give it. Titled the way the herd titles them, harness and all, so the pane
+// already running a `claude` is recognisable as that before it is picked.
+@Composable
+private fun PanePick(agent: AgentPick) {
+    val tokens = Kampr.tokens
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        LabelText("in which pane", tokens.type.micro, tokens.color.mute)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            agent.panes.forEach { p ->
+                val title = paneTitle(p)
+                Chip(title, p.id == agent.paneId, { agent.onPane(p.id) }, label = "Start it in $title")
+            }
+        }
     }
 }
 

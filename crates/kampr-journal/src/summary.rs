@@ -35,3 +35,13 @@ pub fn count_lines(text: &str) -> Option<u32> {
     }
     Some(text.lines().count() as u32)
 }
+
+/// An image the wire has no way to carry. It is an `md` block rather than a block of its own
+/// because a client that does not know a `b` value drops the block silently, and the phones
+/// already installed would go on showing a turn with its screenshot missing and nothing said.
+pub fn image_marker(subtype: Option<&str>) -> String {
+    match subtype {
+        Some(kind) => format!("[image · {kind}]"),
+        None => "[image]".to_string(),
+    }
+}

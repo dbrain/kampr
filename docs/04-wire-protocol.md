@@ -618,8 +618,10 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
   rather than `min(...)`, which is what produces letterboxing. A user may zoom further out, but the
   default never leaves a margin.
 - **When a pane has no ring** (alt-screen, so `scrollback_rows == 0`) there is nothing above the grid
-  to fill with, so fill-height wins and the surface pans horizontally. Those panes default to the
-  conversation view anyway, which scrolls naturally.
+  to fill with, so fill-height wins and the surface pans horizontally. `scrollback_rows == 0` says
+  only that there is no history *above* the grid — the live grid comes off the observe stream and is
+  unaffected — so it is not a reason to show a pane on any surface other than the one this device
+  last chose for it. A pane opens on its remembered `view`, and on the terminal when it has none.
 - **No fixed row budget in the UI.** The node's ring bound is a memory limit, not a display one, and
   it is configurable — a client must not impose its own cap on top.
 - Full bleed on every breakpoint: the terminal reaches the edges, with chrome floating over it rather
@@ -721,6 +723,13 @@ container id** — a workspace, tab or pane — for every op that creates one. T
 rather than addressed, and dressing its name up as `<node_id>/<name>` produced something shaped
 exactly like a pane id that no client can watch. Clients must not
 optimistically mutate their herd model — wait for the patch, so the node stays authoritative.
+
+A `session.create` or `session.stop` ack is a promise that the **host already agrees**: the node
+waits for `herdr session list` to show the change, and reconciles the herd, before acking. Both ops
+finish before the state they changed is visible — `server.stop` answers `ok` 52 to 303 ms before the
+session stops being listed as running (#241) — so a client refreshing `caps` on its own ack used to
+be handed back the state it was trying to change. It may now refresh on the ack and trust the answer,
+and the session's node has appeared in, or gone from, the herd by the time the ack lands.
 
 `readonly` devices are refused every `manage` op with `not_writer`.
 

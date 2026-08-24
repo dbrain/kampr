@@ -1,7 +1,9 @@
 mod common;
 
 use common::*;
-use kampr_journal::{Block, ClaudeAdapter, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot};
+use kampr_journal::{
+    Block, ClaudeAdapter, Journal, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot,
+};
 
 fn journal() -> Box<dyn kampr_journal::Journal> {
     let adapter = ClaudeAdapter::new(TranscriptRoot::new(claude_root()).unwrap());
@@ -212,5 +214,105 @@ fn the_newest_transcript_is_the_last_written_not_the_first_opened() {
         found,
         long.canonicalize().unwrap(),
         "the live conversation lost to a dead one because only its first records were read"
+    );
+}
+
+/// A 1×1 PNG, so a test can ask whether real image bytes escaped as well as whether the image
+/// was named. Both records below are the shapes Claude 2.1.220–2.1.236 actually writes: a paste
+/// arrives as an `image` block beside the text in `message.content`, and a `Read` of a picture
+/// arrives as a `tool_result` whose content array holds an `image` and no text at all.
+const PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+fn scratch_journal(tag: &str, records: &[serde_json::Value]) -> kampr_journal::FileJournal {
+    let path = scratch_dir(tag).join("session.jsonl");
+    let body: String = records.iter().map(|r| r.to_string() + "\n").collect();
+    std::fs::write(&path, body).unwrap();
+    kampr_journal::FileJournal::new(path, claude_parser(), Some(kampr_journal::claude::live))
+}
+
+fn pasted(text: Option<&str>) -> serde_json::Value {
+    let image = serde_json::json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": "image/png", "data": PNG }
+    });
+    let content: Vec<serde_json::Value> = match text {
+        Some(text) => vec![serde_json::json!({ "type": "text", "text": text }), image],
+        None => vec![image],
+    };
+    serde_json::json!({
+        "type": "user",
+        "uuid": "549c13ed-c2b4-4013-b072-f26304a5bb6c",
+        "timestamp": "2026-08-20T02:56:27.681Z",
+        "imagePasteIds": [1],
+        "message": { "role": "user", "content": content }
+    })
+}
+
+#[test]
+fn a_pasted_screenshot_is_named_beside_the_words_it_came_with() {
+    let mut journal = scratch_journal("paste", &[pasted(Some("does this look right?"))]);
+    let turns = journal.poll().unwrap();
+
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].role, Role::User);
+    assert_eq!(
+        turns[0].blocks,
+        vec![
+            Block::Md {
+                text: "does this look right?".into()
+            },
+            Block::Md {
+                text: "[image · png]".into()
+            },
+        ],
+        "a turn that renders only the words reads as though no screenshot was ever sent"
+    );
+}
+
+#[test]
+fn a_message_that_is_nothing_but_an_image_is_still_a_turn() {
+    let mut journal = scratch_journal("paste-only", &[pasted(None)]);
+    let turns = journal.poll().unwrap();
+
+    assert_eq!(
+        turns.len(),
+        1,
+        "dropping it leaves the answer to a question the transcript never shows being asked"
+    );
+    assert_eq!(
+        turns[0].blocks,
+        vec![Block::Md {
+            text: "[image · png]".into()
+        }]
+    );
+}
+
+#[test]
+fn image_bytes_never_reach_the_wire() {
+    let read = serde_json::json!({
+        "type": "assistant", "uuid": "d1", "timestamp": "2026-08-20T02:56:30.000Z",
+        "message": { "content": [
+            { "type": "tool_use", "id": "toolu_1", "name": "Read",
+              "input": { "file_path": "/home/u/demo/shot.png" } }
+        ] }
+    });
+    let result = serde_json::json!({
+        "type": "user", "uuid": "d2", "timestamp": "2026-08-20T02:56:31.000Z",
+        "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "toolu_1",
+              "content": [ { "type": "image",
+                             "source": { "type": "base64", "media_type": "image/png", "data": PNG } } ] }
+        ] },
+        "toolUseResult": { "type": "image", "file": { "base64": PNG, "type": "image/png" } }
+    });
+    let mut journal = scratch_journal("bytes", &[pasted(Some("look")), read, result]);
+    journal.poll().unwrap();
+
+    let wire = serde_json::to_string(&journal.page_before(None, 10).turns).unwrap();
+    assert!(wire.contains("[image · png]"), "{wire}");
+    assert!(
+        !wire.contains(&PNG[..40]),
+        "a screenshot is megabytes and the websocket carries it to a phone: {wire}"
     );
 }

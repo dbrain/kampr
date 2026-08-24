@@ -1,7 +1,9 @@
 mod common;
 
 use common::*;
-use kampr_journal::{Block, CodexAdapter, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot};
+use kampr_journal::{
+    Block, CodexAdapter, Journal, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot,
+};
 
 fn journal() -> Box<dyn kampr_journal::Journal> {
     let adapter = CodexAdapter::new(TranscriptRoot::new(codex_root()).unwrap());
@@ -179,4 +181,40 @@ fn an_unanswered_tool_call_stays_running() {
         })
         .count();
     assert_eq!(running, 1);
+}
+
+/// Codex attaches a picture as an `input_image` content item carrying a `data:` URL — measured on
+/// this machine at `view_image` outputs up to 999 594 characters of base64 in one item.
+#[test]
+fn an_attached_image_is_named_rather_than_dropped() {
+    let path = scratch_dir("codex-image").join("rollout.jsonl");
+    let record = serde_json::json!({
+        "type": "response_item",
+        "timestamp": "2026-08-18T14:11:36.000Z",
+        "payload": { "type": "message", "role": "user", "content": [
+            { "type": "input_text", "text": "does this look right?" },
+            { "type": "input_image",
+              "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }
+        ] }
+    });
+    std::fs::write(&path, record.to_string() + "\n").unwrap();
+
+    let mut journal = kampr_journal::FileJournal::new(path, codex_parser(), Some(kampr_journal::codex::live));
+    let turns = journal.poll().unwrap();
+
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].role, Role::User);
+    assert_eq!(
+        turns[0].blocks,
+        vec![
+            Block::Md {
+                text: "does this look right?".into()
+            },
+            Block::Md {
+                text: "[image · png]".into()
+            },
+        ]
+    );
+    let wire = serde_json::to_string(&turns).unwrap();
+    assert!(!wire.contains("base64"), "{wire}");
 }

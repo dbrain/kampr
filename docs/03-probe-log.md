@@ -414,6 +414,33 @@ half of [#233](#) that a shell cannot show you, because a shell is not what runs
 | 238 | **`herdr --version` answers on stdout and exits 0** | `herdr --version` | `herdr 0.8.2`, exit 0 — so `kampr doctor` can run the binary the observer will run instead of asking the socket what version it is |
 | 239 | **`systemctl show` renders ExecStart as a record, not a command line** | `systemctl --user show kampr.service --property=ExecStart` | `ExecStart={ path=/home/dbrain/.local/bin/kampr ; argv[]=… ; ignore_errors=no ; … }` — the `path=` field is how `doctor` learns which kampr the unit runs, and therefore which directory to look beside |
 
+## What a named session op actually costs (real herdr 0.8.2, five throwaway `kampr-probe-t*` sessions)
+
+Driven exactly the way `manage.rs` drives it: `herdr server --session <name>` spawned detached
+with stdio on `/dev/null`, and `server.stop` written to the session's own socket as one line of
+`{"id":"kampr","method":"server.stop","params":{}}`. Every session created here was stopped and
+deleted. These are the rows behind "creating a new session — session doesn't open when done" and
+"closing a session — session doesn't close when done".
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 240 | **A spawned named session is listed as running within 4 ms, and it has no panes** | five trials, polling `herdr session list --json` every 2 ms from the spawn | **3, 3, 3, 3, 4 ms** to `running: true` with a `socket_path` under `~/.config/herdr/sessions/<name>/`, and `session.snapshot` on that socket answers immediately with `{"workspaces":[],"tabs":[],"panes":[],"agents":[]}`. So `session.create` is not broken and there is **nothing in a new session to navigate to** — a client that "opened" it would land on a node with no panes. `herdr session list --json` itself costs **1 ms**, which is what makes polling it after an op cheap |
+| 241 | **`server.stop` answers `ok` before the session stops being listed as running — by 52 to 303 ms** | same five trials: `server.stop` over the session's socket, then `session list --json` polled every 2 ms | The reply is `{"type":"ok"}` in **under 1 ms** every time; `/proc/<pid>/cmdline` and the socket both go at ~58 ms; and `session list` goes on reporting `running: true` for **52, 54, 52, 52 and 303 ms** after the reply. A `managed{ok}` sent the moment `server.stop` returns is therefore a promise that the very next `caps` contradicts — the client refreshes on its own ack and is told the session it just stopped is still running. Both session ops now wait for the host to agree before they answer |
+| 242 | **A stopped named session stays listed for ever as `running: false`, and its directory stays on disk** | `herdr session list --json` and `ls ~/.config/herdr/sessions/` after the stop above | The entry remains with `running: false` and its `session_dir` intact; only `herdr session delete <name>` removes both (exit 0, `deleted session <name>`), and re-spawning the same name brings it back to `running: true`. So in Kampr's session list "stopped" is a **state change, not a disappearance** — the row stays and its mark goes from bar to ring — while `Sessions::wanted` filters on `running` and the herd loses the node. Two different surfaces, both correct, and the reason a test must assert `Some(false)` rather than `None` |
+| 243 | **A second `herdr server` for a session already running exits 1 and changes nothing** | `herdr server --session kampr-probe-dup…` in the foreground while the first was up | Exit **1**, stderr `error: herdr server is already running` plus the `api socket:` path; the running server untouched and still listed. `create_session` discards the child's status, so a create aimed at a name that is already running is harmless — and, now that the op waits for the name to be listed running, it correctly acks `ok` rather than inventing a failure |
+
+## What a full-screen program does to a pane's history (throwaway `kampr-probe-atuin-*`, real atuin 18.19.0)
+
+The rows behind "pressing up to see fancy history (atuin) scrolls me into history instead of
+staying on screen". Driven against a live 94x40 pane with 162 rows of ring from `seq 1 200`, read
+over the session's own socket, and with the node's own wire captured from a paired client.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 244 | **A full-screen program takes the pane's whole scrollback ring away for as long as it holds the screen, and gives it back on exit** | `session.snapshot` before, during and after `\e[A` into a bash with atuin's shell integration | `max_offset_from_bottom` goes **162 → 0 → 162**, with `viewport_rows` 40 throughout. `printf '\033[?1049h'` alone reproduces it exactly, so the trigger is the alternate screen and not atuin — which is what makes it testable without atuin on the machine |
+| 245 | **The caret never leaves the bottom of the grid while it does** | `herdr terminal session observe w1:p1 --cols 94 --rows 40`, last CUP of every frame | Rows **40, 40, 40, 39, 39, 39, 39** (1-based) across the seven frames atuin's opening takes. `observe` never emits `?1049h` — it flattens the alternate screen into an ordinary repaint. So nothing here moves the client's caret up the surface, and `caretFloor` is not what moved the viewport |
+| 246 | **The node answered that silence by telling the client its history was gone, at a rebased index** | the same run with a paired client's socket recorded, plus `ScrollbackRing::ingest` and `send_history` instrumented | `pane.read recent` came back as **40 lines against `viewport_rows: 40`** — the live viewport and nothing above it — which `history_rows` renders as an empty history. The ring read that as a gap, discarded all 162 rows and rebased its base past them, and the client was sent `scrollback total_rows=0 from_top=323`: a `from_top` beyond what it holds, which is the wire's own word for "throw your copy away". The rows arrived again a moment later at the new base. Between the two, `SurfaceRows.total` falls by the depth of the ring and rises by it again, and `carryHistory` carries any viewport that is not exactly at the live edge by every row of it. A read with no history in it is no news about history, and the ring now says so
+
 ## Still open
 
 - ~~Does `pane.read recent` with `lines > viewport_rows` scroll a pane with a *detected agent*?~~

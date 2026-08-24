@@ -64,7 +64,6 @@ class MachineUpdateTest {
                 pairingError = null,
                 onConnect = {},
                 onPairingCode = {},
-                onOpenHerd = {},
                 onDevices = {},
                 onAppearance = {},
                 onNotifications = {},

@@ -3,12 +3,7 @@ mod common;
 use std::io::Write;
 
 use common::*;
-use kampr_journal::{Block, FileJournal, Journal, ToolState, TranscriptParser};
-
-fn claude_parser() -> Box<dyn TranscriptParser> {
-    use kampr_journal::{ClaudeAdapter, JournalAdapter, TranscriptRoot};
-    ClaudeAdapter::new(TranscriptRoot::new(claude_root()).unwrap()).parser()
-}
+use kampr_journal::{Block, FileJournal, Journal, ToolState};
 
 fn append(path: &std::path::Path, text: &str) {
     let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();

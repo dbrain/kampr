@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kampr_journal::{Block, Journal, Turn};
+use kampr_journal::{Block, Journal, TranscriptParser, Turn};
 
 pub fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -41,6 +41,16 @@ pub fn agy_transcript() -> PathBuf {
     agy_root().join(format!(
         "brain/{AGY_SESSION}/.system_generated/logs/transcript_full.jsonl"
     ))
+}
+
+pub fn claude_parser() -> Box<dyn TranscriptParser> {
+    use kampr_journal::{ClaudeAdapter, JournalAdapter, TranscriptRoot};
+    ClaudeAdapter::new(TranscriptRoot::new(claude_root()).unwrap()).parser()
+}
+
+pub fn codex_parser() -> Box<dyn TranscriptParser> {
+    use kampr_journal::{CodexAdapter, JournalAdapter, TranscriptRoot};
+    CodexAdapter::new(TranscriptRoot::new(codex_root()).unwrap()).parser()
 }
 
 static SCRATCH: AtomicU32 = AtomicU32::new(0);

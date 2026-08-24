@@ -13,10 +13,13 @@ use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::{count_lines, one_line, summarise};
+use crate::summary::{count_lines, image_marker, one_line, summarise};
 use crate::tail::TranscriptParser;
 
-use record::{PATCH_PREFIX, Payload, Record, envelope_output, output_failed, output_text, patch_target};
+use record::{
+    PATCH_PREFIX, Payload, Record, data_url_subtype, envelope_output, output_failed, output_text,
+    patch_target,
+};
 
 pub const AGENT: &str = "codex";
 
@@ -160,11 +163,16 @@ impl CodexParser {
                 };
                 let mut turn = Turn::new(id, role, at);
                 for item in content {
-                    if item.kind != "input_text" && item.kind != "output_text" {
-                        continue;
-                    }
-                    if let Some(text) = item.text.filter(|t| !t.is_empty()) {
-                        turn.blocks.push(Block::Md { text });
+                    match item.kind.as_str() {
+                        "input_text" | "output_text" => {
+                            if let Some(text) = item.text.filter(|t| !t.is_empty()) {
+                                turn.blocks.push(Block::Md { text });
+                            }
+                        }
+                        "input_image" => turn.blocks.push(Block::Md {
+                            text: image_marker(item.image_url.as_deref().and_then(data_url_subtype)),
+                        }),
+                        _ => {}
                     }
                 }
                 if !turn.blocks.is_empty() {

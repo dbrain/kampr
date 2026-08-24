@@ -172,7 +172,6 @@ class ThemeMatrixTest {
                 pairingError = null,
                 onConnect = {},
                 onPairingCode = {},
-                onOpenHerd = {},
                 onDevices = {},
                 onAppearance = {},
                 onNotifications = {},

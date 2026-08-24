@@ -14,10 +14,10 @@ use crate::model::{Block, Role, ToolState, Turn};
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::{count_lines, summarise};
+use crate::summary::{count_lines, image_marker, summarise};
 use crate::tail::TranscriptParser;
 
-use record::{Content, ContentBlock, Record, result_text, unified_patch};
+use record::{Content, ContentBlock, Record, image_subtype, result_text, unified_patch};
 
 pub const AGENT: &str = "claude";
 
@@ -186,6 +186,9 @@ impl ClaudeParser {
     ) {
         match block {
             ContentBlock::Text { text } => turn.blocks.push(Block::Md { text }),
+            ContentBlock::Image { source } => turn.blocks.push(Block::Md {
+                text: image_marker(image_subtype(&source)),
+            }),
             ContentBlock::ToolUse { id, name, input } => {
                 turn.blocks.push(Block::Tool {
                     summary: summarise(&input),

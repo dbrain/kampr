@@ -52,6 +52,14 @@ pub struct ContentItem {
     #[serde(rename = "type")]
     pub kind: String,
     pub text: Option<String>,
+    pub image_url: Option<String>,
+}
+
+pub fn data_url_subtype(url: &str) -> Option<&str> {
+    url.strip_prefix("data:")?
+        .split([';', ','])
+        .next()?
+        .strip_prefix("image/")
 }
 
 /// Codex 0.147 moved shell output to an array of content items; older rollouts use a bare string.

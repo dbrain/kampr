@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.wire.ClientMsg
 
 // `caps.manage` false, or a read-only device, means the affordance is absent rather than
 // present-and-failing — so every entry point asks this before it draws anything.
@@ -91,6 +92,11 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 onNode = { state.openSheet(Sheet.New(it, null)) },
                 onNodePicker = { state.go(Screen.Setup) },
                 onDismiss = state::closeSheet,
+                panes = herd.panes,
+                // `askCaps` keeps a ten-second floor under the connection's own polling, which is
+                // right for a herd patch and wrong for the one moment the operator has just
+                // changed the answer. This asks past it.
+                onRefreshCaps = { state.connection.send(ClientMsg.RequestCaps) },
                 agentArgs = state.agentArgs,
             )
         }
