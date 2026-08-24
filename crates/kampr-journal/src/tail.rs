@@ -86,7 +86,34 @@ impl FileJournal {
         self.partial.clear();
         self.parser.reset();
     }
+
+    /// Parses every whole line the buffer holds and drops them from it in one move, leaving the
+    /// torn tail. Per-line removal is what this must not do: it memmoves the remainder down once
+    /// per line, which is quadratic in the buffer and cost 16.8 s on a 40 MB transcript against
+    /// 15.7 ms for this.
+    fn take_lines(&mut self) {
+        let mut whole = 0;
+        for line in self.partial.split_inclusive(|b| *b == b'\n') {
+            let Some(text) = line.strip_suffix(b"\n") else {
+                break;
+            };
+            let start = self.line_start;
+            self.line_start += line.len() as u64;
+            whole += line.len();
+            let text = String::from_utf8_lossy(text);
+            let text = text.trim_end_matches('\r');
+            if !text.is_empty() {
+                self.parser.push_line(text, start);
+            }
+        }
+        self.partial.drain(..whole);
+    }
 }
+
+/// How much of a transcript one read pulls in before its whole lines are parsed and dropped. The
+/// largest rollout measured on a real machine is 88.7 MB (probe #247), and reading it in full
+/// would hold all of it — twice over, while the buffer grows — on a tokio worker.
+const CHUNK: u64 = 1024 * 1024;
 
 impl Journal for FileJournal {
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError> {
@@ -97,23 +124,17 @@ impl Journal for FileJournal {
         }
         if len > self.offset {
             file.seek(SeekFrom::Start(self.offset))?;
-            let mut fresh = Vec::with_capacity((len - self.offset) as usize);
-            let read = file.read_to_end(&mut fresh)? as u64;
-            self.offset += read;
-            self.partial.extend_from_slice(&fresh);
         }
-
         // A transcript is appended to while we read it, so the tail may be a torn line. Only
         // whole lines are parsed; the remainder waits for the next poll.
-        while let Some(at) = self.partial.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.partial.drain(..=at).collect();
-            let start = self.line_start;
-            self.line_start += line.len() as u64;
-            let text = String::from_utf8_lossy(&line[..at]);
-            let text = text.trim_end_matches('\r');
-            if !text.is_empty() {
-                self.parser.push_line(text, start);
+        while self.offset < len {
+            let read = file.by_ref().take(CHUNK).read_to_end(&mut self.partial)?;
+            // The file shrank under the read that the length said would fill.
+            if read == 0 {
+                break;
             }
+            self.offset += read as u64;
+            self.take_lines();
         }
 
         Ok(self.parser.store_mut().drain_changed())

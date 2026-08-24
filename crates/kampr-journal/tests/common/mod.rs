@@ -108,29 +108,38 @@ impl Scratch {
 }
 
 pub fn scratch_claude(tag: &str, records: &[serde_json::Value]) -> Scratch {
-    scratch_with(tag, "projects/-home-u-demo/session.jsonl", records, |root| {
+    scratch_claude_body(tag, &lines(records))
+}
+
+/// The transcript written verbatim, for the tests whose subject is the bytes between the records
+/// rather than the records.
+pub fn scratch_claude_body(tag: &str, body: &str) -> Scratch {
+    scratch_with(tag, "projects/-home-u-demo/session.jsonl", body, |root| {
         std::sync::Arc::new(kampr_journal::ClaudeAdapter::new(root))
     })
 }
 
 pub fn scratch_codex(tag: &str, records: &[serde_json::Value]) -> Scratch {
     let named = "sessions/2026/08/18/rollout-2026-08-18T14-11-36-01a01311-5036-7e52-8bef-ac91e2fe2b51.jsonl";
-    scratch_with(tag, named, records, |root| {
+    scratch_with(tag, named, &lines(records), |root| {
         std::sync::Arc::new(kampr_journal::CodexAdapter::new(root))
     })
+}
+
+pub fn lines(records: &[serde_json::Value]) -> String {
+    records.iter().map(|r| r.to_string() + "\n").collect()
 }
 
 fn scratch_with(
     tag: &str,
     relative: &str,
-    records: &[serde_json::Value],
+    body: &str,
     build: impl Fn(kampr_journal::TranscriptRoot) -> std::sync::Arc<dyn kampr_journal::JournalAdapter>,
 ) -> Scratch {
     use kampr_journal::{Registry, TranscriptRoot};
     let root = scratch_dir(tag);
     let transcript = root.join(relative);
     std::fs::create_dir_all(transcript.parent().expect("a directory")).expect("a directory");
-    let body: String = records.iter().map(|r| r.to_string() + "\n").collect();
     std::fs::write(&transcript, body).expect("a transcript");
     let adapter = build(TranscriptRoot::new(&root).expect("a root"));
     let journal = adapter.open_path(transcript.clone());
