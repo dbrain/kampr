@@ -381,6 +381,83 @@ which happened.
 `b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
 it, so tables stay tables.
 
+#### `att` — an attachment's header, never its bytes
+
+An `md` block may carry an optional `att`. It is **additive**: the `text` beside it is the marker an
+installed client already renders — `[image · png]` — so a client that has never heard of the field
+goes on showing exactly what it shows today.
+
+```jsonc
+{ "b": "md", "text": "[image · png]",
+  "att": { "id": "opaque", "kind": "image", "mime": "image/png", "bytes": 52831, "name": "shot.png" } }
+```
+
+- **`id`** is required and opaque. It is minted by the node that served the turn and it resolves at
+  the route below, on **that** node and for **that** pane. Do not parse it, do not store it as a
+  permanent handle, and expect it to stop resolving: it names a record in a transcript, and a pane
+  that moves to a different transcript takes every id with it. An id whose record has since been
+  rewritten answers `404`, not different bytes — the size the header quoted is carried inside the
+  id and checked against what comes back.
+- **`kind`** is an **open string**. `image` is the only one a transcript yields today. A client that
+  does not recognise one must treat it as a file and offer a download — never drop the block — so a
+  later `video` needs no protocol change and no client release.
+- **`mime`, `bytes`, `name`** are optional and are **absent when the source did not carry them**, not
+  empty. A pasted screenshot has no filename and no dimensions; the media type is all there is
+  (probe #248). `bytes` is the exact decoded length, computed from the record's own base64 — Claude's
+  `originalSize` beside it is the size of the *file it read*, which disagrees with what is in the
+  record 300 times out of 499 (#249).
+
+**The bytes never travel on this websocket, and that is the point.** The same socket is carrying live
+terminal frames for every pane the client is watching, and the largest single attachment measured is
+**2.22 MB in one record** (#247). Pushing that down the socket head-of-lines every pane on the
+connection for as long as a phone link takes to drain it — for a screenshot the operator may never
+open. So the header goes on the wire, the operator decides, and the bytes come over HTTP once.
+
+#### `GET /api/attachment/{pane}/{id}` — the bytes
+
+Authorised exactly like every other `/api/*` route: a device token in `Authorization: Bearer …`.
+There is no second way in, and **a read-only device may fetch one** — looking at a screenshot
+somebody pasted into an agent session is reading.
+
+A pane id is `<node_id>/<local>` and the slash is sent **literally, not percent-encoded**, so the
+path is three segments and not two:
+
+```
+GET /api/attachment/01JNODE/w3:p2/att-7f3
+```
+
+Exactly three. A path of any other shape is refused rather than guessed at, because guessing wrong
+about which part is the pane anchors every check below on the wrong pane.
+
+```
+200  Content-Type: image/png
+     Content-Length: 52831
+     Content-Disposition: inline                       // attachment; filename="…" for anything else
+     Cache-Control: no-store
+404  { "error": "no such attachment" }
+413  { "error": "this attachment is larger than the node will serve" }
+```
+
+- **`404` is one answer on purpose.** An id that escapes the transcript root, one for a different
+  pane's transcript, one whose record has since been rewritten and one that was never valid are not
+  distinguishable from outside.
+- **A `200` always has a body.** An attachment with no bytes in it is a `404`; there is no such
+  thing here as an empty success.
+- **The recorded media type decides what the node shows, never what the node *is*.** It is a string
+  an agent wrote into a file, so it is served back only from a list of image types the node is
+  willing to render inline; anything else — `text/html`, `image/svg+xml` — becomes
+  `application/octet-stream` with an `attachment` disposition. SVG is deliberately not on that list:
+  it is a scriptable document wearing an image's name.
+- **When the record names no media type at all, `Content-Type` is answered from the bytes.** A paste
+  may carry none (#248), and `Content-Type` is what a client names a saved file from. The sniff can
+  only ever produce a type off the same list, so it widens what is shown without widening what is
+  trusted — and a media type the record *did* name is never second-guessed.
+- **The ceiling is 8 MiB decoded**, read off the record's base64 *before* anything is allocated, so a
+  record claiming a gigabyte costs a comparison. It is between three and four times the largest
+  attachment ever measured (#247).
+- **A pane on another node is not served here.** The route resolves the pane locally; an attachment
+  two hops away over the mesh is not carried today.
+
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.
 

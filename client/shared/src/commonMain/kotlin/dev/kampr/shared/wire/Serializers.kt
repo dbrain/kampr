@@ -7,6 +7,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -14,6 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 object ColorSpecSerializer : KSerializer<ColorSpec> {
@@ -59,7 +61,7 @@ object BlockSerializer : KSerializer<Block> {
         val kind = obj["b"]?.jsonPrimitive?.contentOrNull ?: ""
         val text = obj["text"]?.jsonPrimitive?.contentOrNull ?: ""
         return when (kind) {
-            "md" -> Block.Md(text)
+            "md" -> Block.Md(text, attachmentOf(obj["att"]))
             "code" -> Block.Code(obj["lang"]?.jsonPrimitive?.contentOrNull, text)
             "tool" -> Block.Tool(
                 name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "tool",
@@ -72,11 +74,37 @@ object BlockSerializer : KSerializer<Block> {
         }
     }
 
+    // Read field by field rather than through the generated decoder: an `att` carrying a field
+    // this release has never heard of, or a known field of the wrong shape, must still hand over
+    // the id it does carry instead of taking the whole turn down with it.
+    private fun attachmentOf(element: JsonElement?): Attachment? {
+        val obj = element as? JsonObject ?: return null
+        val id = (obj["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() } ?: return null
+        return Attachment(
+            id = id,
+            kind = (obj["kind"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            mime = (obj["mime"] as? JsonPrimitive)?.contentOrNull,
+            bytes = (obj["bytes"] as? JsonPrimitive)?.longOrNull,
+            name = (obj["name"] as? JsonPrimitive)?.contentOrNull,
+        )
+    }
+
+    private fun attachmentJson(att: Attachment): JsonObject = buildJsonObject {
+        put("id", att.id)
+        if (att.kind.isNotEmpty()) put("kind", att.kind)
+        att.mime?.let { put("mime", it) }
+        att.bytes?.let { put("bytes", it) }
+        att.name?.let { put("name", it) }
+    }
+
     override fun serialize(encoder: Encoder, value: Block) {
         val out = encoder as JsonEncoder
         out.encodeJsonElement(
             when (value) {
-                is Block.Md -> buildJsonObject { put("b", "md"); put("text", value.text) }
+                is Block.Md -> buildJsonObject {
+                    put("b", "md"); put("text", value.text)
+                    value.att?.let { put("att", attachmentJson(it)) }
+                }
                 is Block.Code -> buildJsonObject { put("b", "code"); value.lang?.let { put("lang", it) }; put("text", value.text) }
                 is Block.Tool -> buildJsonObject {
                     put("b", "tool"); put("name", value.name)

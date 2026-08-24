@@ -19,6 +19,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 
@@ -35,6 +36,7 @@ sealed interface Piece {
     data class Fence(val lang: String?, val text: String) : Piece
     data class Patch(val path: String?, val text: String) : Piece
     data class Call(val tool: Block.Tool, val detail: List<Block>) : Piece
+    data class Attach(val att: Attachment) : Piece
 }
 
 // A tool call and the code or patch that follows it in the same turn are one thing to a reader,
@@ -53,7 +55,13 @@ fun groupBlocks(blocks: List<Block>): List<Piece> {
                 }
                 out += Piece.Call(block, detail)
             }
-            is Block.Md -> { out += Piece.Prose(block.text); index++ }
+            is Block.Md -> {
+                // The marker the node writes beside a header — `[image · png]` — is a fallback for
+                // a client that cannot fetch, and this one can: the card says the same thing and
+                // presses.
+                out += block.att?.let { Piece.Attach(it) } ?: Piece.Prose(block.text)
+                index++
+            }
             is Block.Code -> { out += Piece.Fence(block.lang, block.text); index++ }
             is Block.Diff -> { out += Piece.Patch(block.path, block.text); index++ }
             is Block.Unknown -> index++
@@ -69,6 +77,7 @@ fun TurnView(
     expanded: List<String>,
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier,
+    attachments: AttachmentStore = rememberAttachmentStore(""),
 ) {
     val tokens = Kampr.tokens
     val pieces = groupBlocks(turn.blocks)
@@ -87,7 +96,7 @@ fun TurnView(
                 ) {
                     for ((index, piece) in pieces.withIndex()) {
                         if (piece is Piece.Prose) Markdown(piece.text, query)
-                        else PieceView(turn.id, index, piece, query, expanded, onToggle)
+                        else PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
                     }
                 }
             }
@@ -96,7 +105,7 @@ fun TurnView(
     }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
         for ((index, piece) in pieces.withIndex()) {
-            PieceView(turn.id, index, piece, query, expanded, onToggle)
+            PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
         }
         if (turn.id == LIVE_TURN_ID) StreamingStrip()
     }
@@ -129,9 +138,11 @@ private fun PieceView(
     query: String,
     expanded: List<String>,
     onToggle: (String) -> Unit,
+    attachments: AttachmentStore,
 ) {
     when (piece) {
         is Piece.Prose -> Markdown(piece.text, query, Modifier.fillMaxWidth())
+        is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
         is Piece.Patch -> DiffCard(piece.path, piece.text, query)
         is Piece.Call -> {

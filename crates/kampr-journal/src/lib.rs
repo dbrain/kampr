@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod agy;
+pub mod attach;
 pub mod claude;
 pub mod codex;
 pub(crate) mod discover;
@@ -17,11 +18,12 @@ use std::sync::Arc;
 
 pub use adapter::{JournalAdapter, Registry, SessionKind, SessionRef};
 pub use agy::AgyAdapter;
+pub use attach::{Att, Fetched, Locator, Origin};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use error::JournalError;
 pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, Watch, retired};
-pub use model::{Block, Page, Role, ToolState, Turn};
+pub use model::{Attachment, Block, Page, Role, ToolState, Turn};
 pub use process::{Harness, PaneProcess};
 pub use root::TranscriptRoot;
 pub use tail::{FileJournal, Journal, TranscriptParser};

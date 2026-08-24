@@ -11,6 +11,9 @@ pub enum JournalError {
     #[error("no transcript for session {0:?}")]
     NotFound(String),
 
+    #[error("attachment of {0} bytes is past what this node will serve")]
+    TooLarge(u64),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

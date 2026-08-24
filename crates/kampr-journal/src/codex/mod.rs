@@ -7,13 +7,14 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
+use crate::attach::{self, Fetched, Origin};
 use crate::discover;
 use crate::error::JournalError;
 use crate::live::{Layout, LiveBlock, ScreenReader};
-use crate::model::{Block, Role, ToolState, Turn};
+use crate::model::{Attachment, Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::{count_lines, image_marker, one_line, summarise};
+use crate::summary::{count_lines, image_marker, marker_of, one_line, summarise};
 use crate::tail::TranscriptParser;
 
 use record::{
@@ -73,6 +74,10 @@ impl JournalAdapter for CodexAdapter {
         AGENT
     }
 
+    fn root(&self) -> &TranscriptRoot {
+        &self.root
+    }
+
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError> {
         match session.kind {
             SessionKind::Id => self.find_by_id(&session.value),
@@ -113,6 +118,13 @@ impl JournalAdapter for CodexAdapter {
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
     }
+
+    fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
+        let refuse = || JournalError::NotFound(index.to_string());
+        let record: Record = serde_json::from_str(record).map_err(|_| refuse())?;
+        let payload: Payload = serde_json::from_value(record.payload).map_err(|_| refuse())?;
+        attach::nth(record::attachments(&payload), index)
+    }
 }
 
 #[derive(Default)]
@@ -120,10 +132,11 @@ pub struct CodexParser {
     store: TurnStore,
     tool_turns: HashMap<String, String>,
     seq: u64,
+    origin: Option<Origin>,
 }
 
 impl TranscriptParser for CodexParser {
-    fn push_line(&mut self, line: &str) {
+    fn push_line(&mut self, line: &str, at: u64) {
         let seq = self.seq;
         self.seq += 1;
         let Ok(record) = serde_json::from_str::<Record>(line) else {
@@ -135,11 +148,18 @@ impl TranscriptParser for CodexParser {
         let Ok(payload) = serde_json::from_value::<Payload>(record.payload) else {
             return;
         };
-        self.ingest(payload, record.timestamp, format!("x{seq}"));
+        self.ingest(payload, record.timestamp, format!("x{seq}"), at);
+    }
+
+    fn set_origin(&mut self, origin: Origin) {
+        self.origin = Some(origin);
     }
 
     fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            origin: self.origin.take(),
+            ..Self::default()
+        };
     }
 
     fn store(&self) -> &TurnStore {
@@ -152,7 +172,12 @@ impl TranscriptParser for CodexParser {
 }
 
 impl CodexParser {
-    fn ingest(&mut self, payload: Payload, at: Option<String>, id: String) {
+    fn ingest(&mut self, payload: Payload, at: Option<String>, id: String, offset: u64) {
+        let atts = match &self.origin {
+            Some(origin) => attach::headers(origin, offset, &record::attachments(&payload)),
+            None => Vec::new(),
+        };
+        let mut atts = atts.into_iter();
         match payload {
             Payload::Message { role, content } => {
                 // `developer` carries the harness's own instruction blocks, not the conversation.
@@ -166,11 +191,12 @@ impl CodexParser {
                     match item.kind.as_str() {
                         "input_text" | "output_text" => {
                             if let Some(text) = item.text.filter(|t| !t.is_empty()) {
-                                turn.blocks.push(Block::Md { text });
+                                turn.blocks.push(Block::md(text));
                             }
                         }
                         "input_image" => turn.blocks.push(Block::Md {
                             text: image_marker(item.image_url.as_deref().and_then(data_url_subtype)),
+                            att: atts.next(),
                         }),
                         _ => {}
                     }
@@ -230,13 +256,13 @@ impl CodexParser {
             Payload::FunctionCallOutput { call_id, output }
             | Payload::CustomToolCallOutput { call_id, output } => {
                 let raw = output_text(&output);
-                self.settle(&call_id, &raw);
+                self.settle(&call_id, &raw, atts.collect());
             }
             Payload::Other => {}
         }
     }
 
-    fn settle(&mut self, call_id: &str, raw: &str) {
+    fn settle(&mut self, call_id: &str, raw: &str, images: Vec<Attachment>) {
         let Some(target) = self.tool_turns.get(call_id).cloned() else {
             return;
         };
@@ -248,6 +274,12 @@ impl CodexParser {
         if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut() {
             *state = if failed { ToolState::Error } else { ToolState::Done };
             *lines = count_lines(&text);
+        }
+        for att in images {
+            turn.blocks.push(Block::Md {
+                text: marker_of(&att),
+                att: Some(att),
+            });
         }
     }
 }

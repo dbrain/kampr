@@ -1,9 +1,7 @@
 mod common;
 
 use common::*;
-use kampr_journal::{
-    Block, CodexAdapter, Journal, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot,
-};
+use kampr_journal::{Block, CodexAdapter, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot};
 
 fn journal() -> Box<dyn kampr_journal::Journal> {
     let adapter = CodexAdapter::new(TranscriptRoot::new(codex_root()).unwrap());
@@ -187,7 +185,6 @@ fn an_unanswered_tool_call_stays_running() {
 /// this machine at `view_image` outputs up to 999 594 characters of base64 in one item.
 #[test]
 fn an_attached_image_is_named_rather_than_dropped() {
-    let path = scratch_dir("codex-image").join("rollout.jsonl");
     let record = serde_json::json!({
         "type": "response_item",
         "timestamp": "2026-08-18T14:11:36.000Z",
@@ -197,24 +194,17 @@ fn an_attached_image_is_named_rather_than_dropped() {
               "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }
         ] }
     });
-    std::fs::write(&path, record.to_string() + "\n").unwrap();
-
-    let mut journal = kampr_journal::FileJournal::new(path, codex_parser(), Some(kampr_journal::codex::live));
-    let turns = journal.poll().unwrap();
+    let mut scratch = scratch_codex("codex-image", &[record]);
+    let turns = scratch.turns();
 
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].role, Role::User);
-    assert_eq!(
-        turns[0].blocks,
-        vec![
-            Block::Md {
-                text: "does this look right?".into()
-            },
-            Block::Md {
-                text: "[image · png]".into()
-            },
-        ]
-    );
+    assert_eq!(turns[0].blocks[0], Block::md("does this look right?"));
+    assert_eq!(md_texts(&turns), vec!["does this look right?", "[image · png]"]);
+    let att = attachments(&turns);
+    assert_eq!(att.len(), 1);
+    assert_eq!(att[0].mime.as_deref(), Some("image/png"));
+    assert_eq!(att[0].bytes, Some(70));
     let wire = serde_json::to_string(&turns).unwrap();
     assert!(!wire.contains("base64"), "{wire}");
 }

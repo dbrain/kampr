@@ -72,7 +72,7 @@ pub fn md_texts(turns: &[Turn]) -> Vec<&str> {
         .iter()
         .flat_map(|t| &t.blocks)
         .filter_map(|b| match b {
-            Block::Md { text } => Some(text.as_str()),
+            Block::Md { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect()
@@ -91,5 +91,66 @@ pub fn diff_blocks(turns: &[Turn]) -> Vec<&Block> {
         .iter()
         .flat_map(|t| &t.blocks)
         .filter(|b| matches!(b, Block::Diff { .. }))
+        .collect()
+}
+
+pub struct Scratch {
+    pub root: PathBuf,
+    pub transcript: PathBuf,
+    pub journals: kampr_journal::Registry,
+    pub journal: Box<dyn Journal>,
+}
+
+impl Scratch {
+    pub fn turns(&mut self) -> Vec<Turn> {
+        self.journal.poll().expect("poll")
+    }
+}
+
+pub fn scratch_claude(tag: &str, records: &[serde_json::Value]) -> Scratch {
+    scratch_with(tag, "projects/-home-u-demo/session.jsonl", records, |root| {
+        std::sync::Arc::new(kampr_journal::ClaudeAdapter::new(root))
+    })
+}
+
+pub fn scratch_codex(tag: &str, records: &[serde_json::Value]) -> Scratch {
+    let named = "sessions/2026/08/18/rollout-2026-08-18T14-11-36-01a01311-5036-7e52-8bef-ac91e2fe2b51.jsonl";
+    scratch_with(tag, named, records, |root| {
+        std::sync::Arc::new(kampr_journal::CodexAdapter::new(root))
+    })
+}
+
+fn scratch_with(
+    tag: &str,
+    relative: &str,
+    records: &[serde_json::Value],
+    build: impl Fn(kampr_journal::TranscriptRoot) -> std::sync::Arc<dyn kampr_journal::JournalAdapter>,
+) -> Scratch {
+    use kampr_journal::{Registry, TranscriptRoot};
+    let root = scratch_dir(tag);
+    let transcript = root.join(relative);
+    std::fs::create_dir_all(transcript.parent().expect("a directory")).expect("a directory");
+    let body: String = records.iter().map(|r| r.to_string() + "\n").collect();
+    std::fs::write(&transcript, body).expect("a transcript");
+    let adapter = build(TranscriptRoot::new(&root).expect("a root"));
+    let journal = adapter.open_path(transcript.clone());
+    let mut journals = Registry::new();
+    journals.register(adapter);
+    Scratch {
+        root,
+        transcript,
+        journals,
+        journal,
+    }
+}
+
+pub fn attachments(turns: &[Turn]) -> Vec<&kampr_journal::Attachment> {
+    turns
+        .iter()
+        .flat_map(|t| &t.blocks)
+        .filter_map(|b| match b {
+            Block::Md { att: Some(att), .. } => Some(att),
+            _ => None,
+        })
         .collect()
 }

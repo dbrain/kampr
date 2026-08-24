@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::attach::{Att, IMAGE};
+
 #[derive(Debug, Deserialize)]
 pub struct Record {
     #[serde(rename = "type")]
@@ -53,6 +55,51 @@ pub struct ContentItem {
     pub kind: String,
     pub text: Option<String>,
     pub image_url: Option<String>,
+}
+
+/// Every attachment in one payload, in the order [`super::CodexParser`] meets them.
+///
+/// **Every `input_image` measured on a real machine — all 67 of them — is in a
+/// `function_call_output`, not in a user message** (probe #247): it is what `view_image` answers
+/// with. The message arm is the paste, which this machine has never recorded but the format
+/// allows.
+pub fn attachments(payload: &Payload) -> Vec<Att<'_>> {
+    match payload {
+        Payload::Message { content, .. } => content
+            .iter()
+            .filter(|item| item.kind == "input_image")
+            .filter_map(|item| data_url_att(item.image_url.as_deref()?))
+            .collect(),
+        Payload::FunctionCallOutput { output, .. } | Payload::CustomToolCallOutput { output, .. } => {
+            output_atts(output)
+        }
+        _ => Vec::new(),
+    }
+}
+
+pub fn output_atts(output: &Value) -> Vec<Att<'_>> {
+    output
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("input_image"))
+        .filter_map(|item| data_url_att(item.get("image_url").and_then(Value::as_str)?))
+        .collect()
+}
+
+fn data_url_att(url: &str) -> Option<Att<'_>> {
+    let (meta, data) = url.strip_prefix("data:")?.split_once(',')?;
+    if !meta.split(';').any(|p| p == "base64") {
+        return None;
+    }
+    let mime = meta.split(';').next().filter(|m| !m.is_empty());
+    Some(Att {
+        kind: IMAGE,
+        mime,
+        name: None,
+        data,
+    })
 }
 
 pub fn data_url_subtype(url: &str) -> Option<&str> {

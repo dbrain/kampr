@@ -12,13 +12,22 @@ import kotlin.concurrent.thread
 
 // A ktor client talking to a real socket, because the defect is what survives the socket dying:
 // a fake transport that never dies agrees with the code about a case neither of them has.
-internal class StubNode(val port: Int, private val greeting: String = HELLO) {
+internal class StubNode(private val greeting: String = HELLO) {
     val received = CopyOnWriteArrayList<String>()
     private var server: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<Socket>()
 
+    // Bound before it is known, never chosen and then bound. Asking the kernel for a free port and
+    // binding it in a second step leaves a window for anything else on the machine to take it, and
+    // on a loaded runner something does. Zero on the first start, and the port it was given on
+    // every restart after that, because a test that stops the node and brings it back has to bring
+    // it back to the address its client is still dialling.
+    var port: Int = 0
+        private set
+
     fun start() {
         val socket = ServerSocket(port)
+        port = socket.localPort
         server = socket
         thread(isDaemon = true) {
             while (!socket.isClosed) {
@@ -121,7 +130,11 @@ internal const val HELLO =
         """"passkeys":false,"push":true,"tier":0,"unencrypted_banner":false,"unlocks":[]},""" +
         """"t":"hello"}"""
 
-internal fun freePort(): Int = ServerSocket(0).use { it.localPort }
+// An address with nothing listening on it, for the one test that needs a node that is down. This
+// is a guess by construction — the port is free when it is asked for and could be taken before it
+// is dialled — but it is a fail-safe one: a stranger answering there makes the test fail rather
+// than pass. Anything that wants a port to *listen* on binds it itself; see `StubNode.port`.
+internal fun portWithNothingOnIt(): Int = ServerSocket(0).use { it.localPort }
 
 internal suspend fun until(what: String, timeoutMs: Long = 10_000, check: () -> Boolean) {
     val deadline = System.currentTimeMillis() + timeoutMs

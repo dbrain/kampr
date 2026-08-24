@@ -60,7 +60,7 @@ fn agy_upto(records: usize) -> Box<dyn Journal> {
 
 fn md(turn: &Turn) -> &str {
     match turn.blocks.first() {
-        Some(Block::Md { text }) => text,
+        Some(Block::Md { text, .. }) => text,
         other => panic!("expected one md block, got {other:?}"),
     }
 }
@@ -292,6 +292,9 @@ fn a_harness_with_no_probed_screen_publishes_no_preview() {
         }
         fn parser(&self) -> Box<dyn kampr_journal::TranscriptParser> {
             self.0.parser()
+        }
+        fn root(&self) -> &kampr_journal::TranscriptRoot {
+            self.0.root()
         }
     }
     let journal = upto(&Unprobed(claude()), "claude-notes", 12);

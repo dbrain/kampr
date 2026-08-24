@@ -7,6 +7,7 @@
 
 pub mod assetlinks;
 pub mod assets;
+pub mod attach;
 pub mod caps;
 pub mod config;
 pub mod convo;

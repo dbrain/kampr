@@ -99,6 +99,46 @@ class WireTest {
         assertEquals("Bash", (blocks[2] as Block.Tool).name)
     }
 
+    // Additive: a header beside the marker, and a client that has never heard of `att` still
+    // renders the marker it always did.
+    @Test
+    fun anAttachmentHeaderRidesBesideItsMarkerWithoutDisturbingTheBlock() {
+        val msg = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[
+               {"id":"t1","role":"user","blocks":[
+                 {"b":"md","text":"[image · png]","att":{"id":"a7","kind":"image",
+                   "mime":"image/png","bytes":52831,"name":"shot.png","thumb":{"w":8}}},
+                 {"b":"md","text":"plain prose"}]}]}"""
+        ) as ServerMsg.Convo
+        val blocks = msg.turns[0].blocks
+        val marked = blocks[0] as Block.Md
+        assertEquals("[image · png]", marked.text)
+        assertEquals("a7", marked.att?.id)
+        assertEquals("image", marked.att?.kind)
+        assertEquals(52831L, marked.att?.bytes)
+        assertEquals("shot.png", marked.att?.name)
+        assertNull((blocks[1] as Block.Md).att)
+    }
+
+    // A kind nobody here has heard of, no mime, no name, no size: still a handle, because the
+    // handle is the only field the fetch needs.
+    @Test
+    fun anAttachmentIsOnlyAsGoodAsItsIdAndThatIsEnough() {
+        val msg = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[
+               {"id":"t1","role":"user","blocks":[
+                 {"b":"md","text":"[audio]","att":{"id":"a9","kind":"audio"}},
+                 {"b":"md","text":"[image]","att":{"kind":"image"}},
+                 {"b":"md","text":"[image]","att":"a10"}]}]}"""
+        ) as ServerMsg.Convo
+        val blocks = msg.turns[0].blocks
+        assertEquals("a9", (blocks[0] as Block.Md).att?.id)
+        assertEquals("audio", (blocks[0] as Block.Md).att?.kind)
+        assertNull((blocks[1] as Block.Md).att, "an att with no handle is not an attachment")
+        assertNull((blocks[2] as Block.Md).att, "an att that is not an object is not an attachment")
+        assertEquals(3, blocks.size, "a header this client cannot use took its whole turn down")
+    }
+
     @Test
     fun errorAndPongDecode() {
         val failure = Wire.decode("""{"t":"error","code":"not_writer","message":"read-only","pane":null}""")

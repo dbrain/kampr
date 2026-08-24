@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::model::Attachment;
+
 const SUMMARY_KEYS: &[&str] = &[
     "description",
     "file_path",
@@ -44,4 +46,8 @@ pub fn image_marker(subtype: Option<&str>) -> String {
         Some(kind) => format!("[image · {kind}]"),
         None => "[image]".to_string(),
     }
+}
+
+pub fn marker_of(att: &Attachment) -> String {
+    image_marker(att.mime.as_deref().and_then(|m| m.strip_prefix("image/")))
 }

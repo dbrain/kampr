@@ -128,7 +128,7 @@ pub fn preview(reader: Option<ScreenReader>, screen: &[&str], recorded: &[String
         return None;
     }
     let mut turn = Turn::new(LIVE_ID, Role::Assistant, None);
-    turn.blocks.push(Block::Md { text: block.text });
+    turn.blocks.push(Block::md(block.text));
     Some(turn)
 }
 
@@ -215,7 +215,7 @@ impl Watch {
             return self.stop();
         };
         let text = match turn.blocks.first() {
-            Some(Block::Md { text }) => text.clone(),
+            Some(Block::Md { text, .. }) => text.clone(),
             _ => return self.stop(),
         };
         let moving = self.seen.as_deref().is_some_and(|seen| advanced(seen, &text));

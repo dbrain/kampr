@@ -3,7 +3,7 @@ use kampr_core::wire::{
     Caps, ClientMsg, ErrorCode, Hello, NodeEntry, PROTOCOL, PaneEntry, PendingOption, PendingSource, Role,
     ServerMsg,
 };
-use kampr_journal::{Block, Page, Role as Role_, ToolState, Turn};
+use kampr_journal::{Attachment, Block, Page, Role as Role_, ToolState, Turn};
 
 #[test]
 fn hello_matches_the_documented_shape() {
@@ -140,6 +140,17 @@ fn convo_matches_the_shape_the_client_decodes() {
             blocks: vec![
                 Block::Md {
                     text: "Six, and they are…".into(),
+                    att: None,
+                },
+                Block::Md {
+                    text: "[image · png]".into(),
+                    att: Some(Attachment {
+                        id: "opaque".into(),
+                        kind: "image".into(),
+                        mime: Some("image/png".into()),
+                        bytes: Some(52831),
+                        name: Some("shot.png".into()),
+                    }),
                 },
                 Block::Tool {
                     name: "Bash".into(),
@@ -174,16 +185,49 @@ fn convo_matches_the_shape_the_client_decodes() {
     let blocks = turn["blocks"].as_array().unwrap();
     assert_eq!(blocks[0]["b"], "md");
     assert_eq!(blocks[0]["text"], "Six, and they are…");
-    assert_eq!(blocks[1]["b"], "tool");
-    assert_eq!(blocks[1]["name"], "Bash");
-    assert_eq!(blocks[1]["summary"], "probe key grammar");
-    assert_eq!(blocks[1]["lines"], 48);
-    assert_eq!(blocks[1]["state"], "done");
-    assert_eq!(blocks[2]["b"], "code");
-    assert_eq!(blocks[2]["lang"], "ts");
-    assert_eq!(blocks[3]["b"], "diff");
-    assert_eq!(blocks[3]["path"], "/tmp/x");
-    assert!(blocks[3]["text"].as_str().unwrap().starts_with("@@"));
+    assert!(
+        blocks[0].get("att").is_none(),
+        "an md block with nothing attached carries no `att` at all"
+    );
+    // The `att` header, which is the whole of what an attachment costs the socket. A client that
+    // has never heard of it still has `text`, and that is what an installed phone renders.
+    assert_eq!(blocks[1]["b"], "md");
+    assert_eq!(blocks[1]["text"], "[image · png]");
+    assert_eq!(blocks[1]["att"]["id"], "opaque");
+    assert_eq!(blocks[1]["att"]["kind"], "image");
+    assert_eq!(blocks[1]["att"]["mime"], "image/png");
+    assert_eq!(blocks[1]["att"]["bytes"], 52831);
+    assert_eq!(blocks[1]["att"]["name"], "shot.png");
+    assert_eq!(blocks[2]["b"], "tool");
+    assert_eq!(blocks[2]["name"], "Bash");
+    assert_eq!(blocks[2]["summary"], "probe key grammar");
+    assert_eq!(blocks[2]["lines"], 48);
+    assert_eq!(blocks[2]["state"], "done");
+    assert_eq!(blocks[3]["b"], "code");
+    assert_eq!(blocks[3]["lang"], "ts");
+    assert_eq!(blocks[4]["b"], "diff");
+    assert_eq!(blocks[4]["path"], "/tmp/x");
+    assert!(blocks[4]["text"].as_str().unwrap().starts_with("@@"));
+}
+
+/// A paste has no filename and no dimensions — the media type is all there is — so the fields the
+/// source cannot answer are **absent**, not empty strings a client has to special-case.
+#[test]
+fn an_attachment_omits_what_its_source_never_carried() {
+    let v = serde_json::to_value(Block::Md {
+        text: "[image · png]".into(),
+        att: Some(Attachment {
+            id: "opaque".into(),
+            kind: "image".into(),
+            mime: Some("image/png".into()),
+            bytes: Some(70),
+            name: None,
+        }),
+    })
+    .unwrap();
+
+    assert_eq!(v["att"]["id"], "opaque");
+    assert!(v["att"].get("name").is_none(), "{v}");
 }
 
 #[test]

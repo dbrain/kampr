@@ -131,9 +131,23 @@ data class HerdDelta(
 @Serializable
 data class PendingOption(val key: String, val label: String)
 
+// The header of something a transcript mentions but never carries: a pasted screenshot is ~730 KB
+// and the socket it would ride on is the one carrying live terminal frames, which it head-of-lines
+// for seconds on a phone link. `id` is the handle for `GET /api/attachment/{pane}/{id}`. `kind` is
+// an open string and anything unrecognised is a file offered as a download — that rule is what
+// lets a node start producing a new kind without a client release.
+@Serializable
+data class Attachment(
+    val id: String,
+    val kind: String = "",
+    val mime: String? = null,
+    val bytes: Long? = null,
+    val name: String? = null,
+)
+
 @Serializable(with = BlockSerializer::class)
 sealed interface Block {
-    data class Md(val text: String) : Block
+    data class Md(val text: String, val att: Attachment? = null) : Block
     data class Code(val lang: String?, val text: String) : Block
     data class Tool(val name: String, val summary: String?, val lines: Int?, val state: String?) : Block
     data class Diff(val path: String?, val text: String) : Block

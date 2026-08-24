@@ -9,6 +9,8 @@ import dev.kampr.shared.net.Enrolment
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.net.InstallPrompt
+import dev.kampr.shared.net.AttachmentApi
+import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.NodeApi
 import dev.kampr.shared.net.PasskeyApi
 import dev.kampr.shared.net.PasskeyOutcome
@@ -295,6 +297,19 @@ class AppState(
                 "and one printed at a console needs a keypress there before it works."
         }
         return enrolment
+    }
+
+    // A one-shot client for a one-shot fetch, the same shape the pairing and warm calls use: an
+    // attachment is asked for by a press, and holding a connection open between presses buys
+    // nothing on a link this is deliberately kept off.
+    suspend fun fetchAttachment(paneId: String, id: String): AttachmentBytes {
+        val target = endpoint ?: return AttachmentBytes.Failed("This device is not connected to a node.")
+        val client = createHttpClient()
+        return try {
+            AttachmentApi(client, target).fetch(paneId, id)
+        } finally {
+            client.close()
+        }
     }
 
     // The service worker's warm cache is written behind every push and was read by nobody: the

@@ -7,7 +7,9 @@ import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 
 fun blockText(block: Block): String = when (block) {
-    is Block.Md -> block.text
+    // What the reader can see: a block carrying a header renders as a card, so a hit on the
+    // marker it replaced would be a match the counter promises and nothing on screen shows.
+    is Block.Md -> block.att?.let { listOfNotNull(it.name, it.mime).joinToString(" ") } ?: block.text
     is Block.Code -> block.text
     is Block.Diff -> listOfNotNull(block.path, block.text).joinToString("\n")
     is Block.Tool -> listOfNotNull(block.name, block.summary).joinToString(" ")

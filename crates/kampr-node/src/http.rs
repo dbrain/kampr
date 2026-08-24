@@ -1,5 +1,6 @@
 use crate::assetlinks;
 use crate::assets;
+use crate::attach;
 use crate::session;
 use crate::state::{BUILD, Node};
 use anyhow::{Context, Result};
@@ -97,6 +98,7 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/api/mesh/invite", post(create_mesh_invite))
         .route("/api/mesh/{id}/revoke", post(revoke_mesh_node))
         .route("/api/warm", get(warm))
+        .route("/api/attachment/{*locator}", get(attachment))
         .route("/api/push", get(push_state))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
@@ -241,7 +243,7 @@ fn store_failure(context: &str, error: &dyn std::fmt::Display) -> Response {
     )
 }
 
-fn refuse(status: StatusCode, message: &str) -> Response {
+pub fn refuse(status: StatusCode, message: &str) -> Response {
     (
         status,
         [(CACHE_CONTROL, "no-store")],
@@ -531,6 +533,68 @@ async fn push_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Respo
         })).collect::<Vec<_>>(),
         "rules": rules,
     }))
+}
+
+/// `GET /api/attachment/{pane}/{id}` — the bytes an `att` header stands for.
+///
+/// **The websocket never carries them.** It is also carrying live terminal frames, and the
+/// biggest attachment measured is 2.22 MB in one record (probe #247): pushing that down the same
+/// socket head-of-lines every pane on the connection for as long as a phone link takes to drain
+/// it. So the header goes on the wire, the operator decides, and the bytes come over HTTP once.
+///
+/// A pane id is `<node_id>/<local>` and the client sends that slash literally, so the path is
+/// **three** segments and not two. Exactly three: anything else is refused rather than guessed at,
+/// because a wrong guess about which part is the pane is a check anchored on the wrong pane.
+///
+/// **A read-only device may fetch one.** Looking at a screenshot somebody pasted into an agent
+/// session is reading, and it is the whole point of a device you half-trust with a screen.
+async fn attachment(
+    State(node): State<Arc<Node>>,
+    _auth: Authenticated,
+    Path(locator): Path<String>,
+) -> Response {
+    let missing = || refuse(StatusCode::NOT_FOUND, "no such attachment");
+    let mut parts = locator.split('/');
+    let (Some(node_id), Some(local), Some(id), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return missing();
+    };
+    if node_id.is_empty() || local.is_empty() || id.is_empty() {
+        return missing();
+    }
+    let Some(transcript) = transcript_of(&node, &format!("{node_id}/{local}")) else {
+        return missing();
+    };
+    let journals = node.journals();
+    let id = id.to_string();
+    // A record is read off disk and base64-decoded, and both are bounded but neither is instant.
+    match tokio::task::spawn_blocking(move || attach::serve(&journals, &transcript, &id)).await {
+        Ok(response) => response,
+        Err(_) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the attachment could not be read",
+        ),
+    }
+}
+
+/// The transcript this pane is on *now*, derived by the node from the same three handles
+/// `convo` uses. **The request has no say in it**, which is what makes it usable as the proof
+/// that an id belongs to the pane it was asked for.
+fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBuf> {
+    let (session, local) = node.resolve(pane)?;
+    let herd = node.herd();
+    let entry = herd.pane(pane)?;
+    let identity = crate::convo::identity(&session.provider, &local);
+    node.journals()
+        .locate(
+            entry.agent.as_deref(),
+            identity.announced.as_ref(),
+            entry.cwd.as_deref().map(std::path::Path::new),
+            &identity.harness,
+        )
+        .ok()
+        .flatten()
 }
 
 #[derive(Debug, Deserialize)]

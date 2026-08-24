@@ -76,6 +76,9 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     var searching by remember { mutableStateOf(false) }
     var focus by remember { mutableStateOf(0) }
     val expanded = remember { mutableStateListOf<String>() }
+    // Per pane, and dropped with it: what bounds how many decoded images this client is holding
+    // is that leaving the pane lets go of all of them.
+    val attachments = rememberAttachmentStore(pane.id)
     val listState = rememberLazyListState()
     val hits = remember(pane.revision, query) { searchHits(turns, query) }
     val leading = if (pane.convoMore) 1 else 0
@@ -172,6 +175,7 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                         query = query,
                         expanded = expanded,
                         onToggle = { key -> if (key in expanded) expanded.remove(key) else expanded.add(key) },
+                        attachments = attachments,
                     )
                 }
             }

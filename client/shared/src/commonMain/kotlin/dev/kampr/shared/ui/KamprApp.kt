@@ -178,6 +178,7 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
     override fun show(view: PaneView) = state.setPaneView(view)
+    override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
 }
 
 @Composable

@@ -15,11 +15,34 @@ pub enum ToolState {
     Error,
 }
 
+/// The header of something the wire will not carry. `id` resolves at
+/// `GET /api/attachment/{pane}/{id}` and nothing else about it is a promise: it is opaque, it is
+/// minted by the node that served the turn, and it stops resolving when the pane moves to another
+/// transcript.
+///
+/// `kind` is an open string. A client that does not recognise one offers a download rather than
+/// dropping the block, so a future `video` needs no protocol change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Attachment {
+    pub id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "b", rename_all = "lowercase")]
 pub enum Block {
     Md {
         text: String,
+        /// Additive: the `text` beside it is the marker an installed client already renders, so a
+        /// client that has never heard of this field shows what it showed before.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        att: Option<Attachment>,
     },
     Code {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +81,15 @@ pub struct Page {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
     pub more: bool,
+}
+
+impl Block {
+    pub fn md(text: impl Into<String>) -> Self {
+        Self::Md {
+            text: text.into(),
+            att: None,
+        }
+    }
 }
 
 impl Turn {

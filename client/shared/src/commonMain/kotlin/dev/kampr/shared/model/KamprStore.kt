@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Security
@@ -141,14 +142,22 @@ class KamprStore {
         when (msg) {
             is ServerMsg.Hello -> {
                 _hello.value = msg
-                role = msg.role
-                roleNote = null
+                Snapshot.withMutableSnapshot {
+                    role = msg.role
+                    roleNote = null
+                }
                 _status.value = ConnectionStatus.Live(msg.role)
             }
             is ServerMsg.RoleChanged -> {
-                if (msg.role != role) {
-                    role = msg.role
-                    roleNote = roleNoteFor(msg.role)
+                // One change, not two. Written a statement apart, a reader watching for the role
+                // to move landed between them 31% of the time and saw the new role with no notice
+                // beside it — which is a demotion that took the operator's buttons away and never
+                // said why.
+                Snapshot.withMutableSnapshot {
+                    if (msg.role != role) {
+                        role = msg.role
+                        roleNote = roleNoteFor(msg.role)
+                    }
                 }
                 _status.value = ConnectionStatus.Live(msg.role)
             }

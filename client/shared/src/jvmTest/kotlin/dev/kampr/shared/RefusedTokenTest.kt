@@ -19,12 +19,16 @@ import kotlin.test.fail
 
 // A node that is up and has never heard of this device: every route, the socket upgrade included,
 // is a 401. What a revoked device, a replaced database and an expired token all look like.
-private class RefusingNode(val port: Int) {
+private class RefusingNode {
+    var port: Int = 0
+        private set
+
     val paths = CopyOnWriteArrayList<String>()
     private var server: ServerSocket? = null
 
     fun start() {
         val socket = ServerSocket(port)
+        port = socket.localPort
         server = socket
         thread(isDaemon = true) {
             while (!socket.isClosed) {
@@ -64,7 +68,7 @@ private class RefusingNode(val port: Int) {
 class RefusedTokenTest {
     @Test
     fun aTokenTheNodeRefusesIsDiagnosedRatherThanRetriedInSilence() {
-        val node = RefusingNode(freePort())
+        val node = RefusingNode()
         node.start()
         val scope = CoroutineScope(SupervisorJob())
         val store = KamprStore()
@@ -89,7 +93,7 @@ class RefusedTokenTest {
     // telling the operator to pair again would be a lie that costs them their enrolment.
     @Test
     fun aNodeThatIsMerelyDownIsStillOfflineAndNeverARefusal() {
-        val dead = freePort()
+        val dead = portWithNothingOnIt()
         val scope = CoroutineScope(SupervisorJob())
         val store = KamprStore()
         try {

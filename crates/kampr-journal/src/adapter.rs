@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::attach::{Fetched, Origin};
 use crate::error::JournalError;
 use crate::live::ScreenReader;
 use crate::process::{Harness, PaneProcess};
+use crate::root::TranscriptRoot;
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,9 @@ impl SessionRef {
 
 pub trait JournalAdapter: Send + Sync {
     fn agent(&self) -> &str;
+    /// The containment root every path this adapter resolves — including one arriving inside an
+    /// attachment id — is proved to be inside.
+    fn root(&self) -> &TranscriptRoot;
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError>;
     /// The transcript the pane's own harness process is writing.
     ///
@@ -71,12 +76,20 @@ pub trait JournalAdapter: Send + Sync {
         None
     }
 
+    /// The `index`th attachment of one already-read record, decoded. The default is a harness
+    /// whose transcripts have never been measured to carry one.
+    fn attachment(&self, _record: &str, index: u32) -> Result<Fetched, JournalError> {
+        Err(JournalError::NotFound(index.to_string()))
+    }
+
     fn open(&self, session: &SessionRef) -> Result<Box<dyn Journal>, JournalError> {
         Ok(self.open_path(self.locate(session)?))
     }
 
     fn open_path(&self, path: PathBuf) -> Box<dyn Journal> {
-        Box::new(FileJournal::new(path, self.parser(), self.screen()))
+        let mut parser = self.parser();
+        parser.set_origin(Origin::new(self.agent(), self.root(), &path));
+        Box::new(FileJournal::new(path, parser, self.screen()))
     }
 }
 

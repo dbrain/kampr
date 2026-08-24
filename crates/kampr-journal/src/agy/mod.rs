@@ -51,6 +51,10 @@ impl JournalAdapter for AgyAdapter {
         AGENT
     }
 
+    fn root(&self) -> &TranscriptRoot {
+        &self.root
+    }
+
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError> {
         match session.kind {
             SessionKind::Id => self.find_by_id(&session.value),
@@ -111,7 +115,7 @@ pub struct AgyParser {
 }
 
 impl TranscriptParser for AgyParser {
-    fn push_line(&mut self, line: &str) {
+    fn push_line(&mut self, line: &str, _at: u64) {
         let seq = self.seq;
         self.seq += 1;
         let Ok(record) = serde_json::from_str::<Record>(line) else {
@@ -156,7 +160,7 @@ impl AgyParser {
                     return;
                 }
                 let mut turn = Turn::new(format!("a{seq}"), Role::User, record.created_at);
-                turn.blocks.push(Block::Md { text });
+                turn.blocks.push(Block::md(text));
                 self.store.push(turn);
             }
             ("MODEL", "PLANNER_RESPONSE") => {
@@ -164,7 +168,7 @@ impl AgyParser {
                 // about the answer, not the answer.
                 if let Some(text) = record.content.filter(|c| !c.trim().is_empty()) {
                     let mut turn = Turn::new(format!("a{seq}"), Role::Assistant, record.created_at.clone());
-                    turn.blocks.push(Block::Md { text });
+                    turn.blocks.push(Block::md(text));
                     self.store.push(turn);
                 }
                 for (at, call) in record.tool_calls.into_iter().enumerate() {

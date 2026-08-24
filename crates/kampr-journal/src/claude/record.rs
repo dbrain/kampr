@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::attach::{Att, IMAGE};
+
 #[derive(Debug, Deserialize)]
 pub struct Record {
     #[serde(rename = "type")]
@@ -53,6 +55,47 @@ pub enum ContentBlock {
     },
     #[serde(other)]
     Other,
+}
+
+/// Every attachment in one record, in the order [`super::ClaudeParser`] meets them. **The two
+/// walks have to agree**: an id names an attachment by its ordinal within the record, so a block
+/// this yields and the parser skips would hand the next marker somebody else's bytes.
+pub fn attachments(record: &Record) -> Vec<Att<'_>> {
+    let Some(Content::Blocks(blocks)) = record.message.as_ref().and_then(|m| m.content.as_ref()) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Image { source } => found.extend(image(source)),
+            ContentBlock::ToolResult { content, .. } => found.extend(result_atts(content)),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// A `Read` of a picture arrives as a `tool_result` whose content array holds an `image` and no
+/// text at all, so there is nothing in the result for a reader to go on unless this is named. It
+/// is also **512 of the 513 images** on this machine, against a single paste (#248).
+pub fn result_atts(content: &Value) -> Vec<Att<'_>> {
+    content
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("image"))
+        .filter_map(|item| image(item.get("source")?))
+        .collect()
+}
+
+fn image(source: &Value) -> Option<Att<'_>> {
+    Some(Att {
+        kind: IMAGE,
+        mime: source.get("media_type").and_then(Value::as_str),
+        name: None,
+        data: source.get("data").and_then(Value::as_str)?,
+    })
 }
 
 pub fn image_subtype(source: &Value) -> Option<&str> {

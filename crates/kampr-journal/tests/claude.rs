@@ -1,9 +1,7 @@
 mod common;
 
 use common::*;
-use kampr_journal::{
-    Block, ClaudeAdapter, Journal, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot,
-};
+use kampr_journal::{Block, ClaudeAdapter, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot};
 
 fn journal() -> Box<dyn kampr_journal::Journal> {
     let adapter = ClaudeAdapter::new(TranscriptRoot::new(claude_root()).unwrap());
@@ -224,13 +222,6 @@ fn the_newest_transcript_is_the_last_written_not_the_first_opened() {
 const PNG: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-fn scratch_journal(tag: &str, records: &[serde_json::Value]) -> kampr_journal::FileJournal {
-    let path = scratch_dir(tag).join("session.jsonl");
-    let body: String = records.iter().map(|r| r.to_string() + "\n").collect();
-    std::fs::write(&path, body).unwrap();
-    kampr_journal::FileJournal::new(path, claude_parser(), Some(kampr_journal::claude::live))
-}
-
 fn pasted(text: Option<&str>) -> serde_json::Value {
     let image = serde_json::json!({
         "type": "image",
@@ -251,41 +242,45 @@ fn pasted(text: Option<&str>) -> serde_json::Value {
 
 #[test]
 fn a_pasted_screenshot_is_named_beside_the_words_it_came_with() {
-    let mut journal = scratch_journal("paste", &[pasted(Some("does this look right?"))]);
-    let turns = journal.poll().unwrap();
+    let mut scratch = scratch_claude("paste", &[pasted(Some("does this look right?"))]);
+    let turns = scratch.turns();
 
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].role, Role::User);
     assert_eq!(
-        turns[0].blocks,
-        vec![
-            Block::Md {
-                text: "does this look right?".into()
-            },
-            Block::Md {
-                text: "[image · png]".into()
-            },
-        ],
+        turns[0].blocks[0],
+        Block::md("does this look right?"),
         "a turn that renders only the words reads as though no screenshot was ever sent"
     );
+    let Block::Md { text, att } = &turns[0].blocks[1] else {
+        panic!("expected a marker, got {:?}", turns[0].blocks[1]);
+    };
+    assert_eq!(text, "[image · png]", "the marker an installed phone renders");
+    let att = att
+        .as_ref()
+        .expect("a header the client can fetch the bytes with");
+    assert_eq!(att.kind, "image");
+    assert_eq!(att.mime.as_deref(), Some("image/png"));
+    assert_eq!(att.bytes, Some(70));
+    assert_eq!(
+        att.name, None,
+        "a paste carries no filename and inventing one is a lie about the transcript"
+    );
+    assert!(!att.id.is_empty());
 }
 
 #[test]
 fn a_message_that_is_nothing_but_an_image_is_still_a_turn() {
-    let mut journal = scratch_journal("paste-only", &[pasted(None)]);
-    let turns = journal.poll().unwrap();
+    let mut scratch = scratch_claude("paste-only", &[pasted(None)]);
+    let turns = scratch.turns();
 
     assert_eq!(
         turns.len(),
         1,
         "dropping it leaves the answer to a question the transcript never shows being asked"
     );
-    assert_eq!(
-        turns[0].blocks,
-        vec![Block::Md {
-            text: "[image · png]".into()
-        }]
-    );
+    assert_eq!(md_texts(&turns), vec!["[image · png]"]);
+    assert_eq!(attachments(&turns).len(), 1);
 }
 
 #[test]
@@ -306,11 +301,12 @@ fn image_bytes_never_reach_the_wire() {
         ] },
         "toolUseResult": { "type": "image", "file": { "base64": PNG, "type": "image/png" } }
     });
-    let mut journal = scratch_journal("bytes", &[pasted(Some("look")), read, result]);
-    journal.poll().unwrap();
+    let mut scratch = scratch_claude("bytes", &[pasted(Some("look")), read, result]);
+    scratch.turns();
 
-    let wire = serde_json::to_string(&journal.page_before(None, 10).turns).unwrap();
+    let wire = serde_json::to_string(&scratch.journal.page_before(None, 10).turns).unwrap();
     assert!(wire.contains("[image · png]"), "{wire}");
+    assert!(wire.contains("\"att\""), "{wire}");
     assert!(
         !wire.contains(&PNG[..40]),
         "a screenshot is megabytes and the websocket carries it to a phone: {wire}"

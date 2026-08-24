@@ -7,6 +7,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
@@ -42,6 +43,12 @@ interface PaneIo {
     // A surface may need to hand the pane over to the other one — a harness with no journal
     // adapter has no conversation to show, and offers the terminal instead of an error.
     fun show(view: PaneView) = Unit
+
+    // The bytes behind a transcript attachment, on demand and over HTTP rather than over the
+    // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines
+    // every pane for seconds on a phone link.
+    suspend fun attachment(paneId: String, id: String): AttachmentBytes =
+        AttachmentBytes.Failed("This device has no node to fetch it from.")
 }
 
 private object NoPaneIo : PaneIo {

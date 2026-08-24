@@ -7,17 +7,18 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
+use crate::attach::{self, Fetched, Origin};
 use crate::discover;
 use crate::error::JournalError;
 use crate::live::{Layout, LiveBlock, ScreenReader};
-use crate::model::{Block, Role, ToolState, Turn};
+use crate::model::{Attachment, Block, Role, ToolState, Turn};
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::{count_lines, image_marker, summarise};
+use crate::summary::{count_lines, image_marker, marker_of, summarise};
 use crate::tail::TranscriptParser;
 
-use record::{Content, ContentBlock, Record, image_subtype, result_text, unified_patch};
+use record::{Content, ContentBlock, Record, image_subtype, result_atts, result_text, unified_patch};
 
 pub const AGENT: &str = "claude";
 
@@ -59,6 +60,10 @@ fn slug(cwd: &Path) -> String {
 impl JournalAdapter for ClaudeAdapter {
     fn agent(&self) -> &str {
         AGENT
+    }
+
+    fn root(&self) -> &TranscriptRoot {
+        &self.root
     }
 
     fn locate(&self, session: &SessionRef) -> Result<PathBuf, JournalError> {
@@ -114,6 +119,12 @@ impl JournalAdapter for ClaudeAdapter {
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
     }
+
+    fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
+        let record: Record =
+            serde_json::from_str(record).map_err(|_| JournalError::NotFound(index.to_string()))?;
+        attach::nth(record::attachments(&record), index)
+    }
 }
 
 #[derive(Default)]
@@ -121,20 +132,28 @@ pub struct ClaudeParser {
     store: TurnStore,
     tool_turns: HashMap<String, String>,
     seq: u64,
+    origin: Option<Origin>,
 }
 
 impl TranscriptParser for ClaudeParser {
-    fn push_line(&mut self, line: &str) {
+    fn push_line(&mut self, line: &str, at: u64) {
         let seq = self.seq;
         self.seq += 1;
         let Ok(record) = serde_json::from_str::<Record>(line) else {
             return;
         };
-        self.ingest(record, seq);
+        self.ingest(record, seq, at);
+    }
+
+    fn set_origin(&mut self, origin: Origin) {
+        self.origin = Some(origin);
     }
 
     fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            origin: self.origin.take(),
+            ..Self::default()
+        };
     }
 
     fn store(&self) -> &TurnStore {
@@ -147,7 +166,7 @@ impl TranscriptParser for ClaudeParser {
 }
 
 impl ClaudeParser {
-    fn ingest(&mut self, record: Record, seq: u64) {
+    fn ingest(&mut self, record: Record, seq: u64, at: u64) {
         let role = match record.kind.as_str() {
             "assistant" => Role::Assistant,
             "user" => Role::User,
@@ -156,18 +175,23 @@ impl ClaudeParser {
         if record.is_sidechain == Some(true) || record.is_meta == Some(true) {
             return;
         }
+        let atts = match &self.origin {
+            Some(origin) => attach::headers(origin, at, &record::attachments(&record)),
+            None => Vec::new(),
+        };
         let Some(content) = record.message.and_then(|m| m.content) else {
             return;
         };
 
         let id = record.uuid.unwrap_or_else(|| format!("c{seq}"));
         let mut turn = Turn::new(id.clone(), role, record.timestamp);
+        let mut atts = atts.into_iter();
 
         match content {
-            Content::Text(text) => turn.blocks.push(Block::Md { text }),
+            Content::Text(text) => turn.blocks.push(Block::md(text)),
             Content::Blocks(blocks) => {
                 for block in blocks {
-                    self.ingest_block(block, &id, &mut turn, record.tool_use_result.as_ref());
+                    self.ingest_block(block, &id, &mut turn, record.tool_use_result.as_ref(), &mut atts);
                 }
             }
         }
@@ -183,11 +207,13 @@ impl ClaudeParser {
         turn_id: &str,
         turn: &mut Turn,
         tool_use_result: Option<&Value>,
+        atts: &mut impl Iterator<Item = Attachment>,
     ) {
         match block {
-            ContentBlock::Text { text } => turn.blocks.push(Block::Md { text }),
+            ContentBlock::Text { text } => turn.blocks.push(Block::md(text)),
             ContentBlock::Image { source } => turn.blocks.push(Block::Md {
                 text: image_marker(image_subtype(&source)),
+                att: atts.next(),
             }),
             ContentBlock::ToolUse { id, name, input } => {
                 turn.blocks.push(Block::Tool {
@@ -209,13 +235,27 @@ impl ClaudeParser {
                 content,
                 is_error,
             } => {
-                self.settle(&tool_use_id, &result_text(&content), is_error, tool_use_result);
+                let images: Vec<Attachment> = atts.by_ref().take(result_atts(&content).len()).collect();
+                self.settle(
+                    &tool_use_id,
+                    &result_text(&content),
+                    is_error,
+                    tool_use_result,
+                    images,
+                );
             }
             ContentBlock::Other => {}
         }
     }
 
-    fn settle(&mut self, tool_use_id: &str, text: &str, is_error: bool, tool_use_result: Option<&Value>) {
+    fn settle(
+        &mut self,
+        tool_use_id: &str,
+        text: &str,
+        is_error: bool,
+        tool_use_result: Option<&Value>,
+        images: Vec<Attachment>,
+    ) {
         let Some(target) = self.tool_turns.get(tool_use_id).cloned() else {
             return;
         };
@@ -233,6 +273,12 @@ impl ClaudeParser {
         }
         if let Some((path, text)) = patch {
             turn.blocks.push(Block::Diff { path, text });
+        }
+        for att in images {
+            turn.blocks.push(Block::Md {
+                text: marker_of(&att),
+                att: Some(att),
+            });
         }
     }
 }

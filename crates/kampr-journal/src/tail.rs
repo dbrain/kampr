@@ -2,13 +2,17 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::attach::Origin;
 use crate::error::JournalError;
 use crate::live::{self, ScreenReader};
 use crate::model::{Block, Page, Turn};
 use crate::store::TurnStore;
 
 pub trait TranscriptParser: Send {
-    fn push_line(&mut self, line: &str);
+    /// `at` is the byte the record starts at, and it is half of what an attachment id is made of.
+    fn push_line(&mut self, line: &str, at: u64);
+    /// The default is a parser that mints no attachment ids, so it has nothing to mint them from.
+    fn set_origin(&mut self, _origin: Origin) {}
     fn reset(&mut self);
     fn store(&self) -> &TurnStore;
     fn store_mut(&mut self) -> &mut TurnStore;
@@ -38,6 +42,9 @@ const RECENT: usize = 4;
 pub struct FileJournal {
     path: PathBuf,
     offset: u64,
+    /// Where `partial[0]` sits in the file. `offset` is where reading has reached, which is past
+    /// the end of the record being assembled, so it cannot answer where that record began.
+    line_start: u64,
     partial: Vec<u8>,
     parser: Box<dyn TranscriptParser>,
     screen: Option<ScreenReader>,
@@ -48,6 +55,7 @@ impl FileJournal {
         Self {
             path,
             offset: 0,
+            line_start: 0,
             partial: Vec::new(),
             parser,
             screen,
@@ -63,7 +71,7 @@ impl FileJournal {
                 turn.blocks
                     .iter()
                     .filter_map(|b| match b {
-                        Block::Md { text } => Some(text.as_str()),
+                        Block::Md { text, .. } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -74,6 +82,7 @@ impl FileJournal {
 
     fn rewind(&mut self) {
         self.offset = 0;
+        self.line_start = 0;
         self.partial.clear();
         self.parser.reset();
     }
@@ -98,10 +107,12 @@ impl Journal for FileJournal {
         // whole lines are parsed; the remainder waits for the next poll.
         while let Some(at) = self.partial.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.partial.drain(..=at).collect();
+            let start = self.line_start;
+            self.line_start += line.len() as u64;
             let text = String::from_utf8_lossy(&line[..at]);
             let text = text.trim_end_matches('\r');
             if !text.is_empty() {
-                self.parser.push_line(text);
+                self.parser.push_line(text, start);
             }
         }
 

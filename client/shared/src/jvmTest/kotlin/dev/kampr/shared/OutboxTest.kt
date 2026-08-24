@@ -20,8 +20,7 @@ class OutboxTest {
     // 64 that fitted in the outbox were replayed into the live shell twenty seconds later.
     @Test
     fun keystrokesTypedWhileTheSocketIsDownAreDroppedAndSaidSoRatherThanReplayed() {
-        val port = freePort()
-        val node = StubNode(port)
+        val node = StubNode()
         node.start()
         val scope = CoroutineScope(SupervisorJob())
         val store = KamprStore()
@@ -29,7 +28,7 @@ class OutboxTest {
         try {
             runBlocking {
                 store.pane(PANE)
-                connection.connect(Endpoint("http://127.0.0.1:$port"))
+                connection.connect(Endpoint("http://127.0.0.1:${node.port}"))
                 until("hello") { store.hello.value != null }
                 connection.watch(PANE)
                 connection.send(ClientMsg.InputText(PANE, "MARK"))

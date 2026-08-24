@@ -114,15 +114,14 @@ class RoleChangeTest {
     // frame both sides of the seam can agree about while neither agrees with the wire.
     @Test
     fun aRoleChangeOnALiveSocketReachesTheStore() {
-        val port = freePort()
-        val node = StubNode(port, HELLO_MANAGE)
+        val node = StubNode(HELLO_MANAGE)
         node.start()
         val scope = CoroutineScope(SupervisorJob())
         val store = KamprStore()
         val connection = KamprConnection(scope, store)
         try {
             runBlocking {
-                connection.connect(Endpoint("http://127.0.0.1:$port"))
+                connection.connect(Endpoint("http://127.0.0.1:${node.port}"))
                 until("hello") { store.hello.value != null }
                 assertFalse(store.readOnly, "the stub greeted this device as a writer")
                 assertNull(store.roleNote, "nothing has changed yet")
