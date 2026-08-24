@@ -68,7 +68,7 @@ class ModelTest {
         assertEquals('Z'.code, cells.codePointAt(4, 0))
     }
 
-    // Probe #215: a cell is a grapheme. The marks ride beside the text in `m` rather than inside
+    // Probe #223: a cell is a grapheme. The marks ride beside the text in `m` rather than inside
     // it, so `x` stays one code point per column and a row's width is still countable from it.
     @Test
     fun aCellWearsTheMarksItsRunDeclares() {

@@ -179,7 +179,7 @@ class WideGlyphArtboardTest {
         )
     }
 
-    // Probe #215: the mark has to reach the screen without buying itself a column. A cell wearing
+    // Probe #223: the mark has to reach the screen without buying itself a column. A cell wearing
     // one is drawn on its own for the same reason a wide glyph is (probe #214) — nothing promises
     // the face that draws the mark advances exactly zero — so the proof is that the columns after
     // it have not moved, and that the ink is not the ink of a bare base.

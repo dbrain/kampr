@@ -67,7 +67,7 @@ class SelectionTest {
         assertEquals("https://herdr.dev/x", detectTarget(line, offset)?.text)
     }
 
-    // Probe #215: a cell is a grapheme, so copy has to take the marks with the base — and the
+    // Probe #223: a cell is a grapheme, so copy has to take the marks with the base — and the
     // offset a link detector is handed is a string offset, which a mark moves and a column does not.
     @Test
     fun copyingAMarkedRowTakesTheMarksWithTheirBases() {

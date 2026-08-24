@@ -15,7 +15,7 @@ class CellBuffer(cols: Int, rows: Int) {
     var links: IntArray = IntArray(cols * rows)
         private set
 
-    // Probe #215: what each cell wears on top of its code point. Sparse in practice and empty on
+    // Probe #223: what each cell wears on top of its code point. Sparse in practice and empty on
     // almost every cell, so it is a parallel array of references rather than a second IntArray:
     // a cluster does not fit in an Int and interning one would cost a table the wire does not send.
     var marks: Array<String> = Array(cols * rows) { "" }
