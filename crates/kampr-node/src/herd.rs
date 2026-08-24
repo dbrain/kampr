@@ -1,5 +1,5 @@
 use kampr_core::wire::{HerdDelta, NodeEntry, PaneEntry, ServerMsg};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -49,18 +49,18 @@ impl HerdModel {
                 Some(_) => {}
             }
         }
-        let panes_now: Vec<&str> = self.panes.iter().map(|p| p.id.as_str()).collect();
-        let nodes_now: Vec<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
+        let panes_now: HashSet<&str> = self.panes.iter().map(|p| p.id.as_str()).collect();
+        let nodes_now: HashSet<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
         let removed_ids: Vec<String> = previous
             .panes
             .iter()
-            .filter(|p| !panes_now.contains(&p.id.as_str()))
+            .filter(|p| !panes_now.contains(p.id.as_str()))
             .map(|p| p.id.clone())
             .chain(
                 previous
                     .nodes
                     .iter()
-                    .filter(|n| !nodes_now.contains(&n.id.as_str()))
+                    .filter(|n| !nodes_now.contains(n.id.as_str()))
                     .map(|n| n.id.clone()),
             )
             .collect();

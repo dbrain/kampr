@@ -9,10 +9,11 @@
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::post;
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
 use kampr_auth::{PushRule, Role, Store};
 use kampr_node::push::Push;
-use kampr_push::{Blocked, Vapid};
+use kampr_push::{Blocked, Reach, Vapid};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +31,9 @@ struct Service {
     received: Mutex<Vec<Received>>,
     /// Paths that answer 410 Gone, as a push service does for a subscription the browser dropped.
     gone: Mutex<Vec<String>>,
+    /// Where this service answers 302 to, as an attacker-owned endpoint does when it wants the
+    /// node to make the *next* request from inside its own network.
+    redirect_to: Mutex<Option<String>>,
 }
 
 async fn accept(
@@ -37,10 +41,10 @@ async fn accept(
     axum::extract::Path(id): axum::extract::Path<String>,
     headers: HeaderMap,
     body: axum::body::Bytes,
-) -> StatusCode {
+) -> Response {
     let path = format!("/push/{id}");
     if service.gone.lock().unwrap().contains(&path) {
-        return StatusCode::GONE;
+        return StatusCode::GONE.into_response();
     }
     let header = |name: &str| {
         headers
@@ -57,7 +61,10 @@ async fn accept(
         ttl: header("ttl"),
         body_len: body.len(),
     });
-    StatusCode::CREATED
+    if let Some(target) = service.redirect_to.lock().unwrap().clone() {
+        return (StatusCode::FOUND, [("location", target)]).into_response();
+    }
+    StatusCode::CREATED.into_response()
 }
 
 struct Stub {
@@ -75,8 +82,11 @@ impl Drop for Stub {
 impl Stub {
     async fn start() -> Self {
         let service = Arc::new(Service::default());
+        // `any`, not `post`: a 302 turns the node's POST into a GET, so a stub that only routes
+        // POST answers 405 and records nothing — and a test asserting "nothing arrived" would
+        // pass with the redirect policy removed.
         let app = Router::new()
-            .route("/push/{id}", post(accept))
+            .route("/push/{id}", any(accept))
             .with_state(service.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -114,11 +124,17 @@ fn rand_bytes() -> [u8; 16] {
     out
 }
 
+/// The stub is a loopback server, which is the one address a real push endpoint may never be —
+/// so every test that wants delivery to happen at all asks for [`Reach::Loopback`] explicitly.
 async fn fixture() -> (Store, Arc<Push>, tempfile::TempDir) {
+    reaching(Reach::Loopback).await
+}
+
+async fn reaching(reach: Reach) -> (Store, Arc<Push>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_memory().await.unwrap();
     let vapid = Arc::new(Vapid::load_or_create(&dir.path().join("vapid.pem"), "mailto:x@y").unwrap());
-    (store, Arc::new(Push::new(vapid)), dir)
+    (store, Arc::new(Push::new(vapid, reach).expect("a sender")), dir)
 }
 
 async fn enrol(store: &Store, name: &str, endpoint: &str) -> String {
@@ -318,4 +334,48 @@ async fn a_node_with_no_vapid_key_sends_nothing() {
         0
     );
     assert!(stub.received().is_empty());
+}
+
+/// The `https://` check on `push_subscribe` is a check on a *string*, and a 302 is how an
+/// attacker-owned endpoint that passes it aims the node's own POST at loopback or at a link-local
+/// metadata address. The push service that answers the redirect is never asked for anything.
+#[tokio::test]
+async fn a_push_endpoint_that_redirects_never_reaches_what_it_redirects_to() {
+    let inside = Stub::start().await;
+    let endpoint = Stub::start().await;
+    *endpoint.service.redirect_to.lock().unwrap() = Some(format!("{}/push/inside", inside.base));
+
+    let (store, push, _dir) = fixture().await;
+    enrol(&store, "phone", &format!("{}/push/phone", endpoint.base)).await;
+
+    let sent = push
+        .deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
+        .await;
+
+    assert_eq!(sent, 0, "a 302 is not a delivery");
+    assert_eq!(endpoint.received().len(), 1, "the endpoint itself was asked once");
+    assert!(
+        inside.received().is_empty(),
+        "the node followed a redirect into its own network"
+    );
+}
+
+/// And the direct case the redirect was a way around: an endpoint that simply names an address
+/// inside the node. Every subscribe path accepts one — a read-only device may subscribe, and the
+/// only check on the endpoint is that the string starts `https://`.
+#[tokio::test]
+async fn a_push_endpoint_addressed_inside_this_node_is_never_dialled() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = reaching(Reach::Public).await;
+    enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+
+    let sent = push
+        .deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
+        .await;
+
+    assert_eq!(sent, 0);
+    assert!(
+        stub.received().is_empty(),
+        "a loopback endpoint is not a push service"
+    );
 }

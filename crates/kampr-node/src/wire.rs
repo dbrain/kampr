@@ -112,6 +112,35 @@ mod tests {
         }
     }
 
+    /// A cursor that moved on its own — no cell changed, and the client's own caret is wrong
+    /// until it is told. The node forwards it verbatim; anything here that treated an empty
+    /// `rows` as nothing to say would silently undo that.
+    #[tokio::test]
+    async fn a_patch_that_only_moves_the_cursor_still_reaches_the_client() {
+        let outbox = Arc::new(Outbox::new(16));
+        let wire = Wire::new(outbox.clone());
+        wire.send_update("n/w1:p1", &reset());
+        drain(&outbox);
+
+        wire.send_update(
+            "n/w1:p1",
+            &PaneUpdate::Patch {
+                rows: Arc::new(Vec::new()),
+                cursor: Cursor {
+                    col: 2,
+                    row: 0,
+                    visible: true,
+                },
+                new_links: Arc::new(Vec::new()),
+            },
+        );
+        let sent = drain(&outbox);
+        assert_eq!(sent.len(), 1, "an empty patch is a message, not nothing");
+        assert_eq!(sent[0]["t"], "grid.patch");
+        assert_eq!(sent[0]["rows"], serde_json::json!([]));
+        assert_eq!(sent[0]["cursor"]["col"], 2);
+    }
+
     fn drain(outbox: &Outbox) -> Vec<Value> {
         let mut out = Vec::new();
         while let Ok(frame) = futures_util::FutureExt::now_or_never(outbox.next())
@@ -196,7 +225,7 @@ mod tests {
         assert_eq!(span, 10, "the runs cover the columns the glyphs actually occupy");
     }
 
-    /// Probe #215: the marks ride in `m`, positionally, so `x` is still one code point per cell
+    /// Probe #223: the marks ride in `m`, positionally, so `x` is still one code point per cell
     /// and the row's width is still countable from it.
     #[tokio::test]
     async fn a_marked_run_carries_its_marks_beside_the_text_not_inside_it() {

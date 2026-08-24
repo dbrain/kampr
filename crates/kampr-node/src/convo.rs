@@ -4,7 +4,7 @@ use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_core::{HerdrProvider, PaneRegistry};
 use kampr_journal::{
-    Change, Harness, Journal, Registry as Journals, Role, SessionKind, SessionRef, Turn, Watch,
+    Change, Harness, Journal, JournalError, Registry as Journals, Role, SessionKind, SessionRef, Turn, Watch,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -160,7 +160,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // record and *then* goes idle, so withdrawing before that read leaves the client with
         // neither the preview nor its replacement for as long as the follow tick takes to notice.
         if (!working || opened.is_none()) && live.showing() {
-            if !flush(&journal, &wire, &global) {
+            if !flush(&journal, &wire, &global).await {
                 return;
             }
             if send_live(&wire, &global, live.stop()).is_err() {
@@ -201,7 +201,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     *journal.lock().unwrap() = Some(fresh);
                     // The first read is the page the client is about to be sent, so it must not
                     // also arrive behind it as a revision.
-                    let _ = drain(&journal);
+                    let _ = drain(&journal).await;
                     match page(&journal, &global, None) {
                         Some(first) if wire.send(&first) => {}
                         _ => return,
@@ -212,7 +212,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 
         tokio::select! {
             _ = follow.tick() => {
-                match drain(&journal) {
+                match drain(&journal).await {
                     Ok(turns) if !turns.is_empty() => {
                         let revised = ServerMsg::ConvoTurn { pane: global.clone(), turns };
                         if !wire.send(&revised) {
@@ -264,8 +264,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 
 /// Sends whatever the transcript has grown by, if anything. A read that fails is left to the
 /// follow tick, which re-derives the transcript rather than dropping a turn.
-fn flush(journal: &Open, wire: &Wire, pane: &str) -> bool {
-    match drain(journal) {
+async fn flush(journal: &Open, wire: &Wire, pane: &str) -> bool {
+    match drain(journal).await {
         Ok(turns) if !turns.is_empty() => wire.send(&ServerMsg::ConvoTurn {
             pane: pane.to_string(),
             turns,
@@ -353,9 +353,15 @@ fn withdraw(wire: &Wire, pane: &str, shown: &mut Option<(PathBuf, Vec<String>)>,
     })
 }
 
-fn drain(journal: &Open) -> Result<Vec<kampr_journal::Turn>, kampr_journal::JournalError> {
-    match journal.lock().unwrap().as_mut() {
+/// **Off the executor**, because the lock it takes is the one `convo.load` also wants and the
+/// work under it is a file read: `poll` re-reads a transcript that can be tens of megabytes, and
+/// the first one after a resolve parses the whole file.
+async fn drain(journal: &Open) -> Result<Vec<Turn>, JournalError> {
+    let journal = journal.clone();
+    tokio::task::spawn_blocking(move || match journal.lock().unwrap().as_mut() {
         Some(journal) => journal.poll(),
         None => Ok(Vec::new()),
-    }
+    })
+    .await
+    .unwrap_or_else(|e| Err(JournalError::Io(std::io::Error::other(e))))
 }

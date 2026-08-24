@@ -1336,7 +1336,7 @@ async fn a_wide_glyph_reaches_the_client_in_the_two_columns_herdr_gave_it() {
     assert_eq!(emoji[4], Some('Z'));
 }
 
-/// Probe #215, end to end against a real herdr rather than against an idea of one: herdr's cell is
+/// Probe #223, end to end against a real herdr rather than against an idea of one: herdr's cell is
 /// a grapheme, it keeps the marks on the base and addresses the next glyph at base + the cluster's
 /// width — so an emulator that drops the mark loses it for good, because herdr never repaints a
 /// cell it believes already matches.
