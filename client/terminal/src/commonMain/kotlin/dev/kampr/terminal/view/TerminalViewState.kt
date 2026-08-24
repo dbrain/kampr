@@ -86,9 +86,24 @@ class TerminalViewState {
     // horizontal drag already meant "the sheet moves with me".
     fun scrollBy(dx: Float, dy: Float) {
         scrolled = true
+        if (dx != 0f) pannedAway = true
         panX = (panX + dx).coerceIn(minPanX, 0f)
         scrollY = (scrollY + dy).coerceIn(minScroll, maxScroll)
         following = scrollY <= minScroll + FOLLOW_SLACK
+    }
+
+    // The horizontal half of `following`, and it was missing. `followCursorPan` puts the caret a
+    // margin in from the left, and a caret inside that margin lands the surface on `panX = 0` —
+    // the start of the line — so a reader who had dragged along a long line was put back there by
+    // the next frame that moved the caret, and a second drag started over. A hand on the axis owns
+    // it; the caret takes it back by arriving on screen itself, which is the bargain `following`
+    // already makes with the live edge.
+    var pannedAway = false
+        private set
+
+    fun chaseCursor(wanted: Float?) {
+        panX = panX.coerceIn(minPanX, 0f)
+        if (wanted == null) pannedAway = false else if (!pannedAway) panX = wanted
     }
 
     // Pan and scroll are distances across the surface, not across the viewport, so a change of

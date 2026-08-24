@@ -128,13 +128,18 @@ private const val CLOSE_UP_SP = 22f
 
 // Follow-cursor only nudges horizontally: the live viewport is already pinned to the bottom
 // unless the operator has scrolled away, and scrolling away is a deliberate act to preserve.
+//
+// `null` is "the caret is already on screen, so there is nothing to do" — which is not the same
+// answer as "leave the pan where it is", and telling them apart is what lets a hand-made pan give
+// the axis back. Returning the unchanged `panX` for both is how a drag came to be undone by every
+// frame that moved the caret.
 fun followCursorPan(
     panX: Float,
     minPanX: Float,
     cursorCol: Int,
     cellWidth: Float,
     viewWidth: Float,
-): Float {
+): Float? {
     if (minPanX >= 0f) return 0f
     val margin = cellWidth * 4f
     val left = cursorCol * cellWidth
@@ -142,7 +147,7 @@ fun followCursorPan(
     val target = when {
         left + panX < margin -> margin - left
         right + panX > viewWidth - margin -> viewWidth - margin - right
-        else -> panX
+        else -> return null
     }
     return target.coerceIn(minPanX, 0f)
 }

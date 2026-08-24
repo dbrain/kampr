@@ -10,6 +10,7 @@ import dev.kampr.terminal.view.zoomPresets
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val CELL_W = 8f
@@ -80,9 +81,11 @@ class GeometryTest {
     @Test
     fun followCursorNudgesOnlyWhenTheCaretLeavesTheWindow() {
         val minPan = 390f - 94 * CELL_W
-        val inside = followCursorPan(0f, minPan, cursorCol = 10, CELL_W, viewWidth = 390f)
-        close(inside, 0f)
-        val offRight = followCursorPan(0f, minPan, cursorCol = 80, CELL_W, viewWidth = 390f)
+        assertNull(
+            followCursorPan(0f, minPan, cursorCol = 10, CELL_W, viewWidth = 390f),
+            "a caret already on screen is nothing to do, not a pan back to where it already is",
+        )
+        val offRight = requireNotNull(followCursorPan(0f, minPan, cursorCol = 80, CELL_W, viewWidth = 390f))
         assertTrue(offRight < 0f && offRight >= minPan)
         val visible = 80 * CELL_W + offRight
         assertTrue(visible in 0f..390f, "the caret must land inside the viewport")

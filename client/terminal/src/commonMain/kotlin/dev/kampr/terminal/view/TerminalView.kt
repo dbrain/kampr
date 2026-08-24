@@ -268,8 +268,10 @@ fun TerminalView(
 
         LaunchedEffect(pane.cursor, view.followCursor, geometry.pinned) {
             if (view.followCursor && geometry.pinned && !view.pinching) {
-                view.panX = followCursorPan(
-                    view.panX, geometry.minPanX, pane.cursor.col, metrics.width, paint.width,
+                view.chaseCursor(
+                    followCursorPan(
+                        view.panX, geometry.minPanX, pane.cursor.col, metrics.width, paint.width,
+                    )
                 )
             }
         }
