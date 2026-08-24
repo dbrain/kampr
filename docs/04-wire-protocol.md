@@ -40,7 +40,7 @@ hostname would buy (findings §3.7).
   "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
             "mesh": true },   // this node accepts peer links; see "The mesh"
   "security": {
-    "tier": 0,                       // 0 = ip:port, 1 = hostname+cert, 2 = public, 3 = tailscale
+    "tier": 0,                       // 0 = passkeys impossible here, 1 = passkeys possible
     "encrypted": false,              // is this a secure context?
     "unencrypted_banner": true,      // show the persistent Tier-0 warning
     "passkeys": false,               // WebAuthn possible here? an IP is never a registrable domain

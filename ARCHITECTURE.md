@@ -170,8 +170,9 @@ Two implementation rules follow, and both are load-bearing:
 One honest correction to the table above: the wire's `security.tier` field only ever carries **0 or
 1**, because the only thing detectable from an origin is whether passkeys are possible. "Public" and
 "over Tailscale" are deployment postures, not detectable states.
-[`docs/04-wire-protocol.md`](./docs/04-wire-protocol.md) still documents `tier` as four-valued and
-should be corrected. [ADR 0006](./docs/adr/0006-auth-is-in-the-node.md).
+[`docs/04-wire-protocol.md`](./docs/04-wire-protocol.md) documents it that way, and a client that
+branches on a higher value is branching on something no node can send.
+[ADR 0006](./docs/adr/0006-auth-is-in-the-node.md).
 
 ## 4. The data path, Herdr to a phone
 
