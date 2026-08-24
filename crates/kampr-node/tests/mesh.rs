@@ -10,7 +10,7 @@
 use futures_util::{SinkExt, StreamExt};
 use kampr_auth::{MeshRole, NodeIdentity, Role};
 use kampr_mesh::dial::Hub;
-use kampr_mesh::{Presence, mesh_url};
+use kampr_mesh::{Incoming, Presence, mesh_url};
 use kampr_node::{BUILD, Config, Node, http};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -667,4 +667,92 @@ async fn saw(socket: &mut Socket, marker: &str, seconds: u64) -> bool {
         }
     }
     false
+}
+
+/// The handshake binds a key to one node id, and nothing after it does. Two enrolled machines on
+/// one hub is the entire point of the mesh, so a second link claiming an id that is already live
+/// is one of them reaching for the other's terminals — the hub refuses it rather than letting the
+/// order they connected in decide who receives the watches and the keystrokes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_cannot_take_over_another_peers_node_id() {
+    let Some(hub_session) = Session::start("claims").await else {
+        eprintln!("skipping: herdr is not on PATH");
+        return;
+    };
+    let hub_home = Home::new();
+    let hub = Running::start(&hub_home, &hub_session, "front").await;
+    let mesh = hub.node.auth.store().mesh();
+    let now = kampr_auth::now();
+
+    let dial = async |home: &Home, node_id: &str, name: &str| {
+        let code = mesh.invite(now, now + 600).await.expect("a join code");
+        kampr_mesh::dial(
+            &Hub {
+                url: hub.origin.clone(),
+                name: "hub".into(),
+                key: None,
+                join: Some(code),
+            },
+            &home.identity(),
+            &Presence {
+                node_id: node_id.to_string(),
+                node_name: name.to_string(),
+                build: BUILD.to_string(),
+            },
+            Duration::from_secs(10),
+        )
+        .await
+    };
+
+    // The node that owns the id, holding its link open exactly as `kampr serve` would.
+    let laptop_home = Home::new();
+    let (_laptop_hub, _laptop_out, mut laptop_in) = dial(&laptop_home, "01JLAPTOP", "laptop")
+        .await
+        .expect("an enrolled node is served");
+    let laptop_key = laptop_home.identity().public_hex();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while hub.node.peers.links().is_empty() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the hub never served the laptop");
+
+    // A second enrolled machine, dialling in as the laptop. The handshake itself succeeds: its own
+    // key is enrolled here and it signed with it. What it may not have is the laptop's id.
+    let impostor_home = Home::new();
+    let (_impostor_hub, _impostor_out, mut impostor_in) = dial(&impostor_home, "01JLAPTOP", "not the laptop")
+        .await
+        .expect("the handshake is about the key, and this key is enrolled");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while impostor_in.recv().await.is_some() {}
+        })
+        .await
+        .is_ok(),
+        "the hub served two links for one node id",
+    );
+
+    let links = hub.node.peers.links();
+    assert_eq!(links.len(), 1, "the impostor stayed in the herd");
+    assert_eq!(
+        links[0].pubkey, laptop_key,
+        "the id resolves to the machine that authenticated as it",
+    );
+    assert_eq!(
+        hub.node
+            .peers
+            .link_for("01JLAPTOP/w1:p1")
+            .expect("a live link")
+            .pubkey,
+        laptop_key,
+        "traffic for the laptop's pane was handed to the impostor",
+    );
+    // And the laptop's own socket is untouched: a refused impostor costs the node it impersonated
+    // nothing at all.
+    if let Ok(text) = tokio::time::timeout(Duration::from_millis(500), laptop_in.recv()).await {
+        assert!(text.is_some(), "the laptop's own link was collateral damage");
+    }
+
+    hub.stop();
 }
