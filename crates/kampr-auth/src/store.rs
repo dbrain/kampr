@@ -131,9 +131,17 @@ impl Store {
             .max_connections(4)
             // sqlite unlinks `-wal` and `-shm` when the last connection closes and recreates them
             // at the process umask when the next one opens, so an idle node's credential digests
-            // come back 0644 on a default host. Keeping one connection for the life of the
-            // process means the sidecars `restrict` tightened are the ones that stay.
-            .min_connections(1)
+            // come back 0644 on a default host. With neither a lifetime nor an idle timeout
+            // nothing ever closes a connection, and `open` runs migrations before it returns, so
+            // the pool holds one for the life of the process and the sidecars `restrict`
+            // tightened are the ones that stay.
+            //
+            // **Not `min_connections`.** Asking for a minimum makes sqlx spawn a maintenance task
+            // that races `connect_with`'s own call to fill it, and on a runtime with an idle
+            // worker both open a connection at once. Each then runs `journal_mode = WAL` against a
+            // file `touch_private` has created and migrations have not filled, and that
+            // rollback-to-WAL transition answers SQLITE_BUSY *without* going through the busy
+            // handler — so `busy_timeout` does not cover it and `Store::open` fails outright.
             .idle_timeout(None)
             .max_lifetime(None)
             // And for every connection past that one, because a sidecar sqlite recreated is
@@ -847,20 +855,16 @@ mod tests {
         );
     }
 
-    /// Asserted as configuration rather than measured: the defect is a ten-minute idle timeout and
-    /// a thirty-minute lifetime, and a test cannot wait either of them out. What it buys is that
-    /// the last connection never closes, so sqlite never unlinks `-wal` and never recreates it at
-    /// whatever umask the node happens to have.
+    /// The timeouts are asserted as configuration because a test cannot wait out ten minutes and
+    /// thirty; what they buy is measured beside them. A pool that still holds a connection after
+    /// its work is done is one sqlite has not made unlink `-wal` — and the sidecar being *there*,
+    /// not the number in the options, is the thing an operator's credential digests rest on.
     #[tokio::test]
     async fn the_pool_never_drops_to_zero_connections_and_so_never_tears_the_write_ahead_log_down() {
         let parent = tempfile::tempdir().unwrap();
         let path = parent.path().join("state").join("kampr.db");
         let s = Store::open(&path).await.unwrap();
         let options = s.pool().options();
-        assert!(
-            options.get_min_connections() >= 1,
-            "the pool empties itself when idle"
-        );
         assert_eq!(
             options.get_idle_timeout(),
             None,
@@ -870,6 +874,21 @@ mod tests {
             options.get_max_lifetime(),
             None,
             "a live connection is still retired"
+        );
+
+        s.create_device("phone", Role::Full, NOW, None, None, None)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            s.pool().size() > 0,
+            "the pool emptied itself and took the write-ahead log with it"
+        );
+        let mut wal = path.as_os_str().to_os_string();
+        wal.push("-wal");
+        assert!(
+            std::path::PathBuf::from(wal).exists(),
+            "sqlite unlinked `-wal`; the next open recreates it at the process umask"
         );
     }
 
