@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -17,7 +19,11 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
@@ -28,6 +34,9 @@ import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.keyboardInset
+import dev.kampr.shared.wire.PendingOption
+import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -35,6 +44,36 @@ private val BARS = SafeArea(top = 32.dp, bottom = 24.dp)
 private val KEYBOARD = BARS.copy(ime = 300.dp)
 private const val REPLY = "Reply to claude"
 private const val SEND = "Send this reply"
+
+// Rotated: the gesture handle thins and a three-button bar leaves the bottom for one side.
+// Measured on an emulator at 560 dpi, rotated, with the stock keyboard up: 411 dp of window, of
+// which the keys take 212 dp and the pane's own header — which floats over the conversation and
+// is paid for as a top padding — takes 83 dp more.
+private val ROTATED_WINDOW = DpSize(694.dp, 411.dp)
+private val ROTATED_KEYS = SafeArea(top = 24.dp, bottom = 0.dp, ime = 212.dp)
+private val PANE_CHROME = 83.dp
+
+private fun rotatedPane(pending: Boolean): PaneState {
+    val store = KamprStore()
+    store.accept(requireNotNull(Wire.decode(RICH_CONVO)) { "undecodable frame" })
+    // A real question, not a three-word one: harnesses ask about a named file and offer to stop
+    // asking, and those labels wrap the strip onto several rows.
+    if (pending) {
+        store.accept(
+            ServerMsg.Pending(
+                pane = PANE_ID,
+                question = "Edit crates/kampr-core/src/width.rs?",
+                options = listOf(
+                    PendingOption("1", "Yes, make this edit"),
+                    PendingOption("2", "Yes, and do not ask again for this file"),
+                    PendingOption("3", "No, and tell Claude what to do differently"),
+                ),
+                source = "screen",
+            )
+        )
+    }
+    return store.pane(PANE_ID)
+}
 
 // Rotated: the gesture handle thins and a three-button bar leaves the bottom for one side.
 private val ROTATED = listOf(
@@ -51,13 +90,13 @@ private val ROTATED = listOf(
 // ends at the window and owes the handle itself.
 @OptIn(ExperimentalTestApi::class)
 @Composable
-private fun Phone(safe: SafeArea, nav: Boolean = true, content: @Composable () -> Unit) {
+private fun Phone(safe: SafeArea, nav: Boolean = true, window: DpSize? = null, content: @Composable () -> Unit) {
     CompositionLocalProvider(
         LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
         LocalPaneIo provides RecordingIo,
         LocalSafeArea provides safe,
     ) {
-        Box(Modifier.fillMaxSize().keyboardInset()) {
+        Box((if (window == null) Modifier.fillMaxSize() else Modifier.size(window)).keyboardInset()) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) { BottomEdgeHeldBelow(nav, content) }
                 if (nav) BottomNav(Tab.Herd, {})
@@ -146,6 +185,65 @@ class ComposerInsetTest {
                 )
             }
         }
+    }
+
+    // Reported from a phone: "I tap a word and the native android selection anchors show but they
+    // are drawn off screen, as is the selection highlight." They were not translated. Rotated with
+    // the keys up there are 411 dp of window, the keyboard takes 212 and the pane's own floating
+    // header 83, and what is left had to hold a transcript bar, a question strip and a reply box
+    // and could not. A column measures its unweighted children in order against what the ones
+    // before them left, so the reply box — the last of them — was measured against nothing, came
+    // back 0 dp tall, and was placed 22 dp past the bottom of the window. Android's handles hang
+    // below the baseline of the text in it, so they were drawn under the keyboard.
+    //
+    // Both fixtures, because they are two different overflows: the plain pane is the one the
+    // report came from, and a pane with a question open has a whole answer strip in the way too.
+    @Test
+    fun aRotatedPaneWithTheKeysUpShowsTheWholeReplyBox() {
+        val settled = settledReplyHeight()
+        for (pending in listOf(false, true)) {
+            runComposeUiTest {
+                val pane = rotatedPane(pending)
+                setContent {
+                    Phone(ROTATED_KEYS, nav = false, window = ROTATED_WINDOW) {
+                        ConversationView(pane, demoInfo(), Modifier.fillMaxSize().padding(top = PANE_CHROME))
+                    }
+                }
+                waitForIdle()
+                val floor = ROTATED_WINDOW.height - ROTATED_KEYS.ime
+                val reply = onNodeWithContentDescription(REPLY).getUnclippedBoundsInRoot()
+                val send = onNodeWithContentDescription(SEND, substring = true).getUnclippedBoundsInRoot()
+                assertTrue(
+                    reply.bottom - reply.top >= settled - 1.dp,
+                    "pending=$pending: the reply box was squeezed to ${reply.bottom - reply.top}, " +
+                        "against the $settled one line of it needs",
+                )
+                assertTrue(
+                    reply.bottom <= floor && send.bottom <= floor,
+                    "pending=$pending: the reply box ends at ${reply.bottom} and the send button at " +
+                        "${send.bottom}, below the $floor the keys leave",
+                )
+            }
+        }
+    }
+
+    // How tall one line of reply box is when nothing is squeezing it. Measured rather than named,
+    // because what makes the report visible is the *difference*: a field shorter than its own line
+    // of text clips that text through the middle, and Android draws the selection handles below
+    // the baseline of a line that is no longer where it looks.
+    private fun settledReplyHeight(): Dp {
+        var height = 0.dp
+        runComposeUiTest {
+            setContent {
+                Phone(BARS.copy(ime = 0.dp), nav = false) {
+                    ConversationView(rotatedPane(false), demoInfo(), Modifier.fillMaxSize())
+                }
+            }
+            waitForIdle()
+            val reply = onNodeWithContentDescription(REPLY).getUnclippedBoundsInRoot()
+            height = reply.bottom - reply.top
+        }
+        return height
     }
 
     // RICH_CONVO ends on a running `Edit` card, and a lazy list only composes what is in view.

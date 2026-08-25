@@ -49,7 +49,11 @@ fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifie
     // covered. Zero on a portrait phone, where the tabs below already hold the edge.
     val safe = LocalSafeArea.current
     var value by remember { mutableStateOf(TextFieldValue()) }
-    val pill = RoundedCornerShape(tokens.radii.pill)
+    // A fixed radius and not `pill`, which is 999 dp and therefore always half the height of
+    // whatever it is put on. That reads as a chip on one line of reply and as an oval by four,
+    // which is the shape this box spends most of its life in. The send button beside it keeps the
+    // pill, because a circle is what it is meant to be at any size.
+    val field = RoundedCornerShape(tokens.radii.lg)
     val ready = enabled && value.text.isNotBlank()
 
     fun submit() {
@@ -76,8 +80,8 @@ fun Composer(agent: String?, enabled: Boolean, onSend: (String) -> Unit, modifie
         Box(
             Modifier
                 .weight(1f)
-                .background(tokens.color.surface, pill)
-                .edge(tokens.card, pill)
+                .background(tokens.color.surface, field)
+                .edge(tokens.card, field)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             if (value.text.isEmpty()) {
