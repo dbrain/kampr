@@ -6,6 +6,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.themeOf
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.HerdPortrait
@@ -142,7 +143,7 @@ class NewSheetArtboardTest {
             File(OUT, "herd-with-new.png"),
         ) {
             CompositionLocalProvider(LocalManage provides allowed) {
-                HerdPortrait(herd, 0.0, 0.4, emptyList(), {}, null)
+                HerdPortrait(herd, ConnectionStatus.Live("full"), 0.0, 0.4, emptyList(), {}, null)
             }
         }
         val without = render(
@@ -150,7 +151,7 @@ class NewSheetArtboardTest {
             File(OUT, "herd-without-new.png"),
         ) {
             CompositionLocalProvider(LocalManage provides refused) {
-                HerdPortrait(herd, 0.0, 0.4, emptyList(), {}, null)
+                HerdPortrait(herd, ConnectionStatus.Live("full"), 0.0, 0.4, emptyList(), {}, null)
             }
         }
         assertTrue(

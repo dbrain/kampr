@@ -296,6 +296,7 @@ internal fun AppScaffold(
                     Row(Modifier.weight(1f)) {
                         HerdSidebar(
                             herd = herd,
+                            connection = connectionStatus,
                             now = now,
                             localRtt = localRtt,
                             triage = triage,
@@ -396,7 +397,7 @@ internal fun AppScaffold(
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
-                            herd, now, localRtt, triage, state::openPane, null,
+                            herd, connectionStatus, now, localRtt, triage, state::openPane, null,
                             onResync = { state.connection.send(ClientMsg.Resync) },
                         )
                     }
@@ -442,7 +443,7 @@ internal fun AppScaffold(
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                         Screen.Herd, Screen.Mosaic -> HerdPortrait(
-                            herd, now, localRtt, triage,
+                            herd, connectionStatus, now, localRtt, triage,
                             state::openPane,
                             if (readOnly) null else { paneId: String -> answer(paneId, "1") },
                             onResync = { state.connection.send(ClientMsg.Resync) },
@@ -487,17 +488,7 @@ internal fun Modifier.screenInset(screen: Screen): Modifier {
 private fun EmptyDetail(connectionStatus: ConnectionStatus) {
     val tokens = Kampr.tokens
     Box(Modifier.fillMaxSize().background(tokens.color.surface2).readingOrder(1f), contentAlignment = Alignment.Center) {
-        KText(
-            when (connectionStatus) {
-                is ConnectionStatus.Live -> "Pick a pane"
-                is ConnectionStatus.Offline -> "Reconnecting"
-                is ConnectionStatus.Refused -> "Not paired with this node"
-                ConnectionStatus.Connecting -> "Connecting"
-                ConnectionStatus.Idle -> "Not connected"
-            },
-            tokens.type.caption,
-            tokens.color.mute,
-        )
+        KText(connectionWord(connectionStatus) ?: "Pick a pane", tokens.type.caption, tokens.color.mute)
     }
 }
 

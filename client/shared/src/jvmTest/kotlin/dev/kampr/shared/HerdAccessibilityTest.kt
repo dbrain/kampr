@@ -18,6 +18,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.TriageItem
@@ -97,7 +98,7 @@ class HerdAccessibilityTest {
     @Test
     fun theHerdListSaysWhatEachAgentIsDoing() = runComposeUiTest {
         setContent {
-            Themed { HerdPortrait(HERD, 0.0, 12.0, emptyList(), {}, null) }
+            Themed { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) }
         }
         for (word in listOf("Blocked", "Working", "Done", "Idle")) {
             assertTrue(
@@ -113,7 +114,7 @@ class HerdAccessibilityTest {
     fun aBlockedAgentInterrupts() = runComposeUiTest {
         val triage = listOf(TriageItem(HERD.panes.first(), "Approve edit to server.ts"))
         setContent {
-            Themed { HerdPortrait(HERD, 0.0, 12.0, triage, {}, {}) }
+            Themed { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, triage, {}, {}) }
         }
         onNodeWithContentDescription("Needs you", substring = true)
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Assertive))

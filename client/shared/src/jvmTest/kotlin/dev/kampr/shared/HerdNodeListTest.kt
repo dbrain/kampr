@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
@@ -63,7 +64,7 @@ private val ALONE = Herd(nodes = listOf(LOCAL), known = true)
 class HerdNodeListTest {
     @Test
     fun aHerdOfOneNodeReadsAsOneNodeRatherThanOneNodes() = runComposeUiTest {
-        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(ALONE, 0.0, 12.0, emptyList(), {}, null) } } }
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(ALONE, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) } } }
         waitForIdle()
         assertTrue(
             onAllNodesWithText("1 nodes", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty(),
@@ -77,7 +78,7 @@ class HerdNodeListTest {
 
     @Test
     fun thePillOpensAListOfEveryMachineWithItsRealStatus() = runComposeUiTest {
-        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(HERD, 0.0, 12.0, emptyList(), {}, null) } } }
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) } } }
         waitForIdle()
         for (row in listOf(LOCAL_ROW, PEER_ROW, DOWN_ROW)) {
             assertTrue(
@@ -108,18 +109,18 @@ class HerdNodeListTest {
         val layouts = listOf<Pair<String, @Composable () -> Unit>>(
             "portrait" to {
                 Box(Modifier.size(420.dp, 900.dp)) {
-                    HerdPortrait(HERD, 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "portrait" })
+                    HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "portrait" })
                 }
             },
             "landscape" to {
                 Box(Modifier.size(900.dp, 420.dp)) {
-                    HerdLandscape(HERD, 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "landscape" })
+                    HerdLandscape(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null, onResync = { asked += "landscape" })
                 }
             },
             "sidebar" to {
                 Box(Modifier.size(300.dp, 900.dp)) {
                     HerdSidebar(
-                        HERD, 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {},
+                        HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {},
                         onResync = { asked += "sidebar" },
                     )
                 }
@@ -141,11 +142,11 @@ class HerdNodeListTest {
     @Test
     fun everyHerdLayoutOpensAndClosesTheMachineList() {
         val layouts = listOf<Pair<String, @Composable () -> Unit>>(
-            "portrait" to { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(HERD, 0.0, 12.0, emptyList(), {}, null) } },
-            "landscape" to { Box(Modifier.size(900.dp, 420.dp)) { HerdLandscape(HERD, 0.0, 12.0, emptyList(), {}, null) } },
+            "portrait" to { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) } },
+            "landscape" to { Box(Modifier.size(900.dp, 420.dp)) { HerdLandscape(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) } },
             "sidebar" to {
                 Box(Modifier.size(300.dp, 900.dp)) {
-                    HerdSidebar(HERD, 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {})
+                    HerdSidebar(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {})
                 }
             },
         )

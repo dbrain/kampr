@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,9 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.othersWatching
@@ -82,25 +85,109 @@ fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     watchersPhrase(othersWatching(pane)),
 ).joinToString(", ")
 
+// One vocabulary for the socket wherever its state is said — the pill, the empty herd, the detail
+// pane — so a device that never reached a node cannot be "Reconnecting" on one surface and silent
+// on the next. Null is Live: the connection has no news of its own, and each surface says its own
+// thing about a herd that is merely empty.
+fun connectionWord(status: ConnectionStatus): String? = when (status) {
+    is ConnectionStatus.Live -> null
+    is ConnectionStatus.Offline -> "Reconnecting"
+    is ConnectionStatus.Refused -> "Not paired with this node"
+    ConnectionStatus.Connecting -> "Connecting"
+    ConnectionStatus.Idle -> "Not connected"
+}
+
+// Refused is the one state that never comes back on its own, so it is the one that reads as a
+// refusal rather than as weather.
+@Composable
+fun connectionColor(status: ConnectionStatus): Color {
+    val color = Kampr.tokens.color
+    return when (status) {
+        is ConnectionStatus.Live -> color.done
+        is ConnectionStatus.Refused -> color.blocked
+        else -> color.working
+    }
+}
+
+fun connectionShape(status: ConnectionStatus): MarkShape =
+    if (status is ConnectionStatus.Live) MarkShape.Bar else MarkShape.Ring
+
 // The count is the door to the list behind it: a pill that only ever said a number was a control
 // with nothing under it, and "1 nodes" is what an unconditional plural reads as on a herd of one.
+// The mark is the socket rather than the herd, because an unconditionally green dot told a device
+// with no network at all that it was healthy and owned nothing.
 @Composable
-fun NodeCountPill(online: Int, compact: Boolean, onClick: () -> Unit) {
+fun NodeCountPill(online: Int, connection: ConnectionStatus, compact: Boolean, onClick: () -> Unit) {
     val tokens = Kampr.tokens
     val counted = if (online == 1) "1 node" else "$online nodes"
+    val word = connectionWord(connection)
+    val tone = connectionColor(connection)
     Box(
         Modifier
             .touchable(if (compact) LANDSCAPE_TOUCH else TOUCH)
-            .action("Machines — $counted online", onClick),
+            .action(listOfNotNull("Machines — $counted online", word).joinToString(", "), onClick),
         contentAlignment = Alignment.Center,
     ) {
         Pill(
             horizontal = if (compact) 11.dp else 13.dp,
             vertical = if (compact) 5.dp else 7.dp,
         ) {
-            Dot(tokens.color.done, 7.dp)
-            KText(counted, tokens.type.pill, tokens.color.dim)
+            Mark(tone, connectionShape(connection), 7.dp)
+            KText(counted, tokens.type.pill, if (word == null) tokens.color.dim else tone)
         }
+    }
+}
+
+// Four different pieces of news, and the operator can act on only some of them. Painting nothing
+// at all said the healthiest of the four to the device that had the worst of them.
+@Composable
+fun HerdEmpty(connection: ConnectionStatus, compact: Boolean, modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    val headline = connectionWord(connection) ?: "No panes yet"
+    val detail = when (connection) {
+        is ConnectionStatus.Live -> "This node is up and has nothing running on it."
+        is ConnectionStatus.Offline -> "This device has lost the node, and kept none of the herd."
+        is ConnectionStatus.Refused -> "This node does not know this device. Pair it again from Settings."
+        ConnectionStatus.Connecting -> "Reaching the node."
+        ConnectionStatus.Idle -> "This device has not reached a node yet."
+    }
+    Column(
+        modifier.fillMaxWidth().announce("$headline. $detail"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(if (compact) 7.dp else 10.dp),
+    ) {
+        Mark(connectionColor(connection), connectionShape(connection), if (compact) 9.dp else 11.dp)
+        KText(
+            headline,
+            if (compact) tokens.type.bodyStrong else tokens.type.paneTitle,
+            tokens.color.text,
+            maxLines = 2,
+        )
+        KText(
+            detail,
+            tokens.type.caption.copy(textAlign = TextAlign.Center),
+            tokens.color.mute,
+            Modifier.widthIn(max = 260.dp),
+            maxLines = 3,
+        )
+    }
+}
+
+// A herd still on screen while the socket is down is a memory, not a status. The pane surfaces
+// already spell that fact "Stale" for a single grid; this says it about the whole list.
+@Composable
+fun StaleHerdNote(connection: ConnectionStatus, modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    Box(modifier) {
+        StatusBadge(
+            "Stale",
+            tokens.color.working,
+            tokens.color.surface,
+            label = listOfNotNull(
+                "Stale — these machines are the last this device saw, not the herd now",
+                connectionWord(connection),
+            ).joinToString(", "),
+        )
     }
 }
 

@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.NodeGroup
 import dev.kampr.shared.model.TriageItem
@@ -34,6 +35,7 @@ import dev.kampr.shared.wire.PaneInfo
 @Composable
 fun HerdPortrait(
     herd: Herd,
+    connection: ConnectionStatus,
     now: Double,
     localRtt: Double?,
     triage: List<TriageItem>,
@@ -43,6 +45,7 @@ fun HerdPortrait(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val groups = herd.groups()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -53,33 +56,45 @@ fun HerdPortrait(
             ) {
                 KText("Herd", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
                 Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NodeCountPill(herd.nodes.count { it.online }, compact = false) { listing = true }
+                    NodeCountPill(herd.nodes.count { it.online }, connection, compact = false) { listing = true }
                     MosaicAction()
                     NewAction()
                 }
+            }
+            if (herd.stale && groups.isNotEmpty()) {
+                StaleHerdNote(connection, Modifier.padding(start = 20.dp, end = 20.dp, bottom = 11.dp))
             }
             if (triage.isNotEmpty()) {
                 Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
                     TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove)
                 }
             }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                herd.groups().forEachIndexed { index, group ->
-                    NodeHeader(
-                        group.node,
-                        localRtt,
-                        PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
-                    )
-                    Column(
-                        Modifier.padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        for (pane in group.panes) {
-                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+            if (groups.isEmpty()) {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    HerdEmpty(connection, compact = false)
+                }
+            } else {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    groups.forEachIndexed { index, group ->
+                        NodeHeader(
+                            group.node,
+                            localRtt,
+                            PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
+                        )
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            for (pane in group.panes) {
+                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                            }
                         }
                     }
+                    Box(Modifier.height(16.dp))
                 }
-                Box(Modifier.height(16.dp))
             }
         }
         if (listing) NodeListSheet(herd.nodes, Breakpoint.Portrait, onResync) { listing = false }
@@ -89,6 +104,7 @@ fun HerdPortrait(
 @Composable
 fun HerdLandscape(
     herd: Herd,
+    connection: ConnectionStatus,
     now: Double,
     localRtt: Double?,
     triage: List<TriageItem>,
@@ -98,7 +114,8 @@ fun HerdLandscape(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    val columns = herd.groups().chunkedColumns()
+    val groups = herd.groups()
+    val columns = groups.chunkedColumns()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -108,7 +125,7 @@ fun HerdLandscape(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 KText("Herd", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-                NodeCountPill(herd.nodes.count { it.online }, compact = true) { listing = true }
+                NodeCountPill(herd.nodes.count { it.online }, connection, compact = true) { listing = true }
                 MosaicAction(LANDSCAPE_TOUCH)
                 NewAction(target = LANDSCAPE_TOUCH)
                 Box(Modifier.weight(1f))
@@ -121,22 +138,34 @@ fun HerdLandscape(
                     )
                 }
             }
-            Row(
-                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                for (column in columns) {
-                    Column(Modifier.weight(1f)) {
-                        if (column === columns.first() && triage.isNotEmpty()) {
-                            Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                                TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+            if (herd.stale && groups.isNotEmpty()) {
+                StaleHerdNote(connection, Modifier.padding(start = 18.dp, end = 18.dp, bottom = 6.dp))
+            }
+            if (groups.isEmpty()) {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    HerdEmpty(connection, compact = true)
+                }
+            } else {
+                Row(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    for (column in columns) {
+                        Column(Modifier.weight(1f)) {
+                            if (column === columns.first() && triage.isNotEmpty()) {
+                                Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                                    TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                                }
                             }
-                        }
-                        for (group in column) {
-                            NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                for (pane in group.panes) {
-                                    PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                            for (group in column) {
+                                NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    for (pane in group.panes) {
+                                        PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                    }
                                 }
                             }
                         }
@@ -169,6 +198,7 @@ private fun List<NodeGroup>.chunkedColumns(): List<List<NodeGroup>> {
 @Composable
 fun HerdSidebar(
     herd: Herd,
+    connection: ConnectionStatus,
     now: Double,
     localRtt: Double?,
     triage: List<TriageItem>,
@@ -182,6 +212,7 @@ fun HerdSidebar(
 ) {
     val tokens = Kampr.tokens
     val safe = LocalSafeArea.current
+    val groups = herd.groups()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.width(SIDEBAR_WIDTH).fillMaxHeight()) {
     Column(
@@ -200,26 +231,38 @@ fun HerdSidebar(
             ) {
                 KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
                 Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NodeCountPill(herd.nodes.count { it.online }, compact = true) { listing = true }
+                    NodeCountPill(herd.nodes.count { it.online }, connection, compact = true) { listing = true }
                     MosaicAction(LANDSCAPE_TOUCH)
                     NewAction(target = LANDSCAPE_TOUCH)
                 }
+            }
+            if (herd.stale && groups.isNotEmpty()) {
+                StaleHerdNote(connection, Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp))
             }
             if (triage.isNotEmpty()) {
                 Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
                     TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
                 }
             }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                herd.groups().forEachIndexed { index, group ->
-                    NodeHeader(
-                        group.node,
-                        localRtt,
-                        PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
-                    )
-                    Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        for (pane in group.panes) {
-                            PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+            if (groups.isEmpty()) {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    HerdEmpty(connection, compact = true)
+                }
+            } else {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    groups.forEachIndexed { index, group ->
+                        NodeHeader(
+                            group.node,
+                            localRtt,
+                            PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
+                        )
+                        Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            for (pane in group.panes) {
+                                PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                            }
                         }
                     }
                 }

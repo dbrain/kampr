@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.net.DeviceRecord
@@ -137,7 +138,7 @@ class ThemeMatrixTest {
     @Test
     fun herdSheet() = eachGround { ground ->
         sheet(phone.first, phone.second, ground, TypeScale.Phone, "herd") {
-            HerdPortrait(herd, NOW, 4.0, triage, {}, {})
+            HerdPortrait(herd, ConnectionStatus.Live("full"), NOW, 4.0, triage, {}, {})
         }
     }
 
@@ -206,7 +207,7 @@ class ThemeMatrixTest {
         sheet(desk.first, desk.second, ground, TypeScale.Desk, "desktop") {
             val (_, pane) = demoPane(RICH_CONVO)
             Row(Modifier.fillMaxSize()) {
-                HerdSidebar(herd, NOW, 4.0, triage, PANE_ID, "studio", "local · 4 ms", {}, {})
+                HerdSidebar(herd, ConnectionStatus.Live("full"), NOW, 4.0, triage, PANE_ID, "studio", "local · 4 ms", {}, {})
                 Column(Modifier.fillMaxSize()) {
                     PaneScreenDesktop(
                         pane = pane,

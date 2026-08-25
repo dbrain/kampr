@@ -20,6 +20,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
@@ -103,7 +104,7 @@ class WatchersUiTest {
             Themed {
                 HerdPortrait(
                     Herd(nodes = listOf(NODE), panes = listOf(ALONE, SHARED), known = true),
-                    0.0, 12.0, emptyList(), {}, null,
+                    ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null,
                 )
             }
         }

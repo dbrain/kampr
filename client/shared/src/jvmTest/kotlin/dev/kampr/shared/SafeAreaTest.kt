@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
@@ -106,7 +107,7 @@ class SafeAreaTest {
                 setContent {
                     Bars(bars) {
                         Box(Modifier.fillMaxSize().screenInset(Screen.Herd)) {
-                            HerdLandscape(Herd(), now = 0.0, localRtt = null, triage = emptyList(), onOpenPane = {}, onApprove = null)
+                            HerdLandscape(Herd(), ConnectionStatus.Live("full"), now = 0.0, localRtt = null, triage = emptyList(), onOpenPane = {}, onApprove = null)
                         }
                     }
                 }
