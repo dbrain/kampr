@@ -91,39 +91,84 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Never leave a herdr behind. `server.stop` first, then a hard kill of anything holding
-        // the socket, then the session directory.
-        let socket = self.socket.clone();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("teardown runtime");
-            runtime.block_on(async {
-                let _ = kampr_herdr::Herdr::new(&socket)
-                    .call::<Value>("server.stop", json!({}))
-                    .await;
-            });
+        if let Some(dir) = self.socket.parent() {
+            forget_session(dir);
+        }
+    }
+}
+
+/// A session a test made, removed whether that test passes, fails or panics. Teardown at the end
+/// of a body is skipped by both a panic and an abort, and an aborted run once left thirty-seven
+/// of these — which is not tidiness but correctness, because a node serves every session it can
+/// find (#97), so one left behind is in the next test's herd.
+struct CreatedSession {
+    dir: PathBuf,
+}
+
+impl CreatedSession {
+    fn named(name: &str) -> Self {
+        Self {
+            dir: herdr_home().join("sessions").join(name),
+        }
+    }
+
+    fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for CreatedSession {
+    fn drop(&mut self) {
+        forget_session(&self.dir);
+        assert!(
+            std::thread::panicking() || !self.dir.exists(),
+            "left {:?} behind",
+            self.dir
+        );
+    }
+}
+
+/// Never leave a herdr behind. `server.stop` over the session's own socket first — a test that
+/// panicked before its `session.stop` still has one running, and removing the directory under it
+/// leaves the herdr — then the socket, then the directory. A stopped session keeps its directory
+/// until something removes it (#242), and a herdr asked to stop still owns that directory for a
+/// moment: one removal races it, which is what leaves a throwaway session listed forever. So wait
+/// for the socket to go, then keep removing until the directory stays gone.
+fn forget_session(dir: &Path) {
+    if !dir.exists() {
+        return;
+    }
+    let socket = dir.join("herdr.sock");
+    if socket.exists() {
+        // `block_on` panics inside a runtime, and every caller of this is inside one.
+        std::thread::spawn({
+            let socket = socket.clone();
+            move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("teardown runtime");
+                runtime.block_on(async {
+                    let _ = kampr_herdr::Herdr::new(&socket)
+                        .call::<Value>("server.stop", json!({}))
+                        .await;
+                });
+            }
         })
         .join()
         .ok();
-        // A herdr that has been asked to stop still owns its session directory for a moment, and
-        // one removal races it — which is what leaves a throwaway session listed forever. Wait
-        // for the socket to go, then keep removing until the directory stays gone.
-        for _ in 0..50 {
-            if !self.socket.exists() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(200));
+    }
+    for _ in 0..100 {
+        if !socket.exists() {
+            break;
         }
-        if let Some(dir) = self.socket.parent() {
-            for _ in 0..25 {
-                let _ = std::fs::remove_dir_all(dir);
-                std::thread::sleep(Duration::from_millis(200));
-                if !dir.exists() {
-                    break;
-                }
-            }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for _ in 0..25 {
+        let _ = std::fs::remove_dir_all(dir);
+        std::thread::sleep(Duration::from_millis(200));
+        if !dir.exists() {
+            break;
         }
     }
 }
@@ -2814,22 +2859,23 @@ async fn every_client_op_lands_on_a_real_herd() {
 
     // A named session is a whole separate herdr server. Created here, stopped here, gone here.
     let session = format!("kampr-probe-{}", std::process::id());
+    let created = CreatedSession::named(&session);
     ok(
         &mut socket,
         json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
         20,
     )
     .await;
-    let session_dir = herdr_home().join("sessions").join(&session);
     for _ in 0..100 {
-        if session_dir.join("herdr.sock").exists() {
+        if created.dir().join("herdr.sock").exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(
-        session_dir.join("herdr.sock").exists(),
-        "no socket at {session_dir:?}"
+        created.dir().join("herdr.sock").exists(),
+        "no socket at {:?}",
+        created.dir()
     );
     ok(
         &mut socket,
@@ -2837,10 +2883,6 @@ async fn every_client_op_lands_on_a_real_herd() {
         20,
     )
     .await;
-    // Never leave a herdr session behind: wait for the socket to go, then keep removing until the
-    // directory stays gone — a shutting-down herdr writes into it after the socket has vanished.
-    forget_session(&session_dir).await;
-    assert!(!session_dir.exists(), "left {session_dir:?} behind");
 
     // Closing the workspace takes its panes with it, and the client hears about it as a patch.
     let doomed: Vec<String> = h
@@ -3122,7 +3164,7 @@ async fn a_created_session_leaves_the_nodes_process_group() {
     until(&mut socket, "hello", 10).await;
 
     let session = format!("kampr-detach-{}", std::process::id());
-    let session_dir = herdr_home().join("sessions").join(&session);
+    let created = CreatedSession::named(&session);
     ok(
         &mut socket,
         json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
@@ -3130,7 +3172,7 @@ async fn a_created_session_leaves_the_nodes_process_group() {
     )
     .await;
     for _ in 0..100 {
-        if session_dir.join("herdr.sock").exists() {
+        if created.dir().join("herdr.sock").exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -3149,8 +3191,6 @@ async fn a_created_session_leaves_the_nodes_process_group() {
     // N5: a session op answers with a session, so its `id` must not be dressed up as a pane id a
     // client would then try to watch.
     assert_eq!(stopped["id"], session.as_str(), "{stopped}");
-
-    forget_session(&session_dir).await;
 
     assert_ne!(
         theirs, ours,
@@ -3175,7 +3215,7 @@ async fn caps_answers_a_session_op_with_the_session_set_that_op_produced() {
     until(&mut socket, "hello", 10).await;
 
     let session = format!("kampr-capsfresh-{}", std::process::id());
-    let session_dir = herdr_home().join("sessions").join(&session);
+    let _created = CreatedSession::named(&session);
 
     // Warmed the way a client warms it — on `hello`, long before the operator types a name — so
     // what follows is the answer they would really have been given.
@@ -3210,9 +3250,6 @@ async fn caps_answers_a_session_op_with_the_session_set_that_op_produced() {
         Some(false),
         "the session is still advertised as running after its own stop was acknowledged: {stopped}"
     );
-
-    forget_session(&session_dir).await;
-    assert!(!session_dir.exists(), "left {session_dir:?} behind");
 }
 
 /// The settle that makes a session op's ack honest is a wait of up to five seconds, and it used
@@ -3228,7 +3265,7 @@ async fn a_settling_session_op_does_not_stop_the_socket_answering_anything_else(
     until(&mut socket, "hello", 10).await;
 
     let session = format!("kampr-settling-{}", std::process::id());
-    let session_dir = herdr_home().join("sessions").join(&session);
+    let _created = CreatedSession::named(&session);
     ok(
         &mut socket,
         json!({ "t": "manage", "op": "session.create", "node": node, "name": &session }),
@@ -3266,27 +3303,6 @@ async fn a_settling_session_op_does_not_stop_the_socket_answering_anything_else(
     );
     assert_eq!(ack["ok"], true, "{ack}");
     assert_eq!(ack["id"], session.as_str(), "{ack}");
-
-    forget_session(&session_dir).await;
-    assert!(!session_dir.exists(), "left {session_dir:?} behind");
-}
-
-/// A stopped session keeps its directory until something removes it (#242), and a node serves
-/// every session it can find (#97) — so a test that leaves one behind changes the next one's herd.
-async fn forget_session(dir: &Path) {
-    for _ in 0..100 {
-        if !dir.join("herdr.sock").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    for _ in 0..20 {
-        let _ = std::fs::remove_dir_all(dir);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if !dir.exists() {
-            break;
-        }
-    }
 }
 
 /// `session.create` used to answer on the spawn alone, which made it a `managed{ok}` for a
@@ -4636,7 +4652,7 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
     until(&mut socket, "hello", 10).await;
 
     let joined = format!("{node}.{session}");
-    let session_dir = herdr_home().join("sessions").join(&session);
+    let _created = CreatedSession::named(&session);
     let serving = async |want: bool| {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
         loop {
@@ -4675,14 +4691,4 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
         serving(false).await,
         "the session was stopped and is still an online node"
     );
-
-    for _ in 0..100 {
-        if !session_dir.join("herdr.sock").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let _ = std::process::Command::new("herdr")
-        .args(["session", "delete", &session])
-        .output();
 }
