@@ -219,8 +219,13 @@ code is intercepted *and* the attacker answers at the URL before the operator's 
 fingerprint the operator is shown is the attacker's. Compare it out of band if the join crosses a
 network you do not control.
 
-The mesh landed late and has no end-to-end test across two real hosts. Treat everything in this
-section as designed-and-implemented rather than as exercised.
+Exercised on one machine, not across two hosts. `crates/kampr-node/tests/mesh.rs` drives real nodes
+over a real socket into the hub's own `/mesh` endpoint — the handshake, the enrolment store on disk
+and the serve loop are the shipped ones — and covers all three checks above, both revocations (a
+second process writing SQLite, and a client of the hub spending a device token), and a peer that
+stops answering keepalives. What no test here has is a network: NAT, real latency and loss, TLS
+termination at a proxy, and clock skew between hosts remain designed-and-implemented rather than
+exercised.
 
 ### 3.7 A read-only device
 
