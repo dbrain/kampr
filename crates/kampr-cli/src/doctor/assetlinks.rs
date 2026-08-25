@@ -518,10 +518,10 @@ mod tests {
     #[test]
     fn the_host_asked_about_is_the_rp_id_and_not_the_origins_own() {
         let mut config = Config::bootstrap("x");
-        config.server.origin = "https://kampr.oldug.com".into();
-        assert_eq!(relying_party(&config).as_deref(), Some("kampr.oldug.com"));
-        config.auth.rp_id = "oldug.com".into();
-        assert_eq!(relying_party(&config).as_deref(), Some("oldug.com"));
+        config.server.origin = "https://kampr.example.net".into();
+        assert_eq!(relying_party(&config).as_deref(), Some("kampr.example.net"));
+        config.auth.rp_id = "example.net".into();
+        assert_eq!(relying_party(&config).as_deref(), Some("example.net"));
 
         // An override never resurrects a passkey the origin cannot carry.
         config.server.origin = "http://192.168.1.24:8790".into();

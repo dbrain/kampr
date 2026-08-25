@@ -36,7 +36,7 @@ private const val REGISTER_START = """
 private const val AUTHENTICATE_START = """
 {"challenge_id":"3f1a90c2f0d84e1b8e6c2a55b7d31c04","options":{"publicKey":{
 "allowCredentials":[],"challenge":"Yk5wS0dRb0hzZXJfdGVzdF9jaGFsbGVuZ2VfMDE",
-"rpId":"oldug.com","timeout":300000,"userVerification":"required"}}}
+"rpId":"example.net","timeout":300000,"userVerification":"required"}}}
 """
 
 private const val ASSET_LINKS = """
@@ -101,8 +101,8 @@ class PasskeyRequestTest {
     // just failed is a diagnosis that is confidently wrong.
     @Test
     fun aFileThatIsRightIsNotReportedAsAShrug() {
-        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "kampr.oldug.com", RAW)
-        assertTrue("kampr.oldug.com" in told, told)
+        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "kampr.example.net", RAW)
+        assertTrue("kampr.example.net" in told, told)
         assertTrue(RAW in told, "the authenticator's own words are the one thing to search for: $told")
         assertTrue("public internet" in told, told)
         assertTrue("doctor" in told, told)
@@ -143,27 +143,27 @@ class PasskeyRequestTest {
         assertEquals("localhost", relyingParty(register))
 
         val authenticate = requireNotNull(elementOf(AUTHENTICATE_START, "options"))
-        assertEquals("oldug.com", relyingParty(authenticate))
+        assertEquals("example.net", relyingParty(authenticate))
 
         assertNull(relyingParty("""{"publicKey":{}}"""), "no rp id stated is no host to blame")
         assertNull(relyingParty("not json"))
 
-        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "oldug.com", RAW)
-        assertTrue("https://oldug.com/.well-known/assetlinks.json" in told, told)
+        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "example.net", RAW)
+        assertTrue("https://example.net/.well-known/assetlinks.json" in told, told)
     }
 
     // And the file is read from the same place, or the client proves the wrong host correct and
     // then complains about it.
     @Test
     fun theFileIsReadFromTheHostThatDecidesRatherThanTheOneBeingDialled() {
-        val node = Endpoint("https://kampr.oldug.com")
+        val node = Endpoint("https://kampr.example.net")
         assertEquals(
-            "https://oldug.com/.well-known/assetlinks.json",
-            assetLinksUrl(node, "oldug.com"),
+            "https://example.net/.well-known/assetlinks.json",
+            assetLinksUrl(node, "example.net"),
         )
         assertEquals(
-            "https://kampr.oldug.com/.well-known/assetlinks.json",
-            assetLinksUrl(node, "kampr.oldug.com"),
+            "https://kampr.example.net/.well-known/assetlinks.json",
+            assetLinksUrl(node, "kampr.example.net"),
         )
         // A dev node is plain http on a port of its own and has nothing at all on 443, so when the
         // RP ID *is* the host being dialled its own scheme and port are the right ones.
