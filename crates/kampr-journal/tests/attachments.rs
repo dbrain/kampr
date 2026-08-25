@@ -421,3 +421,337 @@ fn a_codex_image_with_no_bytes_behind_it_does_not_take_the_next_ones_locator() {
     let got = attach::fetch(&scratch.journals, &att.id, &scratch.transcript).expect("the gif");
     assert_eq!(got.data, decoded(GIF));
 }
+
+/// Two forms of id share one decoder, so the *old* one has to be pinned by something other than
+/// the encoder that mints it. This is a literal an installed client is holding right now.
+#[test]
+fn an_id_minted_before_there_was_a_second_form_still_decodes_as_a_record() {
+    const MINTED: &str = "Y2xhdWRlH3Byb2plY3RzLy1ob21lLXUtZGVtby9zZXNzaW9uLmpzb25sHzAfMB83MA";
+    let locator = Locator::decode(MINTED).expect("an id this node has already handed out");
+
+    assert_eq!(locator.agent, "claude");
+    assert_eq!(locator.path, "projects/-home-u-demo/session.jsonl");
+    assert_eq!((locator.offset, locator.index, locator.bytes), (0, 0, 70));
+    assert_eq!(locator.encode(), MINTED, "and it still encodes to itself");
+    assert_eq!(
+        attach::Source::decode(MINTED).expect("the same id through the shared decoder"),
+        attach::Source::Record(locator)
+    );
+}
+
+/// The whole point of the second form: a client that saw a path in a tool call can build the id
+/// itself, without the node having minted anything.
+#[test]
+fn a_file_id_is_something_a_client_can_build_from_a_path_alone() {
+    const BUILT: &str = "ZmlsZR8vdmFyL2xpYi9rYW1wci9zaG90LnBuZw";
+
+    assert_eq!(
+        attach::Source::decode(BUILT).expect("a client-built id"),
+        attach::Source::File(attach::FileRef::new("/var/lib/kampr/shot.png"))
+    );
+    assert_eq!(attach::FileRef::new("/var/lib/kampr/shot.png").encode(), BUILT);
+}
+
+#[test]
+fn a_file_id_is_not_a_record_locator_and_a_record_locator_is_not_a_file() {
+    let file = attach::FileRef::new("/etc/hosts").encode();
+    let record = Locator {
+        agent: "claude".into(),
+        path: "projects/x/session.jsonl".into(),
+        offset: 0,
+        index: 0,
+        bytes: 70,
+    };
+
+    assert!(Locator::decode(&file).is_err());
+    assert!(matches!(
+        attach::Source::decode(&record.encode()),
+        Ok(attach::Source::Record(_))
+    ));
+}
+
+fn a_file(tag: &str, name: &str, bytes: &[u8]) -> (ScratchDir, std::path::PathBuf) {
+    let dir = scratch_dir(tag);
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).expect("a file");
+    (dir, path)
+}
+
+#[test]
+fn a_path_on_this_machine_reads_back_byte_for_byte_with_no_transcript_at_all() {
+    let (_dir, path) = a_file("file-png", "shot.png", &decoded(PNG));
+
+    let got = fetch(&path).expect("the bytes");
+    assert_eq!(got.data, decoded(PNG));
+    assert_eq!(got.kind, attach::IMAGE);
+    assert_eq!(got.mime.as_deref(), Some("image/png"));
+    assert_eq!(got.name.as_deref(), Some("shot.png"));
+}
+
+/// The extension is the only thing there is to go on, and a file that is not an image must not
+/// claim to be one — a client that believes `kind` renders a broken picture instead of offering
+/// the download the block is for.
+#[test]
+fn a_files_kind_and_type_come_off_its_extension_and_nowhere_else() {
+    let cases: &[(&str, &str, Option<&str>)] = &[
+        ("shot.png", attach::IMAGE, Some("image/png")),
+        ("shot.JPEG", attach::IMAGE, Some("image/jpeg")),
+        ("shot.gif", attach::IMAGE, Some("image/gif")),
+        ("notes.txt", attach::FILE, None),
+        ("page.svg", attach::FILE, None),
+        ("page.html", attach::FILE, None),
+        ("noextension", attach::FILE, None),
+    ];
+    for (name, kind, mime) in cases {
+        let (_dir, path) = a_file("file-kind", name, b"some bytes");
+        let got = fetch(&path).expect(name);
+        assert_eq!(got.kind, *kind, "{name}");
+        assert_eq!(got.mime.as_deref(), *mime, "{name}");
+    }
+}
+
+/// There is no cwd on the node side of this — a relative path would be resolved against whatever
+/// directory the node happens to have been started in, which is not a thing any caller knows.
+#[test]
+fn a_relative_path_is_refused_rather_than_resolved_against_something() {
+    // In the process's own working directory, so a build that dropped the check would find it and
+    // this would go green with the defect restored.
+    let relative = format!("kampr-cwd-{}.png", std::process::id());
+    std::fs::write(&relative, decoded(PNG)).expect("a file in the process's cwd");
+    let found_by_the_cwd = std::fs::read(&relative).is_ok();
+    let refusal = fetch(&relative);
+    std::fs::remove_file(&relative).expect("the file back out of the crate directory");
+
+    assert!(
+        found_by_the_cwd,
+        "{relative} was not readable, so this proves nothing"
+    );
+    assert!(matches!(refusal, Err(JournalError::NotFound(_))), "{refusal:?}");
+}
+
+#[test]
+fn a_directory_a_missing_path_and_an_empty_file_are_all_the_same_refusal() {
+    let (dir, path) = a_file("file-empty", "empty", b"");
+    for candidate in [dir.to_path_buf(), dir.join("nothing"), path] {
+        assert!(
+            matches!(fetch(&candidate), Err(JournalError::NotFound(_))),
+            "{} must not resolve",
+            candidate.display()
+        );
+    }
+}
+
+#[test]
+fn a_file_the_nodes_user_cannot_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, path) = a_file("file-secret", "secret", b"a private key");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("no permissions");
+    // Root ignores the mode, and a node running as root is meant to read it — there is nothing
+    // to assert on that machine rather than a weaker thing to assert.
+    if std::fs::read(&path).is_ok() {
+        eprintln!("skipping: this user reads a 0o000 file, so there is no refusal to measure");
+        return;
+    }
+
+    assert!(matches!(fetch(&path), Err(JournalError::NotFound(_))));
+}
+
+/// The ceiling is decided from what `stat` says, before a byte is read — a 9 MiB file costs a
+/// comparison here exactly as a 9 MiB record does.
+#[test]
+fn a_file_past_the_ceiling_is_refused_on_its_size_rather_than_read() {
+    let dir = scratch_dir("file-huge");
+    let path = dir.join("huge.png");
+    let file = std::fs::File::create(&path).expect("a file");
+    file.set_len(MAX_BYTES + 1)
+        .expect("a sparse file past the ceiling");
+    drop(file);
+
+    assert!(matches!(
+        fetch(&path),
+        Err(JournalError::TooLarge(n)) if n == MAX_BYTES + 1
+    ));
+}
+
+#[test]
+fn a_file_exactly_at_the_ceiling_is_still_served() {
+    let dir = scratch_dir("file-exact");
+    let path = dir.join("exact.png");
+    let file = std::fs::File::create(&path).expect("a file");
+    file.set_len(MAX_BYTES).expect("a sparse file at the ceiling");
+    drop(file);
+
+    assert_eq!(fetch(&path).expect("the bytes").data.len() as u64, MAX_BYTES);
+}
+
+/// A fifo is why the size is read with `stat` rather than by opening the path first: opening one
+/// with no writer on the other end blocks until there is one, and a request that never comes back
+/// is worse than a refusal. Timed, because a build that got this wrong would hang the suite rather
+/// than fail it.
+#[test]
+fn a_fifo_is_refused_without_waiting_for_a_writer() {
+    let dir = scratch_dir("file-fifo");
+    let path = dir.join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo");
+    assert!(made.success(), "mkfifo failed");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(fetch(&path).is_err());
+    });
+
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(refused) => assert!(refused, "a fifo must not be served"),
+        Err(_) => panic!("the fetch blocked on a fifo with no writer"),
+    }
+}
+
+/// A home no test has anything under, so nothing below resolves a `~` by accident.
+const NO_HOME: &str = "/kampr-no-such-home";
+
+fn fetch(path: impl Into<std::path::PathBuf>) -> Result<kampr_journal::Fetched, JournalError> {
+    attach::FileRef::new(path).fetch(std::path::Path::new(NO_HOME))
+}
+
+fn fetch_from(home: &std::path::Path, path: &str) -> Result<kampr_journal::Fetched, JournalError> {
+    attach::FileRef::new(path).fetch(home)
+}
+
+fn a_home(tag: &str, files: &[(&str, &[u8])]) -> ScratchDir {
+    let home = scratch_dir(tag);
+    for (name, bytes) in files {
+        let path = home.join(name);
+        std::fs::create_dir_all(path.parent().expect("a directory")).expect("a directory");
+        std::fs::write(&path, bytes).expect("a file under the home");
+    }
+    home
+}
+
+/// The whole of why this form is usable. Agents write `~/screenshot.png` and `~/dev/x/plot.png`
+/// constantly, and those are the paths a person taps.
+#[test]
+fn a_leading_tilde_resolves_against_the_nodes_own_home() {
+    let home = a_home(
+        "tilde",
+        &[("shot.png", &decoded(PNG)), ("dev/deep/plot.png", &decoded(PNG))],
+    );
+
+    for asked in ["~/shot.png", "~/dev/deep/plot.png"] {
+        let got = fetch_from(&home, asked).unwrap_or_else(|e| panic!("{asked}: {e}"));
+        assert_eq!(got.data, decoded(PNG), "{asked}");
+        assert_eq!(got.mime.as_deref(), Some("image/png"), "{asked}");
+    }
+    assert!(
+        fetch(std::path::PathBuf::from("~/shot.png")).is_err(),
+        "the same id against a home with nothing in it must not resolve"
+    );
+}
+
+/// A home that is itself a file, which is the only way to watch a **bare** `~` expand without the
+/// answer being the directory refusal either way.
+#[test]
+fn a_bare_tilde_is_the_home_itself() {
+    let dir = scratch_dir("tilde-bare");
+    let home = dir.join("home.png");
+    std::fs::write(&home, decoded(PNG)).expect("a home that is a file");
+
+    assert_eq!(fetch_from(&home, "~").expect("the bytes").data, decoded(PNG));
+}
+
+/// A `~` anywhere but the front is an ordinary character in a filename, and a build that treated
+/// it as anything else would refuse a file that is right there.
+#[test]
+fn a_tilde_that_is_not_the_first_character_is_an_ordinary_one() {
+    let (dir, path) = a_file("tilde-mid", "a~b.png", &decoded(PNG));
+    let leading = dir.join("~leading.png");
+    std::fs::write(&leading, decoded(PNG)).expect("a file whose name starts with a tilde");
+    // A `~/` in the *middle* of the path, which is the case a prefix check passes and a search
+    // does not: a directory whose name ends in a tilde.
+    let mid = dir.join("a~/shot.png");
+    std::fs::create_dir_all(mid.parent().expect("a directory")).expect("a directory");
+    std::fs::write(&mid, decoded(PNG)).expect("a file under a directory named with a tilde");
+
+    for absolute in [&path, &leading, &mid] {
+        assert_eq!(
+            fetch(absolute)
+                .unwrap_or_else(|e| panic!("{}: {e}", absolute.display()))
+                .data,
+            decoded(PNG),
+            "{}",
+            absolute.display()
+        );
+    }
+}
+
+/// `~user/x` is another account's home, and guessing at one would hand over a different user's
+/// files under a gate that reasoned about this one. It is refused, not expanded.
+#[test]
+fn another_users_home_is_refused_rather_than_guessed_at() {
+    // Both of the shapes a wrong expansion would produce are real files here, so a refusal below
+    // is the rule and not the filesystem.
+    let home = a_home(
+        "tilde-user",
+        &[("root/shot.png", &decoded(PNG)), ("shot.png", &decoded(PNG))],
+    );
+
+    for asked in ["~root/shot.png", "~someone/shot.png", "~root", "~/../shot.png~x"] {
+        assert!(
+            fetch_from(&home, asked).is_err(),
+            "{asked} must not resolve to another account's home"
+        );
+    }
+    assert!(
+        fetch_from(&home, "~/root/shot.png").is_ok(),
+        "the same file under this home still resolves, so the refusals above are the rule"
+    );
+}
+
+/// The separators after `~` belong to the prefix, not to a new root. `Path::join` with an
+/// absolute argument *replaces*, so without this `~//etc/hosts` would be `/etc/hosts`.
+#[test]
+fn the_slashes_after_a_tilde_do_not_start_a_new_root() {
+    let home = a_home("tilde-slash", &[("etc/hosts", b"a home's own hosts file")]);
+
+    let got = fetch_from(&home, "~//etc/hosts").expect("the home's file");
+    assert_eq!(got.data, b"a home's own hosts file");
+}
+
+/// `$HOME` unset — the node's `journal_home()` answers with an empty path — must fail closed
+/// rather than resolve `~/x` to the relative `x`.
+#[test]
+fn a_tilde_with_no_home_behind_it_resolves_to_nothing() {
+    // An empty home makes `~/x` the relative `x`, so the file goes where a relative `x` would be
+    // found — the process's own directory — and a build that let one through would serve it.
+    let name = format!("kampr-nohome-{}.png", std::process::id());
+    std::fs::write(&name, decoded(PNG)).expect("a file in the process's cwd");
+    let found_by_the_cwd = std::fs::read(&name).is_ok();
+    let refusals = [
+        fetch_from(std::path::Path::new(""), &format!("~/{name}")),
+        fetch_from(std::path::Path::new(""), "~"),
+    ];
+    std::fs::remove_file(&name).expect("the file back out of the crate directory");
+
+    assert!(
+        found_by_the_cwd,
+        "{name} was not readable, so this proves nothing"
+    );
+    for refusal in refusals {
+        assert!(matches!(refusal, Err(JournalError::NotFound(_))), "{refusal:?}");
+    }
+}
+
+/// Expansion must not be the thing that turns a relative path absolute.
+#[test]
+fn nothing_but_a_leading_tilde_is_expanded() {
+    let home = a_home("tilde-relative", &[("shot.png", &decoded(PNG))]);
+
+    for asked in ["shot.png", "./shot.png", "../shot.png", "dev/shot.png", ""] {
+        assert!(
+            fetch_from(&home, asked).is_err(),
+            "{asked:?} must not be resolved against the home"
+        );
+    }
+}

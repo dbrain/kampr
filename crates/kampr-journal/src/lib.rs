@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 pub use adapter::{JournalAdapter, Registry, SessionKind, SessionRef};
 pub use agy::AgyAdapter;
-pub use attach::{Att, Fetched, Locator, Origin};
+pub use attach::{Att, Fetched, FileRef, Locator, Origin, Source};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use error::JournalError;

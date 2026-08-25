@@ -102,7 +102,8 @@ fn apply_patch_becomes_a_diff_block() {
 fn a_nonzero_exit_marks_the_tool_as_failed() {
     let mut source = std::fs::read_to_string(codex_transcript()).unwrap();
     source = source.replace("Process exited with code 0", "Process exited with code 1");
-    let dir = scratch_dir("codex-fail").join("sessions/2026/08/18");
+    let scratch = scratch_dir("codex-fail");
+    let dir = scratch.join("sessions/2026/08/18");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("rollout-2026-08-18T14-11-36-{CODEX_SESSION}.jsonl"));
     std::fs::write(&path, source).unwrap();

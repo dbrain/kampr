@@ -397,8 +397,9 @@ goes on showing exactly what it shows today.
   permanent handle, and expect it to stop resolving: it names a record in a transcript, and a pane
   that moves to a different transcript takes every id with it. An id whose record has since been
   rewritten answers `404`, not different bytes — the size the header quoted is carried inside the
-  id and checked against what comes back.
-- **`kind`** is an **open string**. `image` is the only one a transcript yields today. A client that
+  id and checked against what comes back. A client that wants the picture *after* that has happened
+  builds an id of its own from the path the tool call named; see "A second id form" below.
+- **`kind`** is an **open string**. `image` and `file` are the two a node yields today. A client that
   does not recognise one must treat it as a file and offer a download — never drop the block — so a
   later `video` needs no protocol change and no client release.
 - **`mime`, `bytes`, `name`** are optional and are **absent when the source did not carry them**, not
@@ -463,9 +464,73 @@ about which part is the pane anchors every check below on the wrong pane.
   `text/html` gets `application/octet-stream` here too.
 - **A hub advertises the attachment only while it can serve it.** It strips every `att` off the
   `convo` and `convo.turn` messages it relays for a peer's pane whenever that peer is offline,
-  unknown to this hub, or running a build whose `hello` does not claim `caps.attachments` —
-  leaving the image marker's text and no button. A client attached to the peer directly always gets
-  both.
+  unknown to this hub, or running a build whose `hello` does not claim `attachments` in its
+  `caps` — leaving the image marker's text and no button. A client attached to the peer directly
+  always gets both.
+
+#### A second id form: a path on the node's filesystem
+
+An `att.id` minted by a node names a **record** in a transcript, and that is what stops resolving
+when the transcript is rewritten under it — the picture is still on disk, and the id for it is not.
+So the route also answers a second form of id, and **a client builds this one itself**: it saw a
+path in a tool call and wants what is at it.
+
+```
+id = base64url-no-pad( "file" U+001F <absolute path> )
+```
+
+`U+001F` is the same unit separator the record form has always used, and `base64url-no-pad` is the
+same alphabet — an id is still one path segment with nothing in it a URL minds. Nothing else is
+tagged: the record form is five separator-delimited fields and has been since the first build that
+minted one, so the **number of fields** is what tells them apart and every id an installed client is
+holding decodes to exactly what it decoded to before. This is additive in the direction that
+matters, too: a node older than this feature answers `404` for a file id, which is what a client
+must already handle.
+
+```jsonc
+// "/var/lib/kampr/shot.png"
+"ZmlsZR8vdmFyL2xpYi9rYW1wci9zaG90LnBuZw"
+// "~/shot.png" — resolved against the serving node's home, see below
+"ZmlsZR9-L3Nob3QucG5n"
+```
+
+- **Only a device that may send input may ask for one**, and a read-only device gets the ordinary
+  `403 this device is read-only` with an audit line. The reasoning is the whole of the security
+  argument here: a device that can type into a terminal can already `cat` any file the node's user
+  can read, so a path read is no escalation *for it* — and it is a real one for a device you
+  half-trust with a screen, whose whole point is that it cannot reach `~/.ssh/id_rsa`. The refusal
+  is decided from the id's own shape, before anything on disk is looked at, so it says nothing
+  about the path. **The record form keeps its looser gate**: a read-only device may still fetch a
+  screenshot out of a transcript.
+- **A leading `~/` resolves against the node's own home**, and only a leading one. Agents write
+  `~/screenshot.png` and `~/dev/x/plot.png` constantly and those are the paths a person taps, so
+  `~/` and a bare `~` are expanded before anything else is decided. **`~user/x` is not** — guessing
+  at another account's home would hand over a different user's files under a gate that reasoned
+  about this one, so it falls through as a relative path and is refused. A `~` anywhere but the
+  first character is an ordinary character in a filename: `/tmp/a~b` is served as itself. The
+  separators straight after `~` belong to the prefix, so `~//etc/hosts` is the home's own file and
+  never `/etc/hosts`. The home is the node's configured journals home — the *operator's*, not the
+  process's, on a node running as a service user — and a node with no home at all resolves `~/x`
+  to nothing and refuses it.
+- **Beyond that gate there is no allowlist and no confinement.** `/etc/hosts` is fine, symlinks are
+  followed, and there is no working directory in the question — which is why a **relative path is
+  refused** rather than resolved against whatever directory the node happens to have been started
+  in. Expansion is never what makes a path absolute: `foo/bar`, `./x` and `../x` are refused
+  whatever the home is. A directory, a path that is not there, a fifo, and a file this user cannot
+  read are all the same `404`, so the route cannot be used to map the filesystem by response code.
+- **The pane in the URL still says which node serves it**, and nothing else. A file id on a peer's
+  pane is carried over the mesh link exactly as a record id is, and the peer applies the same gate
+  to the hub's own device before it reads anything.
+- **`kind` and `mime` come off the extension and nowhere else.** A known image extension is
+  `kind: "image"` with that type; anything else — including `.svg` and `.html` — is `kind: "file"`
+  with no type, which is a download. A file with no extension has its `Content-Type` answered by
+  the same sniff a record with no recorded media type gets, so a screenshot written without one
+  still renders. `name` is the file's own name.
+- **The ceiling is the same 8 MiB**, read off `stat` before a byte is allocated, and the route
+  answers it whole rather than streaming: an 8 MiB body costs about **5 ms and 11 MiB of peak RSS**
+  on the machine the file is already on (#258). It is not raised for this form either — the same
+  `Fetched` crosses the mesh lane, and a peer buffers the whole body before it chunks it (#247,
+  #257), so raising it is a measurement on that lane rather than on this route.
 
 ### `att.*` — the mesh link only
 
@@ -500,6 +565,9 @@ hub  → peer  { "t":"att.stop",  "rid":7 }
   everything else, including a peer that is offline or never answers, is the hub's single `404`.
 - **`caps.attachments`** on a peer's `hello` is what tells a hub this build answers `att.fetch` at
   all. Absent means no, which is what every build before this one says.
+- **`id` is whatever the hub was handed**, forwarded unchanged — a record locator or a file id. The
+  peer decides which it is and applies its own gate: a file id is answered only for a hub whose
+  device may send input *there*, and a demoted one gets `not_found` like any other refusal.
 
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.

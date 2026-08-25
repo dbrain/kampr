@@ -549,11 +549,18 @@ async fn push_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Respo
 /// **three** segments and not two. Exactly three: anything else is refused rather than guessed at,
 /// because a wrong guess about which part is the pane is a check anchored on the wrong pane.
 ///
-/// **A read-only device may fetch one.** Looking at a screenshot somebody pasted into an agent
-/// session is reading, and it is the whole point of a device you half-trust with a screen.
+/// **A read-only device may fetch a record's attachment.** Looking at a screenshot somebody pasted
+/// into an agent session is reading, and it is the whole point of a device you half-trust with a
+/// screen.
+///
+/// **A file id is a different question and carries a different gate.** It names any path on this
+/// machine and nothing minted it, so it is answered only for a device that may send input — that
+/// device can already `cat` the file through the terminal it is typing into, and a read-only one
+/// cannot. The refusal is the ordinary read-only `403` with an audit line, decided from the id's
+/// own shape before anything on disk is looked at, so it says nothing about the path.
 async fn attachment(
     State(node): State<Arc<Node>>,
-    _auth: Authenticated,
+    auth: Authenticated,
     Path(locator): Path<String>,
 ) -> Response {
     let missing = || refuse(StatusCode::NOT_FOUND, "no such attachment");
@@ -568,6 +575,15 @@ async fn attachment(
     }
     let pane = format!("{node_id}/{local}");
     let id = id.to_string();
+    let file = match kampr_journal::Source::decode(&id) {
+        Ok(kampr_journal::Source::File(file)) => Some(file),
+        _ => None,
+    };
+    if file.is_some()
+        && let Some(response) = auth.refused(&node, "api.attachment.path")
+    {
+        return response;
+    }
     // A pane this node does not own is served by the node that does, over the mesh link that node
     // dialled — it has no inbound path for this hub to fetch from (ADR 0007), so the bytes come
     // back the way the frames do.
@@ -578,6 +594,9 @@ async fn attachment(
     // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
     // of megabytes of synchronous reads on a tokio worker for a request any device may make.
     let served = tokio::task::spawn_blocking(move || {
+        if let Some(file) = file {
+            return Some(attach::serve_file(&file, &node.config.journal_home()));
+        }
         let transcript = transcript_of(&node, &pane)?;
         Some(attach::serve(&node.journals(), &transcript, &id))
     })

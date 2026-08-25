@@ -645,6 +645,24 @@ impl Session {
         let (Some(pane), Some(id)) = (message["pane"].as_str(), message["id"].as_str()) else {
             return;
         };
+        // The same line the HTTP route holds: a file id names any path on this machine, so it is
+        // answered only for a hub whose device may send input here — one that has been demoted to
+        // read-only gets the single refusal, which is what the route it is relaying for gives too.
+        let file = match kampr_journal::Source::decode(id) {
+            Ok(kampr_journal::Source::File(file)) => Some(file),
+            _ => None,
+        };
+        if file.is_some() && !self.device.role.writes() {
+            self.audit_refused(
+                "att.fetch",
+                Some(pane),
+                ErrorCode::NotWriter,
+                json!({ "rid": rid }),
+            );
+            self.wire
+                .send_json(&json!({ "t": "att.error", "rid": rid, "code": "not_found" }));
+            return;
+        }
         self.sending.retain(|_, sending| !sending.credit.is_closed());
         if self.sending.len() >= CONCURRENT_TRANSFERS {
             debug!(
@@ -666,6 +684,7 @@ impl Session {
             rid,
             pane: pane.to_string(),
             id: id.to_string(),
+            file,
             window,
             granted,
         }));
@@ -1188,6 +1207,9 @@ struct AttachmentCtx {
     rid: u64,
     pane: String,
     id: String,
+    /// Set when the id named a path rather than a record, and already gated on the hub's role by
+    /// the session that decoded it.
+    file: Option<kampr_journal::FileRef>,
     window: u32,
     granted: mpsc::Receiver<u32>,
 }
@@ -1209,6 +1231,7 @@ async fn pump_attachment(ctx: AttachmentCtx) {
         rid,
         pane,
         id,
+        file,
         window,
         mut granted,
     } = ctx;
@@ -1222,6 +1245,11 @@ async fn pump_attachment(ctx: AttachmentCtx) {
     let read = tokio::task::spawn_blocking({
         let node = node.clone();
         move || {
+            // A path has no transcript behind it, so the lookup that resolves one is skipped
+            // rather than made and ignored — a pane with no agent on it can still serve a file.
+            if let Some(file) = file {
+                return Some(file.fetch(&node.config.journal_home()));
+            }
             let transcript = crate::http::transcript_of(&node, &pane)?;
             Some(kampr_journal::attach::fetch(&node.journals(), &id, &transcript))
         }

@@ -33,7 +33,8 @@ fn upto(adapter: &dyn JournalAdapter, name: &str, records: usize) -> Box<dyn Jou
 fn upto_path(adapter: &dyn JournalAdapter, from: &std::path::Path, records: usize) -> Box<dyn Journal> {
     let whole = std::fs::read_to_string(from).expect("transcript");
     let head: String = whole.lines().take(records).map(|l| format!("{l}\n")).collect();
-    let path = common::scratch_dir("live").join("t.jsonl");
+    let scratch = common::scratch_dir("live");
+    let path = scratch.join("t.jsonl");
     std::fs::write(&path, head).expect("write");
     let mut journal = adapter.open_path(path);
     let _ = journal.poll().expect("poll");

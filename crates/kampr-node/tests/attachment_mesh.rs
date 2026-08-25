@@ -139,6 +139,10 @@ struct Peer {
 
 impl Peer {
     async fn start(fixture: &Fixture, caller: Caller, bytes_per_second: usize) -> Self {
+        Self::start_as(fixture, caller, bytes_per_second, Role::Full).await
+    }
+
+    async fn start_as(fixture: &Fixture, caller: Caller, bytes_per_second: usize, role: Role) -> Self {
         let state = tempfile::tempdir().expect("a state dir");
         let mut config = Config::bootstrap("laptop");
         config.update.check = false;
@@ -168,7 +172,7 @@ impl Peer {
         let device: Device = node
             .auth
             .store()
-            .create_device("hub laptop", Role::Full, kampr_auth::now(), None, None, None)
+            .create_device("hub laptop", role, kampr_auth::now(), None, None, None)
             .await
             .expect("a device");
 
@@ -428,5 +432,111 @@ async fn a_pane_keeps_repainting_while_an_attachment_crosses_the_same_link() {
         "a frame waited {worst:?} during a {transfer:?} transfer — more than the {one_chunk:?} \
          one chunk costs, so it was queued behind chunks rather than overtaking them",
     );
+    peer.stop();
+}
+
+/// A pane the node serves and cannot name a transcript for — which is what a file id has to work
+/// against, because there is no transcript in the question at all.
+fn paneless(peer: &Peer) {
+    peer.node.publish_herd(HerdModel {
+        nodes: Vec::new(),
+        panes: vec![PaneEntry::new(
+            peer.node.node_id(),
+            &PaneInfo {
+                pane_id: "w1:p1".into(),
+                agent: None,
+                cwd: None,
+                rows: 24,
+                ..PaneInfo::default()
+            },
+            true,
+        )],
+    });
+}
+
+fn a_file_on_the_peer(dir: &std::path::Path, name: &str, bytes: &[u8]) -> String {
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).expect("a file on the peer");
+    kampr_journal::FileRef::new(path).encode()
+}
+
+/// The whole of the mesh claim: a hub asks for a path on the peer's filesystem over the same
+/// `att.*` lane, and the peer answers it without a transcript anywhere in the question.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_is_handed_a_path_off_the_peers_own_filesystem() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start(&fixture, Caller::Hub, UNTHROTTLED).await;
+    paneless(&peer);
+    let scratch = tempfile::tempdir().expect("a directory");
+    let id = a_file_on_the_peer(scratch.path(), "plot.png", &fixture.bytes);
+
+    peer.until("hello").await;
+    // The record form is the control: on this pane it cannot resolve, so a green below is the
+    // file form and not some transcript answering by accident.
+    peer.say(json!({
+        "t": "att.fetch", "rid": 1, "pane": peer.pane, "id": fixture.id, "window": ATT_WINDOW
+    }))
+    .await;
+    assert_eq!(peer.until("att.error").await["code"], "not_found");
+
+    peer.say(json!({
+        "t": "att.fetch", "rid": 2, "pane": peer.pane, "id": id, "window": ATT_WINDOW
+    }))
+    .await;
+    let (open, body, _) = pull(&mut peer, 2).await;
+
+    assert_eq!(open["bytes"], json!(fixture.bytes.len()));
+    assert_eq!(open["kind"], "image");
+    assert_eq!(open["mime"], "image/png");
+    assert_eq!(open["name"], "plot.png");
+    assert_eq!(body, fixture.bytes, "the hub was handed different bytes");
+    peer.stop();
+}
+
+/// The same line the HTTP route holds, held again on the link: a hub whose device has been
+/// demoted here may watch panes and may not read the filesystem.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_this_node_will_not_take_input_from_is_refused_a_path() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start_as(&fixture, Caller::Hub, UNTHROTTLED, Role::Readonly).await;
+    let scratch = tempfile::tempdir().expect("a directory");
+    let id = a_file_on_the_peer(scratch.path(), "plot.png", &fixture.bytes);
+
+    peer.until("hello").await;
+    peer.say(json!({
+        "t": "att.fetch", "rid": 3, "pane": peer.pane, "id": id, "window": ATT_WINDOW
+    }))
+    .await;
+
+    assert_eq!(peer.until("att.error").await["code"], "not_found");
+    // And the record form on the same link is untouched, so this is the gate and not the link.
+    peer.say(json!({
+        "t": "att.fetch", "rid": 4, "pane": peer.pane, "id": fixture.id, "window": ATT_WINDOW
+    }))
+    .await;
+    let (_, body, _) = pull(&mut peer, 4).await;
+    assert_eq!(body, fixture.bytes);
+    peer.stop();
+}
+
+/// The same expansion on the other lane, and against the *peer's* home rather than the hub's — a
+/// hub relays the id untouched, so `~` has to mean the home of the machine the file is on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tilde_on_the_link_resolves_against_the_peers_own_home() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start(&fixture, Caller::Hub, UNTHROTTLED).await;
+    paneless(&peer);
+    std::fs::write(fixture.home.join("plot.png"), &fixture.bytes).expect("a file in the peer's home");
+
+    peer.until("hello").await;
+    peer.say(json!({
+        "t": "att.fetch", "rid": 9, "pane": peer.pane,
+        "id": kampr_journal::FileRef::new("~/plot.png").encode(), "window": ATT_WINDOW
+    }))
+    .await;
+    let (open, body, _) = pull(&mut peer, 9).await;
+
+    assert_eq!(open["name"], "plot.png");
+    assert_eq!(body, fixture.bytes);
     peer.stop();
 }

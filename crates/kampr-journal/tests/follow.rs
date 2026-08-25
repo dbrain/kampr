@@ -20,7 +20,8 @@ fn appended_records_arrive_without_replaying_the_file() {
         .collect();
     let split = 8; // through the Read tool_result
 
-    let path = scratch_dir("follow").join("session.jsonl");
+    let scratch = scratch_dir("follow");
+    let path = scratch.join("session.jsonl");
     std::fs::write(&path, source[..split].join("\n") + "\n").unwrap();
 
     let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
@@ -61,7 +62,8 @@ fn a_settled_tool_is_re_emitted_under_the_same_id() {
     // Cut between the Bash tool_use and its tool_result.
     let split = source.len() - 1;
 
-    let path = scratch_dir("settle").join("session.jsonl");
+    let scratch = scratch_dir("settle");
+    let path = scratch.join("session.jsonl");
     std::fs::write(&path, source[..split].join("\n") + "\n").unwrap();
 
     let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
@@ -97,7 +99,8 @@ fn a_half_written_line_waits_for_its_newline() {
         .map(str::to_string)
         .collect();
 
-    let path = scratch_dir("torn").join("session.jsonl");
+    let scratch = scratch_dir("torn");
+    let path = scratch.join("session.jsonl");
     std::fs::write(&path, source[..5].join("\n") + "\n").unwrap();
 
     let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));
@@ -118,7 +121,8 @@ fn a_half_written_line_waits_for_its_newline() {
 #[test]
 fn a_truncated_transcript_is_re_read_from_the_start() {
     let source = std::fs::read_to_string(claude_transcript()).unwrap();
-    let path = scratch_dir("truncate").join("session.jsonl");
+    let scratch = scratch_dir("truncate");
+    let path = scratch.join("session.jsonl");
     std::fs::write(&path, &source).unwrap();
 
     let mut journal = FileJournal::new(path.clone(), claude_parser(), Some(kampr_journal::claude::live));

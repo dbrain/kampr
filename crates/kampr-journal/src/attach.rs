@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE_NO_PAD};
@@ -10,6 +10,9 @@ use crate::model::Attachment;
 use crate::root::TranscriptRoot;
 
 pub const IMAGE: &str = "image";
+
+/// Anything a client should offer as a download rather than try to render.
+pub const FILE: &str = "file";
 
 /// The largest body this node will hand back for one attachment.
 ///
@@ -87,31 +90,170 @@ impl Locator {
     }
 
     pub fn decode(id: &str) -> Result<Self, JournalError> {
-        let refuse = || JournalError::NotFound(String::new());
+        match Source::decode(id)? {
+            Source::Record(locator) => Ok(locator),
+            Source::File(_) => Err(refuse()),
+        }
+    }
+}
+
+/// The tag a file id carries in the first field. Nothing else is tagged: a record id is five
+/// fields and has been since the first build that minted one, so arity is what tells the two
+/// apart and an installed client's id keeps decoding to exactly what it decoded to before.
+const FILE_TAG: &str = "file";
+
+/// A plain path on the node's filesystem, with no transcript behind it and no working directory
+/// to resolve against.
+///
+/// This is the form a **client** builds: it saw a path in a tool call and wants the bytes, and
+/// nothing minted an id for it. Which is why the node gates it on a device that may send input —
+/// a device that can type into a terminal can already `cat` the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRef {
+    pub path: PathBuf,
+}
+
+impl FileRef {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(format!("{FILE_TAG}{SEP}{}", self.path.display()))
+    }
+
+    /// The path with a **leading** `~/` resolved against `home`, and nothing else touched.
+    ///
+    /// `~user/x` is deliberately not expanded: guessing at another account's home would hand over
+    /// a different user's files under a gate that reasoned about this one, so it falls through as
+    /// a relative path and is refused. A `~` anywhere but the front is an ordinary character in a
+    /// filename and stays one.
+    ///
+    /// The separators after `~` belong to the prefix rather than starting a new root — `Path::join`
+    /// with an absolute argument *replaces*, so without the trim `~//etc/hosts` would resolve to
+    /// `/etc/hosts` rather than to one inside the home.
+    fn against(&self, home: &Path) -> PathBuf {
+        let Some(text) = self.path.to_str() else {
+            return self.path.clone();
+        };
+        let Some(rest) = text.strip_prefix("~/") else {
+            // A bare `~` is the home itself. `join("")` would leave a trailing separator, and a
+            // path that ends in one cannot name a regular file.
+            return match text {
+                "~" => home.to_path_buf(),
+                _ => self.path.clone(),
+            };
+        };
+        home.join(rest.trim_start_matches('/'))
+    }
+
+    /// The bytes at that path, or the same refusal everything else here gives.
+    ///
+    /// `home` is the node's own — `Config::journal_home()`, which is the operator's home rather
+    /// than the process's whenever the two differ. An empty one expands `~/x` to the relative `x`
+    /// and the check below refuses it, which is the honest answer on a machine with no `$HOME`.
+    ///
+    /// **`stat` before `open`**: opening a fifo with no writer on the other end blocks for ever,
+    /// and a path naming one has to be refused rather than waited on. The handle is stat'd again
+    /// afterwards, so the size the ceiling is applied to is the size of the file that was
+    /// actually opened.
+    pub fn fetch(&self, home: &Path) -> Result<Fetched, JournalError> {
+        let path = self.against(home);
+        if !path.is_absolute() {
+            return Err(refuse());
+        }
+        if !std::fs::metadata(&path).map_err(|_| refuse())?.is_file() {
+            return Err(refuse());
+        }
+        let mut file = std::fs::File::open(&path).map_err(|_| refuse())?;
+        let stat = file.metadata().map_err(|_| refuse())?;
+        if !stat.is_file() {
+            return Err(refuse());
+        }
+        if stat.len() > MAX_BYTES {
+            return Err(JournalError::TooLarge(stat.len()));
+        }
+        let mut data = Vec::with_capacity(stat.len().min(MAX_BYTES) as usize);
+        (&mut file)
+            .take(MAX_BYTES + 1)
+            .read_to_end(&mut data)
+            .map_err(|_| refuse())?;
+        // A file that grew between the two reads is refused rather than truncated: a body short of
+        // what it claims is the shape of a wrong answer that looks right.
+        if data.len() as u64 > MAX_BYTES {
+            return Err(JournalError::TooLarge(data.len() as u64));
+        }
+        if data.is_empty() {
+            return Err(refuse());
+        }
+        let mime = image_mime(&path);
+        Ok(Fetched {
+            kind: match mime {
+                Some(_) => IMAGE.to_string(),
+                None => FILE.to_string(),
+            },
+            mime: mime.map(str::to_string),
+            name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
+            data,
+        })
+    }
+}
+
+/// The two things an attachment id can name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    Record(Locator),
+    File(FileRef),
+}
+
+impl Source {
+    pub fn encode(&self) -> String {
+        match self {
+            Self::Record(locator) => locator.encode(),
+            Self::File(file) => file.encode(),
+        }
+    }
+
+    pub fn decode(id: &str) -> Result<Self, JournalError> {
         if id.is_empty() || id.len() > 4096 {
             return Err(refuse());
         }
         let raw = URL_SAFE_NO_PAD.decode(id).map_err(|_| refuse())?;
         let text = String::from_utf8(raw).map_err(|_| refuse())?;
-        let mut parts = text.split(SEP);
-        let (Some(agent), Some(path), Some(offset), Some(index), Some(bytes), None) = (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ) else {
-            return Err(refuse());
-        };
-        Ok(Self {
-            agent: agent.to_string(),
-            path: path.to_string(),
-            offset: offset.parse().map_err(|_| refuse())?,
-            index: index.parse().map_err(|_| refuse())?,
-            bytes: bytes.parse().map_err(|_| refuse())?,
-        })
+        let parts: Vec<&str> = text.split(SEP).collect();
+        match parts.as_slice() {
+            [agent, path, offset, index, bytes] => Ok(Self::Record(Locator {
+                agent: (*agent).to_string(),
+                path: (*path).to_string(),
+                offset: offset.parse().map_err(|_| refuse())?,
+                index: index.parse().map_err(|_| refuse())?,
+                bytes: bytes.parse().map_err(|_| refuse())?,
+            })),
+            [tag, path] if *tag == FILE_TAG && !path.is_empty() => Ok(Self::File(FileRef::new(*path))),
+            _ => Err(refuse()),
+        }
     }
+}
+
+fn refuse() -> JournalError {
+    JournalError::NotFound(String::new())
+}
+
+/// What an extension is worth, and it is the only thing a file on disk offers. Deliberately short:
+/// a type that is not on it is a download, which is the safe answer for `text/html` and for the
+/// scriptable document `image/svg+xml` names.
+fn image_mime(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
 }
 
 /// One attachment as it sits in a record, borrowed from the parsed record rather than copied: a

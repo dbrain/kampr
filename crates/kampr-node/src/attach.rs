@@ -6,7 +6,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CON
 use axum::response::{IntoResponse, Response};
 use futures_util::{StreamExt, TryStreamExt};
 use kampr_journal::attach::MAX_BYTES;
-use kampr_journal::{Fetched, JournalError, Registry as Journals};
+use kampr_journal::{Fetched, FileRef, JournalError, Registry as Journals};
 use kampr_mesh::{FetchError, Peers};
 
 use crate::http::refuse;
@@ -44,7 +44,25 @@ fn past_the_ceiling() -> Response {
 }
 
 pub fn serve(journals: &Journals, transcript: &Path, id: &str) -> Response {
-    match kampr_journal::attach::fetch(journals, id, transcript) {
+    respond(kampr_journal::attach::fetch(journals, id, transcript))
+}
+
+/// The bytes at a plain path on this machine, for a caller the route has already established may
+/// send input — a device that can type into a terminal can `cat` this file anyway.
+///
+/// `home` is what a leading `~/` resolves against, and it is the node's own
+/// [`crate::Config::journal_home`] — the home the transcripts are under, which is the operator's
+/// rather than the process's whenever a node runs as a service user.
+///
+/// **Every refusal is the same 404 the record form gives.** A relative path, a directory, a file
+/// that is not there and one this user cannot read must not be distinguishable from outside, or
+/// the route is a way to map the filesystem by response code.
+pub fn serve_file(file: &FileRef, home: &Path) -> Response {
+    respond(file.fetch(home))
+}
+
+fn respond(found: Result<Fetched, JournalError>) -> Response {
+    match found {
         Ok(found) => body(found),
         Err(JournalError::TooLarge(bytes)) => {
             tracing::debug!(bytes, "refusing an attachment past the ceiling");
@@ -100,12 +118,14 @@ fn body(found: Fetched) -> Response {
 /// The type this response is served as, or `None` for bytes to download.
 ///
 /// A recorded media type decides what the node *shows* and is never second-guessed: a record that
-/// says `text/html` is a download whatever the bytes look like. **A record that says nothing is
-/// the case worth sniffing** — a pasted screenshot may carry no media type at all, and the
-/// `Content-Type` is what a client names the saved file from. Sniffing can only ever produce a
-/// type off the list above, so it widens what is shown without widening what is trusted.
+/// says `text/html` is a download whatever the bytes look like. **A claim that says nothing is
+/// the case worth sniffing** — a pasted screenshot may carry no media type at all, and a file on
+/// disk has only its extension, which for anything but an image yields `file` and no type. The
+/// `Content-Type` is what a client names the saved file from, and sniffing can only ever produce
+/// a type off the list above, so it widens what is shown without widening what is trusted.
 fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
-    if claim.kind != kampr_journal::attach::IMAGE {
+    use kampr_journal::attach::{FILE, IMAGE};
+    if claim.kind != IMAGE && claim.kind != FILE {
         return None;
     }
     match claim.mime {

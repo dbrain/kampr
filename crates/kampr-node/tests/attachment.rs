@@ -9,11 +9,11 @@ use axum::body::to_bytes;
 use axum::http::StatusCode;
 use axum::response::Response;
 use kampr_auth::Role;
-use kampr_journal::attach::{self, Locator};
+use kampr_journal::attach::{self, FileRef, Locator};
 use kampr_journal::{Block, JournalAdapter, Registry, TranscriptRoot};
 use kampr_node::{Config, Node, attach as node_attach, http};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
@@ -279,8 +279,11 @@ impl Harness {
         let state_dir = home.path().join("state");
         std::fs::create_dir_all(&state_dir).expect("a state dir");
 
+        let journals_home = home.path().join("journals");
+        std::fs::create_dir_all(&journals_home).expect("a journals home");
         let mut config = Config::bootstrap("attachment");
         config.update.check = false;
+        config.journals.home = journals_home.display().to_string();
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();
         config.server.bind = format!("127.0.0.1:{port}");
@@ -307,10 +310,14 @@ impl Harness {
     }
 
     async fn token(&self) -> String {
+        self.token_for(Role::Readonly).await
+    }
+
+    async fn token_for(&self, role: Role) -> String {
         let pairing = self
             .node
             .auth
-            .create_pairing(Role::Readonly, kampr_auth::Delivery::Console)
+            .create_pairing(role, kampr_auth::Delivery::Console)
             .await
             .expect("a pairing");
         if !pairing.armed {
@@ -327,6 +334,14 @@ impl Harness {
     async fn get(&self, path: &str, headers: &[(&str, &str)]) -> String {
         request(&self.origin, "GET", path, headers, None).await.0
     }
+
+    async fn get_raw(&self, path: &str, headers: &[(&str, &str)]) -> Vec<u8> {
+        raw_request(&self.origin, "GET", path, headers, None).await
+    }
+
+    fn journals_home(&self) -> PathBuf {
+        self.node.config.journal_home()
+    }
 }
 
 async fn request(
@@ -336,6 +351,20 @@ async fn request(
     headers: &[(&str, &str)],
     body: Option<&str>,
 ) -> (String, String) {
+    let response = raw_request(origin, method, path, headers, body).await;
+    let text = String::from_utf8_lossy(&response).to_string();
+    let status = text.lines().next().unwrap_or_default().to_string();
+    let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or_default();
+    (status, body.to_string())
+}
+
+async fn raw_request(
+    origin: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Vec<u8> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let rest = origin.trim_start_matches("http://");
     let (host, port) = rest.split_once(':').expect("host:port");
@@ -354,10 +383,7 @@ async fn request(
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.expect("read");
-    let text = String::from_utf8_lossy(&response).to_string();
-    let status = text.lines().next().unwrap_or_default().to_string();
-    let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or_default();
-    (status, body.to_string())
+    response
 }
 
 /// The route is behind the same bearer check as every other `/api/*` surface, and there is no
@@ -405,4 +431,248 @@ async fn a_read_only_device_naming_a_pane_this_node_does_not_serve_gets_nothing(
              there: {status:?}"
         );
     }
+}
+
+fn a_file(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join(name);
+    std::fs::write(&path, bytes).expect("a file");
+    (dir, path)
+}
+
+/// A home no test here has anything under, so nothing resolves a `~` by accident.
+const NO_HOME: &str = "/kampr-no-such-home";
+
+fn png_bytes() -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(PNG)
+        .expect("a png")
+}
+
+#[tokio::test]
+async fn a_png_on_disk_is_served_inline_under_the_name_it_has_there() {
+    let (_dir, path) = a_file("plot.png", &png_bytes());
+    let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(header(&response, "content-type"), "image/png");
+    assert_eq!(header(&response, "content-length"), "70");
+    assert_eq!(header(&response, "content-disposition"), "inline");
+    assert_eq!(bytes(response).await, png_bytes());
+}
+
+/// The extension decides what the node *claims*; the allowlist and the sniff decide what it
+/// *shows*. A page of markup on disk must not come back as a document from this origin however it
+/// is named.
+#[tokio::test]
+async fn a_document_on_disk_is_a_download_whatever_its_extension_says() {
+    for name in ["page.html", "vector.svg", "notes.txt"] {
+        let (_dir, path) = a_file(name, b"<svg onload=\"alert(1)\"><script>x</script></svg>");
+        let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+
+        assert_eq!(response.status(), StatusCode::OK, "{name}");
+        assert_eq!(
+            header(&response, "content-type"),
+            "application/octet-stream",
+            "{name} must not be a document served from this origin"
+        );
+        assert!(
+            header(&response, "content-disposition").starts_with("attachment; filename="),
+            "{name}"
+        );
+    }
+}
+
+/// A screenshot an agent wrote with no extension at all. The extension gave nothing, so the
+/// `Content-Type` is answered from the bytes by the same sniff a record with no media type uses.
+#[tokio::test]
+async fn a_file_with_no_extension_is_answered_from_its_own_bytes() {
+    let (_dir, path) = a_file("screenshot", &png_bytes());
+    let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+
+    assert_eq!(header(&response, "content-type"), "image/png");
+    assert_eq!(header(&response, "content-disposition"), "inline");
+}
+
+#[tokio::test]
+async fn a_path_this_node_cannot_serve_is_the_same_404_every_other_refusal_is() {
+    let (dir, empty) = a_file("empty", b"");
+    for path in [
+        dir.path().to_path_buf(),
+        dir.path().join("nothing-here.png"),
+        empty,
+        PathBuf::from("relative.png"),
+    ] {
+        let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "{} must be indistinguishable from any other refusal",
+            path.display()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_file_past_the_ceiling_is_refused_with_a_status_that_says_so() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("huge.png");
+    let file = std::fs::File::create(&path).expect("a file");
+    file.set_len(attach::MAX_BYTES + 1).expect("a sparse file");
+    drop(file);
+
+    assert_eq!(
+        node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME)).status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+
+/// The one line this feature holds. A device that may type into a terminal can already `cat` the
+/// file; a read-only device cannot, and an arbitrary-path read would be the whole escalation.
+#[tokio::test(flavor = "multi_thread")]
+async fn only_a_device_that_may_type_can_read_an_arbitrary_path() {
+    let h = Harness::start().await;
+    let (_dir, path) = a_file("plot.png", &png_bytes());
+    let id = FileRef::new(&path).encode();
+    let pane = format!("{}/w1:p1", h.node.node_id());
+
+    let readonly = format!("Bearer {}", h.token_for(Role::Readonly).await);
+    let status = h
+        .get(
+            &format!("/api/attachment/{pane}/{id}"),
+            &[("Authorization", readonly.as_str())],
+        )
+        .await;
+    assert!(
+        status.contains("403"),
+        "a read-only device read a path off the filesystem: {status}"
+    );
+
+    let full = format!("Bearer {}", h.token_for(Role::Full).await);
+    let response = h
+        .get_raw(
+            &format!("/api/attachment/{pane}/{id}"),
+            &[("Authorization", full.as_str())],
+        )
+        .await;
+    let head = String::from_utf8_lossy(&response[..response.len().min(400)]).to_string();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.contains("content-type: image/png"), "{head}");
+    assert!(
+        response.ends_with(&png_bytes()),
+        "the bytes of the file on disk are not what came back"
+    );
+}
+
+/// The looser gate the record form already has is not tightened by any of this: a read-only
+/// device asking for a record id gets the route's ordinary refusal, never a 403.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_is_still_answered_for_a_record_id() {
+    let h = Harness::start().await;
+    let pane = format!("{}/w1:p1", h.node.node_id());
+    let id = Locator {
+        agent: "claude".into(),
+        path: "projects/-home-u-demo/session.jsonl".into(),
+        offset: 0,
+        index: 0,
+        bytes: 70,
+    }
+    .encode();
+    let readonly = format!("Bearer {}", h.token_for(Role::Readonly).await);
+
+    let status = h
+        .get(
+            &format!("/api/attachment/{pane}/{id}"),
+            &[("Authorization", readonly.as_str())],
+        )
+        .await;
+    assert!(
+        status.contains("404"),
+        "a record attachment must stay readable by a device you half-trust with a screen: {status}"
+    );
+}
+
+/// What the ceiling actually costs the local route, which is the measurement behind not splitting
+/// this into a streamed second path (probe #258). Run it with `--nocapture` to read the numbers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_at_the_ceiling_crosses_the_local_route_whole() {
+    let h = Harness::start().await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let path = dir.path().join("ceiling.png");
+    let mut body = png_bytes();
+    body.resize(attach::MAX_BYTES as usize, 0x5a);
+    std::fs::write(&path, &body).expect("a file at the ceiling");
+
+    let id = FileRef::new(&path).encode();
+    let pane = format!("{}/w1:p1", h.node.node_id());
+    let token = format!("Bearer {}", h.token_for(Role::Full).await);
+    let before = peak_rss();
+    let started = std::time::Instant::now();
+    let response = h
+        .get_raw(
+            &format!("/api/attachment/{pane}/{id}"),
+            &[("Authorization", token.as_str())],
+        )
+        .await;
+    let elapsed = started.elapsed();
+    let after = peak_rss();
+
+    let head = String::from_utf8_lossy(&response[..response.len().min(400)]).to_string();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.contains(&format!("content-length: {}", attach::MAX_BYTES)),
+        "{head}"
+    );
+    assert!(
+        response.ends_with(&body),
+        "the ceiling-sized body came back changed"
+    );
+    eprintln!(
+        "#258 {} MiB through GET /api/attachment in {:?}; peak RSS {} KiB -> {} KiB",
+        attach::MAX_BYTES / (1024 * 1024),
+        elapsed,
+        before,
+        after
+    );
+}
+
+/// `VmHWM`, the high-water mark, so a buffer that has already been freed is still counted.
+fn peak_rss() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .expect("a Linux /proc")
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))
+        .and_then(|v| v.split_whitespace().next()?.parse().ok())
+        .expect("VmHWM")
+}
+
+/// The wiring for the expansion, measured through the route rather than under it: the home a
+/// leading `~/` lands in has to be the node's configured one, which is the operator's home rather
+/// than whatever `$HOME` this process happens to have.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tilde_path_resolves_against_the_home_the_node_is_configured_with() {
+    let h = Harness::start().await;
+    let home = h.journals_home();
+    std::fs::write(home.join("plot.png"), png_bytes()).expect("a file in the node's home");
+
+    let id = FileRef::new("~/plot.png").encode();
+    let pane = format!("{}/w1:p1", h.node.node_id());
+    let token = format!("Bearer {}", h.token_for(Role::Full).await);
+    let response = h
+        .get_raw(
+            &format!("/api/attachment/{pane}/{id}"),
+            &[("Authorization", token.as_str())],
+        )
+        .await;
+
+    let head = String::from_utf8_lossy(&response[..response.len().min(400)]).to_string();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.contains("content-type: image/png"), "{head}");
+    assert!(response.ends_with(&png_bytes()));
+    assert_ne!(
+        home,
+        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+        "the configured home and the process's are the same here, so this proves nothing"
+    );
 }

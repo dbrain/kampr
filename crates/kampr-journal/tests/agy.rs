@@ -8,7 +8,7 @@
 mod common;
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 use common::*;
@@ -301,7 +301,7 @@ fn a_working_directory_names_no_conversation() {
 // Identity: the conversation a pid is on.
 // ---------------------------------------------------------------------------------------------
 
-fn presence_home(tag: &str, ids: &[&str]) -> PathBuf {
+fn presence_home(tag: &str, ids: &[&str]) -> common::ScratchDir {
     let home = scratch_dir(tag);
     std::fs::create_dir_all(home.join("presence")).unwrap();
     for id in ids {

@@ -55,12 +55,45 @@ pub fn codex_parser() -> Box<dyn TranscriptParser> {
 
 static SCRATCH: AtomicU32 = AtomicU32::new(0);
 
-pub fn scratch_dir(tag: &str) -> PathBuf {
+/// A directory under the temp dir that goes away with the value that owns it.
+///
+/// **Bind it to a name.** `scratch_dir(t).join(x)` drops the guard at the end of the statement and
+/// takes the directory with it, which is loud rather than silent — the next write fails — but it
+/// is the one way to hold this wrong.
+pub struct ScratchDir(PathBuf);
+
+impl std::ops::Deref for ScratchDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for ScratchDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ScratchDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+pub fn scratch_dir(tag: &str) -> ScratchDir {
     let n = SCRATCH.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("kampr-journal-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
-    dir
+    ScratchDir(dir)
 }
 
 pub fn drain(journal: &mut dyn Journal) -> Vec<Turn> {
@@ -99,6 +132,10 @@ pub struct Scratch {
     pub transcript: PathBuf,
     pub journals: kampr_journal::Registry,
     pub journal: Box<dyn Journal>,
+    /// The root sits *inside* this rather than being it, so a test that writes beside the root —
+    /// an escape target, a symlink's destination — writes inside the guard too instead of into
+    /// the shared temp directory under a name every parallel test would collide on.
+    _dir: ScratchDir,
 }
 
 impl Scratch {
@@ -137,7 +174,9 @@ fn scratch_with(
     build: impl Fn(kampr_journal::TranscriptRoot) -> std::sync::Arc<dyn kampr_journal::JournalAdapter>,
 ) -> Scratch {
     use kampr_journal::{Registry, TranscriptRoot};
-    let root = scratch_dir(tag);
+    let dir = scratch_dir(tag);
+    let root = dir.join("root");
+    std::fs::create_dir_all(&root).expect("a root");
     let transcript = root.join(relative);
     std::fs::create_dir_all(transcript.parent().expect("a directory")).expect("a directory");
     std::fs::write(&transcript, body).expect("a transcript");
@@ -150,6 +189,7 @@ fn scratch_with(
         transcript,
         journals,
         journal,
+        _dir: dir,
     }
 }
 

@@ -212,10 +212,14 @@ impl Running {
     }
 
     async fn token(&self) -> String {
+        self.token_for(Role::Full).await
+    }
+
+    async fn token_for(&self, role: Role) -> String {
         let pairing = self
             .node
             .auth
-            .create_pairing(Role::Full, kampr_auth::Delivery::Console)
+            .create_pairing(role, kampr_auth::Delivery::Console)
             .await
             .expect("a pairing");
         if !pairing.armed {
@@ -1831,6 +1835,78 @@ async fn a_peers_media_type_is_run_through_this_hubs_own_allowlist() {
     assert!(
         headers.contains(r#"content-disposition: attachment; filename="evil.html""#),
         "a peer's filename reached a header with its separators intact: {}",
+        got.headers,
+    );
+    hub.stop();
+}
+
+/// The proxy hop with a **file** id on it. Everything downstream of the id form is supposed to be
+/// unchanged, and this is that claim measured rather than assumed: the hub forwards the id it was
+/// given, over the same link, and serves back what the peer answers with.
+///
+/// The gate is the hub's, because it is the hub that authenticated the browser. A read-only device
+/// must not reach the link at all — a `403` and no `att.fetch` on the wire.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_carries_a_file_id_to_its_peer_only_for_a_device_that_may_type() {
+    use base64::Engine;
+
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JPATH", "laptop").await;
+    let pane = "01JPATH/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JPATH", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JPATH", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| {
+        peers.herd().panes.iter().any(|p| p.id == pane) && peers.can_serve_attachments(pane)
+    })
+    .await;
+
+    let id = kampr_journal::FileRef::new("/var/lib/kampr/plot.png").encode();
+
+    let readonly = hub.token_for(Role::Readonly).await;
+    let refused = get(&format!("{}/api/attachment/{pane}/{id}", hub.origin), &readonly).await;
+    assert_eq!(
+        refused.status, 403,
+        "a read-only device reached the link: {}",
+        refused.headers
+    );
+
+    let png = b"\x89PNG\r\n\x1a\n and then some bytes".to_vec();
+    let token = hub.token().await;
+    let asked = {
+        let url = format!("{}/api/attachment/{pane}/{id}", hub.origin);
+        tokio::spawn(async move { get(&url, &token).await })
+    };
+
+    let fetch = peer.next_but_ping().await;
+    assert_eq!(fetch["t"], "att.fetch", "{fetch}");
+    assert_eq!(
+        fetch["id"], id,
+        "the hub rewrote the id on the way across: {fetch}"
+    );
+    let rid = fetch["rid"].as_u64().expect("an rid");
+    peer.say(json!({
+        "t": "att.open", "rid": rid, "bytes": png.len(), "kind": "image", "mime": "image/png",
+        "name": "plot.png"
+    }))
+    .await;
+    peer.say(json!({
+        "t": "att.chunk", "rid": rid, "seq": 0,
+        "b64": base64::engine::general_purpose::STANDARD.encode(&png)
+    }))
+    .await;
+    peer.say(json!({ "t": "att.end", "rid": rid })).await;
+
+    let got = asked.await.expect("the request task");
+    assert_eq!(got.status, 200, "{}", got.headers);
+    assert_eq!(got.body, png, "the hub served different bytes");
+    assert!(
+        got.headers
+            .to_ascii_lowercase()
+            .contains("content-type: image/png"),
+        "{}",
         got.headers,
     );
     hub.stop();

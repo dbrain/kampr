@@ -54,7 +54,7 @@ fn identity_root() -> PathBuf {
 /// itself. Copying rather than pointing at the fixture is what lets a test describe the *moment*
 /// — a pane whose fresh session has not written a line yet is the case both reports describe,
 /// and it is a directory with the older transcripts in it and nothing else.
-fn home_with(tag: &str, transcripts: &[&str]) -> PathBuf {
+fn home_with(tag: &str, transcripts: &[&str]) -> common::ScratchDir {
     let home = scratch_dir(tag);
     let project = home.join("projects/-tmp-kident-proj");
     std::fs::create_dir_all(&project).unwrap();
