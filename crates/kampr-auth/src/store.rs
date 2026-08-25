@@ -88,6 +88,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Random(#[from] secret::RandomError),
+    #[error(transparent)]
+    Stretch(#[from] secret::StretchError),
 }
 
 type Result<T> = std::result::Result<T, StoreError>;
@@ -312,7 +314,7 @@ impl Store {
             "INSERT INTO pairings (hash, role, created_at, expires_at, armed_until)
              VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(secret::pairing_digest(&secret::normalise_code(&code)))
+        .bind(secret::pairing_digest(secret::normalise_code(&code)).await?)
         .bind(role.as_str())
         .bind(now)
         .bind(expires_at)
@@ -328,7 +330,7 @@ impl Store {
              WHERE hash = ? AND used_at IS NULL AND expires_at > ? AND attempts < ?",
         )
         .bind(until)
-        .bind(secret::pairing_digest(&secret::normalise_code(code)))
+        .bind(secret::pairing_digest(secret::normalise_code(code)).await?)
         .bind(now)
         .bind(PAIRING_ATTEMPT_LIMIT)
         .execute(&self.pool)
@@ -344,7 +346,7 @@ impl Store {
     /// burn a pending code with ten guesses. Burning one costs the operator a re-print; not
     /// counting at all costs them the code.
     pub async fn claim_pairing(&self, code: &str, now: i64) -> Result<Option<Role>> {
-        let hash = secret::pairing_digest(&secret::normalise_code(code));
+        let hash = secret::pairing_digest(secret::normalise_code(code)).await?;
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT role FROM pairings
@@ -402,7 +404,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         sqlx::query("INSERT INTO recovery_codes (hash, created_at) VALUES (?, ?)")
-            .bind(secret::recovery_digest(&secret::normalise_code(&code)))
+            .bind(secret::recovery_digest(secret::normalise_code(&code)).await?)
             .bind(now)
             .execute(&mut *tx)
             .await?;
@@ -414,7 +416,7 @@ impl Store {
     /// limit that killed the code would hand an attacker a permanent lockout for the price of a
     /// few wrong guesses, and at ~99 bits there is nothing to guess.
     pub async fn claim_recovery(&self, code: &str, now: i64) -> Result<bool> {
-        let hash = secret::recovery_digest(&secret::normalise_code(code));
+        let hash = secret::recovery_digest(secret::normalise_code(code)).await?;
         let mut tx = self.pool.begin().await?;
         let claimed = sqlx::query("UPDATE recovery_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL")
             .bind(now)

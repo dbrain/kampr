@@ -560,3 +560,62 @@ async fn a_node_that_cannot_read_its_devices_does_not_say_nobody_is_enrolled() {
     assert!(status.contains("500"), "{status}");
     assert_ne!(body["enrolled"], json!(false), "a guess is not an answer");
 }
+
+/// `/auth/pair` ran its argon2id pass — 19 MiB, memory-hard, tens of milliseconds — inline on
+/// the executor, and nothing bounded how many ran at once. The per-peer
+/// limiter cannot: source addresses are free, and a rotated one buys a fresh burst of five. So a
+/// couple of hundred wrong codes was every tokio worker parked in a key derivation, and a node
+/// with nothing else wrong with it stopped answering anything at all.
+///
+/// Two workers because that is a small VPS, and because a bound that only holds on sixteen cores
+/// is not a bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flood_of_wrong_pairing_codes_leaves_the_node_still_answering_everything_else() {
+    let h = Harness::start(|c| c.server.trust_proxy = true).await;
+    let body = json!({ "code": "ZZZZ-ZZZZ", "device_name": "flood" }).to_string();
+    let flood: Vec<_> = (0..256)
+        .map(|n| {
+            let (origin, body) = (h.origin.clone(), body.clone());
+            tokio::spawn(async move {
+                let peer = format!("203.0.113.{n}");
+                request(
+                    &origin,
+                    "POST",
+                    "/auth/pair",
+                    &[("x-forwarded-for", &peer)],
+                    Some(&body),
+                )
+                .await
+            })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let at = std::time::Instant::now();
+    let (status, _) = request(&h.origin, "GET", "/healthz", &[], None).await;
+    let took = at.elapsed();
+
+    assert!(status.contains("200"), "the health check itself: {status}");
+    assert!(
+        took < Duration::from_millis(500),
+        "a stranger's wrong pairing codes wedged the runtime: /healthz took {took:?}"
+    );
+    let answers: Vec<String> = futures_util::future::join_all(flood)
+        .await
+        .into_iter()
+        .map(|a| a.expect("a request").0)
+        .collect();
+    assert!(
+        answers.iter().all(|a| !a.contains("200")),
+        "not one wrong code may pair"
+    );
+    // Refused, not queued, and this is what says so: without the bound every one of them is a
+    // 401 that cost 19 MiB and a key derivation to answer. That the derivation also runs off the
+    // worker is `redeeming_a_pairing_code_leaves_the_thread_that_asked_free` in `kampr-auth` —
+    // this test passes on either half alone, and neither half is the whole fix.
+    assert!(
+        answers.iter().any(|a| a.contains("503")),
+        "a flood has to hit the bound rather than each get its own 19 MiB: {:?}",
+        answers.iter().collect::<std::collections::BTreeSet<_>>()
+    );
+}

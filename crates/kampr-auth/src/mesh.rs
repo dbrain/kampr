@@ -74,7 +74,7 @@ impl Mesh<'_> {
     pub async fn invite(&self, now: i64, expires_at: i64) -> Result<String> {
         let code = secret::pairing_code()?;
         sqlx::query("INSERT INTO mesh_invites (hash, created_at, expires_at) VALUES (?, ?, ?)")
-            .bind(secret::pairing_digest(&secret::normalise_code(&code)))
+            .bind(secret::pairing_digest(secret::normalise_code(&code)).await?)
             .bind(now)
             .bind(expires_at)
             .execute(self.store.pool())
@@ -85,7 +85,7 @@ impl Mesh<'_> {
     /// Marks the code spent in the same statement that claims it, so two nodes racing on one code
     /// cannot both win. A miss charges every outstanding code an attempt.
     pub async fn claim_invite(&self, code: &str, now: i64) -> Result<bool> {
-        let hash = secret::pairing_digest(&secret::normalise_code(code));
+        let hash = secret::pairing_digest(secret::normalise_code(code)).await?;
         let mut tx = self.store.pool().begin().await?;
         let row = sqlx::query(
             "SELECT hash FROM mesh_invites

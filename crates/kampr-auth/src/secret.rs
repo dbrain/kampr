@@ -98,12 +98,23 @@ const PAIRING_SALT: &[u8] = b"kampr/pairing/v1";
 /// Same scheme, different domain: one table must never answer for both credential classes.
 const RECOVERY_SALT: &[u8] = b"kampr/recovery/v1";
 
-pub fn pairing_digest(normalised_code: &str) -> String {
-    stretch(normalised_code, PAIRING_SALT)
+#[derive(Debug, thiserror::Error)]
+#[error("the key derivation did not finish: {0}")]
+pub struct StretchError(#[from] tokio::task::JoinError);
+
+/// Off the executor, always. argon2id at 19 MiB is tens of milliseconds of one core, and both
+/// `/auth/pair` and `/mesh` reach it from a caller that has proved nothing — so a couple of
+/// hundred wrong codes on a worker is every worker parked in a key derivation and a node that
+/// answers nothing at all. The blocking pool is where work shaped like this belongs.
+///
+/// Fallible rather than a fallback digest: one that is not the digest rejects a good code *and*
+/// charges every outstanding code an attempt for it.
+pub async fn pairing_digest(normalised_code: String) -> Result<String, StretchError> {
+    Ok(tokio::task::spawn_blocking(move || stretch(&normalised_code, PAIRING_SALT)).await?)
 }
 
-pub fn recovery_digest(normalised_code: &str) -> String {
-    stretch(normalised_code, RECOVERY_SALT)
+pub async fn recovery_digest(normalised_code: String) -> Result<String, StretchError> {
+    Ok(tokio::task::spawn_blocking(move || stretch(&normalised_code, RECOVERY_SALT)).await?)
 }
 
 fn stretch(normalised_code: &str, salt: &[u8]) -> String {
@@ -158,16 +169,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_pairing_digest_is_stretched_rather_than_a_bare_hash() {
+    #[tokio::test]
+    async fn a_pairing_digest_is_stretched_rather_than_a_bare_hash() {
         // ~39.6 bits of entropy sits in a world-readable-until-now WAL; a bare SHA-256 of it is
         // an offline brute force with no rate limiter in the way.
         let code = pairing_code().unwrap();
         let normalised = normalise_code(&code);
-        assert_ne!(pairing_digest(&normalised), digest(&normalised));
-        assert_eq!(pairing_digest(&normalised), pairing_digest(&normalised));
+        let stretched = pairing_digest(normalised.clone()).await.unwrap();
+        assert_ne!(stretched, digest(&normalised));
+        assert_eq!(stretched, pairing_digest(normalised.clone()).await.unwrap());
         let at = std::time::Instant::now();
-        pairing_digest(&normalised);
+        pairing_digest(normalised.clone()).await.unwrap();
         assert!(
             at.elapsed() >= std::time::Duration::from_millis(10),
             "a pairing digest must cost real work, took {:?}",
@@ -198,14 +210,15 @@ mod tests {
         assert_ne!(code, recovery_code().unwrap());
     }
 
-    #[test]
-    fn a_recovery_digest_is_stretched_and_not_the_pairing_digest_of_the_same_string() {
+    #[tokio::test]
+    async fn a_recovery_digest_is_stretched_and_not_the_pairing_digest_of_the_same_string() {
         let code = normalise_code(&recovery_code().unwrap());
-        assert_ne!(recovery_digest(&code), digest(&code));
+        let stretched = recovery_digest(code.clone()).await.unwrap();
+        assert_ne!(stretched, digest(&code));
         // Domain separation: a table built against one credential class must not answer for the
         // other.
-        assert_ne!(recovery_digest(&code), pairing_digest(&code));
-        assert_eq!(recovery_digest(&code), recovery_digest(&code));
+        assert_ne!(stretched, pairing_digest(code.clone()).await.unwrap());
+        assert_eq!(stretched, recovery_digest(code.clone()).await.unwrap());
     }
 
     #[test]
