@@ -1421,6 +1421,13 @@ async fn resync_repaints_every_watched_pane_and_unwatch_stops_one() {
     assert_eq!(repaint["pane"], pane.as_str());
 
     send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    // A frame the node had already sent when it read the `unwatch` is late, not a leak — dispatch
+    // is sequential, so a pong sent after it is the client's proof that the unwatch has happened
+    // and that anything arriving from here on was chosen after the pane was dropped. Without this
+    // barrier the resync's own repaint, published a moment before, is counted as the leak.
+    send(&mut socket, json!({ "t": "ping", "n": 8 })).await;
+    until(&mut socket, "pong", 10).await;
+
     send(
         &mut socket,
         json!({ "t": "input", "pane": pane, "text": "echo after-unwatch\n" }),

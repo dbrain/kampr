@@ -160,6 +160,8 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
 }
 
 struct PaneHandle {
+    pane: String,
+    outbox: Arc<Outbox>,
     tasks: Vec<JoinHandle<()>>,
     scrollback: bool,
     conversation: bool,
@@ -167,10 +169,14 @@ struct PaneHandle {
 }
 
 impl PaneHandle {
+    /// Aborting is not enough on its own. `JoinHandle::abort` lands at the task's next await, and
+    /// a pump that has already taken an update off its watcher reaches the outbox without one — so
+    /// the pane is stopped in the outbox too, which is where a push and a stop are serialised.
     fn stop(&self) {
         for task in &self.tasks {
             task.abort();
         }
+        self.outbox.stop_pane(&self.pane);
     }
 }
 
@@ -395,6 +401,9 @@ impl Session {
             Some(pane),
             Some(json!({ "scrollback": scrollback, "conversation": conversation })),
         );
+        // The previous handle stopped this pane in the outbox, and a straggling frame from its
+        // pump must not outlive that. Reopening it is the last thing before the new pump exists.
+        self.wire.outbox().resume_pane(pane);
         let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
             registry: session.registry.clone(),
             herdr: session.herdr.clone(),
@@ -421,6 +430,8 @@ impl Session {
         self.panes.insert(
             pane.to_string(),
             PaneHandle {
+                pane: pane.to_string(),
+                outbox: self.wire.outbox().clone(),
                 tasks,
                 scrollback,
                 conversation,
@@ -448,6 +459,7 @@ impl Session {
             Some(pane),
             Some(json!({ "scrollback": scrollback, "conversation": conversation, "peer": true })),
         );
+        self.wire.outbox().resume_pane(pane);
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
             crate::relay::PeerPaneCtx {
                 peers: self.node.peers.clone(),
@@ -459,6 +471,8 @@ impl Session {
         self.panes.insert(
             pane.to_string(),
             PaneHandle {
+                pane: pane.to_string(),
+                outbox: self.wire.outbox().clone(),
                 tasks,
                 scrollback,
                 conversation,
@@ -507,7 +521,6 @@ impl Session {
     fn unwatch(&mut self, pane: &str) {
         if let Some(handle) = self.panes.remove(pane) {
             handle.stop();
-            self.wire.outbox().purge_pane(pane);
             self.audit("unwatch", Some(pane), None);
         }
     }

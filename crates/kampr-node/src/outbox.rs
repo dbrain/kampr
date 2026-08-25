@@ -1,11 +1,13 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     /// Set on `grid.*` frames only — the ones a purge is allowed to throw away, because a
-    /// `grid.reset` makes every dropped patch for that pane irrelevant.
+    /// `grid.reset` makes every dropped patch for that pane irrelevant, and the only ones a
+    /// stopped pane may be refused: dropping a `styles` frame would leave the connection's pen
+    /// table behind the encoder's for good.
     pub pane: Option<String>,
     pub json: String,
 }
@@ -44,6 +46,7 @@ pub struct Outbox {
 #[derive(Debug, Default)]
 struct Inner {
     queue: VecDeque<Frame>,
+    stopped: HashSet<String>,
     closed: bool,
     purges: u64,
     dropped: u64,
@@ -68,6 +71,13 @@ impl Outbox {
     pub fn push(&self, frame: Frame) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if inner.closed {
+            return false;
+        }
+        if frame
+            .pane
+            .as_deref()
+            .is_some_and(|pane| inner.stopped.contains(pane))
+        {
             return false;
         }
         if inner.queue.len() >= self.hard_cap {
@@ -119,14 +129,33 @@ impl Outbox {
 
     pub fn purge_pane(&self, pane: &str) -> usize {
         let mut inner = self.inner.lock().unwrap();
-        let before = inner.queue.len();
-        inner.queue.retain(|f| f.pane.as_deref() != Some(pane));
-        let dropped = before - inner.queue.len();
+        let dropped = Self::drop_pane(&mut inner, pane);
         if dropped > 0 {
             inner.purges += 1;
             inner.dropped += dropped as u64;
         }
         dropped
+    }
+
+    /// Unwatching a pane aborts its pump, and `JoinHandle::abort` is not synchronous: an iteration
+    /// already running on another worker runs to its next await, and there is no await between
+    /// taking an update off the watcher and enqueueing it. Emptying the queue cannot catch that
+    /// frame, because it is not in the queue yet — so the stop is recorded here instead, the one
+    /// place where a push and a stop are serialised against each other.
+    pub fn stop_pane(&self, pane: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        Self::drop_pane(&mut inner, pane);
+        inner.stopped.insert(pane.to_string());
+    }
+
+    pub fn resume_pane(&self, pane: &str) {
+        self.inner.lock().unwrap().stopped.remove(pane);
+    }
+
+    fn drop_pane(inner: &mut Inner, pane: &str) -> usize {
+        let before = inner.queue.len();
+        inner.queue.retain(|f| f.pane.as_deref() != Some(pane));
+        before - inner.queue.len()
     }
 
     pub fn stats(&self) -> (u64, u64) {

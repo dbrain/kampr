@@ -8,6 +8,7 @@ use kampr_node::session::{PaneStreamCtx, pump_pane};
 use kampr_node::wire::Wire;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
@@ -256,4 +257,116 @@ async fn each_connection_interns_its_own_styles() {
             "each connection starts its own table after the default pen"
         );
     }
+}
+
+/// Unwatching a pane aborts its pump and empties its queue, and neither is enough on its own:
+/// `JoinHandle::abort` lands at the task's next await, and a pump that has already taken an update
+/// off its watcher reaches the outbox without one. The frame it pushes is not in the queue when
+/// the queue is emptied, so it survives — one frame, on a pane the client has said it is done
+/// with. The stop has to be recorded where a push and a stop are serialised against each other.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_stopped_while_its_pump_is_mid_frame_pushes_nothing_more() {
+    const PANE: &str = "01J/w1:p1";
+    for attempt in 0..15 {
+        let (registry, events, outbox, wire) = setup(1024);
+        events.send(PaneEvent::Reset { cols: 20, rows: 4 }).await.unwrap();
+        events
+            .send(PaneEvent::Bytes {
+                full: true,
+                bytes: b"start".to_vec(),
+            })
+            .await
+            .unwrap();
+        let (pump, _herd) = spawn_pump(registry, wire);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        let feeding = Arc::new(AtomicBool::new(true));
+        let feeder = {
+            let feeding = feeding.clone();
+            tokio::spawn(async move {
+                let mut n = 0u32;
+                while feeding.load(Ordering::Relaxed) {
+                    if events.send(ansi(&format!("\r\nline {n}"))).await.is_err() {
+                        return;
+                    }
+                    n += 1;
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+
+        let stopped = Arc::new(AtomicBool::new(false));
+        let strays = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let reader = {
+            let (outbox, stopped, strays) = (outbox.clone(), stopped.clone(), strays.clone());
+            tokio::spawn(async move {
+                while let Ok(Some(frame)) =
+                    tokio::time::timeout(Duration::from_millis(200), outbox.next()).await
+                {
+                    if stopped.load(Ordering::Acquire) && frame.pane.as_deref() == Some(PANE) {
+                        strays.lock().unwrap().push(frame.json);
+                    }
+                }
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Exactly what unwatching this pane does.
+        pump.abort();
+        outbox.stop_pane(PANE);
+        stopped.store(true, Ordering::Release);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        feeding.store(false, Ordering::Relaxed);
+        let _ = feeder.await;
+        outbox.close();
+        let _ = reader.await;
+
+        let strays = strays.lock().unwrap();
+        assert!(
+            strays.is_empty(),
+            "attempt {attempt}: {} frame(s) escaped the stop: {:#?}",
+            strays.len(),
+            *strays
+        );
+    }
+}
+
+/// A congestion purge and a stop empty the same frames, but only the stop is a decision about the
+/// pane: the pump goes on streaming through a purge, and must not through a stop.
+#[tokio::test]
+async fn a_stopped_pane_is_refused_until_it_is_watched_again() {
+    let (_registry, _events, outbox, wire) = setup(64);
+    let update = kampr_core::registry::PaneUpdate::Patch {
+        rows: Arc::new(vec![kampr_term::RowDiff {
+            row: 0,
+            cells: vec![kampr_term::Cell::default()],
+        }]),
+        cursor: kampr_core::wire::Cursor {
+            col: 0,
+            row: 0,
+            visible: true,
+        },
+        new_links: Arc::new(vec![]),
+    };
+    assert!(wire.send_update("p1", &update), "a watched pane streams");
+
+    outbox.purge_pane("p1");
+    assert!(
+        wire.send_update("p1", &update),
+        "a purge is backpressure, not a decision about the pane"
+    );
+
+    outbox.stop_pane("p1");
+    assert!(!wire.send_update("p1", &update), "a stopped pane does not");
+    assert!(
+        !drain(&outbox)
+            .await
+            .iter()
+            .any(|f| f["t"].as_str().is_some_and(|t| t.starts_with("grid."))),
+        "the stop took the queued frame with it and refused the one after"
+    );
+
+    outbox.resume_pane("p1");
+    assert!(wire.send_update("p1", &update), "watching it again reopens it");
 }
