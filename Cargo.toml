@@ -74,6 +74,18 @@ strip = "symbols"
 lto = "thin"
 codegen-units = 1
 
+# The live suite links a dozen test binaries against the whole workspace, and each one carried its
+# own full copy of the DWARF for every dependency — `target/debug` reached 130 GB, most of it
+# duplicated debug info and incremental state cargo never collects. `line-tables-only` keeps the
+# file and line a backtrace needs, which is the whole of what a panicking live test is read for,
+# and drops the type and variable records nothing here steps through. Dependencies keep none: a
+# breakpoint inside `tokio` is not how this project is debugged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # argon2 in a debug build is ~50x slower than in release, which turns a pairing redemption in the
 # test suite into seconds. Optimising just the KDF keeps the cost honest without that.
 [profile.dev.package.argon2]
