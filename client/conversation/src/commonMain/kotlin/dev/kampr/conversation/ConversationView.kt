@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +26,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
@@ -48,7 +48,6 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
-import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 
@@ -103,44 +102,71 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
         }
     }
 
-    val atBottom by remember(pane) {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf true
-            last >= turns.lastIndex + (if (pane.convoMore) 1 else 0) - 1
-        }
+    // Whether the reader is still standing on the end, which only the reader can give up: they
+    // scroll back and it is theirs to keep, they return to the end and the transcript has it
+    // again. Read off `lastScrolledBackward` rather than off `isScrollInProgress`, because the
+    // list is scrolled forward for reasons that are not the reader — a control near the bottom
+    // edge bringing itself into view is one — and being carried towards the end is not the same
+    // as choosing to leave it.
+    var following by remember(pane.id) { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.lastScrolledBackward to listState.canScrollForward }
+            .collect { (backward, below) ->
+                following = when {
+                    !below -> true
+                    backward -> false
+                    else -> following
+                }
+            }
     }
-    // Keyed on the keyboard as well as the turn count: it takes half the viewport, and a lazy list
-    // anchors on its first visible item — so without this the turn you are replying to slides off
-    // the bottom at the moment you start replying.
+
+    // The transcript follows its own end, and it is aimed at that end again whenever the end can
+    // have moved without the reader asking it to. Two things move it, and neither is a count of
+    // anything: the node writing — a turn appended, a live answer revised, a page of older turns
+    // prepended — and the pane's own box changing height. The second is the one every earlier fix
+    // missed. `PaneScreenMobile` lays the transcript out under a *guessed* chrome height and
+    // replaces the guess with the header's own the moment `onGloballyPositioned` reports it, which
+    // is after the transcript's first layout; the keyboard then takes the bottom of the window
+    // over a quarter of a second. A lazy list anchors on its *first* visible item, so a box that
+    // loses height pushes its end below the fold and leaves it there. Measured in the harness: a
+    // chrome guess 52 dp short leaves the last line 52 dp below the fold, on every open.
+    //
+    // Deliberately *not* keyed on how tall the content measures. A tool card unfolding and a
+    // picture decoding are the reader's own doing and must leave the transcript where they put it
+    // (AttachmentScrollTest), which is why this is keyed on the turns and the box rather than on
+    // anything the list reports about its own extent.
     //
     // `requestScrollToItem`, not `scrollToItem`: the suspending one waits for the list's first
     // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
-    val keyboardOpen = LocalSafeArea.current.ime > 0.dp
-    // Keyed on how much prose the newest turn carries as well as on how many turns there are: a
-    // live preview is *revised*, so a message being written grows the last item without ever
-    // changing the count — and a reader at the bottom would watch it run off the bottom.
-    val tail = turns.lastOrNull()?.blocks.orEmpty().filterIsInstance<Block.Md>().sumOf { it.text.length }
-    LaunchedEffect(turns.size, tail, keyboardOpen) {
-        if (atBottom && turns.isNotEmpty()) {
+    var viewport by remember { mutableStateOf(0) }
+    LaunchedEffect(turns, viewport) {
+        if (following && turns.isNotEmpty()) {
             listState.requestScrollToItem(turns.lastIndex + leading, END_OF_THE_ITEM)
         }
     }
 
+    // The bar is 53 dp of a rotated phone's 117 dp of conversation — its search glyph carries a
+    // landscape touch target — and it yields all of it while the keys are up, because a reader
+    // with a keyboard open is writing rather than reading a turn count. Unless the search field is
+    // the thing holding the keyboard, in which case the bar *is* what is being typed into.
+    val keyboardOpen = LocalSafeArea.current.ime > 0.dp
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
-        TranscriptBar(
-            count = turns.size,
-            searching = searching,
-            query = query,
-            hits = hits.size,
-            focus = focus,
-            onQuery = { query = it; focus = 0 },
-            onSearching = { searching = it; if (!it) query = "" },
-            onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
-            agent = info?.agent,
-        )
+        if (searching || !keyboardOpen) {
+            TranscriptBar(
+                count = turns.size,
+                searching = searching,
+                query = query,
+                hits = hits.size,
+                focus = focus,
+                onQuery = { query = it; focus = 0 },
+                onSearching = { searching = it; if (!it) query = "" },
+                onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
+                agent = info?.agent,
+            )
+        }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { viewport = it.height }) {
             if (turns.isEmpty()) {
                 KText(
                     "waiting for the transcript",
@@ -179,10 +205,10 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                     )
                 }
             }
-        }
 
         if (!io.readOnly) {
             pane.pending?.let { PendingStrip(it, onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) }) }
+        }
         }
 
         Composer(
