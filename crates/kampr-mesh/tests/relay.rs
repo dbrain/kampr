@@ -160,6 +160,21 @@ fn text_of(update: &PaneUpdate) -> Vec<String> {
         .collect()
 }
 
+/// Waits until the hub has absorbed a scrollback message, so a handover is measured against a
+/// history that is actually there.
+async fn settled_history(watcher: &mut kampr_mesh::RemoteWatcher) {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), watcher.recv())
+            .await
+            .expect("the watcher went quiet")
+            .expect("the watcher closed")
+        {
+            RemoteEvent::Scrollback(_) => return,
+            _ => continue,
+        }
+    }
+}
+
 async fn next_update(watcher: &mut kampr_mesh::RemoteWatcher) -> PaneUpdate {
     loop {
         match tokio::time::timeout(Duration::from_secs(2), watcher.recv())
@@ -696,4 +711,137 @@ async fn a_styles_message_that_skips_past_the_table_closes_the_link() {
         "the hub sized a table from a number the peer chose",
     );
     settle(&peers, |h| h.nodes.iter().any(|n| !n.online)).await;
+}
+
+/// The node-side twin of this was #252: a registry that holds a `Weak`, and a caller that stops
+/// the old watcher before the new one attaches. A `RemotePane` is kept alive by its watchers
+/// alone, so the last one dropping takes the hub's shadow of the pane, the history it has
+/// stitched, and the upstream `watch` with it — and what the replacement gets is a *fresh* pane:
+/// a blank grid over content a viewer was already looking at, no history at all, and a second
+/// crossing of the WAN per pane per resync.
+#[tokio::test]
+async fn a_relayed_pane_keeps_its_history_when_the_last_viewer_is_replaced() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut first = peers.watch("01JA/w1:p1", false).expect("a live peer");
+    assert_eq!(peer.request_but_ping().await["t"], "watch");
+    peer.send(reset("01JA/w1:p1", "hello")).await;
+    peer.send(json!({
+        "t": "scrollback", "pane": "01JA/w1:p1", "from_top": 0,
+        "rows": [{ "row": 0, "runs": [{ "s": 0, "x": "one" }] }],
+        "total_rows": 1, "complete": true, "capped": false,
+    }))
+    .await;
+    assert_eq!(text_of(&next_update(&mut first).await), ["hello   ", "        "]);
+    settled_history(&mut first).await;
+
+    // The resync: this viewer is the last one, and it is stopped before its replacement watches.
+    let hold = peers.hold_while("01JA/w1:p1", || drop(first));
+    let mut second = peers.watch("01JA/w1:p1", false).expect("a live peer");
+    drop(hold);
+
+    let initial = second.initial();
+    let grid = initial.iter().find_map(|event| match event {
+        RemoteEvent::Update(update) => Some(update),
+        _ => None,
+    });
+    assert_eq!(
+        grid.map(text_of),
+        Some(vec!["hello   ".to_string(), "        ".to_string()]),
+        "the replacement was handed a blank pane instead of the grid the hub already held",
+    );
+    let history = initial.iter().find_map(|event| match event {
+        RemoteEvent::Scrollback(doc) => Some(doc),
+        _ => None,
+    });
+    assert_eq!(
+        history.map(|doc| doc.total_rows),
+        Some(1),
+        "the stitched history was thrown away and re-asked for",
+    );
+
+    // Nothing crossed the link for any of it. `input` is a fence: it is the next request the hub
+    // makes, so anything the handover sent would arrive ahead of it.
+    peers
+        .relay(
+            "01JA/w1:p1",
+            json!({ "t": "input", "pane": "01JA/w1:p1", "text": "ls\r" }),
+        )
+        .expect("a live peer");
+    assert_eq!(
+        peer.request_but_ping().await["t"],
+        "input",
+        "the handover cost the WAN a second watch",
+    );
+}
+
+/// The other half of the hold: a pane held across a handover nobody came back for is still a pane
+/// nobody is watching, and the hub must stop the peer streaming it. Held forever it would cost the
+/// hub a shadow and a history for every pane it ever showed, and the peer a stream nobody reads.
+#[tokio::test]
+async fn a_relayed_pane_nobody_came_back_for_is_still_unwatched_upstream() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut only = peers.watch("01JA/w1:p1", false).expect("a live peer");
+    assert_eq!(peer.request_but_ping().await["t"], "watch");
+    peer.send(reset("01JA/w1:p1", "hello")).await;
+    next_update(&mut only).await;
+
+    let hold = peers.hold_while("01JA/w1:p1", || drop(only));
+    assert!(hold.is_some(), "a live pane is holdable");
+    drop(hold);
+
+    assert_eq!(
+        peer.request_but_ping().await["t"],
+        "unwatch",
+        "a hold that outlived every viewer kept the peer streaming a pane nobody reads",
+    );
+}
+
+/// A hold must not short-circuit what `watch` decides. The first viewer of an agent pane settles
+/// what the peer sends, so a replacement that wants the transcript still has to ask for it — and
+/// across a handover the pane it re-attaches to is the *old* one, which was opened without.
+#[tokio::test]
+async fn a_viewer_replaced_across_a_handover_still_asks_for_the_transcript() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let terminal = peers.watch("01JA/w1:p1", false).expect("a live peer");
+    let opened = peer.request_but_ping().await;
+    assert_eq!(opened["t"], "watch");
+    assert_eq!(opened["conversation"], false);
+
+    let hold = peers.hold_while("01JA/w1:p1", || drop(terminal));
+    let _conversation = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    drop(hold);
+
+    let upgraded = peer.request_but_ping().await;
+    assert_eq!(upgraded["t"], "watch", "{upgraded}");
+    assert_eq!(upgraded["pane"], "01JA/w1:p1");
+    assert_eq!(
+        upgraded["conversation"], true,
+        "the replacement was re-attached to a stream that carries no transcript: {upgraded}",
+    );
+}
+
+/// `hold_while` runs its `stop` whatever it finds, so a caller can order the swap the same way for
+/// every pane it holds — including one on a peer that has gone since it was watched.
+#[tokio::test]
+async fn holding_a_pane_no_link_serves_still_stops_the_watcher_it_was_given() {
+    let peers = peers();
+    let mut stopped = false;
+    let hold = peers.hold_while("01JZ/w1:p1", || stopped = true);
+    assert!(hold.is_none(), "nobody serves that pane");
+    assert!(stopped, "the old watcher was left running");
 }

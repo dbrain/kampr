@@ -1354,3 +1354,113 @@ async fn a_peer_revoked_by_a_client_of_the_hub_is_cut_off_without_waiting_for_a_
 
     hub.stop();
 }
+
+/// Watches one relayed pane and waits until the hub has served its first grid, so what follows is
+/// measured against a pane the hub actually holds a shadow of.
+async fn watch_relayed(client: &mut Socket, peer: &mut Scripted, pane: &str) {
+    send(client, json!({ "t": "watch", "pane": pane, "scrollback": true })).await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["t"], "watch", "{asked}");
+    assert_eq!(asked["pane"], pane, "{asked}");
+    peer.say(json!({
+        "t": "grid.reset", "pane": pane, "cols": 8, "rows": 2,
+        "rows_data": [{ "row": 0, "runs": [{ "s": 0, "x": "hello" }] }],
+        "cursor": { "col": 0, "row": 0, "visible": true }, "links": [],
+    }))
+    .await;
+    until(client, "grid.reset", 10).await;
+}
+
+/// The mesh twin of #252, and a *scheduler race* rather than a certainty: `JoinHandle::abort` is
+/// not synchronous, so the aborted pump still holds the pane when its replacement watches — and
+/// tokio's LIFO slot normally polls that replacement first. One pane therefore survives a resync.
+/// Two or more do not: `resync` spawns a pump per pane, so the second spawn evicts the first from
+/// that slot, the aborted pump is reaped first, and the pane it was the last watcher of goes with
+/// it — the hub's shadow, the stitched history, and one `unwatch`+`watch` across the WAN each.
+#[tokio::test(flavor = "multi_thread")]
+async fn resyncing_several_peer_panes_asks_the_peer_for_none_of_them_again() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JHOLD", "laptop").await;
+    let panes = ["01JHOLD/w1:p1", "01JHOLD/w1:p2", "01JHOLD/w1:p3"];
+    peer.advertise(&[("01JHOLD", "laptop")], &panes).await;
+    mesh_settles(&hub, 10, |peers| {
+        peers.herd().panes.iter().any(|p| p.id == "01JHOLD/w1:p3")
+    })
+    .await;
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    for pane in panes {
+        watch_relayed(&mut client, &mut peer, pane).await;
+    }
+
+    send(&mut client, json!({ "t": "resync" })).await;
+    // `input` is a fence: it is the next request the hub has any reason to make, so a re-watch
+    // that the resync sent would arrive ahead of it.
+    send(
+        &mut client,
+        json!({ "t": "input", "pane": panes[0], "text": "ls\r" }),
+    )
+    .await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(
+        asked["t"], "input",
+        "a resync re-crossed the WAN for a relayed pane the hub already held: {asked}",
+    );
+
+    // And the client was re-served out of the hub's shadow, with no round trip at all.
+    for _ in panes {
+        until(&mut client, "grid.reset", 10).await;
+    }
+
+    hub.stop();
+}
+
+/// The other half of holding a relayed pane across a handover: a hold that never releases is a hub
+/// that keeps a shadow and a stitched history for every pane it has ever shown, and a peer that
+/// keeps streaming panes nobody is looking at. A pane whose viewers have genuinely gone must still
+/// be unwatched upstream — including one that has been through a handover.
+#[tokio::test(flavor = "multi_thread")]
+async fn relayed_panes_the_last_client_unwatches_are_still_unwatched_upstream() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JFREE", "laptop").await;
+    let panes = ["01JFREE/w1:p1", "01JFREE/w1:p2"];
+    peer.advertise(&[("01JFREE", "laptop")], &panes).await;
+    mesh_settles(&hub, 10, |peers| {
+        peers.herd().panes.iter().any(|p| p.id == "01JFREE/w1:p2")
+    })
+    .await;
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    for pane in panes {
+        watch_relayed(&mut client, &mut peer, pane).await;
+    }
+    send(&mut client, json!({ "t": "resync" })).await;
+    for _ in panes {
+        until(&mut client, "grid.reset", 10).await;
+    }
+
+    for pane in panes {
+        send(&mut client, json!({ "t": "unwatch", "pane": pane })).await;
+    }
+
+    let mut released = Vec::new();
+    while released.len() < panes.len() {
+        let asked = peer.next_but_ping().await;
+        if asked["t"] == "unwatch" {
+            released.push(asked["pane"].as_str().unwrap_or_default().to_string());
+        }
+    }
+    released.sort();
+    assert_eq!(
+        released, panes,
+        "a relayed pane nobody is watching was left streaming across the WAN",
+    );
+
+    hub.stop();
+}

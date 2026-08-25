@@ -11,7 +11,8 @@ use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
 use kampr_core::registry::PaneHold;
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
-use kampr_mesh::{Incoming, Outgoing};
+use kampr_mesh::peers::PeerHold;
+use kampr_mesh::{Incoming, Outgoing, Peers};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -168,36 +169,58 @@ struct PaneHandle {
     scrollback: bool,
     conversation: bool,
     convo: convo::Open,
-    _hold: Option<PaneHold>,
+    _hold: Option<Hold>,
+}
+
+/// What keeps a pane open across a handover, on whichever side of the mesh streams it. Dropping it
+/// is what releases the pane, so it lives in the [`PaneHandle`] that replaced the old one and goes
+/// when that handle does — an unwatch, a disconnect, or the next handover, which takes its own
+/// hold before this one is stopped.
+enum Hold {
+    Local { _pane: PaneHold },
+    Peer { _pane: PeerHold },
+}
+
+/// Where the pane about to be handed over is streamed from, and therefore who can hold it open.
+enum Streams<'a> {
+    Local(&'a PaneRegistry, &'a str),
+    Peer(&'a Peers, &'a str),
 }
 
 /// Stops whatever is streaming this pane and hands back what keeps it open until the replacement
 /// has attached.
 ///
-/// **A re-watch must not be a re-open.** The old pump owns the registry's watcher for the pane
-/// and `stop` aborts it, so if it was the only one the pane goes with it — emulator, ring, and
-/// the spawned `observe` behind them. The new pump then opens a *fresh* pane, and the registry's
+/// **A re-watch must not be a re-open.** The old pump owns the watcher for the pane and `stop`
+/// aborts it, so if it was the only one the pane goes with it. Locally that is the emulator, the
+/// ring and the spawned `observe` behind them, and what the new pump opens is a *fresh* pane whose
 /// flush publishes a blank grid at the pane's real geometry over content the client is already
-/// looking at. That is a blank flash and a respawned observer on every pane of every reconnect
-/// resync, which is the one moment a client is least able to spare either. A peer's pane is
-/// streamed by the node that owns it and has nothing here to hold.
+/// looking at (#252). For a peer's pane it is the hub's shadow, the history it has stitched, and
+/// one `unwatch` plus one `watch` back across the WAN.
+///
+/// The two differ in how reliably they bite. Locally the old pump is stopped synchronously, so it
+/// fires every time. Over the mesh the pump is a task and `JoinHandle::abort` is not synchronous,
+/// so the aborted pump usually still holds the pane when the replacement watches — one relayed
+/// pane survives a resync on its own. `resync` spawns a pump per pane, though, and the second
+/// spawn displaces the first from the scheduler slot that was polling it first: from two panes
+/// upwards every pane of every resync is re-opened.
 fn hand_over(
     panes: &mut HashMap<String, PaneHandle>,
     outbox: &Outbox,
-    registry: Option<(&PaneRegistry, &str)>,
+    streams: Streams<'_>,
     pane: &str,
-) -> Option<PaneHold> {
-    let mut stop = || {
+) -> Option<Hold> {
+    let stop = || {
         if let Some(old) = panes.remove(pane) {
             old.stop();
         }
     };
-    let hold = match registry {
-        Some((registry, local)) => registry.hold_while(local, stop),
-        None => {
-            stop();
-            None
-        }
+    let hold = match streams {
+        Streams::Local(registry, local) => registry
+            .hold_while(local, stop)
+            .map(|pane| Hold::Local { _pane: pane }),
+        Streams::Peer(peers, global) => peers
+            .hold_while(global, stop)
+            .map(|pane| Hold::Peer { _pane: pane }),
     };
     // The previous handle stopped this pane in the outbox, and a straggling frame from its pump
     // must not outlive that. Reopening it is the last thing before the new pump exists.
@@ -438,7 +461,7 @@ impl Session {
         let hold = hand_over(
             &mut self.panes,
             self.wire.outbox(),
-            Some((&session.registry, &local)),
+            Streams::Local(&session.registry, &local),
             pane,
         );
         let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
@@ -494,7 +517,12 @@ impl Session {
             Some(pane),
             Some(json!({ "scrollback": scrollback, "conversation": conversation, "peer": true })),
         );
-        hand_over(&mut self.panes, self.wire.outbox(), None, pane);
+        let hold = hand_over(
+            &mut self.panes,
+            self.wire.outbox(),
+            Streams::Peer(&self.node.peers, pane),
+            pane,
+        );
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
             crate::relay::PeerPaneCtx {
                 peers: self.node.peers.clone(),
@@ -512,7 +540,7 @@ impl Session {
                 scrollback,
                 conversation,
                 convo: convo::open(),
-                _hold: None,
+                _hold: hold,
             },
         );
     }
@@ -1351,7 +1379,12 @@ mod tests {
 
         /// Exactly what `watch` does once its checks have passed.
         fn watch(&mut self) {
-            let hold = hand_over(&mut self.panes, &self.outbox, Some((&self.registry, LOCAL)), PANE);
+            let hold = hand_over(
+                &mut self.panes,
+                &self.outbox,
+                Streams::Local(&self.registry, LOCAL),
+                PANE,
+            );
             let (herd, herd_rx) = watch::channel(Arc::new(crate::herd::HerdModel::default()));
             self.herds.push(herd);
             let tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {

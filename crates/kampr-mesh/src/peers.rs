@@ -189,6 +189,24 @@ impl Peers {
             .watch(pane, conversation, self.config.pane_fanout)
     }
 
+    /// Re-watching a relayed pane must not close it in between — the mesh twin of #252.
+    ///
+    /// A [`RemotePane`] is kept alive by its watchers and by nothing else, so a caller that stops
+    /// its old watch before starting the new one *is* the last watcher: the hub's shadow of the
+    /// pane, the history it has stitched and the upstream `watch` all go with it, and what the
+    /// replacement gets is a freshly minted pane — a blank grid over content a viewer was already
+    /// looking at, an empty history, and a second crossing of the WAN. Taken across the swap, a
+    /// re-watch is a re-attach: the peer is asked nothing at all.
+    ///
+    /// The hold is a strong reference and nothing more. It sends no request, so it cannot become a
+    /// second upstream watch, and it releases the pane exactly as a watcher does — a relayed pane
+    /// nobody is watching and nobody is holding is still unwatched upstream.
+    pub fn hold_while(&self, pane: &str, stop: impl FnOnce()) -> Option<PeerHold> {
+        let hold = self.link_for(pane).and_then(|link| link.hold(pane));
+        stop();
+        hold
+    }
+
     /// Keystrokes and answers: fire and forget, exactly as they are locally. The peer's own
     /// session decides whether they are allowed, and says so on its own error channel.
     pub fn relay(&self, addressed_to: &str, message: Value) -> Result<(), RelayError> {
@@ -656,6 +674,15 @@ impl PeerLink {
         Ok(RemoteWatcher::attach(remote))
     }
 
+    fn hold(&self, pane: &str) -> Option<PeerHold> {
+        self.panes
+            .lock()
+            .unwrap()
+            .get(pane)
+            .and_then(Weak::upgrade)
+            .map(|pane| PeerHold { _pane: pane })
+    }
+
     fn pane(&self, message: &Value) -> Option<Arc<RemotePane>> {
         let id = message["pane"].as_str()?;
         self.panes.lock().unwrap().get(id).and_then(Weak::upgrade)
@@ -826,6 +853,13 @@ async fn revoked(store: &Store, pubkey: &str) -> bool {
             false
         }
     }
+}
+
+/// A relayed pane kept open while one watcher is handed over to the next. See
+/// [`Peers::hold_while`].
+#[derive(Debug)]
+pub struct PeerHold {
+    _pane: Arc<RemotePane>,
 }
 
 #[derive(Debug)]
