@@ -813,6 +813,13 @@ async fn redeem_pairing(
             private_json(json!({ "token": e.token, "device": e.device }))
         }
         Err(AuthError::RateLimited) => refuse(StatusCode::TOO_MANY_REQUESTS, "too many attempts"),
+        // The same answer `/mesh` gives when its handshake semaphore is full, for the same
+        // reason: the argon2id pass behind this route is bounded, and a caller told to come back
+        // is not a caller told the code was wrong.
+        Err(AuthError::Busy) => refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this node is busy; try again shortly",
+        ),
         Err(_) => refuse(StatusCode::UNAUTHORIZED, "that pairing code is not valid"),
     }
 }
@@ -942,20 +949,18 @@ async fn register_start(
     }
 }
 
+/// `device_name` and `role` were fields here and are gone: the passkey binds to the device that
+/// asked for it, which already has both. An older client still sends them and is still served —
+/// unknown fields are ignored, which is the rule the wire is additive under.
 #[derive(Debug, Deserialize)]
 struct RegisterFinish {
     challenge_id: String,
     credential: Value,
-    #[serde(default)]
-    device_name: Option<String>,
-    #[serde(default)]
-    role: Option<Role>,
 }
 
 async fn register_finish(
     State(node): State<Arc<Node>>,
     auth: Authenticated,
-    headers: HeaderMap,
     Json(body): Json<RegisterFinish>,
 ) -> Response {
     if let Some(response) = auth.refused(&node, "api.passkey.register.finish") {
@@ -964,17 +969,9 @@ async fn register_finish(
     let Ok(credential) = serde_json::from_value(body.credential) else {
         return refuse(StatusCode::BAD_REQUEST, "unreadable credential");
     };
-    let name = body.device_name.unwrap_or_else(|| auth.device.name.clone());
-    let agent = headers.get("user-agent").and_then(|v| v.to_str().ok());
     match node
         .auth
-        .finish_passkey_registration(
-            &body.challenge_id,
-            &credential,
-            &name,
-            agent,
-            body.role.unwrap_or(Role::Full),
-        )
+        .finish_passkey_registration(&body.challenge_id, &credential, &auth.device)
         .await
     {
         Ok(e) => private_json(json!({ "token": e.token, "device": e.device })),

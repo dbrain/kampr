@@ -32,7 +32,7 @@ pub use tier::{Tier, TierError};
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use tokio::sync::broadcast;
+use tokio::sync::{Semaphore, broadcast};
 use webauthn_rs::prelude::{
     AuthenticationResult, CreationChallengeResponse, Passkey, PublicKeyCredential,
     RegisterPublicKeyCredential, RequestChallengeResponse, Uuid,
@@ -42,6 +42,8 @@ use webauthn_rs::prelude::{
 pub enum AuthError {
     #[error("too many attempts")]
     RateLimited,
+    #[error("this node is busy")]
+    Busy,
     #[error("that pairing code is not valid")]
     BadPairingCode,
     #[error("that recovery code is not valid")]
@@ -71,6 +73,12 @@ pub struct Policy {
     /// Refills slowly enough to be a limit and fast enough to survive a real peer's reconnect
     /// backoff, which starts at one second and settles at thirty.
     pub mesh_attempts: RatePolicy,
+    /// Pairing redemptions running their argon2id pass at once. `/auth/pair` answers a stranger,
+    /// and a limiter keyed on the source address cannot bound this because addresses rotate —
+    /// this is what bounds the 19 MiB and the core each one costs. Four, the same as a mesh
+    /// handshake, which is the same work behind the same kind of caller; the honest concurrency
+    /// here is one person typing one code.
+    pub pairing_redemptions: usize,
 }
 
 impl Default for Policy {
@@ -83,6 +91,7 @@ impl Default for Policy {
             pairing_attempts: RatePolicy::new(5.0, 0.05),
             auth_attempts: RatePolicy::new(20.0, 0.5),
             mesh_attempts: RatePolicy::new(5.0, 0.2),
+            pairing_redemptions: 4,
         }
     }
 }
@@ -132,6 +141,7 @@ pub struct Auth {
     pairing_limiter: RateLimiter,
     auth_limiter: RateLimiter,
     mesh_limiter: RateLimiter,
+    redemptions: Semaphore,
     refusals: Refusals,
     changes: broadcast::Sender<String>,
 }
@@ -169,6 +179,7 @@ impl Auth {
             pairing_limiter: RateLimiter::new(policy.pairing_attempts),
             auth_limiter: RateLimiter::new(policy.auth_attempts),
             mesh_limiter: RateLimiter::new(policy.mesh_attempts),
+            redemptions: Semaphore::new(policy.pairing_redemptions.max(1)),
             refusals: Refusals::default(),
             changes: broadcast::channel(64).0,
         })
@@ -305,6 +316,14 @@ impl Auth {
             self.audit.record(&Entry::new("pairing.rate_limited").peer(peer));
             return Err(AuthError::RateLimited);
         }
+        // Before the work and not around it, exactly as the limiter is: past this point an
+        // anonymous caller has bought an argon2id pass at 19 MiB and an attempt charged against
+        // every outstanding code. Refused rather than queued — the permit is held for tens of
+        // milliseconds, and a queue is the same memory with a slower answer.
+        let Ok(_permit) = self.redemptions.try_acquire() else {
+            self.audit.record(&Entry::new("pairing.busy").peer(peer));
+            return Err(AuthError::Busy);
+        };
         let now = now();
         let Some(role) = self.store.claim_pairing(code, now).await? else {
             self.audit.record(&Entry::new("pairing.rejected").peer(peer));
@@ -433,37 +452,44 @@ impl Auth {
         Ok(engine.start_registration(Uuid::new_v4(), device_name, &existing, client)?)
     }
 
-    /// Enrolment mints the device *and* the credential together, so a passkey is never orphaned
-    /// from the device list the operator revokes from.
+    /// A passkey is a second credential for a device that is already enrolled, never a second
+    /// device. It hangs off the row the operator revokes from, which is the point: minting a
+    /// fresh row gave him two identical `full` devices, each with its own independent token, and
+    /// revoking the one he could see left the other alive.
+    ///
+    /// `device` is the device that asked, and its role is the role — a credential cannot widen
+    /// what the token presenting it already had.
     pub async fn finish_passkey_registration(
         &self,
         challenge_id: &str,
         credential: &RegisterPublicKeyCredential,
-        device_name: &str,
-        user_agent: Option<&str>,
-        role: Role,
+        device: &Device,
     ) -> Result<Enrolment, AuthError> {
         let engine = self.engine()?;
         let passkey = engine.finish_registration(challenge_id, credential)?;
         let now = now();
-        let enrolment = self.enrol(device_name, role, user_agent, now).await?;
+        let id = credential_id(&passkey);
         self.store
             .save_credential(
                 &Credential {
-                    id: credential_id(&passkey),
-                    device_id: enrolment.device.id.clone(),
+                    id: id.clone(),
+                    device_id: device.id.clone(),
                     rp_id: engine.rp_id().to_string(),
                     passkey: serde_json::to_string(&passkey).unwrap_or_default(),
                 },
                 now,
             )
             .await?;
-        self.audit.record(&Entry::new("passkey.registered").device(
-            &enrolment.device.id,
-            &enrolment.device.name,
-            enrolment.device.role.as_str(),
-        ));
-        Ok(enrolment)
+        let token = self.store.mint_token(&device.id, now, self.expiry(now)).await?;
+        self.audit.record(
+            &Entry::new("passkey.registered")
+                .device(&device.id, &device.name, device.role.as_str())
+                .detail(serde_json::json!({ "credential": id })),
+        );
+        Ok(Enrolment {
+            device: device.clone(),
+            token,
+        })
     }
 
     pub async fn start_passkey_authentication(
