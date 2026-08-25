@@ -1,6 +1,7 @@
 use crate::wire::Wire;
 use kampr_core::wire::ErrorCode;
 use kampr_mesh::{Peers, RemoteEvent, RemoteWatcher};
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -76,7 +77,7 @@ fn emit(wire: &Wire, global: &str, event: RemoteEvent) -> bool {
     match event {
         RemoteEvent::Update(update) => wire.send_update(global, &update),
         RemoteEvent::Scrollback(doc) => wire.send_scrollback(global, &doc),
-        RemoteEvent::Passthrough(value) => wire.send_json(&value),
+        RemoteEvent::Passthrough(value) => wire.send_json(&without_attachment_promises(value, global)),
         // A peer's code is forwarded verbatim rather than narrowed to this build's vocabulary:
         // a newer peer may name one this hub has no variant for, and dropping it is the same
         // forward-compatibility failure as refusing an unknown `t`.
@@ -84,4 +85,29 @@ fn emit(wire: &Wire, global: &str, event: RemoteEvent) -> bool {
             "t": "error", "code": code, "message": message, "pane": global
         })),
     }
+}
+
+/// **This hub cannot serve a peer's attachment.** `GET /api/attachment/{pane}/{id}` resolves the
+/// pane against this node's own sessions and derives the transcript itself, so a relayed pane has
+/// no file behind it here and every id the peer minted comes back as the one 404 every refusal
+/// wears — reaching the operator as a dead button on a picture that is intact one hop away.
+///
+/// A client renders a button for exactly as long as an `att` is present, so relaying one is
+/// offering a control that cannot work, which is the #233 shape. The marker text is the peer's own
+/// and stays; the promise is this hop's to make and does not.
+fn without_attachment_promises(mut message: Value, global: &str) -> Value {
+    let mut dropped = 0;
+    let turns = message.get_mut("turns").and_then(Value::as_array_mut);
+    for turn in turns.into_iter().flatten() {
+        let blocks = turn.get_mut("blocks").and_then(Value::as_array_mut);
+        for block in blocks.into_iter().flatten() {
+            if block.as_object_mut().is_some_and(|b| b.remove("att").is_some()) {
+                dropped += 1;
+            }
+        }
+    }
+    if dropped > 0 {
+        debug!(pane = %global, dropped, "a relayed pane's attachments are not carried by this hub");
+    }
+    message
 }

@@ -1464,3 +1464,113 @@ async fn relayed_panes_the_last_client_unwatches_are_still_unwatched_upstream() 
 
     hub.stop();
 }
+
+/// The status of a `GET`, which is the whole answer when the question is whether a route can serve
+/// a pane at all.
+async fn get_status(url: &str, token: &str) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rest = url.trim_start_matches("http://");
+    let (authority, path) = rest.split_once('/').expect("a path");
+    let (host, port) = authority.split_once(':').expect("a port");
+    let request = format!(
+        "GET /{path} HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Bearer {token}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let mut stream = TcpStream::connect((host, port.parse::<u16>().unwrap()))
+        .await
+        .expect("connect");
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.expect("read");
+    String::from_utf8_lossy(&response)
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("a status line")
+}
+
+/// A relayed pane's conversation crosses the hub; its attachments cannot. `/api/attachment`
+/// resolves the pane against the hub's *own* sessions and derives the transcript itself, so an id
+/// minted on the peer has no file behind it here and comes back as the one 404 every refusal wears
+/// — which reaches the operator as "the node no longer has this attachment" on a picture that is
+/// perfectly intact one hop away. A client handed an `att` renders a button for it, so relaying one
+/// is offering a control that cannot work. Both halves are measured here: the 404 first, so the
+/// promise is known to be unkeepable, then the absence of the promise.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relayed_pane_promises_no_attachment_this_hub_could_not_serve() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JATTACH", "laptop").await;
+    let pane = "01JATTACH/w1:p1";
+    peer.advertise(&[("01JATTACH", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let id = kampr_journal::attach::Locator {
+        agent: "claude".into(),
+        path: "projects/-home-u-demo/session.jsonl".into(),
+        offset: 0,
+        index: 0,
+        bytes: 68,
+    }
+    .encode();
+
+    let token = hub.token().await;
+    assert_eq!(
+        get_status(&format!("{}/api/attachment/{pane}/{id}", hub.origin), &token).await,
+        404,
+        "this hub can serve a peer's attachment after all, and the promise below is keepable",
+    );
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    send(
+        &mut client,
+        json!({ "t": "watch", "pane": pane, "scrollback": true, "conversation": true }),
+    )
+    .await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["t"], "watch", "{asked}");
+
+    peer.say(json!({
+        "t": "convo.turn", "pane": pane, "turns": [{
+            "id": "549c13ed-c2b4-4013-b072-f26304a5bb6c",
+            "role": "user",
+            "blocks": [
+                { "b": "md", "text": "look" },
+                { "b": "md", "text": "[image · png]",
+                  "att": { "id": id, "kind": "image", "mime": "image/png", "bytes": 68 } }
+            ]
+        }]
+    }))
+    .await;
+
+    let relayed = until(&mut client, "convo.turn", 10).await;
+    let blocks = relayed["turns"][0]["blocks"].as_array().expect("blocks");
+    assert_eq!(blocks[1]["text"], "[image · png]", "{relayed}");
+    assert!(
+        blocks[1].get("att").is_none(),
+        "the hub relayed a button for bytes it answers 404 for: {relayed}",
+    );
+
+    // The paged answer is a different `t` off the same relay, and it is the one an operator
+    // scrolling back through yesterday's screenshots lands on.
+    peer.say(json!({
+        "t": "convo", "pane": pane, "more": false, "turns": [{
+            "id": "6f1b0f77-3c21-4a5e-9d0c-3b6b1f7c2ea1",
+            "role": "user",
+            "blocks": [
+                { "b": "md", "text": "[image · png]",
+                  "att": { "id": id, "kind": "image", "mime": "image/png", "bytes": 68 } }
+            ]
+        }]
+    }))
+    .await;
+    let paged = until(&mut client, "convo", 10).await;
+    assert!(
+        paged["turns"][0]["blocks"][0].get("att").is_none(),
+        "a relayed page carried the promise the live turn did not: {paged}",
+    );
+
+    hub.stop();
+}

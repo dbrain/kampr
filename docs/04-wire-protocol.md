@@ -456,7 +456,9 @@ about which part is the pane anchors every check below on the wrong pane.
   record claiming a gigabyte costs a comparison. It is between three and four times the largest
   attachment ever measured (#247).
 - **A pane on another node is not served here.** The route resolves the pane locally; an attachment
-  two hops away over the mesh is not carried today.
+  two hops away over the mesh is not carried today — **so a hub does not advertise one.** It strips
+  every `att` off the `convo` and `convo.turn` messages it relays for a peer's pane, leaving the
+  image marker's text and no button. A client attached to the peer directly still gets both.
 
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.
