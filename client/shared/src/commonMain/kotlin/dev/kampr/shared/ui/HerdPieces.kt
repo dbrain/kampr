@@ -262,7 +262,7 @@ fun NodeListSheet(
             QuietAction(
                 "Refresh",
                 onResync,
-                Modifier.padding(top = 4.dp),
+                Modifier.fillMaxWidth().padding(top = 4.dp),
                 label = "Ask this node for the whole herd again",
             )
         }

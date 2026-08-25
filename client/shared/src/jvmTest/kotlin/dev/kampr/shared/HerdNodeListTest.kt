@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -135,6 +136,27 @@ class HerdNodeListTest {
             waitForIdle()
             assertTrue(name in asked, "the $name machine list could not ask for the herd again")
         }
+    }
+
+    // A control laid out with no width hugs its own label, and that is where a corner radius stops
+    // reading as a corner: "Refresh" came out 54 dp wide against a 44 dp touch target, so `md` ate
+    // both ends and the word sat on the curve. Every other action in the client is handed a width
+    // by its caller; this one was not, and the report came back as "way too rounded".
+    @Test
+    fun theRefreshControlIsHandedAWidthRatherThanHuggingItsLabel() = runComposeUiTest {
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null) } } }
+        waitForIdle()
+        onNodeWithContentDescription("nodes online", substring = true).performClick()
+        waitForIdle()
+        val rows = onNodeWithContentDescription(DOWN_ROW).getUnclippedBoundsInRoot()
+        val button = onNodeWithContentDescription("Ask this node for the whole herd again")
+            .getUnclippedBoundsInRoot()
+        val row = rows.right - rows.left
+        val refresh = button.right - button.left
+        assertTrue(
+            refresh >= row,
+            "the refresh control measured $refresh beside a $row machine row, so its corners are most of it",
+        )
     }
 
     // Three layouts share the pill, and a sheet that only opens on one of them is a control that
