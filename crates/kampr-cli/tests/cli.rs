@@ -67,6 +67,10 @@ impl Cli {
         if state_dir {
             command.arg("--state-dir").arg(&self.state);
         }
+        // No test may reach the public internet, and `doctor`'s asset-links check asks Google.
+        // Port 1 refuses instantly, which is the "could not ask" verdict; a test that wants one of
+        // the other three points this at an `Upstream` of its own through `with_env`.
+        command.env("KAMPR_ASSETLINKS_API", "http://127.0.0.1:1/v1/statements:list");
         for (key, value) in &self.env {
             command.env(key, value);
         }
@@ -946,57 +950,142 @@ fn doctor_does_not_call_a_stopped_node_a_broken_proxy() {
     );
 }
 
-/// Eleven checks and nothing said whether the one file Android reads before it will let the app
-/// hold a passkey is actually reachable. The node builds it correctly and a proxy eats it.
+/// Eleven checks and nothing said whether Android would let the app hold a passkey here — and
+/// then the check that did asked the *node's own origin*, which is not the party that decides.
+/// Credential Manager asks Google's validator, which fetches the file server-side from the public
+/// internet; a hostname that resolves publicly to an RFC1918 address is one it cannot reach
+/// however perfectly the node serves it, and the report stayed green through the whole of #170.
 #[test]
-fn doctor_says_when_the_well_known_path_never_reaches_the_node() {
-    let cli = Cli::new();
+fn doctor_fails_when_google_cannot_fetch_the_file_that_decides() {
+    let google = statements_service(r#"{"errorCode":["ERROR_CODE_FETCH_ERROR"],"maxAge":"600s"}"#);
+    let cli = Cli::new().with_env("KAMPR_ASSETLINKS_API", &statements_url(&google));
     cli.init();
-    let node_id = field(&cli.config_text(), "node_id");
-    let body: &'static str = Box::leak(format!(r#"{{"node_id":"{node_id}"}}"#).into_boxed_str());
-    // Answers /api/node as this node and 404s everything else — a Proxy Host with its own
-    // /.well-known location block, which is the common shape of this.
-    let upstream = Upstream::routing(Box::leak(Box::new([("/api/node", body)])));
-    cli.run(&["init", "--origin", &upstream.origin()]);
-    force_a_registrable_origin(&cli, upstream.port);
-
-    let out = cli.run(&["doctor", "--json"]);
-    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
-    let check = check(&json, "assetlinks");
-    assert_eq!(check["status"], "fail", "{json:#}");
-    assert!(
-        check["fix"].as_str().unwrap().contains("/.well-known"),
-        "the fix has to name the path being eaten: {check:#}",
-    );
-}
-
-#[test]
-fn doctor_confirms_the_asset_links_file_when_the_origin_serves_the_node_s_own() {
-    let cli = Cli::new();
-    cli.init();
-    let node_id = field(&cli.config_text(), "node_id");
-    let node: &'static str = Box::leak(format!(r#"{{"node_id":"{node_id}"}}"#).into_boxed_str());
-    let links: &'static str = Box::leak(
-        format!(
-            r#"[{{"relation":["delegate_permission/common.get_login_creds"],"target":{{"namespace":"android_app","package_name":"dev.kampr.app","sha256_cert_fingerprints":["{}"]}}}}]"#,
-            kampr_node::assetlinks::RELEASE_FINGERPRINT
-        )
-        .into_boxed_str(),
-    );
+    // #170 exactly: the origin serves the right document to anything on this network, and the
+    // check that read it from here was green while every ceremony on the phone was refused.
     let upstream = Upstream::routing(Box::leak(Box::new([
-        ("/.well-known/assetlinks.json", links),
-        ("", node),
+        ("/.well-known/assetlinks.json", node_document()),
+        ("", node_identity(&cli)),
     ])));
     cli.run(&["init", "--origin", &upstream.origin()]);
     force_a_registrable_origin(&cli, upstream.port);
 
     let json = cli.json(&["doctor", "--json"]);
     let check = check(&json, "assetlinks");
-    assert_eq!(check["status"], "ok", "{json:#}");
+    assert_eq!(check["status"], "fail", "{json:#}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(detail.contains("ERROR_CODE_FETCH_ERROR"), "{check:#}");
     assert!(
-        check["detail"].as_str().unwrap().contains("dev.kampr.app"),
-        "{check:#}"
+        detail.contains("Google cannot read") && detail.contains("Credential Manager"),
+        "it has to blame Google's fetch and say the phone gets refused: {check:#}",
     );
+}
+
+#[test]
+fn doctor_confirms_the_asset_links_file_when_google_reads_the_certificate_this_node_names() {
+    let google = statements_service(delegating(kampr_node::assetlinks::RELEASE_FINGERPRINT));
+    let cli = Cli::new().with_env("KAMPR_ASSETLINKS_API", &statements_url(&google));
+    cli.init();
+    let upstream = Upstream::serving(node_identity(&cli));
+    cli.run(&["init", "--origin", &upstream.origin()]);
+    force_a_registrable_origin(&cli, upstream.port);
+
+    let json = cli.json(&["doctor", "--json"]);
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "ok", "{json:#}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(detail.contains("dev.kampr.app"), "{check:#}");
+    assert!(
+        detail.contains("https://localhost/.well-known/assetlinks.json"),
+        "a green has to name the host that was actually verified: {check:#}",
+    );
+}
+
+/// The file that decides is about to live on a different host from the node, so two copies exist
+/// and only one of them is read. Nothing else in this report would ever see them diverge.
+#[test]
+fn doctor_names_both_certificates_when_the_copy_google_reads_has_drifted() {
+    let theirs: &'static str = Box::leak("AB".repeat(32).into_boxed_str());
+    let google = statements_service(delegating(theirs));
+    let cli = Cli::new().with_env("KAMPR_ASSETLINKS_API", &statements_url(&google));
+    cli.init();
+    let upstream = Upstream::serving(node_identity(&cli));
+    cli.run(&["init", "--origin", &upstream.origin()]);
+    force_a_registrable_origin(&cli, upstream.port);
+
+    let json = cli.json(&["doctor", "--json"]);
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "fail", "{json:#}");
+    let detail = check["detail"].as_str().unwrap();
+    assert!(detail.contains("AB:AB:AB"), "the copy Google reads: {check:#}");
+    assert!(
+        detail.contains(kampr_node::assetlinks::RELEASE_FINGERPRINT),
+        "and the one this node names: {check:#}",
+    );
+}
+
+/// A doctor run on a machine with no route out is not a diagnosis of the node. The most expensive
+/// bug this project has had was a check that turned an unasked question into a healthy answer, and
+/// the inverse — an unasked question into a failure — would send the operator after a fault that
+/// is not there.
+#[test]
+fn doctor_warns_rather_than_fails_when_this_machine_cannot_ask_google() {
+    let cli = Cli::new().with_env(
+        "KAMPR_ASSETLINKS_API",
+        &format!("http://127.0.0.1:{}/v1/statements:list", free_port()),
+    );
+    cli.init();
+    let upstream = Upstream::serving(node_identity(&cli));
+    cli.run(&["init", "--origin", &upstream.origin()]);
+    force_a_registrable_origin(&cli, upstream.port);
+
+    let json = cli.json(&["doctor", "--json"]);
+    let check = check(&json, "assetlinks");
+    assert_eq!(check["status"], "warn", "{json:#}");
+    assert!(
+        check["detail"].as_str().unwrap().contains("unestablished"),
+        "it has to say what could not be established: {check:#}",
+    );
+    assert!(
+        check["fix"]
+            .as_str()
+            .unwrap()
+            .contains("digitalassetlinks.googleapis.com"),
+        "and point at the machine's own reach, not at the node: {check:#}",
+    );
+}
+
+/// The shape `digitalassetlinks.googleapis.com` answers in, from a port a test controls.
+fn statements_service(body: &'static str) -> Upstream {
+    Upstream::routing(Box::leak(Box::new([("", body)])))
+}
+
+fn statements_url(google: &Upstream) -> String {
+    format!("{}/v1/statements:list", google.origin())
+}
+
+fn delegating(fingerprint: &str) -> &'static str {
+    Box::leak(
+        format!(
+            r#"{{"statements":[{{"relation":"delegate_permission/common.get_login_creds","target":{{"androidApp":{{"packageName":"dev.kampr.app","certificate":{{"sha256Fingerprint":"{fingerprint}"}}}}}}}}],"maxAge":"599s"}}"#
+        )
+        .into_boxed_str(),
+    )
+}
+
+/// The document the node itself builds and serves, which is correct and which nothing decides by.
+fn node_document() -> &'static str {
+    Box::leak(
+        format!(
+            r#"[{{"relation":["delegate_permission/common.get_login_creds"],"target":{{"namespace":"android_app","package_name":"dev.kampr.app","sha256_cert_fingerprints":["{}"]}}}}]"#,
+            kampr_node::assetlinks::RELEASE_FINGERPRINT
+        )
+        .into_boxed_str(),
+    )
+}
+
+fn node_identity(cli: &Cli) -> &'static str {
+    let node_id = field(&cli.config_text(), "node_id");
+    Box::leak(format!(r#"{{"node_id":"{node_id}"}}"#).into_boxed_str())
 }
 
 /// A loopback *IP* is a secure context and still not a registrable domain, so the tier is 0 and

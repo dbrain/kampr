@@ -11,7 +11,9 @@ import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -49,7 +51,7 @@ class PasskeyApi(
         val credential = when (val result = passkeys.create(options)) {
             is PasskeyResult.Ok -> result.json
             PasskeyResult.Cancelled -> return PasskeyOutcome.Cancelled
-            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason))
+            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason, options))
         }
         val finished = post(
             "/auth/webauthn/register/finish",
@@ -70,7 +72,7 @@ class PasskeyApi(
         val credential = when (val result = passkeys.get(options)) {
             is PasskeyResult.Ok -> result.json
             PasskeyResult.Cancelled -> return PasskeyOutcome.Cancelled
-            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason))
+            is PasskeyResult.Failed -> return PasskeyOutcome.Refused(explain(result.reason, options))
         }
         val finished = post(
             "/auth/webauthn/authenticate/finish",
@@ -82,16 +84,16 @@ class PasskeyApi(
         return enrolmentOf(finished)
     }
 
-    // The authenticator says what it refused; only the node can say *why* it was ever going to.
-    // Fetched from the same address this client dials, which is the half of the check the phone
-    // can do — `passkeyRefusal` owns what each answer means.
-    private suspend fun explain(reason: String): String {
+    // The authenticator says what it refused; only the file the RP ID publishes can say *why* it
+    // was ever going to. `passkeyRefusal` owns what each answer means.
+    private suspend fun explain(reason: String, options: String): String {
         val identity = passkeys.identity ?: return reason
+        val rpId = relyingParty(options) ?: endpoint.host
         val document = runCatching {
-            val response = client.get("${endpoint.httpBase}$ASSET_LINKS_PATH")
+            val response = client.get(assetLinksUrl(endpoint, rpId))
             if (response.status.isSuccess()) response.bodyAsText() else null
         }.getOrNull()
-        return passkeyRefusal(document, identity, endpoint.host, reason)
+        return passkeyRefusal(document, identity, rpId, reason)
     }
 
     private fun enrolmentOf(body: JsonObject): PasskeyOutcome {
@@ -130,3 +132,26 @@ sealed interface PasskeyOutcome {
 
     data class Refused(val reason: String) : PasskeyOutcome
 }
+
+// Which host decides, as stated by the ceremony that just failed. It is not always the host this
+// client dials: WebAuthn permits an RP ID that is a registrable suffix of the origin's host, so a
+// node on `kampr.example.com` may be deciding passkeys on `example.com`. Registration states it as
+// `rp.id` and authentication as `rpId`; both are `webauthn-rs`'s own spelling of the same field.
+fun relyingParty(optionsJson: String): String? {
+    val key = runCatching { Json.parseToJsonElement(optionsJson).jsonObject }
+        .getOrNull()
+        ?.get("publicKey") as? JsonObject
+        ?: return null
+    val stated = (key["rp"] as? JsonObject)?.get("id") ?: key["rpId"]
+    return (stated as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+}
+
+// Where Google reads that host's asset links, which is the only copy Credential Manager obeys. An
+// RP ID above the origin is read over https on 443 and nowhere else; when it *is* the host being
+// dialled, that endpoint's own scheme and port are the right ones — a dev node is plain http on
+// 8793 and has nothing on 443 at all.
+fun assetLinksUrl(endpoint: Endpoint, rpId: String): String =
+    when (rpId) {
+        endpoint.host.substringBeforeLast(':') -> "${endpoint.httpBase}$ASSET_LINKS_PATH"
+        else -> "https://$rpId$ASSET_LINKS_PATH"
+    }

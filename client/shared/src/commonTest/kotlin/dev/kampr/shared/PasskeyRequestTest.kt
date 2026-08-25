@@ -1,11 +1,14 @@
 package dev.kampr.shared
 
 import dev.kampr.shared.net.AppIdentity
+import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.assetLinkComplaint
+import dev.kampr.shared.net.assetLinksUrl
 import dev.kampr.shared.net.credentialManagerRequest
 import dev.kampr.shared.net.Enrolment
 import dev.kampr.shared.net.PasskeyOutcome
 import dev.kampr.shared.net.passkeyRefusal
+import dev.kampr.shared.net.relyingParty
 import dev.kampr.shared.ui.passkeyNoteOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,6 +28,15 @@ private const val REGISTER_START = """
 "pubKeyCredParams":[{"alg":-7,"type":"public-key"},{"alg":-257,"type":"public-key"}],
 "rp":{"id":"localhost","name":"Kampr"},"timeout":300000,
 "user":{"displayName":"Pixel","id":"CvLnrLs4SiKe6wnRmiKEsw","name":"Pixel"}}}}
+"""
+
+// The same route's answer, captured the same way: `POST /auth/webauthn/authenticate/start`.
+// `webauthn-rs` spells the RP ID `rpId` here and `rp.id` in the registration above, and both are
+// the one field that says which host Google will be asked about.
+private const val AUTHENTICATE_START = """
+{"challenge_id":"3f1a90c2f0d84e1b8e6c2a55b7d31c04","options":{"publicKey":{
+"allowCredentials":[],"challenge":"Yk5wS0dRb0hzZXJfdGVzdF9jaGFsbGVuZ2VfMDE",
+"rpId":"oldug.com","timeout":300000,"userVerification":"required"}}}
 """
 
 private const val ASSET_LINKS = """
@@ -119,6 +131,44 @@ class PasskeyRequestTest {
         assertTrue(!enrolled.refused, "an enrolment is not a failure")
 
         assertNull(passkeyNoteOf(PasskeyOutcome.Cancelled), "backing out of the sheet says nothing")
+    }
+
+    // Probe #170's sequel. The operator is moving the RP ID up to the registrable domain while the
+    // node stays where it is, and from that moment `endpoint.host` is a hostname that decides
+    // nothing: Google reads the RP ID's own well-known location and no other. A refusal that names
+    // the host the client dials sends somebody to inspect a file nobody reads.
+    @Test
+    fun theHostBlamedIsTheOneTheCeremonyNamedAndNotTheOneTheClientDialled() {
+        val register = requireNotNull(elementOf(REGISTER_START, "options"))
+        assertEquals("localhost", relyingParty(register))
+
+        val authenticate = requireNotNull(elementOf(AUTHENTICATE_START, "options"))
+        assertEquals("oldug.com", relyingParty(authenticate))
+
+        assertNull(relyingParty("""{"publicKey":{}}"""), "no rp id stated is no host to blame")
+        assertNull(relyingParty("not json"))
+
+        val told = passkeyRefusal(ASSET_LINKS, RELEASE, "oldug.com", RAW)
+        assertTrue("https://oldug.com/.well-known/assetlinks.json" in told, told)
+    }
+
+    // And the file is read from the same place, or the client proves the wrong host correct and
+    // then complains about it.
+    @Test
+    fun theFileIsReadFromTheHostThatDecidesRatherThanTheOneBeingDialled() {
+        val node = Endpoint("https://kampr.oldug.com")
+        assertEquals(
+            "https://oldug.com/.well-known/assetlinks.json",
+            assetLinksUrl(node, "oldug.com"),
+        )
+        assertEquals(
+            "https://kampr.oldug.com/.well-known/assetlinks.json",
+            assetLinksUrl(node, "kampr.oldug.com"),
+        )
+        // A dev node is plain http on a port of its own and has nothing at all on 443, so when the
+        // RP ID *is* the host being dialled its own scheme and port are the right ones.
+        val dev = Endpoint("http://localhost:8793")
+        assertEquals("http://localhost:8793/.well-known/assetlinks.json", assetLinksUrl(dev, "localhost"))
     }
 
     // A node whose file lists this app under some *other* relation delegates nothing a passkey
