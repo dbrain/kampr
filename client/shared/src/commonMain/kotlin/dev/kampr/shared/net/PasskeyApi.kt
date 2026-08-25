@@ -19,9 +19,10 @@ import kotlinx.serialization.json.put
 // The four `/auth/webauthn/*` routes have existed and worked since phase 3 with not one caller in
 // the client, in `kamprWeb.js` or in either `.wasm`. This is the caller.
 //
-// Both halves end in an `Enrolment`, because both mint a device: registering a passkey enrols the
-// device that holds it, and signing in with one enrols the device that presented it. That is why
-// neither is reachable below tier 1 — a WebAuthn RP ID must be a registrable domain, and an IP
+// Both halves end in an `Enrolment`, but only one of them mints a device: signing in with a passkey
+// enrols the device that presented it, while registering one binds it to the device already asking
+// and hands its own token back. That is why neither is reachable below tier 1 — a WebAuthn RP ID
+// must be a registrable domain, and an IP
 // address is never one.
 class PasskeyApi(
     private val client: HttpClient,

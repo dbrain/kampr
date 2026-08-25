@@ -7,6 +7,7 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.Enrolment
 import dev.kampr.shared.net.AuthApi
+import dev.kampr.shared.net.Pairing
 import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.net.InstallPrompt
 import dev.kampr.shared.net.AttachmentApi
@@ -287,16 +288,20 @@ class AppState(
     // one mistyped character into an endless `auth.rejected` loop with nothing at all on screen.
     private suspend fun exchange(target: Endpoint, code: String): Enrolment? {
         val client = createHttpClient()
-        val enrolment = try {
+        val outcome = try {
             AuthApi(client, target).pair(code, deviceName())
         } finally {
             client.close()
         }
-        if (enrolment == null) {
-            pairingError = "That pairing code was not accepted. Codes expire after ten minutes, " +
-                "and one printed at a console needs a keypress there before it works."
+        pairingError = when (outcome) {
+            is Pairing.Enrolled -> null
+            Pairing.Refused ->
+                "That pairing code was not accepted. Codes expire after ten minutes, " +
+                    "and one printed at a console needs a keypress there before it works."
+            Pairing.Busy -> "That node is busy. The code is still good — try again in a moment."
+            Pairing.Unreachable -> "Could not reach that node. The code is still good."
         }
-        return enrolment
+        return (outcome as? Pairing.Enrolled)?.enrolment
     }
 
     // A one-shot client for a one-shot fetch, the same shape the pairing and warm calls use: an

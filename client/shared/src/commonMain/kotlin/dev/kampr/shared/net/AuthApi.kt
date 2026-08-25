@@ -7,6 +7,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
@@ -54,6 +55,15 @@ data class DeviceRecord(
 // tell itself apart from the others in the list — a device that cannot recognise itself offers
 // "Revoke" against the connection it is using.
 data class Enrolment(val token: String, val deviceId: String?, val name: String?, val role: String?)
+
+// What a redemption settled as. `Busy` and `Unreachable` are worth another press with the code
+// already typed; `Refused` never is.
+sealed interface Pairing {
+    data class Enrolled(val enrolment: Enrolment) : Pairing
+    data object Refused : Pairing
+    data object Busy : Pairing
+    data object Unreachable : Pairing
+}
 
 @Serializable
 private data class DeviceList(val devices: List<DeviceRecord> = emptyList())
@@ -111,19 +121,25 @@ class AuthApi(
     }.getOrNull()
 
     // A refused code is a refusal, not a token. Treating the typed code as a bearer is what turned
-    // a mistyped pairing code into an endless `auth.rejected` loop with nothing on screen.
-    suspend fun pair(code: String, deviceName: String? = null): Enrolment? = runCatching {
+    // a mistyped pairing code into an endless `auth.rejected` loop with nothing on screen — and a
+    // node that answered `503` because it was busy is not a refusal at all, so collapsing the two
+    // sent an operator hunting for a typo in a code that was correct.
+    suspend fun pair(code: String, deviceName: String? = null): Pairing = runCatching {
         val response = client.post("${endpoint.httpBase}/auth/pair") {
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(RedeemRequest.serializer(), RedeemRequest(code, deviceName)))
         }
-        if (!response.status.isSuccess()) {
-            null
-        } else {
-            val result = json.decodeFromString(PairResult.serializer(), response.bodyAsText())
-            result.token?.let { Enrolment(it, result.device?.id, result.device?.name, result.device?.role) }
+        when {
+            response.status == HttpStatusCode.ServiceUnavailable -> Pairing.Busy
+            !response.status.isSuccess() -> Pairing.Refused
+            else -> {
+                val result = json.decodeFromString(PairResult.serializer(), response.bodyAsText())
+                result.token
+                    ?.let { Pairing.Enrolled(Enrolment(it, result.device?.id, result.device?.name, result.device?.role)) }
+                    ?: Pairing.Refused
+            }
         }
-    }.getOrNull()
+    }.getOrDefault(Pairing.Unreachable)
 
     private suspend fun <T> get(path: String, parse: (String) -> T): T? = runCatching {
         val response = client.get("${endpoint.httpBase}$path") { auth() }

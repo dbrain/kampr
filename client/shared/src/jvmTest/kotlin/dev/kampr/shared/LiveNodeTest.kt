@@ -18,6 +18,8 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import dev.kampr.shared.net.Pairing
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -139,7 +141,8 @@ class LiveNodeTest {
                 // A code this device asked for is armed by construction, so it redeems as it
                 // stands — which is the only thing that makes the browser wizard actionable.
                 val code = assertNotNull(api.pairingCode(), "the wizard cannot offer a pairing code")
-                val enrolled = assertNotNull(api.pair(code, "kampr-live-test"), "a fresh code did not redeem")
+                val enrolled = assertIs<Pairing.Enrolled>(api.pair(code, "kampr-live-test"), "a fresh code did not redeem")
+                    .enrolment
                 assertTrue(enrolled.token.isNotBlank())
                 val added = await("the new device in the list") {
                     api.devices().firstOrNull { it.id == enrolled.deviceId }
