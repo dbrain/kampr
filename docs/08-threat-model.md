@@ -437,13 +437,27 @@ A token on a plain-HTTP LAN is replayable by anyone on the path. The persistent 
 decoration and must not become dismissible. The 30-day expiry exists to force a deliberate decision
 to keep operating that way.
 
-### 7.5 `renew` does not renew a usable device
+### 7.5 `renew` extends a token in place
 
-`POST /api/devices/{id}/renew` extends the *device* expiry and not the *token* expiry, while
-authentication gates on the token's own. So it returns success, writes an audit line, and the
-device's existing token stays dead — the device must re-pair. The endpoint's stated purpose is not
-achieved. Harmless in the fail-safe direction; misleading, and worth fixing before anyone relies on
-it.
+`POST /api/devices/{id}/renew` extends the device row and every one of that device's **live** token
+rows to the same new expiry, in one transaction. In place, not a re-mint: nothing can hand a new
+token to a phone the node is currently refusing, so a renew that minted would still be a re-pair.
+The device that pressed Renew keeps the token it is already holding.
+
+Three properties hold it in the fail-safe direction:
+
+- **Revoked stays revoked.** The token update is `WHERE revoked_at IS NULL`, and a revoked *device*
+  is not un-revoked by a renewal either — `revoked_at` is untouched, and `Device::active` still
+  refuses it.
+- **No expiry is invented.** The new expiry is `Auth::expiry`, the same value pairing mints with, so
+  on a passkey tier it is `NULL` and a renewal leaves a device that never expires exactly that.
+- **One transaction.** A device row extended with its token left behind is the failure this
+  replaced, and it is not reachable a row at a time.
+
+Renewal remains manual and audited (`device.renewed`, carrying the new expiry and how many token
+rows it covered). There is deliberately no renew-on-activity: the 30-day Tier 0 term exists to force
+a decision to keep operating in cleartext, and a term that slides whenever the device connects is
+not a term.
 
 ### 7.6 An unparseable role in the database reads as read-only
 

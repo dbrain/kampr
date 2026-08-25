@@ -63,6 +63,13 @@ impl Device {
     }
 }
 
+/// What one [`Store::extend_device`] actually did, so an audit line can say it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Extension {
+    pub found: bool,
+    pub tokens: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credential {
     pub id: String,
@@ -259,13 +266,28 @@ impl Store {
         Ok(done.rows_affected() > 0)
     }
 
-    pub async fn extend_device(&self, id: &str, expires_at: Option<i64>) -> Result<bool> {
-        let done = sqlx::query("UPDATE devices SET expires_at = ? WHERE id = ?")
+    pub async fn extend_device(&self, id: &str, expires_at: Option<i64>) -> Result<Extension> {
+        let mut tx = self.pool.begin().await?;
+        let found = sqlx::query("UPDATE devices SET expires_at = ? WHERE id = ?")
             .bind(expires_at)
             .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected() > 0)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        // Every live token, not the newest: a device that paired more than once holds whichever
+        // one reached it and the store cannot tell which. Revocation is the per-token kill switch
+        // and renewal must not undo it. One transaction, because a device row extended with its
+        // token left behind is the exact defect this fixes.
+        let tokens =
+            sqlx::query("UPDATE tokens SET expires_at = ? WHERE device_id = ? AND revoked_at IS NULL")
+                .bind(expires_at)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        tx.commit().await?;
+        Ok(Extension { found, tokens })
     }
 
     /// `armed_until` is when the code stops being redeemable. `None` means it never starts:
@@ -609,12 +631,84 @@ mod tests {
         let token = s.mint_token(&d.id, NOW, Some(NOW + 10)).await.unwrap();
         assert!(s.device_for_token(&token, NOW + 5).await.unwrap().is_some());
         assert_eq!(s.device_for_token(&token, NOW + 11).await.unwrap(), None);
-        assert!(s.extend_device(&d.id, Some(NOW + 100)).await.unwrap());
+    }
+
+    /// The defect this guards: the device row was extended and the token it authenticates with was
+    /// not, so renew reported success and the device still had to pair again.
+    #[tokio::test]
+    async fn extending_a_device_carries_the_token_it_is_already_holding_with_it() {
+        let s = store().await;
+        let d = s
+            .create_device("phone", Role::Full, NOW, Some(NOW + 10), None, None)
+            .await
+            .unwrap();
+        let token = s.mint_token(&d.id, NOW, Some(NOW + 10)).await.unwrap();
+        assert_eq!(s.device_for_token(&token, NOW + 11).await.unwrap(), None);
+
+        let extended = s.extend_device(&d.id, Some(NOW + 100)).await.unwrap();
+        assert!(extended.found);
+        assert_eq!(extended.tokens, 1);
         assert_eq!(
-            s.device_for_token(&token, NOW + 11).await.unwrap(),
-            None,
-            "the token expired too"
+            s.device_for_token(&token, NOW + 11).await.unwrap().map(|d| d.id),
+            Some(d.id),
+            "the operator pressed Renew and the device still cannot connect"
         );
+    }
+
+    /// A device that re-paired holds whichever token reached it; the store cannot tell which, so
+    /// renewal covers every live one. Revocation is the per-token kill switch and it stays.
+    #[tokio::test]
+    async fn extending_a_device_renews_every_live_token_and_resurrects_no_revoked_one() {
+        let s = store().await;
+        let d = s
+            .create_device("phone", Role::Full, NOW, Some(NOW + 10), None, None)
+            .await
+            .unwrap();
+        let first = s.mint_token(&d.id, NOW, Some(NOW + 10)).await.unwrap();
+        let second = s.mint_token(&d.id, NOW + 1, Some(NOW + 10)).await.unwrap();
+        let dead = s.mint_token(&d.id, NOW + 2, Some(NOW + 10)).await.unwrap();
+        sqlx::query("UPDATE tokens SET revoked_at = ? WHERE hash = ?")
+            .bind(NOW + 3)
+            .bind(secret::digest(&dead))
+            .execute(s.pool())
+            .await
+            .unwrap();
+
+        let extended = s.extend_device(&d.id, Some(NOW + 100)).await.unwrap();
+        assert_eq!(extended.tokens, 2);
+        assert!(s.device_for_token(&first, NOW + 11).await.unwrap().is_some());
+        assert!(s.device_for_token(&second, NOW + 11).await.unwrap().is_some());
+        assert_eq!(
+            s.device_for_token(&dead, NOW + 11).await.unwrap(),
+            None,
+            "a revoked token came back"
+        );
+    }
+
+    #[tokio::test]
+    async fn extending_a_device_that_never_expires_invents_no_expiry() {
+        let s = store().await;
+        let d = s
+            .create_device("phone", Role::Full, NOW, None, None, None)
+            .await
+            .unwrap();
+        let token = s.mint_token(&d.id, NOW, None).await.unwrap();
+        assert_eq!(s.extend_device(&d.id, None).await.unwrap().tokens, 1);
+        assert_eq!(s.device(&d.id).await.unwrap().unwrap().expires_at, None);
+        assert!(
+            s.device_for_token(&token, NOW + 10_000_000)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn extending_a_device_that_is_not_there_extends_nothing() {
+        let s = store().await;
+        let missing = s.extend_device("nope", Some(NOW + 100)).await.unwrap();
+        assert!(!missing.found);
+        assert_eq!(missing.tokens, 0);
     }
 
     #[tokio::test]

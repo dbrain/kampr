@@ -100,16 +100,16 @@ fun DevicesScreen(
                 }
             }
             if (expired.isNotEmpty()) {
-                // Renew is `extend_device` and nothing else: it gives the row another term on the
-                // node, and a device whose token has already lapsed still pairs again until the
-                // node renews that with it (threat model §7.5). So this says term, never access.
+                // Renew extends the token the device is already holding and not just the device
+                // row (threat model §7.5), so this may promise access back rather than only a
+                // term. Nothing here re-pairs: the phone keeps the token it has.
                 KText(
                     "Expired. A Tier-0 token runs out on purpose, and the node stopped honouring " +
-                        "these when it did.",
+                        "these when it did. Renew restores one for another term — no pairing again.",
                     tokens.type.captionSmall,
                     tokens.color.mute,
                     Modifier.padding(top = 8.dp),
-                    maxLines = 3,
+                    maxLines = 4,
                 )
                 for (device in expired) {
                     DeviceCard(
@@ -120,7 +120,7 @@ fun DevicesScreen(
                         trailing = {
                             QuietAction(
                                 "Renew", { onRenew(device.id) }, Modifier.widthIn(min = 92.dp),
-                                label = "Renew ${device.name} — another term on this node",
+                                label = "Renew ${device.name} — restores its access for another term",
                             )
                         },
                     )

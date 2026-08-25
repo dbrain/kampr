@@ -26,7 +26,7 @@ pub use mesh::{Mesh, MeshNode, MeshRole};
 pub use passkey::{Client, PasskeyError, Passkeys};
 pub use push::{ALL_PANES, PushRule, PushSubscription};
 pub use ratelimit::{Policy as RatePolicy, RateLimiter};
-pub use store::{Credential, Device, Role, Store, StoreError};
+pub use store::{Credential, Device, Extension, Role, Store, StoreError};
 pub use tier::{Tier, TierError};
 
 use std::sync::Arc;
@@ -579,18 +579,25 @@ impl Auth {
 
     /// Renews a Tier 0 device for another term. Deliberate, and audited, because the expiry
     /// exists to force exactly this decision.
+    ///
+    /// The token the device is already holding is extended in place. A re-mint would be a
+    /// re-pair: nothing can hand a new token to a phone that is currently being refused.
     pub async fn renew(&self, id: &str, by: &Device) -> Result<bool, AuthError> {
         let expires_at = self.expiry(now());
-        let done = self.store.extend_device(id, expires_at).await?;
-        if done {
+        let extended = self.store.extend_device(id, expires_at).await?;
+        if extended.found {
             let _ = self.changes.send(id.to_string());
             self.audit.record(
                 &Entry::new("device.renewed")
                     .device(&by.id, &by.name, by.role.as_str())
-                    .detail(serde_json::json!({ "target": id, "expires_at": expires_at })),
+                    .detail(serde_json::json!({
+                        "target": id,
+                        "expires_at": expires_at,
+                        "tokens": extended.tokens,
+                    })),
             );
         }
-        Ok(done)
+        Ok(extended.found)
     }
 }
 
@@ -648,6 +655,56 @@ mod tests {
         let code = armed_code(&one, Role::Full).await;
         let e = one.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
         assert_eq!(e.device.expires_at, None);
+    }
+
+    /// Day 31, straight in the database, because a test cannot wait a term out.
+    async fn lapse(a: &Auth, at: i64) {
+        for sql in [
+            "UPDATE devices SET expires_at = ?",
+            "UPDATE tokens SET expires_at = ?",
+        ] {
+            sqlx::query(sql).bind(at).execute(a.store().pool()).await.unwrap();
+        }
+    }
+
+    /// The endpoint's whole purpose. Renewal extends in place rather than minting: a phone that
+    /// is already holding a token has no way to be handed a new one, so a renew that re-mints is
+    /// a renew that still makes the operator pair again.
+    #[tokio::test]
+    async fn a_renewed_device_can_still_use_the_token_it_already_had() {
+        let a = auth("http://192.168.1.24:8790").await;
+        let code = armed_code(&a, Role::Full).await;
+        let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
+        lapse(&a, now() - 1).await;
+        assert!(a.authenticate(&e.token, "1.2.3.4").await.is_err());
+
+        assert!(a.renew(&e.device.id, &e.device).await.unwrap());
+        assert_eq!(
+            a.authenticate(&e.token, "1.2.3.4").await.unwrap().id,
+            e.device.id,
+            "renew reported success and the device still has to pair again"
+        );
+    }
+
+    #[tokio::test]
+    async fn renewing_a_device_where_nothing_expires_leaves_it_with_no_expiry() {
+        let a = auth("https://kampr.example.com").await;
+        let code = armed_code(&a, Role::Full).await;
+        let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
+        assert!(a.renew(&e.device.id, &e.device).await.unwrap());
+        assert_eq!(
+            a.store().device(&e.device.id).await.unwrap().unwrap().expires_at,
+            None
+        );
+        assert_eq!(a.authenticate(&e.token, "1.2.3.4").await.unwrap().id, e.device.id);
+    }
+
+    #[tokio::test]
+    async fn renewing_a_device_that_is_not_there_is_not_a_renewal() {
+        let a = auth("http://192.168.1.24:8790").await;
+        let code = armed_code(&a, Role::Full).await;
+        let e = a.redeem_pairing(&code, "phone", None, "1.2.3.4").await.unwrap();
+        assert!(!a.renew("nope", &e.device).await.unwrap());
     }
 
     #[tokio::test]
