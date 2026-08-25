@@ -7,7 +7,9 @@ use crate::wire::Wire;
 use axum::extract::ws::WebSocket;
 use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
+use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
+use kampr_core::registry::PaneHold;
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
 use kampr_mesh::{Incoming, Outgoing};
 use serde_json::{Value, json};
@@ -166,6 +168,41 @@ struct PaneHandle {
     scrollback: bool,
     conversation: bool,
     convo: convo::Open,
+    _hold: Option<PaneHold>,
+}
+
+/// Stops whatever is streaming this pane and hands back what keeps it open until the replacement
+/// has attached.
+///
+/// **A re-watch must not be a re-open.** The old pump owns the registry's watcher for the pane
+/// and `stop` aborts it, so if it was the only one the pane goes with it — emulator, ring, and
+/// the spawned `observe` behind them. The new pump then opens a *fresh* pane, and the registry's
+/// flush publishes a blank grid at the pane's real geometry over content the client is already
+/// looking at. That is a blank flash and a respawned observer on every pane of every reconnect
+/// resync, which is the one moment a client is least able to spare either. A peer's pane is
+/// streamed by the node that owns it and has nothing here to hold.
+fn hand_over(
+    panes: &mut HashMap<String, PaneHandle>,
+    outbox: &Outbox,
+    registry: Option<(&PaneRegistry, &str)>,
+    pane: &str,
+) -> Option<PaneHold> {
+    let mut stop = || {
+        if let Some(old) = panes.remove(pane) {
+            old.stop();
+        }
+    };
+    let hold = match registry {
+        Some((registry, local)) => registry.hold_while(local, stop),
+        None => {
+            stop();
+            None
+        }
+    };
+    // The previous handle stopped this pane in the outbox, and a straggling frame from its pump
+    // must not outlive that. Reopening it is the last thing before the new pump exists.
+    outbox.resume_pane(pane);
+    hold
 }
 
 impl PaneHandle {
@@ -390,9 +427,6 @@ impl Session {
                 Some(pane),
             );
         }
-        if let Some(old) = self.panes.remove(pane) {
-            old.stop();
-        }
         // Watching a pane is reading a terminal, and with `scrollback` it is reading its history
         // and with `conversation` its transcript. For a read-only device it is the *only* thing it
         // can do, so it is the only thing there is to record.
@@ -401,9 +435,12 @@ impl Session {
             Some(pane),
             Some(json!({ "scrollback": scrollback, "conversation": conversation })),
         );
-        // The previous handle stopped this pane in the outbox, and a straggling frame from its
-        // pump must not outlive that. Reopening it is the last thing before the new pump exists.
-        self.wire.outbox().resume_pane(pane);
+        let hold = hand_over(
+            &mut self.panes,
+            self.wire.outbox(),
+            Some((&session.registry, &local)),
+            pane,
+        );
         let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
             registry: session.registry.clone(),
             herdr: session.herdr.clone(),
@@ -436,6 +473,7 @@ impl Session {
                 scrollback,
                 conversation,
                 convo,
+                _hold: hold,
             },
         );
     }
@@ -451,15 +489,12 @@ impl Session {
             );
             return;
         }
-        if let Some(old) = self.panes.remove(pane) {
-            old.stop();
-        }
         self.audit(
             "watch",
             Some(pane),
             Some(json!({ "scrollback": scrollback, "conversation": conversation, "peer": true })),
         );
-        self.wire.outbox().resume_pane(pane);
+        hand_over(&mut self.panes, self.wire.outbox(), None, pane);
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
             crate::relay::PeerPaneCtx {
                 peers: self.node.peers.clone(),
@@ -477,6 +512,7 @@ impl Session {
                 scrollback,
                 conversation,
                 convo: convo::open(),
+                _hold: None,
             },
         );
     }
@@ -1225,7 +1261,188 @@ fn submit_key(agent: Option<&str>) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CLIENT_VERBS, submit_key};
+    use super::*;
+    use kampr_core::provider::{PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
+    use kampr_core::registry::RegistryConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::{mpsc, watch};
+
+    const PANE: &str = "01J/w1:p1";
+    const LOCAL: &str = "w1:p1";
+
+    /// Announces the pane's geometry on every open and then says nothing more of its own, which
+    /// is the provider's shape: the `Reset` goes out as soon as `observe` has been spawned, and
+    /// the observer's first frame is as far behind it as the machine is busy.
+    struct Scripted {
+        opens: AtomicUsize,
+        feeds: std::sync::Mutex<Vec<mpsc::Sender<PaneEvent>>>,
+        topology: watch::Sender<u64>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for Scripted {
+        async fn list_panes(&self) -> anyhow::Result<Vec<PaneInfo>> {
+            Ok(vec![PaneInfo {
+                pane_id: LOCAL.into(),
+                cols: Some(20),
+                rows: 3,
+                ..PaneInfo::default()
+            }])
+        }
+
+        async fn watch_pane(&self, _pane_id: &str) -> anyhow::Result<PaneStream> {
+            let (tx, rx) = mpsc::channel(32);
+            tx.try_send(PaneEvent::Reset { cols: 20, rows: 3 }).unwrap();
+            self.feeds.lock().unwrap().push(tx);
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Ok(PaneStream::new(rx))
+        }
+
+        async fn write_pane(&self, _pane_id: &str, _input: Input) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn read_scrollback(&self, _pane_id: &str) -> anyhow::Result<Option<RawScrollback>> {
+            Ok(None)
+        }
+
+        fn topology(&self) -> watch::Receiver<u64> {
+            self.topology.subscribe()
+        }
+    }
+
+    struct Harness {
+        provider: Arc<Scripted>,
+        registry: Arc<PaneRegistry>,
+        outbox: Arc<Outbox>,
+        wire: Arc<Wire>,
+        panes: HashMap<String, PaneHandle>,
+        herds: Vec<watch::Sender<Arc<crate::herd::HerdModel>>>,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let provider = Arc::new(Scripted {
+                opens: AtomicUsize::new(0),
+                feeds: std::sync::Mutex::default(),
+                topology: watch::channel(0).0,
+            });
+            let registry = PaneRegistry::with_config(
+                provider.clone(),
+                RegistryConfig {
+                    // Short enough that a blank flush would land inside the test rather than
+                    // after it; the real 300 ms is a whole `observe` spawn wide.
+                    reset_flush_after: Duration::from_millis(60),
+                    first_grid_wait: Duration::from_millis(500),
+                    ..RegistryConfig::default()
+                },
+            );
+            let outbox = Arc::new(Outbox::new(256));
+            let wire = Arc::new(Wire::new(outbox.clone()));
+            Self {
+                provider,
+                registry,
+                outbox,
+                wire,
+                panes: HashMap::new(),
+                herds: Vec::new(),
+            }
+        }
+
+        /// Exactly what `watch` does once its checks have passed.
+        fn watch(&mut self) {
+            let hold = hand_over(&mut self.panes, &self.outbox, Some((&self.registry, LOCAL)), PANE);
+            let (herd, herd_rx) = watch::channel(Arc::new(crate::herd::HerdModel::default()));
+            self.herds.push(herd);
+            let tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
+                registry: self.registry.clone(),
+                // Nothing in this test reaches herdr; a socket that does not exist proves it.
+                herdr: kampr_herdr::Herdr::new("/nonexistent/kampr-test.sock"),
+                herd: herd_rx,
+                wire: self.wire.clone(),
+                global: PANE.into(),
+                local: LOCAL.into(),
+                scrollback: false,
+            }))];
+            self.panes.insert(
+                PANE.to_string(),
+                PaneHandle {
+                    pane: PANE.into(),
+                    outbox: self.outbox.clone(),
+                    tasks,
+                    scrollback: false,
+                    conversation: false,
+                    convo: convo::open(),
+                    _hold: hold,
+                },
+            );
+        }
+
+        async fn paint(&self, text: &str) {
+            let feed = self.provider.feeds.lock().unwrap().last().unwrap().clone();
+            feed.send(PaneEvent::Bytes {
+                full: true,
+                bytes: format!("\x1b[1;1H{text}").into_bytes(),
+            })
+            .await
+            .unwrap();
+        }
+
+        async fn resets(&self) -> Vec<String> {
+            let mut texts = Vec::new();
+            while let Ok(Some(frame)) =
+                tokio::time::timeout(Duration::from_millis(50), self.outbox.next()).await
+            {
+                let message: Value = serde_json::from_str(&frame.json).unwrap();
+                if message["t"] != "grid.reset" {
+                    continue;
+                }
+                texts.push(
+                    message["rows_data"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|row| row["runs"].as_array().cloned().unwrap_or_default())
+                        .filter_map(|run| run["x"].as_str().map(str::to_string))
+                        .collect::<String>()
+                        .trim()
+                        .to_string(),
+                );
+            }
+            texts
+        }
+    }
+
+    /// A resync re-watches every pane the client holds. Each of those is a stop and a start
+    /// against the same registry, and the stop drops the pane's only watcher — so without a hold
+    /// across the swap the pane is re-opened rather than re-attached, and what the client is sent
+    /// is an empty grid at the pane's real geometry over the one it was already looking at.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_re_watched_pane_is_re_attached_rather_than_re_opened() {
+        for attempt in 0..5 {
+            let mut h = Harness::new();
+            h.watch();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            h.paint("hello").await;
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            assert_eq!(h.resets().await, ["hello"], "attempt {attempt}");
+
+            h.watch();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+
+            let resets = h.resets().await;
+            assert_eq!(
+                h.provider.opens.load(Ordering::SeqCst),
+                1,
+                "attempt {attempt}: a re-watch re-attaches to the pane; it does not re-open it"
+            );
+            assert!(!resets.is_empty(), "attempt {attempt}: the re-watch repaints");
+            assert!(
+                resets.iter().all(|text| text == "hello"),
+                "attempt {attempt}: a blank grid over a pane that had one: {resets:?}"
+            );
+        }
+    }
 
     /// The list gates the tagged enum, so a verb added to one and not the other either goes
     /// unanswered or reintroduces the refusal of an unknown `t`. Serde names the variants it

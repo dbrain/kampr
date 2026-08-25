@@ -202,6 +202,7 @@ impl Activity {
 
 struct PaneEntry {
     pane_id: String,
+    watchers: AtomicU64,
     state: Arc<Mutex<PaneState>>,
     history: Arc<Mutex<ScrollbackRing>>,
     status: Arc<Mutex<HistoryStatus>>,
@@ -297,8 +298,11 @@ impl PaneRegistry {
         self.lookup(pane_id).map(|e| *e.status.lock().unwrap())
     }
 
+    /// Counted rather than read off the refcount, because a [`PaneHold`] is a strong reference
+    /// that nobody is looking through: the herd carries this number.
     pub fn watcher_count(&self, pane_id: &str) -> usize {
-        self.lookup(pane_id).map_or(0, |e| Arc::strong_count(&e) - 1)
+        self.lookup(pane_id)
+            .map_or(0, |e| e.watchers.load(Ordering::Relaxed) as usize)
     }
 
     /// Bumps whenever a viewer joins or leaves any pane.
@@ -359,6 +363,7 @@ impl PaneRegistry {
         ];
         let entry = Arc::new(PaneEntry {
             pane_id: pane_id.to_string(),
+            watchers: AtomicU64::new(0),
             state,
             history,
             status,
@@ -384,6 +389,22 @@ impl PaneRegistry {
         Ok(watcher)
     }
 
+    /// Re-watching a pane must not close it in between.
+    ///
+    /// The registry holds only a `Weak` to a pane, so the last [`Watcher`] dropping takes the
+    /// entry with it — the emulator, the stitched ring, and the spawned `observe` behind them. A
+    /// caller that stops its old watch before starting the new one *is* that last watcher, so
+    /// what it opens next is a fresh pane: a 1x1 emulator, a newly spawned observer, and
+    /// `reset_flush_after` publishing a blank grid at the pane's real geometry over content the
+    /// viewer was already looking at, until the new observer's first frame repaints it. Held
+    /// across the swap, a re-watch is a re-attach: nothing is re-opened, nothing is republished,
+    /// and the ring keeps the history it has stitched.
+    pub fn hold_while(&self, pane_id: &str, stop: impl FnOnce()) -> Option<PaneHold> {
+        let hold = self.lookup(pane_id).map(|entry| PaneHold { _entry: entry });
+        stop();
+        hold
+    }
+
     fn lookup(&self, pane_id: &str) -> Option<Arc<PaneEntry>> {
         self.panes.lock().unwrap().get(pane_id).and_then(Weak::upgrade)
     }
@@ -396,6 +417,7 @@ impl PaneRegistry {
         let rx = entry.tx.subscribe();
         let initial = full_update(&state);
         drop(state);
+        entry.watchers.fetch_add(1, Ordering::Relaxed);
         self.watcher_changes.send_modify(|n| *n += 1);
         Watcher {
             entry,
@@ -405,6 +427,11 @@ impl PaneRegistry {
             watcher_changes: self.watcher_changes.clone(),
         }
     }
+}
+
+/// A pane kept open while one watcher is handed over to the next. See [`PaneRegistry::hold_while`].
+pub struct PaneHold {
+    _entry: Arc<PaneEntry>,
 }
 
 pub struct Watcher {
@@ -417,6 +444,7 @@ pub struct Watcher {
 
 impl Drop for Watcher {
     fn drop(&mut self) {
+        self.entry.watchers.fetch_sub(1, Ordering::Relaxed);
         self.watcher_changes.send_modify(|n| *n += 1);
     }
 }

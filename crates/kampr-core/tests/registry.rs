@@ -19,6 +19,7 @@ struct Scripted {
     reads_done: AtomicUsize,
     stall_when_empty: std::sync::atomic::AtomicBool,
     reads_fail: std::sync::atomic::AtomicBool,
+    announce: std::sync::Mutex<Option<(u16, u16)>>,
 }
 
 impl Default for Scripted {
@@ -33,6 +34,7 @@ impl Default for Scripted {
             reads_done: AtomicUsize::default(),
             stall_when_empty: std::sync::atomic::AtomicBool::new(false),
             reads_fail: std::sync::atomic::AtomicBool::new(false),
+            announce: std::sync::Mutex::default(),
         }
     }
 }
@@ -61,6 +63,11 @@ impl Provider for Scripted {
 
     async fn watch_pane(&self, pane_id: &str) -> Result<PaneStream> {
         let (tx, rx) = mpsc::channel(32);
+        // With `announce`, every open reports the pane's geometry before any frame — which is
+        // what the real provider does, and the window in which a reopened pane is blank.
+        if let Some((cols, rows)) = *self.announce.lock().unwrap() {
+            tx.try_send(PaneEvent::Reset { cols, rows }).unwrap();
+        }
         self.feeds.lock().await.insert(pane_id.to_string(), tx);
         self.opens.fetch_add(1, Ordering::SeqCst);
         Ok(PaneStream::new(rx))
@@ -223,6 +230,55 @@ async fn the_last_watcher_leaving_tears_the_pane_down() {
         2,
         "watching again re-opens the stream"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_that_had_a_grid_is_never_republished_a_blank_one_on_a_re_watch() {
+    let (p, reg) = setup().await;
+    *p.announce.lock().unwrap() = Some((20, 3));
+    let mut first = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"\x1b[1;1Hhello".to_vec(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(text_of(&next(&mut first).await)[0], "hello");
+
+    // A pump owns its watcher, and `stop` aborts the task that holds it. Dropping it here is
+    // that abort at its worst: landed already, before the new watch is asked for.
+    let hold = reg.hold_while("p", || drop(first));
+
+    let second = reg.watch("p").await.unwrap();
+    assert_eq!(
+        p.opens.load(Ordering::SeqCst),
+        1,
+        "a re-watch re-attaches to the pane; it does not re-open it"
+    );
+    assert!(second.is_ready());
+    assert_eq!(
+        text_of(second.initial())[0],
+        "hello",
+        "the client was already looking at this grid"
+    );
+    assert_eq!(reg.watcher_count("p"), 1, "a hold is not a viewer");
+    drop(hold);
+}
+
+/// The other half of the same rule: a pane nobody was watching has nothing to hand over, and a
+/// genuinely new watch still owes the client the geometry it is about to lay out.
+#[tokio::test]
+async fn a_pane_nobody_was_watching_still_publishes_its_geometry_before_the_first_frame() {
+    let (p, reg) = setup().await;
+    *p.announce.lock().unwrap() = Some((94, 40));
+    let hold = reg.hold_while("p", || {});
+    assert!(hold.is_none(), "there was no pane to hold open");
+
+    let first = reg.watch("p").await.unwrap();
+    assert!(first.is_ready(), "the flush is what a silent new pane has to say");
+    assert_eq!(first.initial().geometry(), Some((94, 40)));
+    assert_eq!(text_of(first.initial())[0], "");
 }
 
 #[tokio::test]
