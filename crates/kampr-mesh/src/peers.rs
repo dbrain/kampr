@@ -1,6 +1,7 @@
 use crate::handshake::Accepted;
 use crate::shadow::{History, Shadow, StyleTable};
 use crate::transport::{Incoming, Outgoing};
+use base64::Engine;
 use kampr_auth::Store;
 use kampr_core::registry::PaneUpdate;
 use kampr_core::scrollback::ScrollbackDoc;
@@ -25,6 +26,21 @@ const REQUEST_QUEUE: usize = 256;
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 const MANAGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How much of an attachment one `att.chunk` carries, decoded.
+///
+/// This is the unit of fairness at the WAN hop: a terminal frame queued while a transfer is in
+/// progress waits for one chunk to be written, never for the record. The largest attachment ever
+/// measured is 2.22 MB (#247), so that record is 36 chunks rather than one message that stops
+/// every pane on the link for as long as the link takes to drain it.
+pub const ATT_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Chunks a peer may have sent that the hub has not yet asked to replace.
+///
+/// The hub grants one back for each chunk it has handed to the client, so this is at once the
+/// most the hub will ever hold for a transfer — 256 KiB, whatever the attachment's size — and the
+/// in-flight window that keeps a WAN round trip from costing a chunk of throughput.
+pub const ATT_WINDOW: u32 = 4;
 
 /// Keepalive rounds a peer may leave unanswered before the link is dropped. At the default five
 /// second interval that is fifteen seconds of silence: long enough to sit out a stalled writer or
@@ -52,6 +68,44 @@ impl RelayError {
             Self::Offline(_) | Self::Wedged | Self::NoAnswer => ErrorCode::NodeOffline,
         }
     }
+}
+
+/// Why a relayed attachment did not arrive.
+///
+/// Nothing here is shown to a client as itself. The route that serves an attachment answers every
+/// refusal the same way on purpose — an escape, a stale id and an id for somebody else's
+/// transcript must not be distinguishable from outside — and a hop across the mesh must not be
+/// the one that says which. This exists so the *log* can, and so the one refusal that is already
+/// its own status locally (too large) still is.
+#[derive(Debug, thiserror::Error)]
+pub enum FetchError {
+    #[error(transparent)]
+    Link(#[from] RelayError),
+    #[error("this attachment is larger than the node will serve")]
+    TooLarge(u64),
+    #[error("that node refused the attachment: {0}")]
+    Refused(String),
+    #[error("that node stopped sending the attachment")]
+    Truncated,
+}
+
+/// What the peer says its attachment is. Every field is the peer's own claim and none of it
+/// decides what this hub serves: the media type is run through the same allowlist a local one is,
+/// and `bytes` is checked against the ceiling before a byte is pulled and again as they arrive.
+#[derive(Debug, Clone, Default)]
+pub struct AttHeader {
+    pub kind: String,
+    pub mime: Option<String>,
+    pub name: Option<String>,
+    pub bytes: u64,
+}
+
+#[derive(Debug)]
+enum AttEvent {
+    Open(AttHeader),
+    Chunk(Vec<u8>),
+    End,
+    Refused(String),
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +271,32 @@ impl Peers {
         self.resolve(addressed_to)?.manage(message).await
     }
 
+    /// Whether a pane's node can hand this hub the bytes behind an attachment id.
+    ///
+    /// False for a node that is offline, for one this hub has never met, and for one whose build
+    /// predates `att.fetch` — three different reasons the button must be absent rather than
+    /// present and answering 404. It is the peer's own `hello` that says so, which is the only
+    /// claim about a build that arrives after the handshake and before the first pane.
+    pub fn can_serve_attachments(&self, id: &str) -> bool {
+        self.link_for(id).is_some_and(|link| link.serves_attachments())
+    }
+
+    /// Pulls one attachment off a peer, a chunk at a time.
+    ///
+    /// `ceiling` is the caller's own decoded-bytes limit, enforced *before* anything is pulled —
+    /// the peer's header is a claim, so it is refused on the claim and then again on the arithmetic
+    /// as chunks arrive, because a peer that lied about the size would otherwise stream for ever.
+    pub async fn fetch_attachment(&self, pane: &str, id: &str, ceiling: u64) -> Result<Transfer, FetchError> {
+        let link = self.resolve(pane)?;
+        // The same fact the promise is keyed on, asked again at the moment it is relied on: a
+        // build with no `att.fetch` would leave this request waiting out its deadline for an
+        // answer that is never coming.
+        if !link.serves_attachments() {
+            return Err(FetchError::Refused("that node has no attachment route".into()));
+        }
+        link.fetch_attachment(pane, id, ceiling).await
+    }
+
     fn resolve(&self, id: &str) -> Result<Arc<PeerLink>, RelayError> {
         if let Some(link) = self.link_for(id) {
             return Ok(link);
@@ -262,6 +342,7 @@ impl Peers {
             state: Mutex::new(LinkState::default()),
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
+            transfers: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),
@@ -343,6 +424,9 @@ impl Peers {
         for pane in link.panes.lock().unwrap().values().filter_map(Weak::upgrade) {
             pane.fail("node_offline", &detail);
         }
+        // A half-served attachment ends with the link rather than waiting out its own deadline:
+        // the request behind it is a client holding a socket open for bytes that cannot arrive.
+        link.transfers.lock().unwrap().clear();
         // A superseded link is the same node's previous socket, and its successor is already
         // serving: remembering it would list that node twice, once offline for ever.
         if !link.superseded.load(Ordering::Relaxed) {
@@ -407,6 +491,14 @@ impl Peers {
             "pending" | "convo" | "convo.turn" => link.passthrough(&message),
             "error" => link.error(&message),
             "managed" => link.managed(message),
+            "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),
+            // The one thing in `hello` the handshake did not already establish: whether this
+            // peer's build answers `att.fetch`. A hub that guessed would advertise an attachment
+            // button an older peer cannot serve, which is the bug this whole path exists to fix.
+            "hello" => {
+                let serves = message["caps"]["attachments"].as_bool().unwrap_or(false);
+                link.state.lock().unwrap().attachments = serves;
+            }
             // A fresh round trip is a change to the herd like any other: it is what a client
             // renders to say how far away a node is.
             "pong" => {
@@ -415,8 +507,8 @@ impl Peers {
                     self.publish();
                 }
             }
-            // `hello` carries nothing the handshake did not already establish, and an unknown `t`
-            // is ignored rather than refused — the same forward-compatibility rule as everywhere.
+            // An unknown `t` is ignored rather than refused — the same forward-compatibility rule
+            // as everywhere.
             _ => {}
         }
     }
@@ -531,6 +623,7 @@ struct LinkState {
     panes: Vec<PaneEntry>,
     rtt_ms: Option<f64>,
     pings: HashMap<u64, Instant>,
+    attachments: bool,
 }
 
 impl LinkState {
@@ -563,6 +656,7 @@ pub struct PeerLink {
     state: Mutex<LinkState>,
     panes: Mutex<HashMap<String, Weak<RemotePane>>>,
     manages: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    transfers: Mutex<HashMap<u64, mpsc::Sender<AttEvent>>>,
     next_request: AtomicU64,
     closed: Arc<tokio::sync::Notify>,
     closed_reason: Mutex<Option<String>>,
@@ -631,6 +725,96 @@ impl PeerLink {
         };
         if let Some(waiter) = self.manages.lock().unwrap().remove(&id) {
             let _ = waiter.send(message);
+        }
+    }
+
+    fn serves_attachments(&self) -> bool {
+        self.state.lock().unwrap().attachments
+    }
+
+    async fn fetch_attachment(
+        self: &Arc<Self>,
+        pane: &str,
+        id: &str,
+        ceiling: u64,
+    ) -> Result<Transfer, FetchError> {
+        let rid = self.next_request.fetch_add(1, Ordering::Relaxed);
+        // One slot per chunk the peer is allowed to have in flight, plus the two events that are
+        // not chunks. A peer that fills it has sent more than it was granted, which is the one
+        // way this queue can grow and the reason the transfer ends rather than buffering.
+        let (tx, rx) = mpsc::channel(ATT_WINDOW as usize + 2);
+        self.transfers.lock().unwrap().insert(rid, tx);
+        let asked = self.request(json!({
+            "t": "att.fetch", "rid": rid, "pane": pane, "id": id, "window": ATT_WINDOW
+        }));
+        if let Err(e) = asked {
+            self.transfers.lock().unwrap().remove(&rid);
+            return Err(e.into());
+        }
+        let mut transfer = Transfer {
+            link: self.clone(),
+            rid,
+            header: AttHeader::default(),
+            rx,
+            remaining: 0,
+            done: false,
+        };
+        match tokio::time::timeout(MANAGE_TIMEOUT, transfer.rx.recv()).await {
+            Ok(Some(AttEvent::Open(header))) => {
+                // The ceiling is checked on the peer's claim, before a chunk is asked for, so a
+                // record naming a gigabyte costs a comparison here exactly as it does locally.
+                if header.bytes > ceiling {
+                    return Err(FetchError::TooLarge(header.bytes));
+                }
+                transfer.remaining = header.bytes;
+                transfer.header = header;
+                Ok(transfer)
+            }
+            Ok(Some(AttEvent::Refused(code))) => Err(FetchError::Refused(code)),
+            Ok(Some(_)) => Err(FetchError::Refused("out of order".into())),
+            Ok(None) => Err(RelayError::Offline("that node left the herd".into()).into()),
+            Err(_) => Err(RelayError::NoAnswer.into()),
+        }
+    }
+
+    fn attachment(&self, message: &Value) {
+        let Some(rid) = message["rid"].as_u64() else {
+            debug!(node = %self.node_id, "a peer sent an attachment frame without an rid");
+            return;
+        };
+        let event = match message["t"].as_str().unwrap_or_default() {
+            "att.open" => AttEvent::Open(AttHeader {
+                kind: message["kind"].as_str().unwrap_or_default().to_string(),
+                mime: message["mime"].as_str().map(str::to_string),
+                name: message["name"].as_str().map(str::to_string),
+                bytes: message["bytes"].as_u64().unwrap_or_default(),
+            }),
+            "att.chunk" => match message["b64"]
+                .as_str()
+                .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+            {
+                Some(data) => AttEvent::Chunk(data),
+                None => AttEvent::Refused("unreadable chunk".into()),
+            },
+            "att.end" => AttEvent::End,
+            _ => AttEvent::Refused(message["code"].as_str().unwrap_or("refused").to_string()),
+        };
+        let sink = self.transfers.lock().unwrap().get(&rid).cloned();
+        // A transfer nobody is waiting for is one the client walked away from, and the `att.stop`
+        // that said so is still crossing the link — dropping what is already in flight is what
+        // that costs, and it is not an error.
+        let Some(sink) = sink else { return };
+        if sink.try_send(event).is_err() {
+            debug!(node = %self.node_id, rid, "a peer overran its attachment window");
+            self.transfers.lock().unwrap().remove(&rid);
+        }
+    }
+
+    /// Stops caring about a transfer, and tells the peer so unless it has already finished.
+    fn end_transfer(&self, rid: u64, tell_the_peer: bool) {
+        self.transfers.lock().unwrap().remove(&rid);
+        if tell_the_peer {
+            let _ = self.request(json!({ "t": "att.stop", "rid": rid }));
         }
     }
 
@@ -855,6 +1039,84 @@ async fn revoked(store: &Store, pubkey: &str) -> bool {
     }
 }
 
+/// One attachment being pulled off a peer, a chunk at a time.
+///
+/// **Nothing here ever holds the whole record.** The hub asks for [`ATT_WINDOW`] chunks, and
+/// grants one more for each chunk it has handed downstream — so the memory it spends is the
+/// window, whether the attachment is 68 bytes or the 2.22 MB largest measured (#247), and the
+/// rate it pulls at is the rate the client is reading at.
+///
+/// Dropping it is the cancellation: the client that walked away is the last thing keeping this
+/// alive, and the peer is told to stop rather than left streaming into a hub that will discard it.
+pub struct Transfer {
+    link: Arc<PeerLink>,
+    rid: u64,
+    header: AttHeader,
+    rx: mpsc::Receiver<AttEvent>,
+    remaining: u64,
+    done: bool,
+}
+
+impl Transfer {
+    pub fn header(&self) -> &AttHeader {
+        &self.header
+    }
+
+    /// The next chunk, `None` at a clean end. A peer that stalls ends the transfer rather than
+    /// hanging the request, on the same bound a manage op waits on.
+    pub async fn next_chunk(&mut self) -> Option<Result<Vec<u8>, FetchError>> {
+        if self.done {
+            return None;
+        }
+        let event = match tokio::time::timeout(MANAGE_TIMEOUT, self.rx.recv()).await {
+            Ok(Some(event)) => event,
+            Ok(None) => return Some(self.fail(FetchError::Truncated)),
+            Err(_) => return Some(self.fail(RelayError::NoAnswer.into())),
+        };
+        match event {
+            AttEvent::Chunk(data) => {
+                // The peer's header was a claim and this is the arithmetic. A peer that keeps
+                // sending past the size it announced is one this hub stops reading from.
+                let Some(left) = self.remaining.checked_sub(data.len() as u64) else {
+                    return Some(self.fail(FetchError::Refused("more bytes than it announced".into())));
+                };
+                self.remaining = left;
+                if let Err(e) = self
+                    .link
+                    .request(json!({ "t": "att.more", "rid": self.rid, "n": 1 }))
+                {
+                    return Some(self.fail(e.into()));
+                }
+                Some(Ok(data))
+            }
+            AttEvent::End => {
+                self.done = true;
+                self.link.end_transfer(self.rid, false);
+                match self.remaining {
+                    0 => None,
+                    _ => Some(Err(FetchError::Truncated)),
+                }
+            }
+            AttEvent::Refused(code) => Some(self.fail(FetchError::Refused(code))),
+            AttEvent::Open(_) => Some(self.fail(FetchError::Refused("out of order".into()))),
+        }
+    }
+
+    fn fail(&mut self, e: FetchError) -> Result<Vec<u8>, FetchError> {
+        self.done = true;
+        self.link.end_transfer(self.rid, true);
+        Err(e)
+    }
+}
+
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        if !self.done {
+            self.link.end_transfer(self.rid, true);
+        }
+    }
+}
+
 /// A relayed pane kept open while one watcher is handed over to the next. See
 /// [`Peers::hold_while`].
 #[derive(Debug)]
@@ -1004,6 +1266,7 @@ mod tests {
             state: Mutex::new(LinkState::default()),
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
+            transfers: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),

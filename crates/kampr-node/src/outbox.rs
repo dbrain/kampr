@@ -35,6 +35,13 @@ impl Frame {
 /// The hard cap is the floor beneath that. Frames that are not `grid.*` — pongs, errors, herd
 /// patches — cannot be dropped without lying to the client, so a connection that will not drain
 /// them is closed instead.
+///
+/// **The bulk lane is a second queue that every ordinary frame overtakes.** Attachment chunks go
+/// there and nothing else does: a 2.22 MB record (#247) queued in front of the terminal frames
+/// would stop every pane on the connection repainting for as long as the link takes to drain it,
+/// which is the whole reason the local attachment route is HTTP rather than a wire message. It is
+/// drained only when nothing else is waiting, so a transfer costs a frame the time to write one
+/// chunk rather than the time to write the record.
 #[derive(Debug)]
 pub struct Outbox {
     inner: Mutex<Inner>,
@@ -46,6 +53,7 @@ pub struct Outbox {
 #[derive(Debug, Default)]
 struct Inner {
     queue: VecDeque<Frame>,
+    bulk: VecDeque<Frame>,
     stopped: HashSet<String>,
     closed: bool,
     purges: u64,
@@ -92,12 +100,32 @@ impl Outbox {
         true
     }
 
+    /// A frame nothing on this connection has to wait behind.
+    ///
+    /// Only an attachment's chunks go here. The producer is credit-driven, so a `false` is the
+    /// end of that transfer and not of the connection: a bulk lane that would not drain is a
+    /// transfer that stalls and times out at the hub, never a pane that stops.
+    pub fn push_bulk(&self, frame: Frame) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.closed || inner.bulk.len() >= self.cap {
+            return false;
+        }
+        inner.bulk.push_back(frame);
+        drop(inner);
+        self.ready.notify_one();
+        true
+    }
+
     pub async fn next(&self) -> Option<Frame> {
         loop {
             let waiting = self.ready.notified();
             {
                 let mut inner = self.inner.lock().unwrap();
-                if let Some(frame) = inner.queue.pop_front() {
+                let next = match inner.queue.pop_front() {
+                    Some(frame) => Some(frame),
+                    None => inner.bulk.pop_front(),
+                };
+                if let Some(frame) = next {
                     return Some(frame);
                 }
                 if inner.closed {
@@ -233,6 +261,35 @@ mod tests {
             }
         }
         panic!("the outbox buffered without limit");
+    }
+
+    /// The property the whole relayed-attachment path rests on: a chunk already queued never
+    /// delays a frame that is enqueued after it.
+    #[tokio::test]
+    async fn a_frame_overtakes_every_attachment_chunk_already_queued() {
+        let o = Outbox::new(16);
+        for n in 0..8 {
+            assert!(o.push_bulk(Frame::plain(format!(r#"{{"t":"att.chunk","seq":{n}}}"#))));
+        }
+        o.push(patch("p1", 1));
+        assert_eq!(o.next().await.unwrap(), patch("p1", 1));
+        assert_eq!(o.next().await.unwrap().json, r#"{"t":"att.chunk","seq":0}"#);
+    }
+
+    /// Bulk frames are not the client falling behind on its panes, so they must not trip the rule
+    /// that purges a pane and re-sends its grid.
+    #[test]
+    fn a_transfer_in_progress_is_not_congestion() {
+        let o = Outbox::new(4);
+        for n in 0..4 {
+            assert!(o.push_bulk(Frame::plain(format!(r#"{{"seq":{n}}}"#))));
+        }
+        assert!(!o.congested());
+        assert!(
+            !o.push_bulk(Frame::plain(r#"{"seq":4}"#.into())),
+            "the bulk lane grew past its own bound",
+        );
+        assert!(!o.is_closed(), "a full bulk lane ended the connection");
     }
 
     #[tokio::test]

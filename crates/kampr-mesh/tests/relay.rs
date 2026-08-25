@@ -845,3 +845,337 @@ async fn holding_a_pane_no_link_serves_still_stops_the_watcher_it_was_given() {
     assert!(hold.is_none(), "nobody serves that pane");
     assert!(stopped, "the old watcher was left running");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Attachments, which are the one thing on this link that is bulk rather than a frame.
+
+const CEILING: u64 = 8 * 1024 * 1024;
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// The hub asking, and everything the peer said back, as one task — so the test can play the peer
+/// against a fetch that is genuinely concurrent with it.
+fn fetching(peers: &Arc<Peers>, pane: &str) -> tokio::task::JoinHandle<Result<(u64, Vec<u8>), String>> {
+    let peers = peers.clone();
+    let pane = pane.to_string();
+    tokio::spawn(async move {
+        let mut transfer = peers
+            .fetch_attachment(&pane, "an-id", CEILING)
+            .await
+            .map_err(|e| e.to_string())?;
+        let bytes = transfer.header().bytes;
+        let mut body = Vec::new();
+        while let Some(chunk) = transfer.next_chunk().await {
+            body.extend_from_slice(&chunk.map_err(|e| e.to_string())?);
+        }
+        Ok((bytes, body))
+    })
+}
+
+/// A peer that has said it answers `att.fetch`, which is what a hub keys both the promise and the
+/// request on.
+async fn join_serving_attachments(peers: &Arc<Peers>, store: &Store) -> Peer {
+    let mut peer = join(peers, store, KEY, "01JA", "laptop").await;
+    peer.send(json!({ "t": "hello", "node_id": "01JA", "caps": { "attachments": true } }))
+        .await;
+    for _ in 0..200 {
+        if peers.can_serve_attachments("01JA") {
+            return peer;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the hub never took the peer at its word");
+}
+
+/// A hub that asked for the whole record at once would put 2.22 MB (#247) on the socket carrying
+/// every pane's frames, at the WAN hop — the head-of-line problem the attachment route is HTTP to
+/// avoid. It asks a chunk at a time instead, and *grants* the next one only once it has handed the
+/// last downstream, so what the hub holds is the window and never the record.
+#[tokio::test]
+async fn an_attachment_crosses_the_link_a_chunk_at_a_time_and_each_one_is_asked_for() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let asked = peer.request_but_ping().await;
+    assert_eq!(asked["t"], "att.fetch", "{asked}");
+    assert_eq!(asked["pane"], "01JA/w1:p1");
+    assert_eq!(asked["id"], "an-id");
+    assert_eq!(
+        asked["window"],
+        json!(kampr_mesh::ATT_WINDOW),
+        "the peer was not told how far ahead it may run: {asked}",
+    );
+    let rid = asked["rid"].as_u64().expect("an rid");
+
+    peer.send(json!({
+        "t": "att.open", "rid": rid, "bytes": 6, "kind": "image", "mime": "image/png"
+    }))
+    .await;
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 0, "b64": b64(b"abc") }))
+        .await;
+    assert_eq!(
+        peer.request_but_ping().await,
+        json!({ "t": "att.more", "rid": rid, "n": 1 }),
+        "the hub took a chunk without granting one back, so the window only ever shrinks",
+    );
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 1, "b64": b64(b"def") }))
+        .await;
+    assert_eq!(peer.request_but_ping().await["t"], "att.more");
+    peer.send(json!({ "t": "att.end", "rid": rid })).await;
+
+    let (bytes, body) = pulled.await.expect("the fetch task").expect("a transfer");
+    assert_eq!(bytes, 6);
+    assert_eq!(body, b"abcdef");
+}
+
+/// The ceiling is read off a claim, before anything is pulled — the same shape the local route
+/// has, where the decoded length comes off the record's base64 rather than off a decode.
+#[tokio::test]
+async fn an_attachment_past_the_ceiling_is_refused_before_a_byte_of_it_is_pulled() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.send(json!({
+        "t": "att.open", "rid": rid, "bytes": CEILING + 1, "kind": "image"
+    }))
+    .await;
+
+    let refusal = pulled.await.expect("the fetch task").expect_err("a refusal");
+    assert!(refusal.contains("larger than"), "{refusal}");
+    assert_eq!(
+        peer.request_but_ping().await,
+        json!({ "t": "att.stop", "rid": rid }),
+        "the hub asked for a chunk of something it had already refused",
+    );
+}
+
+/// A peer that announces less than it sends is a peer this hub stops reading from. The claim is
+/// how the ceiling is enforced, so nothing may arrive past it.
+#[tokio::test]
+async fn a_peer_that_sends_more_than_it_announced_is_cut_off() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 2, "kind": "image" }))
+        .await;
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 0, "b64": b64(b"far too much") }))
+        .await;
+
+    let refusal = pulled.await.expect("the fetch task").expect_err("a refusal");
+    assert!(refusal.contains("more bytes than it announced"), "{refusal}");
+}
+
+/// A body that stops short is a body that stops short: the client is promised a `Content-Length`
+/// before the first chunk goes out, so a short read has to be an error rather than a clean end.
+#[tokio::test]
+async fn an_attachment_that_ends_early_is_an_error_and_not_a_short_body() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 9, "kind": "image" }))
+        .await;
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 0, "b64": b64(b"abc") }))
+        .await;
+    peer.send(json!({ "t": "att.end", "rid": rid })).await;
+
+    let refusal = pulled.await.expect("the fetch task").expect_err("a refusal");
+    assert!(refusal.contains("stopped sending"), "{refusal}");
+}
+
+/// The client hung up. Nothing downstream will ever read these bytes, so the peer is told rather
+/// than left pushing a megabyte into a hub that discards it.
+#[tokio::test]
+async fn a_client_that_walks_away_stops_the_peer_sending() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+
+    let transfer = {
+        let asked = tokio::spawn({
+            let peers = peers.clone();
+            async move { peers.fetch_attachment("01JA/w1:p1", "an-id", CEILING).await }
+        });
+        let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+        peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 3, "kind": "image" }))
+            .await;
+        (asked.await.expect("the fetch task").expect("a transfer"), rid)
+    };
+    let (transfer, rid) = transfer;
+    drop(transfer);
+
+    assert_eq!(
+        peer.request_but_ping().await,
+        json!({ "t": "att.stop", "rid": rid }),
+        "the peer was left streaming to nobody",
+    );
+}
+
+/// A peer that goes quiet must end the request rather than hold a client's socket open for ever.
+/// The bound is the one a manage op already waits on.
+#[tokio::test]
+async fn a_peer_that_stalls_ends_the_transfer_rather_than_hanging_it() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    // The clock stops here rather than at the top: sqlx acquires on tokio time too, and a store
+    // opened under a paused one never finishes.
+    tokio::time::pause();
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 6, "kind": "image" }))
+        .await;
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 0, "b64": b64(b"abc") }))
+        .await;
+    // …and then says nothing at all about the second half.
+
+    let refusal = tokio::time::timeout(Duration::from_secs(120), pulled)
+        .await
+        .expect("the fetch never gave up")
+        .expect("the fetch task")
+        .expect_err("a refusal");
+    assert!(refusal.contains("did not answer"), "{refusal}");
+}
+
+/// A peer that never answers the first ask is the same bounded wait, one step earlier.
+#[tokio::test]
+async fn a_peer_that_never_opens_the_attachment_ends_the_request() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    tokio::time::pause();
+    let pulled = fetching(&peers, "01JA/w1:p1");
+    let _asked = peer.request_but_ping().await;
+
+    let refusal = tokio::time::timeout(Duration::from_secs(120), pulled)
+        .await
+        .expect("the fetch never gave up")
+        .expect("the fetch task")
+        .expect_err("a refusal");
+    assert!(refusal.contains("did not answer"), "{refusal}");
+}
+
+/// A link that drops mid-body ends the transfer with it. Waiting out the deadline would hold a
+/// client's socket open for ten seconds after the answer was already known.
+#[tokio::test]
+async fn a_link_that_drops_mid_attachment_ends_the_transfer_with_it() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join_serving_attachments(&peers, &store).await;
+    let pulled = fetching(&peers, "01JA/w1:p1");
+
+    let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 6, "kind": "image" }))
+        .await;
+    peer.send(json!({ "t": "att.chunk", "rid": rid, "seq": 0, "b64": b64(b"abc") }))
+        .await;
+    peer.close().await;
+
+    let refusal = tokio::time::timeout(Duration::from_secs(5), pulled)
+        .await
+        .expect("the transfer outlived the link it was on")
+        .expect("the fetch task")
+        .expect_err("a refusal");
+    assert!(refusal.contains("stopped sending"), "{refusal}");
+}
+
+/// The promise a hub relays is keyed on this: a build that does not answer `att.fetch` must not
+/// have an attachment button rendered for it, and only the peer's own `hello` says which it is.
+#[tokio::test]
+async fn a_peer_promises_nothing_about_attachments_until_its_hello_says_so() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+
+    assert!(
+        !peers.can_serve_attachments("01JA/w1:p1"),
+        "a peer that has said nothing was taken at a word it never gave",
+    );
+    peer.send(json!({ "t": "hello", "node_id": "01JA", "caps": { "scrollback": true } }))
+        .await;
+    settle(&peers, |_| true).await;
+    assert!(
+        !peers.can_serve_attachments("01JA/w1:p1"),
+        "a build with no `att.fetch` was promised anyway",
+    );
+
+    peer.send(json!({ "t": "hello", "node_id": "01JA", "caps": { "attachments": true } }))
+        .await;
+    for _ in 0..100 {
+        if peers.can_serve_attachments("01JA/w1:p1") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("a peer that says it serves attachments is still not believed");
+}
+
+/// Offline is one of the three reasons the button must be absent, and it is the one that arrives
+/// while a client is looking at the pane.
+#[tokio::test]
+async fn a_peer_that_has_gone_promises_nothing_about_attachments() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(json!({ "t": "hello", "node_id": "01JA", "caps": { "attachments": true } }))
+        .await;
+    for _ in 0..100 {
+        if peers.can_serve_attachments("01JA/w1:p1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(peers.can_serve_attachments("01JA/w1:p1"));
+
+    peer.close().await;
+    for _ in 0..100 {
+        if !peers.can_serve_attachments("01JA/w1:p1") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("a node that has left the herd is still promised to serve its attachments");
+}
+
+/// The promise and the request are keyed on the same fact, so a build with no `att.fetch` is
+/// refused here rather than left waiting out a deadline for an answer that is never coming.
+#[tokio::test]
+async fn a_peer_with_no_attachment_route_is_refused_rather_than_asked() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    for _ in 0..200 {
+        if peers.link_for("01JA").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let refusal = peers
+        .fetch_attachment("01JA/w1:p1", "an-id", CEILING)
+        .await
+        .err()
+        .expect("a refusal");
+    assert!(refusal.to_string().contains("no attachment route"), "{refusal}");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(200), peer.request_but_ping())
+            .await
+            .ok(),
+        None,
+        "the hub asked a peer it already knew could not answer",
+    );
+}

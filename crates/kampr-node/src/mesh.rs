@@ -260,7 +260,15 @@ async fn serve_hub(
         return;
     }
     info!(hub = %hub.node_name, fingerprint = %hub.fingerprint(), "serving a hub");
-    session::run_on(out, incoming, node, device, format!("mesh:{}", hub.fingerprint())).await;
+    session::run_on(
+        out,
+        incoming,
+        node,
+        device,
+        format!("mesh:{}", hub.fingerprint()),
+        session::Caller::Hub,
+    )
+    .await;
 }
 
 impl Node {

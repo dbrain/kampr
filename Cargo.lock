@@ -2045,6 +2045,7 @@ name = "kampr-mesh"
 version = "0.1.17"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "futures-util",
  "hex",
  "kampr-auth",

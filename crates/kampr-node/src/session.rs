@@ -1,6 +1,6 @@
 use crate::convo::{self, ConvoCtx};
 use crate::manage::{self, ManageOp, Managed, Manager, Settle};
-use crate::outbox::Outbox;
+use crate::outbox::{Frame, Outbox};
 use crate::pending;
 use crate::state::{BUILD, Node};
 use crate::wire::Wire;
@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
@@ -47,6 +48,13 @@ const DEVICE_READ_FAILURES: u32 = 3;
 
 const MAX_PREFS_BYTES: usize = 2048;
 
+/// Attachments this node will be chunking towards one hub at a time.
+///
+/// Each holds one decoded record until the hub has read it, and the ceiling on one is 8 MiB, so
+/// this is the memory a hub can make a peer hold — and the hub opens one per client request, so
+/// without a bound a herd's worth of phones tapping screenshots is a peer's whole heap.
+const CONCURRENT_TRANSFERS: usize = 4;
+
 /// Every `t` [`ClientMsg`] decodes, kept beside it because the enum's own refusal of an unknown
 /// variant is indistinguishable from a malformed known one.
 const CLIENT_VERBS: [&str; 7] = [
@@ -62,7 +70,7 @@ const CLIENT_VERBS: [&str; 7] = [
 pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
     let link = crate::mesh::split(socket);
     let (out, incoming) = link.split();
-    run_on(out, incoming, node, device, peer).await;
+    run_on(out, incoming, node, device, peer, Caller::Client).await;
 }
 
 /// One client session, over any framed link.
@@ -78,6 +86,7 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
     node: Arc<Node>,
     device: Device,
     peer: String,
+    caller: Caller,
 ) {
     let outbox = Arc::new(Outbox::new(node.config.limits.client_queue));
     let wire = Arc::new(Wire::new(outbox.clone()));
@@ -104,7 +113,9 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
         wire: wire.clone(),
         device,
         peer,
+        caller,
         panes: HashMap::new(),
+        sending: HashMap::new(),
         unreadable: 0,
     };
     // **Subscribed before the herd is read, and the read is the subscription's own.** `greet`
@@ -248,13 +259,34 @@ impl Drop for PaneHandle {
     }
 }
 
+/// Who is on the other end of a session.
+///
+/// The whole of the difference is `att.*`: a browser has `GET /api/attachment` and must use it,
+/// because bytes on the socket that carries frames is the thing that route exists to avoid. A hub
+/// has no inbound path to a peer (ADR 0007), so for it the socket is the only way, and the
+/// chunking and the bulk lane are what make that safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    Client,
+    Hub,
+}
+
 struct Session {
     node: Arc<Node>,
     wire: Arc<Wire>,
     device: Device,
     peer: String,
+    caller: Caller,
     panes: HashMap<String, PaneHandle>,
+    sending: HashMap<u64, Sending>,
     unreadable: u32,
+}
+
+/// One attachment this node is chunking towards a hub: the credits it is waiting for, and a task
+/// that dies with the entry.
+struct Sending {
+    credit: mpsc::Sender<u32>,
+    _task: crate::mesh::AbortOnDrop,
 }
 
 impl Session {
@@ -262,7 +294,7 @@ impl Session {
     /// other way for a client to learn the zoom it left a pane at. A client that has to ask has
     /// already rendered the pane at the wrong size.
     async fn greet(&self, herd: &crate::herd::HerdModel) {
-        self.wire.send_json(&hello(&self.node, &self.device));
+        self.wire.send_json(&hello(&self.node, &self.device, self.caller));
         self.wire.send(&herd.message());
         self.wire.send_json(&self.stored_prefs().await);
         self.audit("session.opened", None, None);
@@ -394,6 +426,11 @@ impl Session {
             Some("manage") => self.manage(value).await,
             Some("caps") => self.caps().await,
             Some("prefs") => self.prefs(&value).await,
+            // Only a hub asks for these, and a session that is not one has no verb for them —
+            // which is the same thing it does with any other `t` it does not know.
+            Some("att.fetch" | "att.more" | "att.stop") if self.caller == Caller::Hub => {
+                self.attachment(&value);
+            }
             Some(known) if CLIENT_VERBS.contains(&known) => {
                 match serde_json::from_value::<ClientMsg>(value) {
                     Ok(msg) => self.client_msg(msg).await,
@@ -580,6 +617,65 @@ impl Session {
                 );
             }
         }
+    }
+
+    /// The three verbs a hub uses to pull an attachment off this node: ask, grant, cancel.
+    ///
+    /// Everything expensive is on a task of its own. `att.fetch` walks project directories and
+    /// reads a transcript, and doing that here would stop this node answering the hub's keystrokes
+    /// for as long as it took.
+    fn attachment(&mut self, message: &Value) {
+        let Some(rid) = message["rid"].as_u64() else {
+            return;
+        };
+        match message["t"].as_str().unwrap_or_default() {
+            "att.more" => {
+                if let Some(sending) = self.sending.get(&rid) {
+                    let _ = sending.credit.try_send(message["n"].as_u64().unwrap_or(1) as u32);
+                }
+            }
+            "att.stop" => {
+                self.sending.remove(&rid);
+            }
+            _ => self.send_attachment(rid, message),
+        }
+    }
+
+    fn send_attachment(&mut self, rid: u64, message: &Value) {
+        let (Some(pane), Some(id)) = (message["pane"].as_str(), message["id"].as_str()) else {
+            return;
+        };
+        self.sending.retain(|_, sending| !sending.credit.is_closed());
+        if self.sending.len() >= CONCURRENT_TRANSFERS {
+            debug!(
+                rid,
+                "refusing an attachment: this node is already sending as many as it will"
+            );
+            self.wire
+                .send_json(&json!({ "t": "att.error", "rid": rid, "code": "busy" }));
+            return;
+        }
+        let window = message["window"]
+            .as_u64()
+            .unwrap_or(1)
+            .clamp(1, u64::from(kampr_mesh::ATT_WINDOW)) as u32;
+        let (credit, granted) = mpsc::channel(kampr_mesh::ATT_WINDOW as usize);
+        let task = tokio::spawn(pump_attachment(AttachmentCtx {
+            node: self.node.clone(),
+            outbox: self.wire.outbox().clone(),
+            rid,
+            pane: pane.to_string(),
+            id: id.to_string(),
+            window,
+            granted,
+        }));
+        self.sending.insert(
+            rid,
+            Sending {
+                credit,
+                _task: crate::mesh::AbortOnDrop(task.abort_handle()),
+            },
+        );
     }
 
     fn unwatch(&mut self, pane: &str) {
@@ -976,7 +1072,7 @@ fn wire_role(role: Role) -> kampr_core::wire::Role {
     }
 }
 
-fn hello(node: &Node, device: &Device) -> Value {
+fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     let hello = ServerMsg::Hello(kampr_core::wire::Hello {
         protocol: PROTOCOL,
         node_id: node.config.node_id.clone(),
@@ -1002,6 +1098,12 @@ fn hello(node: &Node, device: &Device) -> Value {
     // A client that knows about the mesh can show a per-node latency and a version skew; one that
     // does not ignores the field and sees a herd it cannot tell apart, which is still correct.
     value["caps"]["mesh"] = json!(node.config.mesh.accept);
+    // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
+    // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
+    // and the point of that route is that bytes never share a queue with terminal frames.
+    if caller == Caller::Hub {
+        value["caps"]["attachments"] = json!(true);
+    }
     let tier = node.auth.tier();
     // A browser needs the application server key before it may call `pushManager.subscribe`, and
     // it is a public value — sending it with `hello` saves a round trip on the one path where a
@@ -1078,6 +1180,98 @@ fn offline_code(session: &crate::sessions::SessionNode) -> ErrorCode {
     } else {
         ErrorCode::NodeOffline
     }
+}
+
+struct AttachmentCtx {
+    node: Arc<Node>,
+    outbox: Arc<Outbox>,
+    rid: u64,
+    pane: String,
+    id: String,
+    window: u32,
+    granted: mpsc::Receiver<u32>,
+}
+
+/// One attachment, chunked towards a hub at the rate the hub asks for it.
+///
+/// **The ceiling is the transcript's own.** `attach::fetch` reads the decoded length off the
+/// record's base64 and refuses past 8 MiB *before* decoding, so a record claiming a gigabyte costs
+/// a comparison here exactly as it does on the local HTTP route — this path adds no second
+/// judgement about size and inherits that one.
+///
+/// **Chunks go down the bulk lane and everything else does not.** A frame enqueued while this is
+/// running overtakes every chunk already queued, so a pane on this link repaints during a transfer
+/// rather than after it. `att.end` rides the same lane as the chunks, or it would arrive first.
+async fn pump_attachment(ctx: AttachmentCtx) {
+    let AttachmentCtx {
+        node,
+        outbox,
+        rid,
+        pane,
+        id,
+        window,
+        mut granted,
+    } = ctx;
+    let refuse = |code: &str| {
+        outbox.push(Frame::plain(
+            json!({ "t": "att.error", "rid": rid, "code": code }).to_string(),
+        ));
+    };
+    // The same two file reads the local route makes, on the same blocking pool and for the same
+    // reason: a miss walks every project directory and reads both ends of up to 64 transcripts.
+    let read = tokio::task::spawn_blocking({
+        let node = node.clone();
+        move || {
+            let transcript = crate::http::transcript_of(&node, &pane)?;
+            Some(kampr_journal::attach::fetch(&node.journals(), &id, &transcript))
+        }
+    })
+    .await;
+    let found = match read {
+        Ok(Some(Ok(found))) => found,
+        Ok(Some(Err(kampr_journal::JournalError::TooLarge(bytes)))) => {
+            debug!(rid, bytes, "refusing a relayed attachment past the ceiling");
+            return refuse("too_large");
+        }
+        // Every other refusal is one answer here for the same reason it is one answer over HTTP:
+        // an escape, a stale id and an id for somebody else's transcript are the same sentence.
+        Ok(other) => {
+            debug!(rid, found = other.is_some(), "refusing a relayed attachment");
+            return refuse("not_found");
+        }
+        Err(_) => return refuse("not_found"),
+    };
+
+    let mut open = json!({
+        "t": "att.open", "rid": rid, "bytes": found.data.len(), "kind": found.kind,
+    });
+    if let Some(mime) = &found.mime {
+        open["mime"] = json!(mime);
+    }
+    if let Some(name) = &found.name {
+        open["name"] = json!(name);
+    }
+    if !outbox.push(Frame::plain(open.to_string())) {
+        return;
+    }
+    let mut credit = window;
+    for (seq, chunk) in found.data.chunks(kampr_mesh::ATT_CHUNK_BYTES).enumerate() {
+        while credit == 0 {
+            // `None` is the hub cancelling or the session ending. Either way nobody wants the
+            // rest of these bytes.
+            let Some(more) = granted.recv().await else { return };
+            credit += more;
+        }
+        credit -= 1;
+        let frame = json!({
+            "t": "att.chunk", "rid": rid, "seq": seq,
+            "b64": base64::engine::general_purpose::STANDARD.encode(chunk),
+        });
+        if !outbox.push_bulk(Frame::plain(frame.to_string())) {
+            return;
+        }
+    }
+    outbox.push_bulk(Frame::plain(json!({ "t": "att.end", "rid": rid }).to_string()));
 }
 
 /// Everything one pane's stream needs, and nothing else — so the pump can be driven in a test

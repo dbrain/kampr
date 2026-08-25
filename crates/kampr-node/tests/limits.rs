@@ -487,6 +487,7 @@ async fn a_herd_rebuilt_while_the_greeting_is_still_being_written_still_reaches_
         h.node.clone(),
         device,
         "test".into(),
+        kampr_node::session::Caller::Client,
     ));
     // One poll is all it takes to reach the database read: everything before it is synchronous,
     // and the herd the client has just been handed is already on the wire.

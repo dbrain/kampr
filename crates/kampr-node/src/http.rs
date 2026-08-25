@@ -568,6 +568,12 @@ async fn attachment(
     }
     let pane = format!("{node_id}/{local}");
     let id = id.to_string();
+    // A pane this node does not own is served by the node that does, over the mesh link that node
+    // dialled — it has no inbound path for this hub to fetch from (ADR 0007), so the bytes come
+    // back the way the frames do.
+    if node.resolve(&pane).is_none() {
+        return attach::relay(&node.peers, &pane, &id).await;
+    }
     // Both halves are file IO and the *first* is the expensive one: a miss walks every project
     // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
     // of megabytes of synchronous reads on a tokio worker for a request any device may make.
@@ -589,7 +595,7 @@ async fn attachment(
 /// The transcript this pane is on *now*, derived by the node from the same three handles
 /// `convo` uses. **The request has no say in it**, which is what makes it usable as the proof
 /// that an id belongs to the pane it was asked for.
-fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBuf> {
     let (session, local) = node.resolve(pane)?;
     let herd = node.herd();
     let entry = herd.pane(pane)?;

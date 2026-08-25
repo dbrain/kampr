@@ -1465,9 +1465,16 @@ async fn relayed_panes_the_last_client_unwatches_are_still_unwatched_upstream() 
     hub.stop();
 }
 
-/// The status of a `GET`, which is the whole answer when the question is whether a route can serve
-/// a pane at all.
-async fn get_status(url: &str, token: &str) -> u16 {
+/// A whole `GET`: the status, the headers as they came, and the bytes underneath them. A relayed
+/// attachment is served with a `Content-Type` this hub decided and a body it never held at once,
+/// so all three are the answer rather than only the first.
+struct Got {
+    status: u16,
+    headers: String,
+    body: Vec<u8>,
+}
+
+async fn get(url: &str, token: &str) -> Got {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let rest = url.trim_start_matches("http://");
     let (authority, path) = rest.split_once('/').expect("a path");
@@ -1482,20 +1489,35 @@ async fn get_status(url: &str, token: &str) -> u16 {
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.expect("read");
-    String::from_utf8_lossy(&response)
+    let split = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("a header block");
+    let headers = String::from_utf8_lossy(&response[..split]).to_string();
+    let status = headers
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse().ok())
-        .expect("a status line")
+        .expect("a status line");
+    Got {
+        status,
+        body: response[split + 4..].to_vec(),
+        headers,
+    }
 }
 
-/// A relayed pane's conversation crosses the hub; its attachments cannot. `/api/attachment`
-/// resolves the pane against the hub's *own* sessions and derives the transcript itself, so an id
-/// minted on the peer has no file behind it here and comes back as the one 404 every refusal wears
-/// — which reaches the operator as "the node no longer has this attachment" on a picture that is
-/// perfectly intact one hop away. A client handed an `att` renders a button for it, so relaying one
-/// is offering a control that cannot work. Both halves are measured here: the 404 first, so the
-/// promise is known to be unkeepable, then the absence of the promise.
+async fn get_status(url: &str, token: &str) -> u16 {
+    get(url, token).await.status
+}
+
+/// A hub serves a relayed attachment by asking the peer for it, so the promise it relays is only
+/// as good as the peer at the other end of that ask. **This peer never said it answers
+/// `att.fetch`** — the shape of every build from before that verb existed — so the id has nothing
+/// behind it here and comes back as the one 404 every refusal wears, which would reach the
+/// operator as "the node no longer has this attachment" on a picture that is perfectly intact one
+/// hop away. A client handed an `att` renders a button for it, so relaying one here is offering a
+/// control that cannot work. Both halves are measured: the 404 first, so the promise is known to
+/// be unkeepable, then the absence of the promise.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_relayed_pane_promises_no_attachment_this_hub_could_not_serve() {
     let hub_home = Home::new();
@@ -1520,6 +1542,10 @@ async fn a_relayed_pane_promises_no_attachment_this_hub_could_not_serve() {
         get_status(&format!("{}/api/attachment/{pane}/{id}", hub.origin), &token).await,
         404,
         "this hub can serve a peer's attachment after all, and the promise below is keepable",
+    );
+    assert!(
+        !hub.node.peers.can_serve_attachments(pane),
+        "a peer that has never claimed the verb was taken at a word it did not give",
     );
 
     let mut client = hub.connect().await;
@@ -1572,5 +1598,240 @@ async fn a_relayed_pane_promises_no_attachment_this_hub_could_not_serve() {
         "a relayed page carried the promise the live turn did not: {paged}",
     );
 
+    hub.stop();
+}
+
+/// The other half of the promise: a peer that **does** answer `att.fetch` keeps its `att`, and the
+/// hub serves the bytes behind it.
+///
+/// The hub has no inbound path to the peer (ADR 0007), so it cannot fetch over HTTP: it asks on
+/// the link the peer dialled and streams what comes back, a chunk at a time. What is measured here
+/// is the whole hop — the promise surviving the relay, the ask crossing the link, and a body that
+/// is byte for byte what the peer sent under a `Content-Type` **this hub** decided.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_serves_the_attachment_its_peer_promised_it_could() {
+    use base64::Engine;
+
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JSERVE", "laptop").await;
+    let pane = "01JSERVE/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JSERVE", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JSERVE", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| {
+        peers.herd().panes.iter().any(|p| p.id == pane) && peers.can_serve_attachments(pane)
+    })
+    .await;
+
+    let id = kampr_journal::attach::Locator {
+        agent: "claude".into(),
+        path: "projects/-home-u-demo/session.jsonl".into(),
+        offset: 0,
+        index: 0,
+        bytes: 68,
+    }
+    .encode();
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    send(
+        &mut client,
+        json!({ "t": "watch", "pane": pane, "scrollback": true, "conversation": true }),
+    )
+    .await;
+    assert_eq!(peer.next_but_ping().await["t"], "watch");
+    peer.say(json!({
+        "t": "convo.turn", "pane": pane, "turns": [{
+            "id": "549c13ed-c2b4-4013-b072-f26304a5bb6c",
+            "role": "user",
+            "blocks": [
+                { "b": "md", "text": "[image · png]",
+                  "att": { "id": id, "kind": "image", "mime": "image/png", "bytes": 68 } }
+            ]
+        }]
+    }))
+    .await;
+    let relayed = until(&mut client, "convo.turn", 10).await;
+    assert_eq!(
+        relayed["turns"][0]["blocks"][0]["att"]["id"], id,
+        "the hub dropped a promise it can keep: {relayed}",
+    );
+
+    // A PNG the peer will hand over in one chunk, and the sniffing path's only honest input.
+    let png = b"\x89PNG\r\n\x1a\n and then some bytes".to_vec();
+    let token = hub.token().await;
+    let asked = {
+        let url = format!("{}/api/attachment/{pane}/{id}", hub.origin);
+        tokio::spawn(async move { get(&url, &token).await })
+    };
+
+    let fetch = peer.next_but_ping().await;
+    assert_eq!(fetch["t"], "att.fetch", "{fetch}");
+    assert_eq!(fetch["pane"], pane);
+    assert_eq!(fetch["id"], id);
+    let rid = fetch["rid"].as_u64().expect("an rid");
+    peer.say(json!({
+        "t": "att.open", "rid": rid, "bytes": png.len(), "kind": "image", "mime": "image/png"
+    }))
+    .await;
+    peer.say(json!({
+        "t": "att.chunk", "rid": rid, "seq": 0,
+        "b64": base64::engine::general_purpose::STANDARD.encode(&png)
+    }))
+    .await;
+    peer.say(json!({ "t": "att.end", "rid": rid })).await;
+
+    let got = asked.await.expect("the request task");
+    assert_eq!(got.status, 200, "{}", got.headers);
+    assert_eq!(got.body, png, "the hub served different bytes: {}", got.headers);
+    assert!(
+        got.headers
+            .to_ascii_lowercase()
+            .contains("content-type: image/png"),
+        "{}",
+        got.headers,
+    );
+    hub.stop();
+}
+
+/// A peer that refuses is the same 404 a stale id gets from this hub's own transcripts. It has to
+/// be: the peer already answers every refusal but the ceiling identically, and a hub that turned
+/// one of them into a different status would put back the distinction that was removed there.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_attachment_a_peer_refuses_is_the_hubs_own_one_refusal() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JREFUSE", "laptop").await;
+    let pane = "01JREFUSE/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JREFUSE", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JREFUSE", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.can_serve_attachments(pane)).await;
+
+    let token = hub.token().await;
+    let refused = {
+        let url = format!("{}/api/attachment/{pane}/an-id", hub.origin);
+        let token = token.clone();
+        tokio::spawn(async move { get(&url, &token).await })
+    };
+    let rid = peer.next_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.say(json!({ "t": "att.error", "rid": rid, "code": "not_found" }))
+        .await;
+    let refused = refused.await.expect("the request task");
+
+    // The hub's own answer for an id that resolves to nothing here, asked of its own node id.
+    let local = format!("{}/w1:p1", hub.node.node_id());
+    let locally = get(&format!("{}/api/attachment/{local}/an-id", hub.origin), &token).await;
+    assert_eq!(refused.status, 404);
+    assert_eq!(
+        refused.body, locally.body,
+        "a relayed refusal is distinguishable from a local one",
+    );
+    hub.stop();
+}
+
+/// The hub asks for a chunk only once it has handed the last one downstream, so what it holds is
+/// the window and never the record. A peer that runs past the window is one this hub stops reading
+/// from — which is the thing that makes "the hub does not buffer an attachment" true rather than
+/// merely intended.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_pulls_a_peers_attachment_a_chunk_at_a_time() {
+    use base64::Engine;
+
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JCHUNK", "laptop").await;
+    let pane = "01JCHUNK/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JCHUNK", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JCHUNK", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.can_serve_attachments(pane)).await;
+
+    let chunks: Vec<Vec<u8>> = (0..6u8).map(|n| vec![n; 4096]).collect();
+    let total: usize = chunks.iter().map(Vec::len).sum();
+    let token = hub.token().await;
+    let asked = {
+        let url = format!("{}/api/attachment/{pane}/an-id", hub.origin);
+        tokio::spawn(async move { get(&url, &token).await })
+    };
+
+    let rid = peer.next_but_ping().await["rid"].as_u64().expect("an rid");
+    peer.say(json!({ "t": "att.open", "rid": rid, "bytes": total, "kind": "image", "mime": "image/png" }))
+        .await;
+    for (seq, chunk) in chunks.iter().enumerate() {
+        peer.say(json!({
+            "t": "att.chunk", "rid": rid, "seq": seq,
+            "b64": base64::engine::general_purpose::STANDARD.encode(chunk)
+        }))
+        .await;
+        let granted = peer.next_but_ping().await;
+        assert_eq!(
+            granted,
+            json!({ "t": "att.more", "rid": rid, "n": 1 }),
+            "chunk {seq} was taken without one being granted back, so the window only shrinks",
+        );
+    }
+    peer.say(json!({ "t": "att.end", "rid": rid })).await;
+
+    let got = asked.await.expect("the request task");
+    assert_eq!(got.status, 200, "{}", got.headers);
+    assert_eq!(got.body, chunks.concat());
+    hub.stop();
+}
+
+/// A peer's recorded media type is a string an agent wrote into a file on *another machine*, and
+/// the hub serves the answer from its own origin. Echoing it would put a document out of the
+/// origin the bundle's CSP is written for — the same trap the local route's allowlist exists for,
+/// one hop further away, and the allowlist has to be applied at the hop that serves the bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peers_media_type_is_run_through_this_hubs_own_allowlist() {
+    use base64::Engine;
+
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JMIME", "laptop").await;
+    let pane = "01JMIME/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JMIME", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JMIME", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.can_serve_attachments(pane)).await;
+
+    let token = hub.token().await;
+    let asked = {
+        let url = format!("{}/api/attachment/{pane}/an-id", hub.origin);
+        tokio::spawn(async move { get(&url, &token).await })
+    };
+    let rid = peer.next_but_ping().await["rid"].as_u64().expect("an rid");
+    let page = b"<script>alert(1)</script>".to_vec();
+    peer.say(json!({
+        "t": "att.open", "rid": rid, "bytes": page.len(),
+        "kind": "image", "mime": "text/html", "name": "../../evil.html"
+    }))
+    .await;
+    peer.say(json!({
+        "t": "att.chunk", "rid": rid, "seq": 0,
+        "b64": base64::engine::general_purpose::STANDARD.encode(&page)
+    }))
+    .await;
+    peer.say(json!({ "t": "att.end", "rid": rid })).await;
+
+    let got = asked.await.expect("the request task");
+    let headers = got.headers.to_ascii_lowercase();
+    assert_eq!(got.status, 200, "{}", got.headers);
+    assert!(
+        headers.contains("content-type: application/octet-stream"),
+        "the hub served a peer's `text/html` from its own origin: {}",
+        got.headers,
+    );
+    assert!(
+        headers.contains(r#"content-disposition: attachment; filename="evil.html""#),
+        "a peer's filename reached a header with its separators intact: {}",
+        got.headers,
+    );
     hub.stop();
 }

@@ -455,10 +455,51 @@ about which part is the pane anchors every check below on the wrong pane.
 - **The ceiling is 8 MiB decoded**, read off the record's base64 *before* anything is allocated, so a
   record claiming a gigabyte costs a comparison. It is between three and four times the largest
   attachment ever measured (#247).
-- **A pane on another node is not served here.** The route resolves the pane locally; an attachment
-  two hops away over the mesh is not carried today — **so a hub does not advertise one.** It strips
-  every `att` off the `convo` and `convo.turn` messages it relays for a peer's pane, leaving the
-  image marker's text and no button. A client attached to the peer directly still gets both.
+- **A pane on another node is served from the peer that owns it, over the link that peer dialled.**
+  The hub has no inbound path to a peer ([ADR 0007](./adr/0007-peers-dial-outbound-to-a-hub.md)), so
+  it cannot fetch this over HTTP; it asks on the mesh link instead and streams the answer back. The
+  response is the same shape a local one has, including the ceiling and the single `404`, and the
+  `Content-Type` is the **hub's** decision from the same allowlist — a peer that recorded
+  `text/html` gets `application/octet-stream` here too.
+- **A hub advertises the attachment only while it can serve it.** It strips every `att` off the
+  `convo` and `convo.turn` messages it relays for a peer's pane whenever that peer is offline,
+  unknown to this hub, or running a build whose `hello` does not claim `caps.attachments` —
+  leaving the image marker's text and no button. A client attached to the peer directly always gets
+  both.
+
+### `att.*` — the mesh link only
+
+Five messages carry an attachment from a peer to the hub relaying it. They are **not part of the
+client protocol**: a browser has the route above, and the reason that route is HTTP is that a 2.22
+MB record (#247) must not share a queue with terminal frames. A node answers `att.*` for a hub and
+ignores it from anything else, exactly as it ignores any other unknown `t`.
+
+```
+hub  → peer  { "t":"att.fetch", "rid":7, "pane":"01JNODE/w3:p2", "id":"att-7f3", "window":4 }
+peer → hub   { "t":"att.open",  "rid":7, "bytes":52831, "kind":"image", "mime":"image/png",
+                                          "name":"shot.png" }
+peer → hub   { "t":"att.chunk", "rid":7, "seq":0, "b64":"…" }        // ≤ 64 KiB decoded
+hub  → peer  { "t":"att.more",  "rid":7, "n":1 }
+peer → hub   { "t":"att.end",   "rid":7 }
+peer → hub   { "t":"att.error", "rid":7, "code":"not_found" }        // or "too_large", "busy"
+hub  → peer  { "t":"att.stop",  "rid":7 }
+```
+
+- **`rid` correlates**, the same way `manage`/`managed` does. A frame naming an `rid` nothing is
+  waiting for is dropped, not an error: an `att.stop` and the chunks it cancels cross in flight.
+- **The window is the whole of the flow control.** The peer may send `window` chunks before it is
+  asked for more, and the hub grants one back for each chunk it has handed downstream — so the hub
+  holds the window and never the record, and it pulls at the rate the client is reading at. A peer
+  that runs past its window is cut off.
+- **Chunks go down a lane every other frame overtakes.** A pane on the same link repaints during a
+  transfer rather than after it, and `att.end` rides that lane too or it would arrive first.
+- **The ceiling is enforced on `att.open`'s claim before a chunk is asked for**, and again on the
+  arithmetic as they arrive: a peer that sends more than it announced is cut off, and one that sends
+  less ends the body short of its `Content-Length`.
+- **`att.error` is one answer for the same reason `404` is.** `too_large` is the hub's `413`;
+  everything else, including a peer that is offline or never answers, is the hub's single `404`.
+- **`caps.attachments`** on a peer's `hello` is what tells a hub this build answers `att.fetch` at
+  all. Absent means no, which is what every build before this one says.
 
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.

@@ -1,9 +1,13 @@
 use std::path::Path;
 
+use axum::body::Body;
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
+use futures_util::{StreamExt, TryStreamExt};
+use kampr_journal::attach::MAX_BYTES;
 use kampr_journal::{Fetched, JournalError, Registry as Journals};
+use kampr_mesh::{FetchError, Peers};
 
 use crate::http::refuse;
 
@@ -25,43 +29,72 @@ const RENDERABLE: &[&str] = &[
 
 const OPAQUE: &str = "application/octet-stream";
 
+/// The one answer every refusal but the ceiling wears. An escape, a stale id and an id for
+/// somebody else's transcript must not be distinguishable from outside, and a pane one hop away
+/// over the mesh must not be either.
+fn missing() -> Response {
+    refuse(StatusCode::NOT_FOUND, "no such attachment")
+}
+
+fn past_the_ceiling() -> Response {
+    refuse(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "this attachment is larger than the node will serve",
+    )
+}
+
 pub fn serve(journals: &Journals, transcript: &Path, id: &str) -> Response {
     match kampr_journal::attach::fetch(journals, id, transcript) {
         Ok(found) => body(found),
         Err(JournalError::TooLarge(bytes)) => {
             tracing::debug!(bytes, "refusing an attachment past the ceiling");
-            refuse(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "this attachment is larger than the node will serve",
-            )
+            past_the_ceiling()
         }
-        // Every other refusal is one answer on purpose. An escape, a stale id and an id for
-        // somebody else's transcript must not be distinguishable from outside.
         Err(e) => {
             tracing::debug!(error = %e, "refusing an attachment");
-            refuse(StatusCode::NOT_FOUND, "no such attachment")
+            missing()
         }
     }
 }
 
-fn body(found: Fetched) -> Response {
-    let rendered = rendered_as(&found);
-    let content_type = rendered.unwrap_or(OPAQUE).to_string();
+/// What a record claims to be, which is all the response headers are ever derived from — and
+/// none of it is trusted: see [`rendered_as`].
+struct Claim<'a> {
+    kind: &'a str,
+    mime: Option<&'a str>,
+    name: Option<&'a str>,
+    bytes: u64,
+}
+
+/// The four headers an attachment is served under, decided from a record's claims and the first
+/// bytes of its body.
+///
+/// One implementation for both paths on purpose. A relayed attachment is described by the peer
+/// and served from *this* origin, so the allowlist that decides what may render has to be applied
+/// here rather than taken on trust — a peer that said `text/html` would otherwise get a document
+/// out of the hub's origin, past a CSP written for the bundle.
+fn headers(claim: &Claim<'_>, prefix: &[u8]) -> [(axum::http::HeaderName, String); 4] {
+    let rendered = rendered_as(claim, prefix);
     let disposition = match rendered {
         Some(_) => "inline".to_string(),
-        None => format!("attachment; filename=\"{}\"", filename(&found)),
+        None => format!("attachment; filename=\"{}\"", filename(claim)),
     };
-    (
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, content_type),
-            (CONTENT_LENGTH, found.data.len().to_string()),
-            (CONTENT_DISPOSITION, disposition),
-            (CACHE_CONTROL, "no-store".to_string()),
-        ],
-        found.data,
-    )
-        .into_response()
+    [
+        (CONTENT_TYPE, rendered.unwrap_or(OPAQUE).to_string()),
+        (CONTENT_LENGTH, claim.bytes.to_string()),
+        (CONTENT_DISPOSITION, disposition),
+        (CACHE_CONTROL, "no-store".to_string()),
+    ]
+}
+
+fn body(found: Fetched) -> Response {
+    let claim = Claim {
+        kind: &found.kind,
+        mime: found.mime.as_deref(),
+        name: found.name.as_deref(),
+        bytes: found.data.len() as u64,
+    };
+    (StatusCode::OK, headers(&claim, &found.data), found.data).into_response()
 }
 
 /// The type this response is served as, or `None` for bytes to download.
@@ -71,13 +104,13 @@ fn body(found: Fetched) -> Response {
 /// the case worth sniffing** — a pasted screenshot may carry no media type at all, and the
 /// `Content-Type` is what a client names the saved file from. Sniffing can only ever produce a
 /// type off the list above, so it widens what is shown without widening what is trusted.
-fn rendered_as(found: &Fetched) -> Option<&'static str> {
-    if found.kind != kampr_journal::attach::IMAGE {
+fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
+    if claim.kind != kampr_journal::attach::IMAGE {
         return None;
     }
-    match found.mime.as_deref() {
+    match claim.mime {
         Some(recorded) => RENDERABLE.iter().find(|m| **m == recorded).copied(),
-        None => sniff(&found.data),
+        None => sniff(prefix),
     }
 }
 
@@ -106,13 +139,74 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// The bytes behind an id on a pane this node does not own, pulled off the peer that does.
+///
+/// **The hub never holds the record.** It pulls a bounded window of chunks and hands each one to
+/// the response body, so what it spends is the window whatever the attachment's size is, and the
+/// rate it pulls at is the rate the client is reading at. A client that walks away drops the
+/// transfer, and the peer is told to stop rather than left streaming into nothing.
+///
+/// **The ceiling is enforced on the peer's claim before a chunk is asked for**, so a record
+/// claiming a gigabyte costs a comparison here exactly as it does locally — and again as the
+/// bytes arrive, because the claim came off the network.
+///
+/// **Every refusal but the ceiling is the one 404.** Offline, unknown pane, a peer that never
+/// answered and a stale id are the same sentence from outside; which one it was goes to the log.
+pub async fn relay(peers: &Peers, pane: &str, id: &str) -> Response {
+    let mut transfer = match peers.fetch_attachment(pane, id, MAX_BYTES).await {
+        Ok(transfer) => transfer,
+        Err(FetchError::TooLarge(bytes)) => {
+            tracing::debug!(pane, bytes, "refusing a peer's attachment past the ceiling");
+            return past_the_ceiling();
+        }
+        Err(e) => {
+            tracing::debug!(pane, error = %e, "refusing a peer's attachment");
+            return missing();
+        }
+    };
+    // The headers are decided from the first chunk as well as from the peer's claims, because a
+    // record with no recorded media type is sniffed — so the first chunk is held for exactly as
+    // long as it takes to write a header, and never a second one.
+    let first = match transfer.next_chunk().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(e)) => {
+            tracing::debug!(pane, error = %e, "a peer's attachment ended before its first chunk");
+            return missing();
+        }
+        None => return missing(),
+    };
+    let header = transfer.header().clone();
+    let claim = Claim {
+        kind: &header.kind,
+        mime: header.mime.as_deref(),
+        name: header.name.as_deref(),
+        bytes: header.bytes,
+    };
+    let headers = headers(&claim, &first);
+    let pane = pane.to_string();
+    let rest = futures_util::stream::unfold(transfer, |mut transfer| async move {
+        transfer.next_chunk().await.map(|chunk| (chunk, transfer))
+    });
+    // A truncation is visible to the client as a body shorter than the `Content-Length` it was
+    // promised, which is the honest end for a transfer that cannot be completed once the status
+    // line has gone out.
+    let body = futures_util::stream::once(async move { Ok(first) })
+        .chain(rest.map(move |chunk| {
+            chunk.map_err(|e| {
+                tracing::debug!(pane, error = %e, "a peer's attachment stopped mid-body");
+                std::io::Error::other(e.to_string())
+            })
+        }))
+        .map_ok(axum::body::Bytes::from);
+    (StatusCode::OK, headers, Body::from_stream(body)).into_response()
+}
+
 /// A name out of a transcript reaches a header and then a filesystem, so it is reduced to
 /// something that can be neither: no separators, no quotes, no control characters, and never
 /// empty.
-fn filename(found: &Fetched) -> String {
-    let safe: String = found
+fn filename(claim: &Claim<'_>) -> String {
+    let safe: String = claim
         .name
-        .as_deref()
         .unwrap_or_default()
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
@@ -122,9 +216,8 @@ fn filename(found: &Fetched) -> String {
     if !safe.is_empty() {
         return safe.to_string();
     }
-    let extension = found
+    let extension = claim
         .mime
-        .as_deref()
         .and_then(|m| m.rsplit('/').next())
         .filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric()))
         .unwrap_or("bin");

@@ -37,7 +37,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         }
     };
     for event in watcher.initial() {
-        if !emit(&wire, &global, event) {
+        if !emit(&peers, &wire, &global, event) {
             return;
         }
     }
@@ -60,7 +60,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
                 false => return,
             }
         }
-        if !emit(&wire, &global, event) {
+        if !emit(&peers, &wire, &global, event) {
             return;
         }
     }
@@ -73,11 +73,14 @@ fn resync(wire: &Wire, global: &str, watcher: &RemoteWatcher) -> bool {
     }
 }
 
-fn emit(wire: &Wire, global: &str, event: RemoteEvent) -> bool {
+fn emit(peers: &Peers, wire: &Wire, global: &str, event: RemoteEvent) -> bool {
     match event {
         RemoteEvent::Update(update) => wire.send_update(global, &update),
         RemoteEvent::Scrollback(doc) => wire.send_scrollback(global, &doc),
-        RemoteEvent::Passthrough(value) => wire.send_json(&without_attachment_promises(value, global)),
+        RemoteEvent::Passthrough(value) => match peers.can_serve_attachments(global) {
+            true => wire.send_json(&value),
+            false => wire.send_json(&without_attachment_promises(value, global)),
+        },
         // A peer's code is forwarded verbatim rather than narrowed to this build's vocabulary:
         // a newer peer may name one this hub has no variant for, and dropping it is the same
         // forward-compatibility failure as refusing an unknown `t`.
@@ -87,14 +90,18 @@ fn emit(wire: &Wire, global: &str, event: RemoteEvent) -> bool {
     }
 }
 
-/// **This hub cannot serve a peer's attachment.** `GET /api/attachment/{pane}/{id}` resolves the
-/// pane against this node's own sessions and derives the transcript itself, so a relayed pane has
-/// no file behind it here and every id the peer minted comes back as the one 404 every refusal
-/// wears — reaching the operator as a dead button on a picture that is intact one hop away.
+/// **The promise is this hop's to make, and it is only made when this hub can keep it.**
 ///
-/// A client renders a button for exactly as long as an `att` is present, so relaying one is
-/// offering a control that cannot work, which is the #233 shape. The marker text is the peer's own
-/// and stays; the promise is this hop's to make and does not.
+/// `GET /api/attachment/{pane}/{id}` pulls a relayed pane's bytes off the peer over the link the
+/// peer dialled, so the button works — but only while there *is* a link, and only if the build at
+/// the far end of it answers `att.fetch`. For a peer that is offline, one this hub has never met,
+/// and one running a build from before that verb, the id resolves to nothing here and comes back
+/// as the one 404 every refusal wears — reaching the operator as a dead button on a picture that
+/// is intact one hop away.
+///
+/// A client renders a button for exactly as long as an `att` is present, so relaying one in those
+/// three cases is offering a control that cannot work, which is the #233 shape. The marker text is
+/// the peer's own and stays either way: the image was there, this hub just cannot fetch it.
 fn without_attachment_promises(mut message: Value, global: &str) -> Value {
     let mut dropped = 0;
     let turns = message.get_mut("turns").and_then(Value::as_array_mut);
