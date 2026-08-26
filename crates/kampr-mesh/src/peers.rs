@@ -826,20 +826,25 @@ impl PeerLink {
     ) -> Result<RemoteWatcher, RelayError> {
         let mut panes = self.panes.lock().unwrap();
         if let Some(existing) = panes.get(pane).and_then(Weak::upgrade) {
-            let upgrade = conversation && !existing.conversation.load(Ordering::Relaxed);
             drop(panes);
-            // One `watch` per pane per link is what keeps the WAN hop carrying one copy, so the
-            // first viewer decides what the peer sends. A later one asking for the transcript has
-            // to say so, or it lands on the agent pane's default surface with nothing in it.
-            // Recorded only once the ask is away, because a request that was never sent has bought
-            // this pane nothing.
-            if upgrade {
+            // **Subscribed before the ask**, so a page sent in answer to it cannot arrive before
+            // there is a watcher to hand it to.
+            let watcher = RemoteWatcher::attach(existing.clone());
+            // One `watch` per pane per link is what keeps the WAN hop carrying one copy — but a
+            // grid can be replayed from the hub's shadow and a transcript cannot: `convo` is
+            // passed straight through to whoever is listening at the time, and the peer sends a
+            // page when the pane's pump *opens* a transcript and never again. So every joiner
+            // that wants the transcript re-asks, not only the first one to want it, and what
+            // comes back is a page the viewers who already had it merge by id. Recorded only once
+            // the ask is away, because a request that was never sent has bought this pane
+            // nothing.
+            if conversation {
                 self.request(json!({
                     "t": "watch", "pane": pane, "scrollback": true, "conversation": true
                 }))?;
                 existing.conversation.store(true, Ordering::Relaxed);
             }
-            return Ok(RemoteWatcher::attach(existing));
+            return Ok(watcher);
         }
         let (tx, _) = broadcast::channel(fanout);
         let remote = Arc::new(RemotePane {
@@ -852,10 +857,11 @@ impl PeerLink {
         });
         panes.insert(pane.to_string(), Arc::downgrade(&remote));
         drop(panes);
+        let watcher = RemoteWatcher::attach(remote);
         self.request(json!({
             "t": "watch", "pane": pane, "scrollback": true, "conversation": conversation
         }))?;
-        Ok(RemoteWatcher::attach(remote))
+        Ok(watcher)
     }
 
     fn hold(&self, pane: &str) -> Option<PeerHold> {

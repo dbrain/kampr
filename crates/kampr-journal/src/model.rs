@@ -102,7 +102,16 @@ impl Turn {
         }
     }
 
-    pub fn tool_block_mut(&mut self) -> Option<&mut Block> {
-        self.blocks.iter_mut().find(|b| matches!(b, Block::Tool { .. }))
+    /// The tool card at `at`, when that is what sits there.
+    ///
+    /// **A turn can hold several.** Claude emits parallel `tool_use` blocks in one assistant
+    /// record and their results come back separately, in whatever order the calls finish — so a
+    /// result that took the *first* card put its state and its line count on somebody else's
+    /// tool, and left its own running for ever. Every parser records where its call's card went.
+    pub fn tool_block_mut(&mut self, at: usize) -> Option<&mut Block> {
+        match self.blocks.get_mut(at) {
+            block @ Some(Block::Tool { .. }) => block,
+            _ => None,
+        }
     }
 }

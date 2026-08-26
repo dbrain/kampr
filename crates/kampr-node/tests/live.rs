@@ -3990,6 +3990,25 @@ impl Harnessed {
         std::fs::write(self.session_file(pid), record.to_string()).unwrap();
     }
 
+    /// A further turn on a transcript that is already open, which is what the follow tick sends
+    /// as a `convo.turn` rather than as a page.
+    fn append(&self, id: &str, uuid: &str, text: &str) {
+        let at = time::OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let record = json!({
+            "type": "assistant", "uuid": uuid, "cwd": self.cwd, "timestamp": at,
+            "message": { "content": [ { "type": "text", "text": text } ] },
+        });
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.project.join(format!("{id}.jsonl")))
+            .unwrap();
+        std::io::Write::write_all(&mut file, format!("{record}\n").as_bytes()).unwrap();
+    }
+
     /// A one-turn transcript for a session, stamped `offset` seconds from now — so a test can put
     /// another run's transcript *ahead* of the one the pane is really on.
     fn transcript(&self, id: &str, text: &str, offset: i64) {
@@ -4088,10 +4107,174 @@ async fn a_pane_shows_the_session_its_own_process_is_on_and_moves_when_it_restar
 
     // `/clear` is the same move without a new process: claude rewrites `sessionId` in place in
     // `~/.claude/sessions/<pid>.json` and opens a new transcript under the same pid, so nothing
-    // about the pane changes at all — measured against claude 2.1.239.
+    // about the pane changes at all (#259). `/compact` does neither and never moves a pane.
     fixture.announce(second, "33333333-3333-4333-8333-333333333333");
     fixture.transcript("33333333-3333-4333-8333-333333333333", "AFTER CLEAR", 0);
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// The same defect one screen away: the transcript moves while nobody is watching the pane.
+///
+/// **The withdrawal lives with the pump and the conversation lives with the client, and the two
+/// have different lifetimes.** A pump is created by `watch` and aborted by `unwatch` — which is
+/// what leaving a pane's screen does — while the client's turns are kept for the life of the app.
+/// So a `/clear` between leaving a pane and coming back is served by a pump that has never shown
+/// this client anything, withdraws nothing, and sends a page whose ids match none of what is on
+/// the screen: the new conversation lands *above* the old one and the panel reads as though it
+/// never updated.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_that_moved_while_the_pane_was_unwatched_is_still_taken_off_the_client() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("unwatched", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let turns = opening["turns"].as_array().expect("turns").clone();
+    assert_eq!(turns[0]["blocks"][0]["text"], "FIRST SESSION", "{opening}");
+    let mut stale: Vec<String> = turns
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    // The conversation goes on after its first page, and a turn that arrived as a revision is on
+    // the client exactly as firmly as one that arrived in the page.
+    fixture.append(
+        "11111111-1111-4111-8111-111111111111",
+        "first-session-2",
+        "STILL THE FIRST SESSION",
+    );
+    let grown = until_pane(&mut socket, "convo.turn", &pane, 25).await;
+    assert_eq!(grown["turns"][0]["id"], "first-session-2", "{grown}");
+    stale.push("first-session-2".to_string());
+
+    // The operator leaves the pane's screen. `AppState` unwatches, and the client keeps every
+    // turn it was ever sent — `paneStates` is never pruned.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    // And `/clear`s in the terminal while the phone is on some other screen.
+    fixture.announce(pid, "22222222-2222-4222-8222-222222222222");
+    fixture.transcript("22222222-2222-4222-8222-222222222222", "AFTER CLEAR", 0);
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// The half a withdrawal cannot reach: a client that comes back on a **different socket**.
+///
+/// The node's record of what a client is holding lives with that client's session, and a
+/// reconnecting phone gets a new one — `KamprConnection` re-watches every pane it holds and
+/// `paneStates` survives the drop, so the turns are still on the screen and the node has no way to
+/// name them. Server-side memory cannot close this either: the node itself restarts, and a client
+/// that reconnects to a restarted node is in exactly the same position. So the page says so, and
+/// the client drops what it holds for the pane before applying it. Additive: a build that ignores
+/// the field behaves as it does today.
+///
+/// The negative is the other half of the claim. `convo.load` answers with older slices of the
+/// *same* transcript and those must merge, or paging backwards would throw away the page above.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_a_reconnecting_client_could_not_have_been_told_about_replaces_what_it_holds() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("reconnect", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    assert_eq!(opening["turns"][0]["blocks"][0]["text"], "FIRST SESSION");
+    assert_eq!(
+        opening["fresh"], true,
+        "a first page is a conversation starting, and the node cannot know what this socket \
+         arrived holding: {opening}"
+    );
+
+    let cursor = opening["cursor"].as_str().expect("a cursor").to_string();
+    send(
+        &mut socket,
+        json!({ "t": "convo.load", "pane": pane, "before": cursor }),
+    )
+    .await;
+    let older = until_pane(&mut socket, "convo", &pane, 15).await;
+    assert!(
+        older["fresh"].is_null(),
+        "paging backwards through one transcript must merge, or the page above it goes: {older}"
+    );
+
+    // The phone goes to sleep, `/clear` happens in the terminal, and the phone comes back on a
+    // socket this node has never seen.
+    drop(socket);
+    fixture.announce(pid, "22222222-2222-4222-8222-222222222222");
+    fixture.transcript("22222222-2222-4222-8222-222222222222", "AFTER CLEAR", 0);
+
+    let mut back = h.connect(&token).await;
+    until(&mut back, "hello", 10).await;
+    send(
+        &mut back,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let after = until_pane(&mut back, "convo", &pane, 25).await;
+    assert_eq!(after["turns"][0]["blocks"][0]["text"], "AFTER CLEAR", "{after}");
+    assert_eq!(
+        after["fresh"], true,
+        "the old conversation is still on this client and nothing has told it to let go: {after}"
+    );
 }
 
 /// Waits for the pane to move to the conversation whose only turn reads `text`, and answers with

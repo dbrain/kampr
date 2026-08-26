@@ -115,6 +115,7 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
         peer,
         caller,
         panes: HashMap::new(),
+        held: HashMap::new(),
         sending: HashMap::new(),
         unreadable: 0,
     };
@@ -278,6 +279,9 @@ struct Session {
     peer: String,
     caller: Caller,
     panes: HashMap<String, PaneHandle>,
+    /// What this client is holding from each pane's conversation, kept past the pump that sent it
+    /// and past the `unwatch` that stopped the pump. See [`convo::Held`].
+    held: HashMap<String, convo::Held>,
     sending: HashMap<u64, Sending>,
     unreadable: u32,
 }
@@ -513,6 +517,11 @@ impl Session {
         let convo = convo::open();
         if conversation {
             let provider = session.provider.clone();
+            let held = self
+                .held
+                .entry(pane.to_string())
+                .or_insert_with(convo::held)
+                .clone();
             tasks.push(tokio::spawn(convo::pump_convo(ConvoCtx {
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
@@ -522,6 +531,7 @@ impl Session {
                 global: pane.to_string(),
                 local,
                 journal: convo.clone(),
+                held,
             })));
         }
         self.panes.insert(
@@ -604,7 +614,8 @@ impl Session {
         let page = self
             .panes
             .get(pane)
-            .and_then(|handle| convo::page(&handle.convo, pane, before));
+            // Older turns from the transcript already on the screen: a page that merges.
+            .and_then(|handle| convo::page(&handle.convo, pane, before, false));
         match page {
             Some(page) => {
                 self.wire.send(&page);

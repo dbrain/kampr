@@ -13,7 +13,8 @@ const MAX_CANDIDATES: usize = 64;
 
 /// How far into a transcript to look for the working directory it declares. Claude writes `cwd`
 /// on its first conversational record rather than on the header records above it, and a single
-/// record can be large, so the byte bound is what keeps a search off a 40 MB file.
+/// record can be large, so the byte bound is what keeps a search off a 40 MB file. A record wider
+/// than the whole budget is real and measured (#260) — see [`Silent`] for what that means.
 const HEAD_LINES: usize = 40;
 const HEAD_BYTES: usize = 256 * 1024;
 
@@ -106,6 +107,25 @@ pub fn head(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// What a head that names no working directory at all is taken to mean.
+///
+/// **"No directory found" is as often "could not see that far".** A transcript whose first
+/// conversational record carries a pasted image is one record wider than the whole head budget —
+/// 288 KB against 256 KB, measured on a live 13.5 MB transcript (#260) — so its `cwd` sits past
+/// the window and every record the head *can* parse is a header that carries none.
+///
+/// Where the directory the candidate sits in was itself derived from the working directory,
+/// claude's own filing already answers the question and a head that says nothing does not
+/// contradict it. Where the search is sweeping directories that say nothing — codex's flat
+/// `sessions/`, and the fallback across every project — the head is the only evidence there is,
+/// and silence has to be a refusal. A head that names a *different* directory is refused either
+/// way: that is a contradiction rather than a silence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Silent {
+    Refuse,
+    Belongs,
+}
+
 /// The newest candidate whose own records name `cwd`, out of those still being written after
 /// `since`. Verifying rather than trusting a derived filename is what stops a near-miss serving a
 /// different project's conversation.
@@ -126,6 +146,7 @@ pub fn newest_declaring(
     candidates: Vec<PathBuf>,
     cwd: &Path,
     since: Option<SystemTime>,
+    silent: Silent,
     declared: impl Fn(&Value) -> Option<String>,
 ) -> Option<PathBuf> {
     let wanted = cwd.to_string_lossy();
@@ -133,7 +154,7 @@ pub fn newest_declaring(
     let mut matches: Vec<(String, SystemTime, PathBuf)> = newest_first(candidates)
         .into_iter()
         .filter_map(|path| {
-            if !head(&path).iter().any(|r| declared(r).as_deref() == Some(wanted)) {
+            if !belongs(&head(&path), wanted, silent, &declared) {
                 return None;
             }
             let stamp = latest_stamp(&path);
@@ -146,6 +167,23 @@ pub fn newest_declaring(
         .collect();
     matches.sort();
     matches.pop().map(|(_, _, path)| path)
+}
+
+fn belongs(
+    head: &[Value],
+    wanted: &str,
+    silent: Silent,
+    declared: &impl Fn(&Value) -> Option<String>,
+) -> bool {
+    let mut said = false;
+    for record in head {
+        match declared(record) {
+            Some(cwd) if cwd == wanted => return true,
+            Some(_) => said = true,
+            None => {}
+        }
+    }
+    !said && silent == Silent::Belongs
 }
 
 pub fn not_found(cwd: &Path) -> JournalError {

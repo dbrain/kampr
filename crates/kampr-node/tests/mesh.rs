@@ -1320,6 +1320,79 @@ async fn a_second_viewer_asking_for_the_conversation_gets_an_upgrade_watch() {
     hub.stop();
 }
 
+/// The surviving half of that fix, and the one the operator actually meets.
+///
+/// The upgrade above fires only when the hub's single upstream watch is *not already* carrying
+/// the transcript. When it is — a second phone on a pane the first one opened, and every
+/// `resync` — nothing crosses the link at all, and the joiner is attached to a stream whose page
+/// has already gone by. A page is sent when the pane's pump **opens** a transcript and never
+/// again, so there is nothing later to catch: agent panes open on the conversation (ADR 0005) and
+/// the joiner lands on it empty, or on turns it is still holding from before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_joining_a_relayed_conversation_another_client_already_has_is_sent_one() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JJOIN", "agentic").await;
+    let pane = "01JJOIN/w1:p1";
+    peer.advertise(&[("01JJOIN", "agentic")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let page = |text: &str| {
+        json!({
+            "t": "convo", "pane": pane, "cursor": "t1", "more": false,
+            "turns": [{ "id": "t1", "role": "assistant", "blocks": [{ "b": "md", "text": text }] }],
+        })
+    };
+
+    let mut first = hub.connect().await;
+    until(&mut first, "hello", 10).await;
+    send(
+        &mut first,
+        json!({ "t": "watch", "pane": pane, "scrollback": true, "conversation": true }),
+    )
+    .await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["conversation"], true, "{asked}");
+    peer.say(page("THE CONVERSATION")).await;
+    let served = until(&mut first, "convo", 10).await;
+    assert_eq!(served["turns"][0]["blocks"][0]["text"], "THE CONVERSATION");
+
+    let mut joiner = hub.connect().await;
+    until(&mut joiner, "hello", 10).await;
+    send(
+        &mut joiner,
+        json!({ "t": "watch", "pane": pane, "scrollback": true, "conversation": true }),
+    )
+    .await;
+    let again = peer.next_but_ping().await;
+    assert_eq!(again["t"], "watch", "the peer was asked nothing: {again}");
+    assert_eq!(again["pane"], pane, "{again}");
+    assert_eq!(
+        again["conversation"], true,
+        "a joiner wanting the transcript has to make the peer page again, because the page it \
+         would have caught was sent before it was listening: {again}",
+    );
+    peer.say(page("THE CONVERSATION")).await;
+    let joined = until(&mut joiner, "convo", 10).await;
+    assert_eq!(joined["turns"][0]["blocks"][0]["text"], "THE CONVERSATION");
+    assert_eq!(
+        joined["fresh"], true,
+        "the joiner may be a phone that reconnected still holding a conversation this pane has \
+         left, and only this hop knows it has been sent nothing yet: {joined}",
+    );
+    // The viewer that was already here is not starting a conversation — it is being sent the page
+    // again on somebody else's account, and it merges by id.
+    let repeated = until(&mut first, "convo", 10).await;
+    assert!(
+        repeated["fresh"].is_null(),
+        "a client that already has the page would throw away everything it had paged back \
+         through: {repeated}",
+    );
+
+    hub.stop();
+}
+
 /// The same revocation from the other end of the herd: an operator with a phone rather than a
 /// shell, spending a device token on the hub's own API. This one must not wait for a keepalive at
 /// all — the handler ends the link itself — so the test is armed just after a tick, where a hub

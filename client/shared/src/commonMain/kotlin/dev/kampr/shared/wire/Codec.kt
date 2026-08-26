@@ -78,6 +78,7 @@ object Wire {
                 cursor = obj.str("cursor"),
                 more = obj.bool("more") ?: false,
                 turns = obj.decodeList<Turn>("turns"),
+                fresh = obj.bool("fresh") ?: false,
             )
             "convo.turn" -> ServerMsg.ConvoTurn(
                 pane = obj.str("pane") ?: return null,

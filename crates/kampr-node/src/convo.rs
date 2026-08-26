@@ -28,7 +28,7 @@ const POLL: Duration = Duration::from_millis(400);
 const LIVE_POLL: Duration = Duration::from_millis(200);
 
 /// How often the pane is asked which transcript it is on *now*. `/clear` opens a new file under
-/// the same working directory and nothing announces it — but deriving the answer reads
+/// the same working directory and nothing announces it (#259) — but deriving the answer reads
 /// directories, so it does not happen at the follow rate.
 const RESOLVE_EVERY: Duration = Duration::from_secs(15);
 
@@ -45,6 +45,20 @@ const FAST_RETRIES: u32 = 5;
 pub type Open = Arc<Mutex<Option<Box<dyn Journal>>>>;
 
 pub fn open() -> Open {
+    Arc::new(Mutex::new(None))
+}
+
+/// The transcript this client is holding turns from, and their ids.
+///
+/// **Kept by the client rather than by the pump, because the two have different lifetimes.** A
+/// pump is created by `watch` and aborted by `unwatch` — which is what leaving a pane's screen
+/// does — while the turns already drawn live as long as the app does: nothing on the client
+/// prunes a pane it has stopped watching. A transcript that moves in that gap is therefore served
+/// by a pump that has shown this client nothing and would withdraw nothing, and the new page
+/// lands above a conversation that is still on the screen. See [`withdraw`].
+pub type Held = Arc<Mutex<Option<(PathBuf, Vec<String>)>>>;
+
+pub fn held() -> Held {
     Arc::new(Mutex::new(None))
 }
 
@@ -83,9 +97,13 @@ pub fn identity(provider: &HerdrProvider, local: &str) -> Identity {
 
 /// A page of turns running backwards from `before`, or from the newest turn when it is `None`.
 /// `None` means this pane has no transcript open at all.
-pub fn page(journal: &Open, pane: &str, before: Option<&str>) -> Option<ServerMsg> {
+pub fn page(journal: &Open, pane: &str, before: Option<&str>, fresh: bool) -> Option<ServerMsg> {
     let guard = journal.lock().unwrap();
-    Some(ServerMsg::convo(pane, guard.as_ref()?.page_before(before, PAGE)))
+    Some(ServerMsg::convo(
+        pane,
+        guard.as_ref()?.page_before(before, PAGE),
+        fresh,
+    ))
 }
 
 /// What a pane has to keep for its conversation to be the same conversation: the harness, the
@@ -109,6 +127,7 @@ pub struct ConvoCtx {
     pub global: String,
     pub local: String,
     pub journal: Open,
+    pub held: Held,
 }
 
 /// One pane's transcript for one client: the initial page, then the tail.
@@ -126,6 +145,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         global,
         local,
         journal,
+        held,
     } = ctx;
 
     let mut follow = tokio::time::interval(POLL);
@@ -144,9 +164,6 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut due = true;
     let mut misses = 0u32;
     let mut live = Watch::default();
-    // The transcript the client is holding turns from, and their ids, from the moment this pump
-    // let go of it. See [`withdraw`].
-    let mut shown: Option<(PathBuf, Vec<String>)> = None;
     let mut was_working = false;
 
     loop {
@@ -160,10 +177,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // record and *then* goes idle, so withdrawing before that read leaves the client with
         // neither the preview nor its replacement for as long as the follow tick takes to notice.
         if (!working || opened.is_none()) && live.showing() {
-            if !flush(&journal, &wire, &global).await {
+            if !flush(&journal, &wire, &global, &held).await {
                 return;
             }
-            if send_live(&wire, &global, live.stop()).is_err() {
+            if send_live(&wire, &global, live.stop(), &held).is_err() {
                 return;
             }
         }
@@ -174,7 +191,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
             handle = Some(now.clone());
             opened = None;
-            shown = close(&journal).or(shown);
+            release(&journal, &held);
             due = true;
             misses = 0;
         }
@@ -194,7 +211,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
-                    if !withdraw(&wire, &global, &mut shown, fresh.path()) {
+                    // What the client is holding, when this node knows: a page for the transcript
+                    // it is already showing merges into it, and every other page replaces it.
+                    let replaces = held
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_none_or(|(path, _)| path != fresh.path());
+                    if !withdraw(&wire, &global, &held, fresh.path()) {
                         return;
                     }
                     opened = Some(fresh.path().to_path_buf());
@@ -202,10 +226,11 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     // The first read is the page the client is about to be sent, so it must not
                     // also arrive behind it as a revision.
                     let _ = drain(&journal).await;
-                    match page(&journal, &global, None) {
+                    match page(&journal, &global, None, replaces) {
                         Some(first) if wire.send(&first) => {}
                         _ => return,
                     }
+                    *held.lock().unwrap() = showing(&journal);
                 }
             }
         }
@@ -214,6 +239,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             _ = follow.tick() => {
                 match drain(&journal).await {
                     Ok(turns) if !turns.is_empty() => {
+                        holding(&held, &turns);
                         let revised = ServerMsg::ConvoTurn { pane: global.clone(), turns };
                         if !wire.send(&revised) {
                             return;
@@ -223,7 +249,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     Err(e) => {
                         debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
                         opened = None;
-                        shown = close(&journal).or(shown);
+                        release(&journal, &held);
                         due = true;
                     }
                 }
@@ -240,7 +266,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     }
                     None => live.stop(),
                 };
-                if send_live(&wire, &global, change).is_err() {
+                if send_live(&wire, &global, change, &held).is_err() {
                     return;
                 }
             }
@@ -249,7 +275,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 let latest = resolve(&journals, &now);
                 if latest.as_deref().map(Journal::path) != opened.as_deref() {
                     opened = None;
-                    shown = close(&journal).or(shown);
+                    release(&journal, &held);
                 }
                 due = true;
             }
@@ -264,24 +290,28 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 
 /// Sends whatever the transcript has grown by, if anything. A read that fails is left to the
 /// follow tick, which re-derives the transcript rather than dropping a turn.
-async fn flush(journal: &Open, wire: &Wire, pane: &str) -> bool {
+async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> bool {
     match drain(journal).await {
-        Ok(turns) if !turns.is_empty() => wire.send(&ServerMsg::ConvoTurn {
-            pane: pane.to_string(),
-            turns,
-        }),
+        Ok(turns) if !turns.is_empty() => {
+            holding(held, &turns);
+            wire.send(&ServerMsg::ConvoTurn {
+                pane: pane.to_string(),
+                turns,
+            })
+        }
         _ => true,
     }
 }
 
 /// A live turn is a *revision* like any other, which is what lets it be withdrawn: the same id
 /// with no blocks, and a client that matches by id and replaces is rid of it.
-fn send_live(wire: &Wire, pane: &str, change: Change) -> Result<(), ()> {
+fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(), ()> {
     let turns = match change {
         Change::Held => return Ok(()),
         Change::Show(turn) => vec![turn],
         Change::Retire => vec![kampr_journal::retired()],
     };
+    holding(held, &turns);
     match wire.send(&ServerMsg::ConvoTurn {
         pane: pane.to_string(),
         turns,
@@ -323,10 +353,39 @@ fn resolve(journals: &Journals, handle: &Handle) -> Option<Box<dyn Journal>> {
         .flatten()
 }
 
-/// Lets go of the open transcript and reports what the client is left holding from it.
-fn close(journal: &Open) -> Option<(PathBuf, Vec<String>)> {
-    let old = journal.lock().unwrap().take()?;
-    Some((old.path().to_path_buf(), old.turn_ids()))
+/// Lets go of the open transcript and records what the client is left holding from it.
+///
+/// A transcript that was never open leaves the record alone: what the client is holding is then
+/// whatever an earlier one put there, and it is still on the screen.
+fn release(journal: &Open, held: &Held) {
+    let Some(old) = journal.lock().unwrap().take() else {
+        return;
+    };
+    *held.lock().unwrap() = Some((old.path().to_path_buf(), old.turn_ids()));
+}
+
+/// What the client is holding from the transcript that is open *now*.
+fn showing(journal: &Open) -> Option<(PathBuf, Vec<String>)> {
+    let guard = journal.lock().unwrap();
+    let open = guard.as_ref()?;
+    Some((open.path().to_path_buf(), open.turn_ids()))
+}
+
+/// Adds to what the client is holding, for as long as it is holding the open transcript.
+///
+/// The record is kept current at every send rather than only when a transcript is closed, because
+/// the pump is *aborted* as often as it finishes: `unwatch` and a re-watch both stop it where it
+/// stands, and a record written only on the way out would never be written at all.
+fn holding(held: &Held, turns: &[Turn]) {
+    let mut guard = held.lock().unwrap();
+    let Some((_, ids)) = guard.as_mut() else {
+        return;
+    };
+    for turn in turns {
+        if !ids.contains(&turn.id) {
+            ids.push(turn.id.clone());
+        }
+    }
 }
 
 /// Takes the previous conversation off the client before a different one is sent.
@@ -336,8 +395,8 @@ fn close(journal: &Open) -> Option<(PathBuf, Vec<String>)> {
 /// above the old conversation instead of in place of it, which reads exactly like the panel
 /// refusing to update. Withdrawing first is the existing retirement mechanism applied to the
 /// whole conversation: a turn carrying no blocks is not drawn.
-fn withdraw(wire: &Wire, pane: &str, shown: &mut Option<(PathBuf, Vec<String>)>, fresh: &Path) -> bool {
-    let Some((path, ids)) = shown.take() else {
+fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
+    let Some((path, ids)) = held.lock().unwrap().take() else {
         return true;
     };
     if path == fresh || ids.is_empty() {

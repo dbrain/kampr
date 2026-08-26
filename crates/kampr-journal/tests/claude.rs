@@ -312,3 +312,65 @@ fn image_bytes_never_reach_the_wire() {
         "a screenshot is megabytes and the websocket carries it to a phone: {wire}"
     );
 }
+
+/// Claude emits several `tool_use` blocks in one assistant record and the results come back in
+/// separate records, in whatever order the calls finish — so a result has to settle onto the card
+/// its *own* call opened. Taking the first `Block::Tool` in the turn put every result on the first
+/// card: the second tool's state, its line count and its diff all landed on the first one, and the
+/// first tool's own result was overwritten by whichever came last.
+#[test]
+fn parallel_tool_calls_each_settle_onto_their_own_card() {
+    let calls = serde_json::json!({
+        "type": "assistant", "uuid": "p1", "timestamp": "2026-08-26T01:00:00.000Z",
+        "message": { "content": [
+            { "type": "tool_use", "id": "toolu_a", "name": "Read",
+              "input": { "file_path": "/home/u/demo/notes.md" } },
+            { "type": "tool_use", "id": "toolu_b", "name": "Grep",
+              "input": { "pattern": "needle" } }
+        ] }
+    });
+    // The second call answers first, which is the whole point of running them in parallel.
+    let grep = serde_json::json!({
+        "type": "user", "uuid": "p2", "timestamp": "2026-08-26T01:00:01.000Z",
+        "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "toolu_b", "content": "one\ntwo\nthree" }
+        ] }
+    });
+    let read = serde_json::json!({
+        "type": "user", "uuid": "p3", "timestamp": "2026-08-26T01:00:02.000Z",
+        "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "toolu_a", "content": "no such file",
+              "is_error": true }
+        ] }
+    });
+    let mut scratch = scratch_claude("parallel", &[calls, grep, read]);
+    let turns = scratch.turns();
+
+    let turn = turns.iter().find(|t| t.id == "p1").expect("the calling turn");
+    let cards: Vec<&Block> = turn
+        .blocks
+        .iter()
+        .filter(|b| matches!(b, Block::Tool { .. }))
+        .collect();
+    assert_eq!(cards.len(), 2, "one card per call: {:?}", turn.blocks);
+    assert_eq!(
+        cards[0],
+        &Block::Tool {
+            name: "Read".into(),
+            summary: Some("/home/u/demo/notes.md".into()),
+            lines: Some(1),
+            state: ToolState::Error,
+        },
+        "the failing Read took the Grep's three lines and its success"
+    );
+    assert_eq!(
+        cards[1],
+        &Block::Tool {
+            name: "Grep".into(),
+            summary: Some("needle".into()),
+            lines: Some(3),
+            state: ToolState::Done,
+        },
+        "the Grep never settled at all"
+    );
+}

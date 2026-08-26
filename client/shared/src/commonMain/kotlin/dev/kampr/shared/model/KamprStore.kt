@@ -170,7 +170,15 @@ class KamprStore {
             is ServerMsg.GridReset -> pane(msg.pane).applyReset(msg)
             is ServerMsg.GridPatch -> pane(msg.pane).applyPatch(msg)
             is ServerMsg.Scrollback -> pane(msg.pane).applyScrollback(msg)
-            is ServerMsg.Convo -> pane(msg.pane).applyConvo(msg)
+            // A page merges by id, which is what lets `convo.load` prepend older slices of the
+            // same transcript — and what leaves a conversation the pane has left sitting under
+            // the one it moved to. `fresh` is the node saying this page is a different
+            // transcript in a case where it cannot name the turns to withdraw: a socket it has
+            // never seen, because this client reconnected or that node restarted.
+            is ServerMsg.Convo -> pane(msg.pane).let { pane ->
+                if (msg.fresh) pane.turns.clear()
+                pane.applyConvo(msg)
+            }
             is ServerMsg.ConvoTurn -> pane(msg.pane).applyConvoTurn(msg)
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes

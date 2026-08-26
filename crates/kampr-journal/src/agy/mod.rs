@@ -100,6 +100,7 @@ impl JournalAdapter for AgyAdapter {
 #[derive(Debug)]
 struct Pending {
     turn: String,
+    card: usize,
     target: Option<String>,
 }
 
@@ -181,6 +182,7 @@ impl AgyParser {
 
     fn call(&mut self, call: ToolCall, id: String, at: Option<String>) {
         let mut turn = Turn::new(id.clone(), Role::Assistant, at);
+        let card = turn.blocks.len();
         turn.blocks.push(Block::Tool {
             summary: summarise(&call.args),
             lines: None,
@@ -195,6 +197,7 @@ impl AgyParser {
         }
         self.pending.push_back(Pending {
             turn: id,
+            card,
             target: arg(&call.args, "TargetFile").map(str::to_string),
         });
         self.store.push(turn);
@@ -210,7 +213,7 @@ impl AgyParser {
         let Some(turn) = self.store.revise(&pending.turn) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut() {
+        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(pending.card) {
             *state = if failed { ToolState::Error } else { ToolState::Done };
             *lines = count_lines(body);
         }

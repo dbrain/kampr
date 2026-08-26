@@ -229,6 +229,11 @@ sealed interface ServerMsg {
         val cursor: String?,
         val more: Boolean,
         val turns: List<Turn>,
+        // This page is the pane's whole conversation, and anything else held for the pane belongs
+        // to a transcript that has been left. Absent on the pages `convo.load` answers with —
+        // older slices of the same transcript, which merge. Additive: a node that never sends it
+        // gets the merging behaviour every build before it had.
+        val fresh: Boolean = false,
     ) : ServerMsg
 
     data class ConvoTurn(val pane: String, val turns: List<Turn>) : ServerMsg

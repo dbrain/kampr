@@ -7,6 +7,7 @@ import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -82,6 +83,19 @@ class WireTest {
         ) as ServerMsg.Scrollback
         assertEquals(70_001, msg.rows[0].row)
         assertTrue(msg.capped)
+    }
+
+    // Additive: a page with no `fresh` is the page every node before this one sent, and it merges.
+    @Test
+    fun aPageSaysWhetherItReplacesTheConversationOrMergesIntoIt() {
+        val merging = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[]}"""
+        ) as ServerMsg.Convo
+        assertFalse(merging.fresh)
+        val replacing = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"fresh":true,"turns":[]}"""
+        ) as ServerMsg.Convo
+        assertTrue(replacing.fresh)
     }
 
     @Test

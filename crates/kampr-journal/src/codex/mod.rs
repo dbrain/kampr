@@ -99,7 +99,7 @@ impl JournalAdapter for CodexAdapter {
                     .is_some_and(|n| n.starts_with("rollout-"))
             })
             .collect();
-        discover::newest_declaring(rollouts, cwd, since, |record| {
+        discover::newest_declaring(rollouts, cwd, since, discover::Silent::Refuse, |record| {
             if record.get("type").and_then(Value::as_str) != Some("session_meta") {
                 return None;
             }
@@ -130,7 +130,7 @@ impl JournalAdapter for CodexAdapter {
 #[derive(Default)]
 pub struct CodexParser {
     store: TurnStore,
-    tool_turns: HashMap<String, String>,
+    tool_turns: HashMap<String, (String, usize)>,
     seq: u64,
     origin: Option<Origin>,
 }
@@ -216,6 +216,7 @@ impl CodexParser {
             } => {
                 let args: Value = serde_json::from_str(&arguments).unwrap_or(Value::Null);
                 let mut turn = Turn::new(id.clone(), Role::Assistant, at);
+                let card = turn.blocks.len();
                 turn.blocks.push(Block::Tool {
                     summary: summarise(&args),
                     lines: None,
@@ -228,13 +229,14 @@ impl CodexParser {
                         text: cmd.to_string(),
                     });
                 }
-                self.tool_turns.insert(call_id, id);
+                self.tool_turns.insert(call_id, (id, card));
                 self.store.push(turn);
             }
             Payload::CustomToolCall { name, input, call_id } => {
                 let mut turn = Turn::new(id.clone(), Role::Assistant, at);
                 let patch = input.starts_with(PATCH_PREFIX);
                 let target = patch.then(|| patch_target(&input)).flatten();
+                let card = turn.blocks.len();
                 turn.blocks.push(Block::Tool {
                     summary: Some(one_line(target.as_deref().unwrap_or(&input))),
                     lines: None,
@@ -254,7 +256,7 @@ impl CodexParser {
                         text: input,
                     }
                 });
-                self.tool_turns.insert(call_id, id);
+                self.tool_turns.insert(call_id, (id, card));
                 self.store.push(turn);
             }
             Payload::FunctionCallOutput { call_id, output }
@@ -267,7 +269,7 @@ impl CodexParser {
     }
 
     fn settle(&mut self, call_id: &str, raw: &str, images: Vec<Attachment>) {
-        let Some(target) = self.tool_turns.get(call_id).cloned() else {
+        let Some((target, card)) = self.tool_turns.get(call_id).cloned() else {
             return;
         };
         let failed = output_failed(raw);
@@ -275,7 +277,7 @@ impl CodexParser {
         let Some(turn) = self.store.revise(&target) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut() {
+        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(card) {
             *state = if failed { ToolState::Error } else { ToolState::Done };
             *lines = count_lines(&text);
         }

@@ -656,6 +656,12 @@ async fn a_peer_that_stops_answering_keepalives_is_dropped() {
 /// the first viewer decided for everybody: a second viewer asking for the transcript was attached
 /// to a stream that was never asked for one. Agent panes default to the conversation view, so that
 /// viewer lands on the product's default surface with nothing in it.
+///
+/// **Asking only on the upgrade was the same defect one viewer along** (#263). A grid is replayed
+/// from the hub's shadow; a transcript is not shadowed anywhere, and the peer sends a page when
+/// its pump *opens* one and never again — so a viewer attached to a stream already carrying the
+/// transcript is attached to a page that has gone by. Every viewer that wants the transcript
+/// re-asks; one that wants only the terminal still costs nothing.
 #[tokio::test]
 async fn a_second_viewer_asking_for_the_conversation_is_sent_one() {
     let peers = peers();
@@ -678,8 +684,17 @@ async fn a_second_viewer_asking_for_the_conversation_is_sent_one() {
     assert_eq!(upgraded["pane"], "01JA/w1:p1");
     assert_eq!(upgraded["conversation"], true);
 
-    // And it is asked for once: a third viewer wanting the same thing costs no round trip.
     let _third = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    let again = peer.request_but_ping().await;
+    assert_eq!(
+        again["t"], "watch",
+        "a third viewer was attached to a page that had already gone by: {again}"
+    );
+    assert_eq!(again["conversation"], true, "{again}");
+
+    // A viewer wanting only the terminal still costs no round trip: the stream it is joining is
+    // already carrying everything it asked for, and a grid replays out of the hub's own shadow.
+    let _terminal_again = peers.watch("01JA/w1:p1", false).expect("a live peer");
     peers
         .relay(
             "01JA/w1:p1",
@@ -689,7 +704,7 @@ async fn a_second_viewer_asking_for_the_conversation_is_sent_one() {
     assert_eq!(
         peer.request_but_ping().await["t"],
         "input",
-        "the hub asked for the same transcript twice",
+        "the hub asked the peer for a transcript nobody new wanted",
     );
 }
 

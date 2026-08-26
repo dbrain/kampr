@@ -171,11 +171,16 @@ fn convo_matches_the_shape_the_client_decodes() {
         cursor: Some("t_812".into()),
         more: true,
     };
-    let v = serde_json::to_value(ServerMsg::convo("01J/w3:p2", page)).unwrap();
+    let v = serde_json::to_value(ServerMsg::convo("01J/w3:p2", page.clone(), false)).unwrap();
     assert_eq!(v["t"], "convo");
     assert_eq!(v["pane"], "01J/w3:p2");
     assert_eq!(v["cursor"], "t_812");
     assert_eq!(v["more"], true);
+    // Additive: a page that merges is byte for byte the page every build before `fresh` sent, so
+    // an installed phone sees nothing new. Only a page that *replaces* carries the field.
+    assert!(v.get("fresh").is_none(), "{v}");
+    let replacing = serde_json::to_value(ServerMsg::convo("01J/w3:p2", page, true)).unwrap();
+    assert_eq!(replacing["fresh"], true, "{replacing}");
 
     let turn = &v["turns"][0];
     assert_eq!(turn["id"], "t_812");

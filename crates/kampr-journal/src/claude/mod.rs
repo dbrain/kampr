@@ -100,8 +100,13 @@ impl JournalAdapter for ClaudeAdapter {
         let named = projects.join(slug(cwd));
         let declared = |record: &Value| record.get("cwd").and_then(Value::as_str).map(str::to_string);
         if named.is_dir()
-            && let Some(found) =
-                discover::newest_declaring(discover::jsonl_files(&named), cwd, since, declared)
+            && let Some(found) = discover::newest_declaring(
+                discover::jsonl_files(&named),
+                cwd,
+                since,
+                discover::Silent::Belongs,
+                declared,
+            )
         {
             return Ok(found);
         }
@@ -109,7 +114,8 @@ impl JournalAdapter for ClaudeAdapter {
             .iter()
             .flat_map(|d| discover::jsonl_files(d))
             .collect();
-        discover::newest_declaring(everything, cwd, since, declared).ok_or_else(|| discover::not_found(cwd))
+        discover::newest_declaring(everything, cwd, since, discover::Silent::Refuse, declared)
+            .ok_or_else(|| discover::not_found(cwd))
     }
 
     fn parser(&self) -> Box<dyn TranscriptParser> {
@@ -130,7 +136,7 @@ impl JournalAdapter for ClaudeAdapter {
 #[derive(Default)]
 pub struct ClaudeParser {
     store: TurnStore,
-    tool_turns: HashMap<String, String>,
+    tool_turns: HashMap<String, (String, usize)>,
     seq: u64,
     origin: Option<Origin>,
 }
@@ -216,6 +222,7 @@ impl ClaudeParser {
                 att: image(&source).and_then(|_| atts.next()),
             }),
             ContentBlock::ToolUse { id, name, input } => {
+                let at = turn.blocks.len();
                 turn.blocks.push(Block::Tool {
                     summary: summarise(&input),
                     lines: None,
@@ -228,7 +235,7 @@ impl ClaudeParser {
                         text: command.to_string(),
                     });
                 }
-                self.tool_turns.insert(id, turn_id.to_string());
+                self.tool_turns.insert(id, (turn_id.to_string(), at));
             }
             ContentBlock::ToolResult {
                 tool_use_id,
@@ -256,14 +263,14 @@ impl ClaudeParser {
         tool_use_result: Option<&Value>,
         images: Vec<Attachment>,
     ) {
-        let Some(target) = self.tool_turns.get(tool_use_id).cloned() else {
+        let Some((target, at)) = self.tool_turns.get(tool_use_id).cloned() else {
             return;
         };
         let patch = tool_use_result.and_then(unified_patch);
         let Some(turn) = self.store.revise(&target) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut() {
+        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(at) {
             *state = if is_error {
                 ToolState::Error
             } else {

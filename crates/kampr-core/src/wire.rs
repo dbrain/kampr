@@ -331,6 +331,17 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
         more: bool,
+        /// **This page is the pane's whole conversation, and anything else held for the pane
+        /// belongs to a transcript that has been left.**
+        ///
+        /// A page merges by id, which is what lets `convo.load` prepend older slices of the same
+        /// transcript — and what leaves a stale conversation underneath a new one when the pane
+        /// has moved. The node takes the stale turns off by name where it knows them, but a
+        /// client that reconnects arrives on a socket carrying no history and the node itself
+        /// restarts, so there are cases where nothing on this end can name them. Additive: a
+        /// client that has never heard of the field merges, exactly as it does today.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        fresh: bool,
         turns: Vec<Turn>,
     },
     /// Turns added *or revised*. A tool turn is replaced by id when its result lands, so a client
@@ -356,11 +367,12 @@ pub enum ServerMsg {
 }
 
 impl ServerMsg {
-    pub fn convo(pane: &str, page: Page) -> Self {
+    pub fn convo(pane: &str, page: Page, fresh: bool) -> Self {
         Self::Convo {
             pane: pane.to_string(),
             cursor: page.cursor,
             more: page.more,
+            fresh,
             turns: page.turns,
         }
     }

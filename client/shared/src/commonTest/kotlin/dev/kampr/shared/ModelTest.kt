@@ -326,6 +326,31 @@ class ModelTest {
         assertFalse(pane.convoMore)
     }
 
+    // A pane's turns outlive the socket they arrived on — `paneStates` is never pruned, and a
+    // reconnecting client re-watches every pane it holds. The node cannot name what a socket it
+    // has never seen is still showing, so a page it knows to be a different transcript says so,
+    // and what the client holds for that pane goes before the page is applied. Without it the new
+    // conversation is prepended above the old one, which reads as a panel that never updated.
+    @Test
+    fun aFreshPageReplacesTheConversationInsteadOfLandingAboveIt() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"before the clear"}]}]}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"n1","more":false,"fresh":true,"turns":[
+                   {"id":"n1","role":"user","blocks":[{"b":"md","text":"after the clear"}]}]}"""
+            )!!
+        )
+        val pane = store.pane("p")
+        assertEquals(listOf("n1"), pane.turns.map { it.id })
+        assertEquals("n1", pane.convoCursor)
+    }
+
     // kampr-journal revises a tool turn in place when its result lands, so a `convo.turn` that
     // repeats an id is a replacement. Appending it instead duplicates every tool call.
     @Test

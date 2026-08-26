@@ -290,6 +290,86 @@ fn a_pane_whose_harness_is_gone_shows_nothing_even_though_its_directory_is_full(
     assert_eq!(located(&home, &Harness::Absent).as_deref(), None);
 }
 
+/// Probe #260: a transcript whose first user message carries a pasted image is one record wide
+/// enough to push the `cwd` it declares past the head window — 288 KB against a 256 KB budget, on
+/// a live 13.5 MB transcript on `pleader`. Nothing in the head names the directory, so the search
+/// dropped it and answered with the previous conversation in the same pane, which is the exact
+/// shape of the operator's report.
+///
+/// A file *inside* `projects/<slug(cwd)>` that never declares any directory is this directory's:
+/// claude put it there. One that declares a different directory is still refused, which is the
+/// half that stops a near-miss serving another project's conversation.
+#[test]
+fn a_transcript_whose_first_message_is_too_big_to_see_past_is_still_this_directorys() {
+    let home = scratch_dir("blind-head");
+    let project = home.join("projects/-tmp-kident-proj");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(home.join("sessions")).unwrap();
+
+    let previous = "aaaaaaaa-0000-4000-8000-000000000001.jsonl";
+    std::fs::write(project.join(previous), transcript(CWD, 0, LIVE_STARTED + 10)).unwrap();
+    let blind = "bbbbbbbb-0000-4000-8000-000000000002.jsonl";
+    std::fs::write(
+        project.join(blind),
+        transcript(CWD, 300 * 1024, LIVE_STARTED + 20),
+    )
+    .unwrap();
+    // The same record shape, in a directory whose name says another project: the head is the only
+    // thing that could refuse it, and it must still refuse it.
+    let elsewhere = home.join("projects/-tmp-kident-other");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join("cccccccc-0000-4000-8000-000000000003.jsonl"),
+        transcript("/tmp/kident/other", 300 * 1024, LIVE_STARTED + 30),
+    )
+    .unwrap();
+
+    let unmapped = live_process();
+    assert_eq!(
+        located(&home, &Harness::Running(unmapped)).as_deref(),
+        Some(blind),
+        "the newest conversation in the pane's own directory, not the one before it"
+    );
+    assert_eq!(
+        registry(&home)
+            .locate(
+                Some("claude"),
+                None,
+                Some(Path::new("/tmp/kident/nowhere")),
+                &Harness::Unknown,
+            )
+            .unwrap(),
+        None,
+        "a directory nothing was ever run in takes no transcript from another project"
+    );
+}
+
+/// One transcript: the header records claude writes before any conversation, a user record whose
+/// `cwd` sits behind `pad` bytes of message, and the assistant reply that gives the tail its
+/// stamp. `pad` is what decides whether the `cwd` is inside the head window or past it.
+fn transcript(cwd: &str, pad: usize, at: u64) -> String {
+    let stamp = |secs: u64| {
+        time::OffsetDateTime::from_unix_timestamp(secs as i64)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    };
+    let mut out = String::new();
+    for header in ["mode", "permission-mode", "atis-latch"] {
+        out.push_str(&format!("{{\"type\":\"{header}\"}}\n"));
+    }
+    out.push_str(&format!(
+        "{{\"type\":\"user\",\"uuid\":\"u-{at}\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}},\"timestamp\":\"{}\",\"cwd\":\"{cwd}\"}}\n",
+        "x".repeat(pad),
+        stamp(at)
+    ));
+    out.push_str(&format!(
+        "{{\"type\":\"assistant\",\"uuid\":\"a-{at}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}]}},\"timestamp\":\"{}\"}}\n",
+        stamp(at + 1)
+    ));
+    out
+}
+
 /// The one thing here that has to agree with the kernel rather than with a fixture: field 22 of
 /// `/proc/<pid>/stat` is what Claude records as `procStart`, and reading field 21 or 23 instead
 /// would produce a plausible number that never matches anything. Checked against this test's own

@@ -29,6 +29,8 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         global,
         conversation,
     } = ctx;
+    // Whether this client has been handed a page for this pane yet. See [`first_page`].
+    let mut paged = false;
     let mut watcher = match peers.watch(&global, conversation) {
         Ok(watcher) => watcher,
         Err(e) => {
@@ -37,7 +39,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         }
     };
     for event in watcher.initial() {
-        if !emit(&peers, &wire, &global, event) {
+        if !emit(&peers, &wire, &global, event, &mut paged) {
             return;
         }
     }
@@ -60,7 +62,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
                 false => return,
             }
         }
-        if !emit(&peers, &wire, &global, event) {
+        if !emit(&peers, &wire, &global, event, &mut paged) {
             return;
         }
     }
@@ -73,14 +75,17 @@ fn resync(wire: &Wire, global: &str, watcher: &RemoteWatcher) -> bool {
     }
 }
 
-fn emit(peers: &Peers, wire: &Wire, global: &str, event: RemoteEvent) -> bool {
+fn emit(peers: &Peers, wire: &Wire, global: &str, event: RemoteEvent, paged: &mut bool) -> bool {
     match event {
         RemoteEvent::Update(update) => wire.send_update(global, &update),
         RemoteEvent::Scrollback(doc) => wire.send_scrollback(global, &doc),
-        RemoteEvent::Passthrough(value) => match peers.can_serve_attachments(global) {
-            true => wire.send_json(&value),
-            false => wire.send_json(&without_attachment_promises(value, global)),
-        },
+        RemoteEvent::Passthrough(value) => {
+            let value = first_page(value, paged);
+            match peers.can_serve_attachments(global) {
+                true => wire.send_json(&value),
+                false => wire.send_json(&without_attachment_promises(value, global)),
+            }
+        }
         // A peer's code is forwarded verbatim rather than narrowed to this build's vocabulary:
         // a newer peer may name one this hub has no variant for, and dropping it is the same
         // forward-compatibility failure as refusing an unknown `t`.
@@ -88,6 +93,28 @@ fn emit(peers: &Peers, wire: &Wire, global: &str, event: RemoteEvent) -> bool {
             "t": "error", "code": code, "message": message, "pane": global
         })),
     }
+}
+
+/// Marks the first `convo` page this client is handed for this pane as replacing what it holds.
+///
+/// **Only this hop knows.** A page merges by id, and the node that owns the pane decides whether
+/// one replaces from its own record of what it has sent — which is a record of what it sent *the
+/// hub*, not what any of the hub's clients have on screen. A phone that reconnects re-watches
+/// every pane it holds and keeps its turns, so the page it is about to be handed can be a
+/// conversation it left; a second phone opening the same pane has never been sent one at all. The
+/// pump is per client per pane, so "this client has not been paged yet" is exactly the fact here,
+/// and it is the same reasoning `kampr-node::convo` applies to a pane it owns.
+///
+/// A `fresh` the peer set is never cleared: it knows the transcript moved and this hop does not.
+fn first_page(mut value: Value, paged: &mut bool) -> Value {
+    if value.get("t").and_then(Value::as_str) != Some("convo") {
+        return value;
+    }
+    let already = std::mem::replace(paged, true);
+    if !already && let Some(page) = value.as_object_mut() {
+        page.insert("fresh".into(), Value::Bool(true));
+    }
+    value
 }
 
 /// **The promise is this hop's to make, and it is only made when this hub can keep it.**

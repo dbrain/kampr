@@ -381,6 +381,33 @@ which happened.
 `b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
 it, so tables stay tables.
 
+#### `fresh` — this page replaces, it does not merge
+
+A page **merges by id**: turns whose ids the client already holds are replaced in place, and the
+rest are prepended. That is what lets `convo.load` page backwards through one transcript. It is
+also what leaves a conversation the pane has *left* sitting underneath the one it moved to, because
+the new transcript's ids match nothing.
+
+Where the node knows what a client is holding it takes the old turns off by name — a `convo.turn`
+carrying their ids and no blocks, exactly as a live preview is retired. There are cases where it
+cannot: a client that reconnects arrives on a socket the node has no history for, and a node that
+restarted has no history for anybody. Then the page says so.
+
+```jsonc
+{ "t": "convo", "pane": "01J.../w3:p2", "fresh": true, "cursor": "opaque", "more": true, "turns": [ … ] }
+```
+
+- **`fresh: true`** — *drop every turn you hold for this pane, then apply this page.* It is the
+  pane's whole conversation as far back as one page reaches; `more`/`cursor` still page further.
+- **Absent or `false`** — merge, as before. Every page `convo.load` answers with is one of these:
+  they are older slices of the transcript already on the screen.
+
+**Additive.** A client that has never heard of the field merges, which is what every build did
+before it — including the case this field exists for, so an older phone is no worse off than it is
+today. A hub relaying a peer's pane sets it on the **first** page it hands each client for that
+pane, because only that hop knows which of its clients has been sent one; a `fresh` the peer set is
+never cleared.
+
 #### `att` — an attachment's header, never its bytes
 
 An `md` block may carry an optional `att`. It is **additive**: the `text` beside it is the marker an
