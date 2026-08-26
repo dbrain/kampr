@@ -18,9 +18,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CAPS_MIN_INTERVAL_MS = 10_000.0
 
@@ -53,6 +54,7 @@ class KamprConnection(
     private val scope: CoroutineScope,
     val store: KamprStore,
     private val clientFactory: () -> HttpClient = ::createHttpClient,
+    private val liveness: Liveness = Liveness(),
 ) {
     private var loop: Job? = null
     private var outbox = Channel<ClientMsg>(Channel.BUFFERED)
@@ -66,6 +68,16 @@ class KamprConnection(
     private var capsWanted = false
     private var capsAskedAt = 0.0
     private var openedAt = 0.0
+    private var heardAt = 0.0
+    private var heardAtWall = 0.0
+    private var probeUntil = 0.0
+    private var probeArmed = false
+    private var sessionJob: Job? = null
+    private var dropped: String? = null
+    // Conflated, and only ever read by whichever of the two waits is the live one: the heartbeat
+    // while there is a socket, the retry ladder while there is not.
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+    private var foreground: ForegroundWatch? = null
 
     var endpoint: Endpoint? = null
         private set
@@ -75,6 +87,7 @@ class KamprConnection(
             loop?.cancelAndJoin()
             endpoint = target
             outbox = Channel(Channel.BUFFERED)
+            if (foreground == null) foreground = watchForeground(::onForeground)
             loop = scope.launch { run(target) }
         }
     }
@@ -83,6 +96,8 @@ class KamprConnection(
         scope.launch {
             loop?.cancelAndJoin()
             loop = null
+            foreground?.stop()
+            foreground = null
             store.status(ConnectionStatus.Idle)
         }
     }
@@ -118,6 +133,22 @@ class KamprConnection(
 
     fun observedPanes(): Set<String> = watched.keys.toSet()
 
+    // The one measurement that has to span a background, so the one that cannot use the monotonic
+    // clock: `nowMillis()` is CLOCK_MONOTONIC on Android and stops dead in deep sleep, and asking
+    // it how long the app was away gets the answer "no time at all" from the very sleep being
+    // measured. The wall clock counts it. It can also step, so a reading that came out negative is
+    // read as "cannot tell" and probes rather than trusted.
+    //
+    // Below the quiet window the socket has not even missed a heartbeat and is left alone: a glance
+    // at a notification must not cost every watched pane its scrollback. Above it, one ping decides
+    // it — a socket that is alive answers in a round trip and keeps everything it had.
+    fun onForeground() {
+        val silence = liveness.wall() - heardAtWall
+        if (live && silence >= 0.0 && silence < liveness.resumeQuietMs) return
+        probeArmed = true
+        wake.trySend(Unit)
+    }
+
     private suspend fun run(target: Endpoint) {
         val client = clientFactory()
         val backoff = Backoff()
@@ -125,16 +156,17 @@ class KamprConnection(
             while (scope.isActive) {
                 store.status(ConnectionStatus.Connecting)
                 openedAt = 0.0
-                val outcome = runCatching { session(client, target) }
+                dropped = null
+                val outcome = runCatching { attempt(client, target) }
                 if (outcome.exceptionOrNull() is CancellationException) throw outcome.exceptionOrNull()!!
                 store.markStale()
                 // A session that stayed up is the only evidence there is that this address works,
                 // and it is what the ladder exists to find. Without it the delay only ever grew:
                 // a phone that lost its network a handful of times over a day waited the full
                 // ceiling before every attempt after that.
-                if (openedAt != 0.0 && nowMillis() - openedAt >= HEALTHY_SESSION_MS) backoff.reset()
+                if (openedAt != 0.0 && liveness.wall() - openedAt >= HEALTHY_SESSION_MS) backoff.reset()
                 val wait = backoff.next()
-                val reason = outcome.exceptionOrNull()?.message ?: "connection closed"
+                val reason = dropped ?: outcome.exceptionOrNull()?.message ?: "connection closed"
                 // A socket that will not open says nothing about why. Asking the same token over
                 // HTTP is what separates a node that is down — which comes back on its own and must
                 // keep saying "reconnecting" — from one that has been reset, or has revoked this
@@ -145,11 +177,29 @@ class KamprConnection(
                 } else {
                     store.status(ConnectionStatus.Offline(reason, wait))
                 }
-                delay(wait)
+                waitOrWake(wait)
             }
         } finally {
             client.close()
         }
+    }
+
+    // A socket this client decided was dead has to end without a `CancellationException` reaching
+    // the ladder above, which reads one as the whole connection being torn down. Cancelling a child
+    // job is not a failure of its parent, so the join returns and the ladder walks on.
+    private suspend fun attempt(client: HttpClient, target: Endpoint) = coroutineScope {
+        val job = launch { session(client, target) }
+        sessionJob = job
+        job.join()
+    }
+
+    private fun drop(reason: String) {
+        dropped = reason
+        sessionJob?.cancel()
+    }
+
+    private suspend fun waitOrWake(ms: Long) {
+        withTimeoutOrNull(ms) { wake.receive() }
     }
 
     private suspend fun session(client: HttpClient, target: Endpoint) {
@@ -161,16 +211,20 @@ class KamprConnection(
             val pump = launch { pump(this@webSocket, queue) }
             val heartbeat = launch { heartbeat() }
             live = true
-            openedAt = nowMillis()
+            openedAt = liveness.wall()
+            heard()
             try {
                 capsWanted = false
                 capsAskedAt = 0.0
+                probeArmed = false
+                while (wake.tryReceive().isSuccess) { }
                 for (pane in watched.keys) outbox.trySend(ClientMsg.Watch(pane))
                 for (frame in incoming) {
+                    heard()
                     val text = (frame as? Frame.Text)?.readText() ?: continue
                     val msg = Wire.decode(text) ?: continue
                     if (msg is ServerMsg.Pong) {
-                        pingSentAt.remove(msg.n)?.let { store.recordRtt(nowMillis() - it) }
+                        pingSentAt.remove(msg.n)?.let { store.recordRtt(liveness.monotonic() - it) }
                         continue
                     }
                     store.accept(msg)
@@ -199,7 +253,7 @@ class KamprConnection(
     // often than that only turns a burst of herd patches into a burst of no-ops.
     private fun askCaps() {
         if (!capsWanted) return
-        val now = nowMillis()
+        val now = liveness.monotonic()
         if (capsAskedAt != 0.0 && now - capsAskedAt < CAPS_MIN_INTERVAL_MS) return
         capsAskedAt = now
         send(ClientMsg.RequestCaps)
@@ -221,15 +275,46 @@ class KamprConnection(
         for (msg in kept) queue.trySend(msg)
     }
 
+    private fun heard() {
+        heardAt = liveness.monotonic()
+        heardAtWall = liveness.wall()
+        probeUntil = 0.0
+    }
+
+    // The monotonic clock, and deliberately: every deadline here is counted in time this loop was
+    // actually running, so a device that slept between two ticks is not accused of having a dead
+    // socket, and a wall clock that steps cannot close a socket that is answering. It also means
+    // this loop can never detect a background — nothing here runs while the process is frozen,
+    // which is what `onForeground` is for.
     private suspend fun heartbeat() {
+        var pingedAt = liveness.monotonic()
         while (true) {
-            delay(10_000)
-            val n = ++pingSeq
-            // A full outbox is the backlog a heartbeat exists to find, so a dropped ping is left
-            // dropped: the pong that never comes closes the socket. Stamping a send that did not
-            // happen would only turn the next round trip into a lie about the latency.
-            if (outbox.trySend(ClientMsg.Ping(n)).isSuccess) pingSentAt[n] = nowMillis()
-            if (pingSentAt.size > 8) pingSentAt.clear()
+            waitOrWake(liveness.tickMs)
+            val now = liveness.monotonic()
+            if (probeArmed) {
+                probeArmed = false
+                probeUntil = now + liveness.probeMs
+                ping()
+            }
+            if (now - pingedAt >= liveness.pingIntervalMs) {
+                pingedAt = now
+                ping()
+            }
+            if (now - heardAt >= liveness.silenceDeadlineMs) {
+                return drop("no reply for ${((now - heardAt) / 1000).toInt()}s")
+            }
+            if (probeUntil != 0.0 && now >= probeUntil) {
+                return drop("no reply since the app came back")
+            }
         }
+    }
+
+    // A full outbox is the backlog a heartbeat exists to find, so a dropped ping is left dropped.
+    // Stamping a send that did not happen would only turn the next round trip into a lie about the
+    // latency, and the silence deadline above is what notices either way.
+    private fun ping() {
+        val n = ++pingSeq
+        if (outbox.trySend(ClientMsg.Ping(n)).isSuccess) pingSentAt[n] = liveness.monotonic()
+        if (pingSentAt.size > 8) pingSentAt.clear()
     }
 }

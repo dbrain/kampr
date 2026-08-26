@@ -8,12 +8,23 @@ import java.net.Socket
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 // A ktor client talking to a real socket, because the defect is what survives the socket dying:
 // a fake transport that never dies agrees with the code about a case neither of them has.
 internal class StubNode(private val greeting: String = HELLO) {
     val received = CopyOnWriteArrayList<String>()
+
+    // Every accepted upgrade, so a test can see a socket being dropped and re-dialled rather than
+    // only that one is up. `status` going back to Live cannot tell those apart.
+    val accepted = AtomicInteger(0)
+
+    // A node that is still holding the TCP connection open and has stopped answering: what a phone
+    // comes back to after the OS froze the process. Nothing errors, nothing closes.
+    @Volatile
+    var deaf = false
+
     private var server: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<Socket>()
 
@@ -45,10 +56,16 @@ internal class StubNode(private val greeting: String = HELLO) {
     }
 
     fun stop() {
-        server?.close()
-        server = null
+        stopListening()
         for (client in clients) runCatching { client.close() }
         clients.clear()
+    }
+
+    // Stops accepting without touching the sockets already open, so a test can hold a session in
+    // the state a frozen phone comes back to and know that nothing can reconnect behind its back.
+    fun stopListening() {
+        server?.close()
+        server = null
     }
 
     private fun serve(client: Socket) {
@@ -64,12 +81,24 @@ internal class StubNode(private val greeting: String = HELLO) {
                 "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray()
         )
         output.flush()
+        accepted.incrementAndGet()
         send(output, greeting)
         while (!client.isClosed) {
             val frame = readFrame(input) ?: return
             if (frame.first == 8) return
-            if (frame.first == 1) received += frame.second.decodeToString()
+            if (frame.first != 1) continue
+            val text = frame.second.decodeToString()
+            received += text
+            if (!deaf) pongFor(text)?.let { send(output, it) }
         }
+    }
+
+    // The real node answers `ping` with `pong` (crates/kampr-node/src/session.rs). A stub that did
+    // not would make every session here look like one that had stopped answering.
+    private fun pongFor(text: String): String? {
+        if (!text.contains(""""t":"ping"""")) return null
+        val n = Regex(""""n":(\d+)""").find(text)?.groupValues?.get(1) ?: return null
+        return """{"n":$n,"t":"pong"}"""
     }
 
     private fun handshake(input: InputStream): String? {
