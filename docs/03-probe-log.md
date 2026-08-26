@@ -570,3 +570,16 @@ it.
   is a line whose height is unknown, so there is no count of rows to step over with it, and every
   join above it would then be paired with rows that are not its own — which is #211, the defect the
   walk exists to prevent. The stop stays.
+- **A dropped keystroke does not say which of two things went wrong.** `KamprConnection.send`
+  refuses a keystroke on two different grounds — the socket is not live, which is the deliberate
+  rule that a half-typed command must not be replayed into a live shell a reconnect later, and
+  `outbox.trySend` failing because the 64-message buffer is full while the socket *is* live, which
+  means the writer is suspended in `session.send` behind a stalled link. Both land on
+  `noteInput(pane, delivered = false)` and both surface as the same "Not sent · N" badge, so the
+  badge cannot distinguish "there is nowhere to put this" from "the writer is behind". Nothing is
+  measured here: the second case needs a real stalled link and a run of typing longer than the
+  buffer to reach at all, and it has never been observed. Telling them apart needs a reading of
+  whether the pump is making progress — the count queued and the age of the oldest entry when the
+  refusal happens — which is a state the connection does not keep today. Left alone deliberately:
+  the buffer is what bounds the backlog, and an unbounded one would trade a visible refusal for a
+  silent delay. If the badge is ever reported from a phone, this is the first thing to instrument.

@@ -2,12 +2,15 @@ package dev.kampr.terminal.input
 
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -22,15 +25,40 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.TextFieldValue
 import dev.kampr.terminal.PaneSession
 
-// The IME-backed capture used everywhere except the browser: a zero-size field whose value is
+// A run of spaces kept in front of the cursor so the field is never empty. A soft keyboard chooses
+// between a key event and a deletion for backspace depending on whether it can see anything there,
+// and only one of the two ever carried a payload; with padding both do, and the key path consumes
+// the event before the field can delete as well. A space rather than a zero-width space because
+// every IME treats a space as a word boundary and so will not pull it into a composing region.
+private const val PAD_LENGTH = 64
+
+// Below this the padding is restored, above it the field is emptied back to bare padding. Both
+// rewrite text the IME did not write and cost a restartInput, so both sit far from ordinary
+// typing: the floor is dozens of backspaces past an empty command line, the ceiling a command
+// nobody types.
+private const val PAD_FLOOR = 16
+private const val PAD_CEILING = 1024
+
+private val PAD = " ".repeat(PAD_LENGTH)
+
+// The IME-backed capture used everywhere except the browser: a zero-size field whose edits are
 // diffed rather than displayed. Autocapitalise and autocorrect are off because a terminal is not
-// prose, and the field is emptied after every commit so a backspace against an empty buffer still
-// arrives as a key event rather than being swallowed.
+// prose.
+//
+// The field is never handed back text other than the text the IME itself put there. A field whose
+// value the app answers with something else is answered in turn with InputMethodManager
+// .restartInput, and a restarted Gboard drops to its letters page — a digit that will not stay
+// typed — and abandons the input connection, discarding any keystroke already in flight on it.
+// This one emptied itself after every commit, so that was every keystroke. The state therefore
+// lives in the buffer the IME edits rather than in a value round-tripped through recomposition,
+// and what goes to the pane is the difference that buffer itself reports rather than a diff
+// against a copy this file keeps. Padding is restored only through `state.edit`, which the input
+// transformation does not see, so no space in it is ever typed at the pane.
 @Composable
 fun FieldTextInput(
     session: PaneSession,
@@ -40,7 +68,8 @@ fun FieldTextInput(
 ) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    var value by remember { mutableStateOf(TextFieldValue("")) }
+    val state = rememberTextFieldState(PAD, TextRange(PAD_LENGTH))
+    val diff = remember(sink) { DiffToPane(sink) }
 
     // Focus alone does not raise the IME on Android; the controller is what actually shows it.
     LaunchedEffect(session.focusRequests, session.keyboardOpen, enabled) {
@@ -52,18 +81,20 @@ fun FieldTextInput(
         }
     }
 
+    LaunchedEffect(state) {
+        snapshotFlow { state.text.length }.collect { length ->
+            if (length < PAD_FLOOR || length > PAD_CEILING) state.setTextAndPlaceCursorAtEnd(PAD)
+        }
+    }
+
     BasicTextField(
-        value = value,
-        onValueChange = { next ->
-            if (enabled) {
-                emitDiff(value.text, next.text, sink)
-                value = if (next.composition != null) next else TextFieldValue("")
-            }
-        },
+        state = state,
         modifier = modifier
             .focusRequester(focus)
             .onPreviewKeyEvent { event -> enabled && handleKeyEvent(event, sink) },
-        singleLine = true,
+        enabled = enabled,
+        inputTransformation = diff,
+        lineLimits = TextFieldLineLimits.SingleLine,
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
@@ -72,13 +103,18 @@ fun FieldTextInput(
     )
 }
 
-private fun emitDiff(previous: String, current: String, sink: InputSink) {
-    if (previous == current) return
+private class DiffToPane(private val sink: InputSink) : InputTransformation {
+    override fun TextFieldBuffer.transformInput() {
+        emitDiff(originalText, asCharSequence(), sink)
+    }
+}
+
+private fun emitDiff(previous: CharSequence, current: CharSequence, sink: InputSink) {
     var shared = 0
     while (shared < previous.length && shared < current.length && previous[shared] == current[shared]) shared++
     val removed = previous.length - shared
     if (removed > 0) sink.raw(Esc.BACKSPACE.repeat(removed))
-    if (current.length > shared) sink.type(current.substring(shared))
+    if (current.length > shared) sink.type(current.subSequence(shared, current.length).toString())
 }
 
 private val functionKeys = listOf(

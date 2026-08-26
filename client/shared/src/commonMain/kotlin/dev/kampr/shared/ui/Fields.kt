@@ -13,9 +13,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -64,6 +70,32 @@ fun KField(
     }
 }
 
+// The caret is state a caller holding a plain String does not have, and rebuilding the value from
+// that String on every recomposition hands the field a caret at offset zero along with it — so
+// every character lands in front of the one before it and PATH is typed HTAP. Only the text comes
+// from the caller here; the caret stays. A caller whose String changes underneath the field —
+// a row removed from a list, leaving a different row in the same place — is still authoritative,
+// and re-seeds it.
+@Composable
+fun KField(
+    hint: String,
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = Kampr.tokens.type.meta,
+    label: String? = null,
+    keyboard: KeyboardOptions = KeyboardOptions.Default,
+    onSubmit: (() -> Unit)? = null,
+    onText: (String) -> Unit,
+) {
+    var caret by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    val value = if (caret.text == text) caret else TextFieldValue(text, TextRange(text.length))
+    SideEffect { caret = value }
+    KField(hint, value, modifier, style, label, keyboard, onSubmit) { edited ->
+        caret = edited
+        if (edited.text != text) onText(edited.text)
+    }
+}
+
 @Composable
 fun LabelledField(
     label: String,
@@ -98,11 +130,11 @@ fun EnvEditor(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                KField("NAME", TextFieldValue(key), Modifier.weight(1f), label = "Variable name") {
-                    onChange(index, it.text to value)
+                KField("NAME", key, Modifier.weight(1f), label = "Variable name") {
+                    onChange(index, it to value)
                 }
-                KField("value", TextFieldValue(value), Modifier.weight(1.2f), label = "Value of $key") {
-                    onChange(index, key to it.text)
+                KField("value", value, Modifier.weight(1.2f), label = "Value of $key") {
+                    onChange(index, key to it)
                 }
                 GlyphTarget(
                     KamprIcons.cross,
