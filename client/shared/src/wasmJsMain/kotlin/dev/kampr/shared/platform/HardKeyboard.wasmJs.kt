@@ -1,94 +1,61 @@
 package dev.kampr.shared.platform
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import kotlin.js.ExperimentalWasmJsInterop
 
-// Whether focusing an offscreen input would raise a keyboard over the page. A desk browser has none
-// to raise; a touch browser must be left alone, because focusing is what raises the keys.
+// Three answers, because the browser gives three and folding the third into either of the others
+// is what shipped a key row onto a desk. `pointer` and `hover` describe the *primary* input
+// device, which is the one the person is using:
 //
-// Two readings rather than the usual `(hover: hover) and (pointer: fine)`, because that one is
-// measured to answer "no device at all" — ChromeHeadless 151 reports `hover: none`, `pointer: none`
-// and `pointer: coarse: false` together — and a browser that reports nothing has to fall on the
-// side that keeps working. `maxTouchPoints` is a hardware count no phone gets wrong, and it is
-// what makes "reports nothing" mean a desk rather than an unknown. A laptop with a touchscreen is
-// read as touch, and the keydown latch below is what takes it back.
+//   - a desk browser is `(hover: hover) and (pointer: fine)` — a mouse or a trackpad, and a
+//     machine with one of those has a keyboard under it. A laptop with a touchscreen and a
+//     desktop whose driver reports a digitiser both land here, correctly, because the pointer
+//     they are *driven* by is still fine.
+//   - a phone or tablet browser is `(pointer: coarse)` — a fingertip, and no keys.
+//   - and a browser can report neither. ChromeHeadless reports `hover: none`, `pointer: none`,
+//     `any-pointer: none` and `maxTouchPoints: 0` (#266). That is a harness with no input device
+//     attached to it rather than a machine anyone is sitting at, and it is its own answer, not a
+//     quiet vote for one of the other two.
+//
+// `maxTouchPoints` was the previous reading and it is not the question. It is a hardware count,
+// not a statement about how the machine is driven, and desktops and laptops report a non-zero one
+// from a digitiser or a driver — so it read an operator's desk as a phone. It was chosen because
+// it puts the *harness* on the desk side, and #266 is what that costs: the test drove the design
+// and the design was wrong about every machine but the test's.
+internal enum class PointerKind { Desk, Touch, Unknown }
+
 @OptIn(ExperimentalWasmJsInterop::class)
-fun touchBrowser(): Boolean = js(
+private fun mediaMatches(query: String): Boolean = js(
     """
     (function () {
-        try {
-            if ((navigator.maxTouchPoints || 0) > 0) return true;
-            return window.matchMedia('(pointer: coarse)').matches;
-        } catch (e) {
-            return true;
-        }
+        try { return window.matchMedia(query).matches; } catch (e) { return false; }
     })()
     """
 )
 
-// There is no browser API for "is a physical keyboard attached". `navigator.keyboard` is the
-// Keyboard Map and Keyboard Lock API — it answers what a key prints and whether the page may take
-// Escape — and it is present on Chrome for Android with no keyboard anywhere near the device, so
-// it is not the question. Nothing else comes close, so what is left is evidence.
-//
-// The evidence is a keydown that a soft keyboard does not produce. Android IMEs report keyCode 229
-// and `key: "Unidentified"` for printable text, and the handful of keys they do send for real are
-// Enter and Backspace — so those three are excluded and everything else here is a key that has to
-// have been pressed on something with keys: a modifier held on its own, or a key no on-screen
-// keyboard in this layout draws at all.
-//
-// A latch rather than a reading, because it can only be honest in one direction. A keydown proves
-// a keyboard was there; silence proves nothing, and no event fires when one is unplugged. So it
-// goes `false → true` once and stays, which is the direction that never takes an operator's only
-// Escape key away from them mid-session.
-//
-// Capturing, on the document, so it sees the key wherever the focus is — the offscreen input the
-// terminal installs consumes what it handles, and this must not depend on having got there first.
-//
-// No `isTrusted` guard. Nothing in Kampr dispatches a KeyboardEvent — the key row's caps go over
-// the wire as bytes, not as DOM events — so it would be guarding against a thing that does not
-// happen, and Chrome 151 makes `isTrusted` a non-configurable own property of every event, so a
-// test cannot forge one either. Keeping it would have made the whole latch unreachable from the
-// browser harness, which is a test that proves nothing about the app.
-@OptIn(ExperimentalWasmJsInterop::class)
-internal fun hardKeySeen(): Boolean = js(
-    """
-    (function () {
-        var s = globalThis.__kamprHardKeys;
-        if (!s) {
-            s = { seen: false };
-            var named = /^(Escape|Tab|CapsLock|Control|Alt|Meta|Insert|Home|End|PageUp|PageDown|Arrow(Up|Down|Left|Right)|F([1-9]|1[0-9]|2[0-4]))$/;
-            document.addEventListener('keydown', function (e) {
-                if (s.seen || e.isComposing || e.keyCode === 229) return;
-                var k = e.key;
-                if (!k || k === 'Unidentified') return;
-                if (e.ctrlKey || e.altKey || e.metaKey || named.test(k)) s.seen = true;
-            }, true);
-            globalThis.__kamprHardKeys = s;
-        }
-        return s.seen;
-    })()
-    """
-)
-
-// Polled rather than pushed, the way the on-screen keyboard inset is: the listener fires on a
-// thread of the browser's choosing and there is no Compose-side channel to hand the value to. One
-// boolean read a frame, and the loop ends the moment it latches, so a tablet costs a read per frame
-// until its keyboard is used and nothing after that.
-@Composable
-actual fun hardKeyboardAttached(): Boolean {
-    var attached by remember { mutableStateOf(!touchBrowser()) }
-    LaunchedEffect(Unit) {
-        while (!attached) {
-            withFrameNanos { }
-            if (hardKeySeen()) attached = true
-        }
-    }
-    return attached
+internal fun pointerKind(): PointerKind = when {
+    mediaMatches("(hover: hover) and (pointer: fine)") -> PointerKind.Desk
+    mediaMatches("(pointer: coarse)") -> PointerKind.Touch
+    else -> PointerKind.Unknown
 }
+
+// Whether focusing an offscreen input would raise a keyboard over the page. Only a coarse pointer
+// has one to raise, so `Unknown` is not touch: a browser that reports no input device has no
+// keyboard to put over the pane, and refusing the focus there is a pane that takes no keys at all.
+fun touchBrowser(): Boolean = pointerKind() == PointerKind.Touch
+
+// The other question, and deliberately not the same threshold. There is no browser API for "is a
+// physical keyboard attached" — `navigator.keyboard` is the Keyboard Map and Keyboard Lock API,
+// it answers what a key prints and whether the page may take Escape, and Chrome for Android
+// exposes it with no keyboard within a metre of the device — so this is a guess, and only a
+// positive reading of a desk counts as one. `Unknown` keeps the key row, because a spare strip of
+// caps costs a reader some clutter and a missing one costs an operator their only Escape.
+//
+// No evidence gathered after this. A keydown latch stood here and it could only ever move the
+// reading towards "there is a keyboard", which is the direction that takes the row off the screen
+// mid-session — the regression this replaces. `keyRowNeeded` holds the row whatever this says
+// later, so evidence in that direction now has nothing left to do.
+internal fun deskBrowser(): Boolean = pointerKind() == PointerKind.Desk
+
+@Composable
+actual fun hardKeyboardAttached(): Boolean = deskBrowser()

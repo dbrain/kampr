@@ -156,12 +156,18 @@ internal fun installInput() {
 internal fun drainInput(): String =
     js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
 
-// The touch reading is `dev.kampr.shared.platform.touchBrowser`, because the pane screen asks the
-// same question for the key row and one answer is enough. What it means here: focusing is what
-// raises the keys, so a touch browser is left alone until the operator asks — a pane that opened
-// underneath the keyboard is the regression this guards. A desk browser has no keys to raise, so
-// the input holds the focus for as long as a pane is on screen, which is the only thing that makes
-// a hardware keyboard reach the pane at all.
+// `touchBrowser` and not the key row's reading, because these are two questions off one browser
+// and they want different thresholds. Here the question is whether focusing would raise a soft
+// keyboard over the pane, and only a coarse pointer has one to raise — so a browser that reports
+// no input device at all is held, not left alone. The key row asks whether there is a hardware
+// keyboard, which nothing has answered in that case, and it offers the row. Sharing one answer
+// meant a browser reporting nothing had to be either a desk or a phone for both, and it is
+// neither.
+//
+// What this one means: focusing is what raises the keys, so a touch browser is left alone until
+// the operator asks — a pane that opened underneath the keyboard is the regression this guards.
+// A desk browser has no keys to raise, so the input holds the focus for as long as a pane is on
+// screen, which is the only thing that makes a hardware keyboard reach the pane at all.
 
 internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean): Boolean =
     enabled && (keyboardAsked || !touch)

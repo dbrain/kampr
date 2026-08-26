@@ -539,6 +539,28 @@ and the actions sheet offered a second chip called `zoom`, one screen away, for 
 op, with *"at the desk"* carrying the entire distinction. The sheet's chip is now **`fill the tab`**.
 
 
+## What a browser says about the machine it is on (ChromeHeadless 151.0.0.0, Karma, `:shared:wasmJsBrowserTest`)
+
+The operator, within minutes of 0.1.20: *"the wasm webapp is now showing the the keyboard buttons
+(ctrl esc arrows etc.) - they stay for a while then go away weirdly."* Measured by dumping every
+candidate reading out of the harness itself, which is the only browser this repository can drive.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 266 | **ChromeHeadless reports no input device at all, and reads as a *desk* under a `maxTouchPoints` predicate** | a throwaway `wasmJsBrowserTest` printing every pointer and hover reading Karma's browser gives | `maxTouchPoints: 0`, `ontouchstart: false`, `hover: none`, `pointer: none`, `any-hover: none`, `any-pointer: none`, `any-pointer: coarse: false`. So `(hover: hover) and (pointer: fine)` is **false** here, which is what the 0.1.20 comment recorded — but `maxTouchPoints > 0 \|\| (pointer: coarse)` is *also* false, so the reading that was chosen to keep the harness on the desk side does that by accident of a count, not by answering the question. It is the one browser in the matrix that answers **neither**, and folding that into either of the other two is what put a key row on an operator's desktop |
+
+| 267 | **A real desktop reports ten touch points, so `maxTouchPoints` reads an operator's desk as a phone** | the operator's own desktop browser, the machine the 0.1.20 key-row regression was reported from — `[matchMedia('(hover: hover) and (pointer: fine)').matches, matchMedia('(pointer: coarse)').matches, navigator.maxTouchPoints]` pasted into its console | **`[true, false, 10]`.** The primary pointer is fine and hovers, nothing is coarse, and the hardware still counts **ten** touch points. So `maxTouchPoints > 0` — the 0.1.20 reading — is true on a machine driven by a mouse, which is the whole of the regression: the key row was drawn on a desk and then taken away again by the keydown latch on the first Escape. It also closes the desktop half of what [#266](#) left open, and confirms the media query answers correctly on real hardware where the harness could not ([#266](#) is `pointer: none` on all three). A touch count is a statement about what the hardware has; `pointer`/`hover` is a statement about how the person is driving it, and only the second is the question |
+
+**What this row does not measure, and deliberately.** The values real desktop and real phone
+browsers report for `hover` and `pointer` are defined by CSS Media Queries Level 4 — a desk's
+primary pointer is `fine` and hovers, a touchscreen's is `coarse` and does not — and no browser on
+this machine can be made into either. `BrowserKeyboardTest` therefore hands those readings to the
+code as a table rather than asserting them off the harness, which is the honest shape: the headless
+row above is measured, the desk and phone rows are the specification, and **the predicate is never
+allowed to be chosen by what the harness happens to report.** That is the mistake this row exists
+to record. Confirming a real desktop and a real phone is a device question and is listed as open.
+
+
 ## Still open
 
 - ~~A client that reconnects gets no withdrawal, because the node has no memory of what it is
@@ -570,6 +592,12 @@ op, with *"at the desk"* carrying the entire distinction. The sheet's chip is no
   the interlock left. The premise underneath the old half had also stopped being true: agent panes
   were said to be alt-screen with no ring to miss (#30), and a codex pane read back 402 rows.
 - **A real mid-range ARM phone.** #56 is emulator-only; the shaping cost is the part that will move.
+- **What a real *phone* browser reports for `hover` and `pointer` ([#266](#)).** The desktop half
+  is now measured and closed — [#267](#) is an operator's own desktop answering `[true, false, 10]`,
+  which both confirms the media query on real hardware and shows why the touch count could not be
+  the question. The phone row is still the specification rather than a measurement, held as a table
+  in `BrowserKeyboardTest`; nothing on this machine can be made into one, and letting the harness
+  pick the predicate is exactly the defect #266 records.
 - ~~Why herdr’s headless rect is one column wider than the PTY it created (#69).~~ **The rect is
   the pane’s outer box and the column it keeps back is the scrollbar’s (#230).** Rendered and read
   off the screen: on a 120-column client the single unbordered pane’s rect is 94 at `x: 26`, its

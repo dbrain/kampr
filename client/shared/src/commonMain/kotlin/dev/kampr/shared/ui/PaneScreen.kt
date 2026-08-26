@@ -33,7 +33,7 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
-import dev.kampr.shared.platform.LocalHardKeyboard
+import dev.kampr.shared.platform.keyRowNeeded
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
@@ -429,7 +429,7 @@ fun PaneScreenDesktop(
         if (shown == PaneView.Terminal) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
                 if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
-                if (!LocalHardKeyboard.current) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())
+                if (keyRowNeeded()) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())
             }
         }
     }

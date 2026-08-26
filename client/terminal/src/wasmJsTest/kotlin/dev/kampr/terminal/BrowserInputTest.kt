@@ -15,10 +15,50 @@ import kotlin.test.assertTrue
 private fun inputFocused(): Boolean =
     js("(function(){ var s = globalThis.__kamprInput; return !!(s && document.activeElement === s.el); })()")
 
+// Karma's own browser is a headless Chromium reporting no input device at all, so a desk and a
+// phone both have to be handed to the code as the readings they give. `dev.kampr.shared` measures
+// the reading itself; what is faked here is only enough of it to pick a side.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun pretendTouchscreen(points: Int) {
-    js("Object.defineProperty(navigator, 'maxTouchPoints', { value: points, configurable: true })")
+private fun pretendPointer(hover: String, pointer: String) {
+    js(
+        """
+        (function () {
+            if (!globalThis.__kamprRealMatchMedia) globalThis.__kamprRealMatchMedia = window.matchMedia;
+            Object.defineProperty(window, 'matchMedia', {
+                value: function (q) {
+                    var ok = true;
+                    var re = /\((hover|pointer)\s*:\s*([a-z]+)\)/g;
+                    var m;
+                    while ((m = re.exec(q)) !== null) {
+                        if ((m[1] === 'hover' ? hover : pointer) !== m[2]) ok = false;
+                    }
+                    return { matches: ok, media: q };
+                },
+                configurable: true,
+            });
+        })()
+        """
+    )
 }
+
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun stopPretending() {
+    js(
+        """
+        (function () {
+            if (globalThis.__kamprRealMatchMedia) {
+                Object.defineProperty(window, 'matchMedia', {
+                    value: globalThis.__kamprRealMatchMedia, configurable: true,
+                });
+            }
+        })()
+        """
+    )
+}
+
+private fun pretendDesk() = pretendPointer(hover = "hover", pointer = "fine")
+
+private fun pretendPhone() = pretendPointer(hover = "none", pointer = "coarse")
 
 @OptIn(ExperimentalWasmJsInterop::class)
 private fun stealFocus() {
@@ -42,7 +82,6 @@ private fun typeKey(key: String) {
 class BrowserInputTest {
     @Test
     fun theOffscreenInputCanBeGivenAndTakenTheKeyboardFocus() {
-        pretendTouchscreen(0)
         installInput()
         focusInput(false)
         assertFalse(inputFocused(), "blurring left the offscreen input holding the keyboard")
@@ -56,29 +95,53 @@ class BrowserInputTest {
     // every keystroke went to the page instead of the pane.
     @Test
     fun aDeskBrowserHoldsTheInputWithNobodyHavingAskedForAKeyboard() {
-        pretendTouchscreen(0)
-        assertFalse(touchBrowser(), "this browser reported a touchscreen it does not have")
+        try {
+            pretendDesk()
+            assertFalse(touchBrowser(), "this browser reported a touchscreen it does not have")
+            assertTrue(
+                holdsInput(enabled = true, keyboardAsked = false, touch = touchBrowser()),
+                "a pane on a desk browser has to hold the input before anything is asked for",
+            )
+        } finally {
+            stopPretending()
+        }
+    }
+
+    // The half of the split that lives here. The key row and the focus ask two different questions
+    // of one browser, and a browser reporting no input device answers neither — so they are allowed
+    // to disagree, and they do. The key row offers itself, because nothing said there is a
+    // keyboard. The focus is held, because there is no soft keyboard to raise over the pane and a
+    // pane that refuses the focus takes no keys at all. Sharing one answer is what made this a
+    // choice between a desk and a phone for a machine that is neither.
+    @Test
+    fun aBrowserThatReportsNoInputDeviceAtAllStillHoldsTheInput() {
+        stopPretending()
+        assertFalse(touchBrowser(), "the headless harness reported a touchscreen it does not have")
         assertTrue(
             holdsInput(enabled = true, keyboardAsked = false, touch = touchBrowser()),
-            "a pane on a desk browser has to hold the input before anything is asked for",
+            "a browser with no keyboard to raise over the pane still refused the focus",
         )
     }
 
     // The guard: focusing is what raises the keys, so a touch browser must be left alone until
-    // the operator asks. `maxTouchPoints` is the reading a phone gets right, and this is it, faked.
+    // the operator asks. A coarse primary pointer is the reading a phone gets right, and this is
+    // it, faked.
     @Test
     fun aTouchBrowserIsLeftAloneUntilTheOperatorAsksForAKeyboard() {
-        pretendTouchscreen(5)
-        assertTrue(touchBrowser(), "a touchscreen reading was not believed")
-        assertFalse(
-            holdsInput(enabled = true, keyboardAsked = false, touch = touchBrowser()),
-            "a pane opening on a phone browser raised the keyboard over itself",
-        )
-        assertTrue(
-            holdsInput(enabled = true, keyboardAsked = true, touch = touchBrowser()),
-            "the keyboard cap stopped working on a phone browser",
-        )
-        pretendTouchscreen(0)
+        try {
+            pretendPhone()
+            assertTrue(touchBrowser(), "a touchscreen reading was not believed")
+            assertFalse(
+                holdsInput(enabled = true, keyboardAsked = false, touch = touchBrowser()),
+                "a pane opening on a phone browser raised the keyboard over itself",
+            )
+            assertTrue(
+                holdsInput(enabled = true, keyboardAsked = true, touch = touchBrowser()),
+                "the keyboard cap stopped working on a phone browser",
+            )
+        } finally {
+            stopPretending()
+        }
     }
 
     // Which is also what keeps the mosaic honest: every cell but the focused one is handed a
@@ -94,7 +157,6 @@ class BrowserInputTest {
     // cue, and it has to fire whether or not a keyboard was ever asked for.
     @Test
     fun aGestureThatBlurredTheInputEndsWithTheFocusBack() {
-        pretendTouchscreen(0)
         installInput()
         focusInput(true)
         stealFocus()
@@ -112,7 +174,6 @@ class BrowserInputTest {
 
     @Test
     fun aKeyPressedOnTheFocusedInputArrivesAsItsEscapeSequence() {
-        pretendTouchscreen(0)
         installInput()
         focusInput(true)
         drainInput()

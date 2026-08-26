@@ -95,15 +95,29 @@ class DeskKeyRowTest {
         onNodeWithContentDescription(KEY_ROW).assertDoesNotExist()
     }
 
-    // Attaching and detaching a keyboard is a configuration change, not a launch: the row has to
-    // arrive and leave in the composition that is already on screen.
+    // The report, verbatim: the caps "stay for a while then go away weirdly". Every platform's
+    // reading can move mid-session — Android's on a configuration change, a browser's because it
+    // is a guess — and the two directions are not the same size. A spare row on a desk is clutter;
+    // a row that leaves takes Escape, the arrows and every latch off the screen of whoever was
+    // reaching for them. So nothing may take it back once it is up.
     @Test
-    fun aKeyboardTakenAwayMidSessionBringsTheRowBackWithoutRestartingTheApp() = window(1280.dp, 800.dp) {
+    fun aKeyboardNoticedMidSessionDoesNotTakeTheRowOffTheScreenUnderneathAnOperator() = window(1280.dp, 800.dp) {
         var attached by mutableStateOf(false)
         setContent { Desk(keyboard = attached) }
         waitForIdle()
         onNodeWithContentDescription(KEY_ROW).assertIsDisplayed()
         attached = true
+        waitForIdle()
+        onNodeWithContentDescription(KEY_ROW).assertIsDisplayed()
+    }
+
+    // The direction that must still work, and the reason this is a running rule rather than one
+    // reading frozen at composition: undocking a tablet from its keyboard case is the moment the
+    // row exists for, and it happens in the composition that is already on screen.
+    @Test
+    fun aKeyboardTakenAwayMidSessionBringsTheRowBackWithoutRestartingTheApp() = window(1280.dp, 800.dp) {
+        var attached by mutableStateOf(true)
+        setContent { Desk(keyboard = attached) }
         waitForIdle()
         onNodeWithContentDescription(KEY_ROW).assertDoesNotExist()
         attached = false

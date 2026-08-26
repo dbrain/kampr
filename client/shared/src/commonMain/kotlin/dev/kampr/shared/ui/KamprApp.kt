@@ -155,9 +155,10 @@ fun KamprApp(
                 // Provided once, here, so a screen cannot forget it — and so a test can put the
                 // system bars back, which is the only way this suite can see them at all.
                 LocalSafeArea provides systemSafeArea(),
-                // Read here so every layout under it gets one answer, and so the platforms that
-                // can only answer by watching — Android's configuration, the browser's first
-                // hardware keydown — have one place to be watched from.
+                // Read here so every layout under it gets one answer, and so Android's
+                // configuration — which moves when a keyboard case is docked — has one place to be
+                // watched from. What a layout must not do with it is take a key row back off the
+                // screen; `keyRowNeeded` is the rule that holds it.
                 LocalHardKeyboard provides hardKeyboardAttached(),
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
                 LocalManage provides remember(state) { AppManage(state) },
