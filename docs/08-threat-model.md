@@ -14,8 +14,10 @@ looks, it says so. Where a risk is known and unfixed, it is listed under
 [`06-audit.md`](./06-audit.md); this file is the standing analysis, and the two are meant to be read
 together.
 
-Status: **pre-alpha**. The security pass in `413083a` closed nine audited defects, each with a test
-that failed first. It was not an external review, and one has not happened.
+Status: **released and unreviewed**. The security pass in `413083a` closed nine audited defects, each
+with a test that failed first. It was not an external review, and one has not happened. Kampr is
+published — see the releases — so the reachable surface is now whatever an operator has pointed at
+the internet rather than whatever was on one desk.
 
 ---
 
@@ -256,6 +258,11 @@ A read-only device that reaches a hub reads every pane on **every peer**, not ju
 | Malicious pane content | same defences at every rung | | |
 
 Two things this table is saying that are easy to miss.
+
+A passkey in the Android *app* additionally needs Digital Asset Links, which needs a hostname
+reachable from the public internet by Google's own fetcher — see [`10-passkeys.md`](./10-passkeys.md).
+The browser has no such requirement, and a node with no passkey at all is a supported configuration
+rather than a broken one.
 
 **HTTPS on an IP address does not move you up a rung.** It buys a secure context — so service workers
 may work — and still no passkeys, because a WebAuthn RP ID must be a registrable domain and the
@@ -561,7 +568,9 @@ Kampr cannot do these for you.
    leaves your LAN. Every other rung is optional.
 3. **Set the canonical origin *before* enrolling a passkey.** A passkey is bound to an origin and
    does not survive a change of one. The credential rows survive and become inert; there is no
-   migration path and no warning at startup.
+   migration path and no warning at startup. What each surface needs before a passkey is possible at
+   all — and why the Android app needs a hostname Google's servers can fetch a file from, which is a
+   constraint no local configuration substitutes for — is [`10-passkeys.md`](./10-passkeys.md).
 4. **Decide `trust_proxy` deliberately.** Turn it on only when a proxy you control is the *only* path
    to the node. With it on and the node reachable directly, every rate limit is forgeable.
 5. **Keep the device list short, and use `readonly` for what it is.** Read-only bounds damage, not

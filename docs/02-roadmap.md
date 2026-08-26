@@ -16,11 +16,11 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 3** | ✅ Tiered auth, devices, roles, passkeys server-side, audit log, recovery code. Nine security defects found by audit and closed with tests. |
 | **Phase 4** | ✅ Mesh: peers dial out to a hub, ed25519 mutual auth, relay with per-hop backpressure. Proven across two nodes on one host. The latency indicator (P4.9) is now drawn in four places, so the phase is complete on one machine; real latency, a real NAT and a real proxy remain unproven. |
 | **Phase 5** | ✅ Conversation view, both halves. Claude, Codex and `agy` adapters, markdown with real tables, turn revision by id. |
-| **Phase 7** | ⚠️ Setup ladder, plugin manifest, service supervision and `kampr doctor` (14 checks) are done and exercised. The **install path is written and has never run** — it depends on Phase 9's untagged release, so `install.sh` and `herdr plugin install` have nothing to fetch, and the gate below is unmet for that reason alone. |
+| **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision and `kampr doctor` are done and exercised, and the install path now runs: `install.sh` fetches, verifies and installs a published release, which is what the phase was waiting on. `herdr plugin install` has something to fetch too, and has not been driven end to end by anyone. |
 | **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md) and the terminal now **has** a review mode (`terminal/review/`). PWA (P6.10) **is** built — manifest and service worker both ship, with no install prompt and no offline shell, deliberately — so `security.installable` is no longer overclaiming. Remaining: two controls under the 44 dp target (the column indicator at 26 dp, `Segmented` at the deliberate 36 dp `LANDSCAPE_TOUCH`), and no emulator has re-measured any of it. |
 | **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
 | **Phase 8.5** | ➖ **Cut**, 2026-08-21. Kampr as an Android *provider*. The sandbox makes it a novelty — see below. |
-| **Phase 9** | ⚠️ Release workflow written and **never run**: `git tag` is empty, `release.yml` is tag-triggered, and it pins cosign's certificate identity to `release.yml@refs/tags/…` — so `workflow_dispatch` builds but never signs or publishes. macOS cross-compilation, cosign signing and `gh release create` are all unexercised, and `install.sh` / `herdr plugin install` have nothing to fetch. aarch64 Linux was proven by hand. |
+| **Phase 9** | ✅ **Running.** The workflow has published 21 releases, `v0.1.0` through `v0.1.21`, each one four tarballs (linux and macOS, x86_64 and aarch64), a `SHA256SUMS` signed keyless with cosign, and `install.sh`; a `smoke` job installs the real artefact on a clean runner and re-runs it against a tampered checksum to prove the refusal, and `verify-published` installs from the published URL after the release exists. macOS cross-compilation, cosign signing and `gh release create` are all exercised now. **The APK is not the workflow's** — `make android-publish` sends it to kobup and it is attached to the GitHub release by hand. Remaining: P9.6, the `herdr-plugin` topic, which the repository still does not carry. |
 | **Phase 4.5** | ✅ Server complete — all 13 `manage` ops, each driven against a real herd. Client complete: `client/mosaic` closes P4.5.8/P4.5.9. Remaining: P4.5.5/P4.5.6 have ops and wire but no list/remove and no stored named layouts, and P4.5.12 (`notification.show`) was never built. |
 
 **Legend:** `[ ]` todo · `[x]` done · `[~]` in progress · `[!]` blocked · `[-]` cut
@@ -35,7 +35,7 @@ The seven open questions in findings §6. Cheap, and each one can invalidate a P
 - [x] P0.1 **OSC 8 survives `terminal.frame`** — the spike interned a link from the frame stream. `pane.read` drops it, so frames are strictly richer
 - [ ] P0.2 `terminal.closed` reason + latency when a streamed pane exits → decides reconnect UX
 - [ ] P0.3 Does `observe`/`control` accept an agent-name target as well as `wN:pN`?
-- [x] P0.4 **Scrollback answered without `terminal.scroll`** — frames carry end state only; the ring comes from `pane.read recent` (instant, colour-preserving, viewport unmoved) and alt-screen panes have no ring at all
+- [x] P0.4 **Scrollback answered without `terminal.scroll`** — frames carry end state only; the ring comes from `pane.read recent` (instant, colour-preserving, viewport unmoved). The clause that used to end this line — *and alt-screen panes have no ring at all* — was withdrawn by #231: a live `codex` reads back 402 rows of one
 - [x] P0.5 Version floor pinned to **0.8.2** — the only version everything here is verified on. Lower it later with evidence, never with optimism
 - [ ] P0.6 Frame-stream cost: CPU/RSS of N concurrent `observe` children on one host → sizes the mux
 - [ ] P0.7 Behaviour when the *same* pane is observed at two different geometries simultaneously (already seen working; confirm no cross-talk under load)
@@ -245,7 +245,7 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 
 - [ ] P7.1 `herdr-plugin.toml`: `[[actions]]` (start/stop/restart/status/url/update/uninstall), `[[panes]]` popup setup, `[[startup]]` nudge, `min_herdr_version` from P0.5
 - [x] P7.1b `[[build]]` downloads a prebuilt binary — `packaging/fetch-binary.sh`, os/arch matched
-- [x] P7.1c Standalone route written — `packaging/install.sh`
+- [x] P7.1c Standalone route written — `packaging/install.sh`, and running against real releases since `v0.1.0`
 - [ ] P7.1d Single-binary packaging: Gradle builds the CMP wasm bundle, `rust-embed` bakes it in
 - [ ] P7.2 Terminal wizard as `placement = "popup"`, `width = "80%"` — first-run setup, session-modal
 - [ ] P7.3 The ladder screen: running-now card (URL, QR, pairing code) plus optional upgrades, each labelled with what it unlocks
@@ -255,12 +255,13 @@ The answer to "unlike Collie which just wraps text". Structure cannot come from 
 - [ ] P7.6 Browser first-run wizard mirroring the terminal one, for people who start from the phone
 - [x] P7.7 `kampr doctor` — herdr socket and version floor, sessions, bind and tier, TLS or proxy, file modes, client bundle, service state, devices and recovery; `--json`, non-zero exit on a real failure. Peer health is not covered while the mesh is in flight
 - [x] P7.8 Uninstall that actually cleans up: `uninstall` removes service and units and says where the devices still live; `purge` removes those too. `purge` is deliberately not a Herdr action — an action list is one tap away from a phone
-- [x] P7.9 Release workflow: Gradle stages the bundle, `build.rs` refuses to build a binary without it, `cross` builds static musl for linux x86_64/aarch64 and macOS for both arches, `SHA256SUMS` is signed keyless with cosign, and a clean runner installs the artefact and runs it — unexercised until the first tag
+- [x] P7.9 Release workflow: Gradle stages the bundle, `build.rs` refuses to build a binary without it, `cross` builds static musl for linux x86_64/aarch64 and macOS for both arches, `SHA256SUMS` is signed keyless with cosign, and a clean runner installs the artefact and runs it. Exercised on every tag since `v0.1.0`
 
 **Gate:** a clean machine goes from `herdr plugin install` to a working authenticated phone session with
-no manual file editing. **Not met** — and not for a reason inside this phase: no release has ever been
-tagged, so there is no artefact for either install route to download. Everything downstream of the
-download is built and tested.
+no manual file editing. **Half met.** The reason it was unmet is gone — there are artefacts, and the
+standalone route is exercised: `install.sh` against a published release installs a working binary on
+a clean runner in CI, and by hand into a scratch prefix. `herdr plugin install` itself has still not
+been driven end to end by anyone, so the gate as literally written is unproven rather than failing.
 
 ---
 
@@ -315,7 +316,7 @@ iOS was never possible and this does not change that — third-party apps cannot
 - [ ] P9.4 `docs/03-probe-log.md` kept current — every claim about Herdr traceable to a command
 - [x] P9.5 CI: fmt, clippy (`-D warnings`), tests, Gradle build, shell syntax, manifest validation
 - [ ] P9.6 GitHub topic `herdr-plugin` for marketplace discovery
-- [ ] P9.7 Publish
+- [x] P9.7 Publish — 21 releases, `v0.1.0` through `v0.1.21`, each with four tarballs, a cosign-signed `SHA256SUMS` and `install.sh`
 
 ---
 

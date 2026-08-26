@@ -178,6 +178,38 @@ class WideGlyphArtboardTest {
         )
     }
 
+    // Probe #271: the tree an agent draws its tool results with. U+23BF and U+23AF were absent
+    // from all four faces and drew as tofu in the browser, where nothing can supply a codepoint
+    // the one loaded typeface lacks. They are aliased onto JetBrains Mono's own box lattice rather
+    // than cut in from Noto, because a cut-in is centred in 560 of the 600 cell while the lattice
+    // deliberately overflows it, and an elbow that does not reach the cell edge does not join the
+    // rule beside it. So the assertion is both halves: the glyphs draw ink, and the row after them
+    // still sits on the grid.
+    @Test
+    fun theTreeAnAgentDrawsItsResultsWithHoldsTheGridLikeTheBoxGlyphsItJoins() {
+        check(
+            listOf(Run(0, "AB"), Run(0, "\u23bf\u23af"), Run(0, "CD")),
+            "agent-tree-elbow",
+            glyphCols = 2..3,
+            tail = 4..5,
+        )
+        check(
+            listOf(Run(0, "AB"), Run(0, "\u21b3\u29c9"), Run(0, "CD")),
+            "agent-tree-arrow",
+            glyphCols = 2..3,
+            tail = 4..5,
+        )
+        // The elbow has to be the elbow: aliasing it to a blank or to a space would keep the pitch
+        // and still leave the tree invisible.
+        val (elbow, pitch) = render(listOf(listOf(Run(0, "AB"), Run(0, "\u23bf"))), "agent-tree-ink")
+        val (blank, _) = render(listOf(listOf(Run(0, "AB"), Run(0, " "))), "agent-tree-blank")
+        assertTrue(pitch > 1f)
+        assertTrue(
+            columnPixels(elbow, 2, pitch) != columnPixels(blank, 2, pitch),
+            "U+23BF draws the same ink as a space, so the tree never arrived",
+        )
+    }
+
     // Probe #223: the mark has to reach the screen without buying itself a column. A cell wearing
     // one is drawn on its own for the same reason a wide glyph is (probe #214) — nothing promises
     // the face that draws the mark advances exactly zero — so the proof is that the columns after

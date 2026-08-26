@@ -23,10 +23,10 @@ safe:
 - **A resubscribe is debounced.** A workspace opening ten agent panes moves the set ten times.
   `resubscribe_min` (500 ms) collapses that into one socket and one subscribe.
 - **A stale pane id is fatal, and expected.** A pane that closed between the snapshot and the
-  subscribe answers `pane_not_found` and takes the whole call with it (probe #76) — the same
+  subscribe answers `pane_not_found` and takes the whole call with it (probe #107) — the same
   all-or-nothing rule as a missing `pane_id`, at a different stage. It is a race, not a fault: the
   next pass re-derives the set from a fresh snapshot. An *existing* subscription survives its pane
-  closing (probe #76), so only the initial call is exposed.
+  closing (probe #107), so only the initial call is exposed.
 
 **Measured, against a real `claude` driven to a real permission prompt:** the event beat the
 3-second poll by **1.38 s / 2.21 s / 2.58 s / 2.67 s / 2.84 s** over five runs — mean **2.33 s**.

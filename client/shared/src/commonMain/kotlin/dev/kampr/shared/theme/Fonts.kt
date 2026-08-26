@@ -63,12 +63,18 @@ private fun faces(id: FamilyId): List<FontFace> = when (id) {
 }
 
 // Probe #66: the ligature cut collapses two cells into one glyph inside a shaped run.
-// JetBrains Mono NL, with the symbols it does not carry cut in from Noto Sans Symbols 2 (both
+// JetBrains Mono NL, with the symbols it does not carry added from the Noto families (all
 // OFL 1.1): a browser has no system font behind Skia, and a FontFamily of loaded fonts resolves
 // to exactly one typeface, so a codepoint the face lacks — U+23F5 and U+273B are both in Claude's
-// own status line — is tofu and nothing else can supply it. The cut-in glyphs are scaled to the
-// 600/1000 advance and carry JetBrains Mono's vertical metrics, so no symbol widens a cell or
-// grows a line.
+// own status line — is tofu and nothing else can supply it. Added glyphs take the 600/1000 advance
+// and carry JetBrains Mono's vertical metrics, so no symbol widens a cell or grows a line.
+//
+// Probe #271: the four faces are built by `tools/terminalmono.py`, which is the whole of how they
+// exist — run `--verify` to check the shipped files against a rebuild. A codepoint in the box
+// lattice is aliased onto JetBrains Mono's own glyph rather than cut in, because the lattice
+// deliberately overflows the cell so neighbours join and a cut-in is centred inside it; that is
+// also the only path that keeps the weight of the face. What the face must cover is measured, and
+// the list lives in `shared/src/jvmTest/resources/agent-glyphs.txt`.
 private val terminalFaces = listOf(
     FontFace("kmono-regular", Res.font.terminalmono_regular, FontWeight.W400),
     FontFace("kmono-bold", Res.font.terminalmono_bold, FontWeight.W700),

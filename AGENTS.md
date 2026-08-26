@@ -22,6 +22,7 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | What goes over the wire? | [`docs/04-wire-protocol.md`](./docs/04-wire-protocol.md) |
 | Why is my build broken? | [`docs/09-toolchain.md`](./docs/09-toolchain.md) |
 | How do I ship it? | [`docs/07-android-release.md`](./docs/07-android-release.md) |
+| Why won't passkeys work on my host? | [`docs/10-passkeys.md`](./docs/10-passkeys.md) — the Android asset-links constraint is structural |
 
 ## The rules
 
@@ -75,7 +76,7 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | `crates/kampr-auth`, `-mesh`, `-push`, `-journal`, `-cli`, `-spike` | Pairing and tokens; hub/peer links; web push; agent transcripts; the `kampr` binary; the fidelity canary |
 | `client/shared` | Model, wire, theme, and the screens that are not a pane |
 | `client/terminal`, `client/conversation`, `client/mosaic` | The three pane surfaces |
-| `client/androidApp`, `client/webApp` | The two shells |
+| `client/androidApp`, `client/webApp`, `client/desktopApp` | The composition roots. Android and web are the two that ship |
 
 `docs/05-agent-briefs.md` is the original build plan and is kept for its reasoning; treat its
 "what already exists" table as history, not as the current state.

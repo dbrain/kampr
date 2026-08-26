@@ -24,6 +24,13 @@ is probing what it can do, was invisible — and both now carry named tests that
 run red. Nothing else in this file moved; the counts in the table above are from the second pass and
 have not been re-measured.
 
+**Amended 2026-08-26, for the release only.** Everything below is still the second pass's verdict and
+has not been re-decided. One bullet and one table row have been struck through because the thing they
+said was open has since happened: the release path ran. 21 releases exist, `v0.1.0` through
+`v0.1.21`, each carrying four tarballs, a cosign-signed `SHA256SUMS` and `install.sh`, and the
+installer was re-run into a scratch prefix against `v0.1.21` on the day of this amendment. Nothing
+else here has been re-measured and none of it should be read as fresh.
+
 ## The commands this pass ran
 
 | | |
@@ -35,7 +42,7 @@ have not been re-measured.
 | `./gradlew :shared:jvmTest :terminal:jvmTest :mosaic:jvmTest` | 139 / 81 / 32, **0 failures** |
 | `KAMPR_LIVE=1 KAMPR_URL=… KAMPR_TOKEN=… ./gradlew :shared:jvmTest --tests '…LiveNodeTest.theClientReadsTheAuthSurfaceOfARealNode' --tests '…LiveNodeTest.preferencesWrittenOnOneConnectionComeBackOnTheNext'` | **2 tests, 2.09 s, no skip marker** — the real client against a real node |
 | `curl` route matrix and a raw WebSocket client against 127.0.0.1:8795 | see items #6 and the audit-hole bullet |
-| `git tag` | **empty** |
+| `git tag` | **empty** — true on 2026-08-21, and superseded: see the amendment above |
 
 **One flake, new, mentioned by neither list.** The first full run of `--test live` at
 `--test-threads=2` failed `resync_repaints_every_watched_pane_and_unwatch_stops_one` at
@@ -154,13 +161,19 @@ that sets `authFailure` — that assertion lives only in the live test.
 - **PWA.** Unchanged and still accurate as re-stated last pass: `manifest.webmanifest` and a 224-line
   `sw.js` both ship, the worker deliberately does not proxy the app's own fetches, there is **no
   install prompt** and **no offline shell, by choice**.
-- **The install path is built and has never run.** **STILL OPEN — execution.** `git tag` is empty.
-  `release.yml` is tag-triggered (`on: push: tags: ['v*']`) and pins cosign's certificate identity
-  to `release.yml@refs/tags/…` (`:197`), so a `workflow_dispatch` run builds and smoke-tests but
-  never signs or publishes — by construction, and the file says so in its own header. **Nothing has
-  ever been cross-compiled for macOS, signed with cosign, or published with `gh release create`, and
-  `install.sh` and `herdr plugin install` have nothing to fetch.** aarch64 Linux was proven by hand;
-  the release path around it was not.
+- ~~**The install path is built and has never run.**~~ — **CLOSED, 2026-08-26 — execution.** The
+  tag-triggered path is the one that has run: 21 releases, `v0.1.0` through `v0.1.21`, each with
+  linux and macOS tarballs for both architectures, a keyless cosign signature over `SHA256SUMS`, and
+  `install.sh` beside them. macOS cross-compilation, cosign signing and `gh release create` are all
+  exercised, `release.yml`'s `smoke` job installs the real artefact on a clean runner and proves the
+  refusal against a tampered checksum, and `verify-published` installs from the published URL after
+  the release exists. Re-run by hand on the day of this amendment:
+  `KAMPR_PREFIX=$PWD sh install.sh` against `v0.1.21` installed `kampr 0.1.21` and printed
+  `checksum verified: yes`. **Two residuals.** The cosign bundle is published but no machine here has
+  cosign, so every real installation to date printed `signature verified: skipped — cosign is not
+  installed` and proceeded — the signature is generated and never checked outside CI. And
+  `herdr plugin install` now has something to fetch and **still has not been driven end to end by
+  anyone.**
 - **`min_herdr_version` is enforced by `kampr doctor` and nowhere else.** **STILL OPEN — execution.**
   `MIN_HERDR_VERSION` appears only in `crates/kampr-cli/src/doctor/herd.rs` (and a unit test there
   asserting `herdr-plugin.toml` declares the same floor). `kampr-node` never compares a version to
@@ -336,7 +349,7 @@ Checked against code on 2026-08-21, second pass.
 | Kampr on Android as a *provider* (Phase 8.5) | **Cut** 2026-08-21 |
 | ARCHITECTURE.md, ADRs, threat model (P3.1, P9.2, P9.3) | **Written** |
 | Terminal find | **Absent on both sides** |
-| Release tag | **Never pushed** — `git tag` is empty |
+| Release tag | ~~**Never pushed**~~ — pushed, and 21 times: `v0.1.0` … `v0.1.21` |
 
 ## Verified good — re-checked
 

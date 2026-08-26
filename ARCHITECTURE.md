@@ -428,7 +428,7 @@ emulation recovers it. Collie's ADR 0008 puts it best: *a TUI paints cells; it d
 structure.*
 
 But the harness wrote the original markdown to disk. `~/.claude/projects/<slug>/<uuid>.jsonl` parses
-to literal markdown (#39); Codex writes `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (#45). So an
+to literal markdown (#39); Codex writes `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (#43 for the path, #45 for the schema). So an
 agent pane has two views over one session — the terminal, where you type, and the conversation, which
 is read-optimised, phone-shaped, and scrolls through the whole session rather than one viewport.
 Adapters are keyed on Herdr's own `agent` string, and registered only if their root directory exists,

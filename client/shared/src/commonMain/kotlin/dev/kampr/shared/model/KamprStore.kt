@@ -119,6 +119,20 @@ class KamprStore {
         if (delivered) pane.noteDelivered() else pane.noteUndelivered()
     }
 
+    // The node's socket plane reporting a pane doing things is only evidence about that pane's
+    // stream if this client is actually watching it — so it is counted against the panes there is
+    // a `PaneState` for, which is the set that has a grid on screen to be wrong. Creating one here
+    // would accuse a pane nobody has open.
+    private fun noteMovement(before: Herd) {
+        if (paneStates.isEmpty()) return
+        val was = before.panes.associateBy { it.id }
+        for (after in _herd.value.panes) {
+            val pane = paneStates[after.id] ?: continue
+            val old = was[after.id] ?: continue
+            if (paneMoved(old, after)) pane.noteMoved()
+        }
+    }
+
     fun markStale() {
         _herd.value = _herd.value.copy(stale = true)
         paneStates.values.forEach { it.markStale() }
@@ -159,11 +173,15 @@ class KamprStore {
                 _status.value = ConnectionStatus.Live(msg.role)
             }
             is ServerMsg.Herd -> {
+                val before = _herd.value
                 _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
+                noteMovement(before)
                 dropRepairedFault()
             }
             is ServerMsg.HerdPatch -> {
+                val before = _herd.value
                 _herd.value = _herd.value.applyPatch(msg)
+                noteMovement(before)
                 dropRepairedFault()
             }
             is ServerMsg.Styles -> styles.append(msg.from, msg.styles)
@@ -182,7 +200,14 @@ class KamprStore {
             is ServerMsg.ConvoTurn -> pane(msg.pane).applyConvoTurn(msg)
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes
-            is ServerMsg.Failure -> _failure.value = msg
+            is ServerMsg.Failure -> {
+                _failure.value = msg
+                // Read without creating: a refusal about a pane nobody has open is not news about
+                // any grid on screen.
+                if (msg.code == "stream_unavailable") {
+                    msg.pane?.let { paneStates[it]?.noteStreamStopped() }
+                }
+            }
             is ServerMsg.Managed -> _managed.value = msg
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
             is ServerMsg.Pong -> Unit

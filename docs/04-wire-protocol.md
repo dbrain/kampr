@@ -36,11 +36,14 @@ that cannot work must be absent, not present-and-failing — and `unlocks` is th
 hostname would buy (findings §3.7).
 ```jsonc
 { "t": "hello", "protocol": 1, "node_id": "01J...", "node_name": "comingclean",
-  "build": "0.1.0+abc1234", "role": "full",          // "full" | "readonly"
+  "build": "0.1.21", "role": "full",          // "full" | "readonly"
   "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
             "mesh": true },   // this node accepts peer links; see "The mesh"
+  "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
+                                     // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
     "tier": 0,                       // 0 = passkeys impossible here, 1 = passkeys possible
+    "origin": "http://192.168.1.24:8790",   // the canonical origin the tier was decided from
     "encrypted": false,              // is this a secure context?
     "unencrypted_banner": true,      // show the persistent Tier-0 warning
     "passkeys": false,               // WebAuthn possible here? an IP is never a registrable domain
@@ -96,9 +99,9 @@ this arrives, so a client must gate on it rather than on the role it was greeted
 { "t": "herd",
   "nodes": [ { "id": "01J...", "name": "comingclean", "kind": "local",   // "local"|"peer"
                "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2",
-               "build": "0.1.0+abc1234",   // this node's kampr build — see "Version skew"
+               "build": "0.1.21",          // this node's kampr build — see "Version skew"
                "update": "0.1.2",          // ABSENT unless a newer release exists — see below
-               "detail": null } ],   // why it is offline, when it is
+               "detail": "…" } ],   // ABSENT when the node is up — see below
   "panes": [ { "id": "01J.../w3:p2", "node_id": "01J...",
                "workspace_id": "01J.../w3", "tab_id": "01J.../w3:t1",  // node-qualified, usable as `at`
                "workspace": "kampr", "tab": "1", "cwd": "/home/dbrain/dev/kampr",
@@ -110,7 +113,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a transcript for this pane resolves on disk
                "watchers": 2,                        // ABSENT below 2 — see below
-               "detail": null,                       // why this pane has no picture — see below
+               "detail": "…",                        // ABSENT when it has a picture — see below
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -379,7 +382,8 @@ which happened.
                            { "b": "code", "lang": "ts", "text": "send(pane, \"\\u001b[5~\")" } ] } ] }
 ```
 `b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
-it, so tables stay tables.
+it, so tables stay tables. A `diff` block carries `text` and an optional `path`. `cursor` is
+**absent** when there is nothing further back to ask for, which is not the same as `more: false`.
 
 #### `fresh` — this page replaces, it does not merge
 
@@ -1007,11 +1011,11 @@ never asks for one.
 ```jsonc
 // peer → hub, first message on the socket
 { "t": "mesh.hello", "protocol": 1, "node_id": "01J...", "node_name": "laptop",
-  "build": "0.1.0+abc1234", "key": "<hex ed25519 public key>", "nonce": "<hex 32 bytes>",
+  "build": "0.1.21", "key": "<hex ed25519 public key>", "nonce": "<hex 32 bytes>",
   "join": "K7QF-9M2X" }        // only on the connection that enrols this node; omitted after
 // hub → peer
 { "t": "mesh.challenge", "protocol": 1, "node_id": "01J...", "node_name": "front",
-  "build": "0.1.0+abc1234", "key": "<hex>", "nonce": "<hex 32 bytes>" }
+  "build": "0.1.21", "key": "<hex>", "nonce": "<hex 32 bytes>" }
 // peer → hub
 { "t": "mesh.auth", "sig": "<hex ed25519 signature>" }
 // hub → peer, then the v1 stream begins

@@ -28,10 +28,13 @@ its own transcript on disk in its own format: `~/.claude/projects/<slug>/<uuid>.
 assistant records on this machine whose text is **literal markdown** (#39); Codex writes
 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Nothing has been rendered yet.
 
-This also solves a problem [ADR 0004](./0004-scrollback-is-stitched-and-a-gap-discards.md) cannot:
-agent panes run on the alternate screen, so `max_offset_from_bottom` is 0 and there is no scrollback
-ring to read (#30). The transcript is not a substitute history for those panes — it is a *better*
-one, being whole-session, structured and searchable rather than a fixed number of rows.
+This also solves a problem [ADR 0004](./0004-scrollback-is-stitched-and-a-gap-discards.md) cannot —
+though not for the reason first written here. That reason was *agent panes run on the alternate
+screen, so there is no scrollback ring to read (#30)*, and it was an extrapolation from a synthetic
+alt screen rather than a measurement of an agent: a live `codex` reads back 402 rows of ring and a
+live `claude` 384 (#231). The transcript is a better history anyway, and for the reason that
+survived — it is whole-session, structured and searchable, where a ring is a fixed number of rows
+whatever is in it.
 
 Two probes shaped the design more than any argument did:
 

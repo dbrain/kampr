@@ -24,8 +24,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
@@ -53,6 +55,33 @@ private fun viewOn(info: PaneInfo?, view: PaneView): PaneView =
 // Why this pane will never paint, when there is nothing on its surface to read instead.
 private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
     info?.detail?.takeUnless { pane.painted }
+
+// The zoom sheet belongs to the terminal surface, so the control that opens it has nothing to open
+// on a transcript. Withdrawing it outright is what the report is about: every one of these headers
+// has something elastic in it, and a row that loses an item hands the width to whatever stretches.
+// The portrait switch grew by the button's whole width; on a 360 dp phone and a 740 dp landscape
+// the row rewrapped and the switch moved outright. Either way the segment under the thumb is not
+// the one that gets tapped.
+//
+// So the control is measured whichever view is up, and placed only when it leads somewhere: the
+// slot keeps its width and nothing beside it reflows. An unplaced child is neither painted nor
+// hit — but its semantics outlive being unplaced, so those are cleared too. A reader offered a
+// button that opens nothing is the inert affordance this header had taken out of it once already.
+// Measured rather than given a constant because the button's width is its label's, and the label
+// is the zoom: "fit" and "12.0×" are not the same slot.
+@Composable
+private fun ZoomSlot(pane: PaneState, surfaces: PaneSurfaces, shown: PaneView) {
+    val opens = shown != PaneView.Conversation
+    Layout(
+        { surfaces.Zoom(pane, Modifier) },
+        if (opens) Modifier else Modifier.clearAndSetSemantics {},
+    ) { measurables, constraints ->
+        val slot = measurables.map { it.measure(constraints) }
+        layout(slot.maxOfOrNull { it.width } ?: 0, slot.maxOfOrNull { it.height } ?: 0) {
+            if (opens) slot.forEach { it.place(0, 0) }
+        }
+    }
+}
 
 private fun statusLabel(status: AgentStatus): String? = when (status) {
     AgentStatus.Blocked, AgentStatus.Working, AgentStatus.Done -> statusWord(status)
@@ -83,6 +112,7 @@ private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean) {
     val tokens = Kampr.tokens
     if (info?.detail != null) StreamBadge()
     if (pane.stale) StaleBadge()
+    if (pane.quiet) QuietBadge()
     if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
     if (readOnly) {
         StatusBadge(
@@ -159,15 +189,18 @@ fun PaneScreenMobile(
                 if (landscape) {
                     KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
                     KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+                    // Leading the cluster the weighted line pins to the right edge, which is as far
+                    // left as it goes here: ahead of it is Back and the pane title, and a zoom
+                    // control wedged between a screen's back arrow and its heading reads as neither.
+                    // It is also where the held slot costs nothing to look at — on the transcript
+                    // the gap merges into the whitespace the geometry line already trails.
+                    ZoomSlot(pane, surfaces, shown)
                     PaneMarks(pane, info, readOnly)
                     NewAction(pane.id)
                     PaneManageAction(pane.id)
                     // Landscape has no second row to hang these off, and an agent pane opens in
                     // Conversation: without them here the terminal is unreachable without rotating.
                     if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
-                    // The zoom sheet belongs to the terminal surface, so the control that opens
-                    // it goes wherever that surface is: on the transcript it opens nothing.
-                    if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
@@ -195,8 +228,19 @@ fun PaneScreenMobile(
                     itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     PaneMarks(pane, info, readOnly)
-                    if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f)) else Box(Modifier.weight(1f))
-                    if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
+                    // Left of the switch, which is the ask, but after the badges rather than ahead
+                    // of them: the held slot has to sit somewhere, and leading the row it indents
+                    // every badge off the margin the line above starts at whenever the transcript
+                    // is up. Behind the badges the same gap is the space before a right-hand
+                    // control, and once the row wraps it is a trailing gap nobody can see.
+                    ZoomSlot(pane, surfaces, shown)
+                    // Weighted rather than the landscape row's fixed 210 dp. It is already 211 dp
+                    // on a 411 dp phone, and the width it would be pinned to is one the 360 dp
+                    // phone cannot spare: there the row wraps and the switch has the line to
+                    // itself, where filling it is 160 dp a segment against 105 dp stranded beside
+                    // a dead margin. What the report asked for is that it stop *changing*, and the
+                    // slot above is what does that.
+                    if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f))
                 }
             }
         }
@@ -248,6 +292,23 @@ private fun StaleBadge() {
     val tokens = Kampr.tokens
     Box(Modifier.announce("Stale — this pane has stopped sending frames, showing the last grid")) {
         StatusBadge("Stale", tokens.color.working, tokens.color.surface)
+    }
+}
+
+// The badge for the state nothing could see. Worded as what is known rather than as a diagnosis,
+// because the client cannot tell which half of the node stopped — only that the two halves
+// disagree. `working` and not `blocked`: it is a warning about the picture, not a question waiting
+// on the operator, and the pane may still be perfectly reachable by typing.
+@Composable
+private fun QuietBadge() {
+    val tokens = Kampr.tokens
+    Box(
+        Modifier.announce(
+            "Quiet — this node says the pane is active but has sent no frames; what is shown may be out of date",
+            urgent = true,
+        )
+    ) {
+        StatusBadge("Quiet", tokens.color.working, tokens.color.surface)
     }
 }
 
@@ -374,10 +435,15 @@ fun PaneScreenDesktop(
             }
             if (info?.detail != null) StreamBadge()
             if (pane.stale) StaleBadge()
+            if (pane.quiet) QuietBadge()
             if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
             StatusChip(info)
             NewAction(pane.id)
             PaneManageAction(pane.id)
+            // Closing the left-hand toolbar rather than trailing the switch: the desk has room to
+            // put the two apart, and the slot it holds on the transcript is then a few pixels of a
+            // spacer that was already empty.
+            ZoomSlot(pane, surfaces, shown)
             Box(Modifier.weight(1f))
             if (info.talks) {
                 // Terminal first and Split last, in the order a pane is actually opened in: the
@@ -403,7 +469,6 @@ fun PaneScreenDesktop(
                     what = "view",
                 )
             }
-            if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
         }
 
         streamFault(pane, info)?.let {

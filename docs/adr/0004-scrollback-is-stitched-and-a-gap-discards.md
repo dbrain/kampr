@@ -29,10 +29,15 @@ format:"ansi"` on a shell pane returned 401 lines in **0.002 s** with the viewpo
 It comes with three hard edges, and the third only appeared after code was built on a wrong reading
 of the second:
 
-1. **Alt-screen panes have no ring.** `max_offset_from_bottom` is 0 for Claude, Codex, vim
-   (#30) — `recent` degrades to the viewport. Agent panes lose nothing by this: the conversation
-   view is a better history than a ring, being whole-session and structured
-   ([ADR 0005](./0005-structure-comes-from-the-transcript.md)).
+1. ~~**Alt-screen panes have no ring, so agent panes lose nothing.**~~ **Half withdrawn (#231).**
+   The measured half stands: a pane genuinely on the alternate screen reports
+   `max_offset_from_bottom: 0` and `recent` degrades to the viewport, and exiting alt screen
+   restores the ring (#30). What was extrapolated from it — that a detected agent pane *is* such a
+   pane — is false. A live `codex` read back **402** rows of ring and a live `claude` **384**; the
+   one harness that really does clear its scrollback is Claude Code once it has taken the screen.
+   So agent panes do have history to lose. The conversation view is still the better history for
+   them ([ADR 0005](./0005-structure-comes-from-the-transcript.md)), but it is no longer the only
+   one they have.
 2. ~~**A read on an idle *recognised agent* pane can move the operator's screen.**~~ **Measured and
    withdrawn (#231).** Collie's hazard was respected rather than tested; a live `codex` and a live
    `claude`, both herdr-detected and both holding a ring, answer `lines: 5000` in 1 ms with the

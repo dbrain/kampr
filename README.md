@@ -4,9 +4,14 @@ Remote access to a [Herdr](https://herdr.dev) agent herd from a phone, a tablet 
 across every machine you own, behind real authentication, without reshaping the session you left
 running at your desk.
 
-> **Status: pre-alpha.** Every part is built and tested, but no tagged release exists yet, so the
-> install is from source. A completeness audit is in flight; `docs/06-audit.md` is the standing
-> list of what is broken. Read it before you expose this to anything.
+> **Status: released, and young.** Every
+> [release](https://github.com/dbrain/kampr/releases) carries static Linux and macOS binaries for
+> both architectures, a checksum-verified installer, and a signed Android APK; `kampr update` takes
+> the next one. What is still unproven is unproven for want of hardware rather than for want of a
+> test — no passkey has ever been created on a real phone, push has been driven against a real
+> browser and a real push service but never against a handset, and the mesh has never crossed a real
+> WAN. [`docs/06-audit.md`](docs/06-audit.md) is the standing list. Read it before you expose this
+> to anything.
 
 - **A live terminal, not a text mirror.** Kampr streams Herdr's own rendered frames and
   reconstructs the grid exactly — truecolour, cursor, hyperlinks and all.
@@ -15,6 +20,63 @@ running at your desk.
 - **It never resizes your panes.** Kampr observes and types; it is structurally incapable of
   reshaping a session. Small screens are handled with zoom, pan and the conversation view, so the
   desk you come back to is the desk you left.
+
+---
+
+## TL;DR
+
+Herdr 0.8.2 or newer, running. Then, on the machine it is running on:
+
+```bash
+curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
+sh install.sh                                  # ~/.local/bin/kampr, checksum verified
+kampr init --name laptop --bind 0.0.0.0:8790   # config, identity, URL, pairing code, recovery code
+kampr service install                          # systemd --user unit, or a launchd agent on macOS
+kampr doctor                                   # one ok/warn/fail line per thing that has to be true
+```
+
+Open the URL `kampr init` printed, on the phone, and pair with the code it printed beside it. The web
+client is compiled into the binary, so a browser is the whole client and there is nothing else to
+install — on Android there is a signed APK on the same release if you would rather have an app. Write
+the recovery code down on paper; it is shown once.
+
+`--bind 0.0.0.0:8790` is what makes it reachable from the phone. Leave it off and the node is
+loopback-only, which is the default because anything that pairs with it can type into every terminal
+on that host. It is plain HTTP on your LAN at this point, and the node says so on every screen until
+you give it a hostname and a certificate.
+
+That is one machine. Several machines behind one hostname, a certificate, passkeys and notifications
+are all below, and all of them are optional.
+
+Two notes on the installer, since it is fetching a binary that will hold your shells. It writes the
+script to a file rather than piping into `sh` on purpose — a piped `curl` sends nothing into `sh`
+when the URL 404s and the pipeline still exits 0. And it verifies `SHA256SUMS` always but the cosign
+signature beside it only if you have [cosign](https://docs.sigstore.dev/cosign/installation)
+installed; without it the run prints `signature verified: skipped — cosign is not installed` and
+carries on, which is what most people will see.
+
+---
+
+## Vibe coded
+
+Kampr was written overwhelmingly by an AI agent, in about a week, and the commit log does not hide
+it. The phrase usually means generated fast and trusted blindly, so here is what was actually done
+instead, all of it in this repository and all of it checkable.
+
+[`docs/03-probe-log.md`](docs/03-probe-log.md) is 267 numbered rows today. Each one is a single claim about
+Herdr or about a browser or about Google, the command that produced it, and what came back. Nothing
+here is allowed to be reasoned out from another terminal multiplexer or recalled from training; if a
+fact is not in that log, the rule is to go and measure it and add a row. The `#123` citations
+scattered through the code point into it, and the constants that look arbitrary are mostly one of
+those measurements. A fix is not accepted until the test that catches it has been run against the
+*old* code and seen to fail, because a test that still passes with the defect restored is a harness
+that was never the app. The integration suite drives a real Herdr binary end to end and skips loudly
+rather than passing quietly when one is missing. Decisions that closed off other options are written
+down in [`docs/adr/`](docs/adr/), each with what would justify revisiting it.
+
+If the real question is whether to give this a shell on your machine, the two documents that answer
+it are [`docs/08-threat-model.md`](docs/08-threat-model.md) — which is candid about what each rung
+of the ladder does *not* protect against — and the probe log.
 
 ---
 
@@ -67,16 +129,29 @@ optional.
 |---|---|
 | Herdr | **0.8.2 or newer** (protocol 20), running, on every box |
 | OS | Linux or macOS 11+. **Windows is not supported** — the node reaches Herdr over a Unix socket and supervises itself with systemd or launchd. Use WSL2. |
-| To build | Rust 1.90+ and **JDK 21 exactly** — every module pins `jvmToolchain(21)`, so a newer JDK is not a substitute. Full list in [`docs/09-toolchain.md`](docs/09-toolchain.md) |
+| To build *from source* | Rust 1.90+ and **JDK 21 exactly** — every module pins `jvmToolchain(21)`, so a newer JDK is not a substitute. Not needed if you install a release. Full list in [`docs/09-toolchain.md`](docs/09-toolchain.md) |
 
 Kampr access is **unrestricted command execution** on the host it runs on. Treat a paired device
 the way you would treat an SSH key.
 
-### 1. Build and install the binary — on every box
+### 1. Install the binary — on every box
 
-There is no published release yet, so the documented `curl | sh` installer and
-`herdr plugin install` path both have nothing to fetch. Build from source. Note the order: the node
-**embeds** the web client, so the bundle is staged before cargo runs.
+```bash
+curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
+sh install.sh
+```
+
+`KAMPR_PREFIX` chooses where it lands; the default is `~/.local/bin`. It picks the tarball for this
+OS and architecture, checks it against the release's `SHA256SUMS`, checks that against the cosign
+bundle beside it **if cosign is installed** and says `skipped` if it is not, and refuses rather than
+half-succeeding: a checksum mismatch installs nothing, a release with no `SHA256SUMS` installs
+nothing, and a new binary that will not run on the host is put back (#156).
+
+Linux binaries are statically linked against musl, so there is no glibc floor and an old Raspberry Pi
+is fine. macOS needs 11.0 or newer.
+
+**From source instead.** The node **embeds** the web client, so the bundle is staged before cargo
+runs, and the order is the part that is easy to get wrong:
 
 ```bash
 git clone https://github.com/dbrain/kampr && cd kampr
@@ -92,9 +167,6 @@ KAMPR_REQUIRE_BUNDLE=1 cargo build --release -p kampr-cli
 
 install -Dm755 target/release/kampr ~/.local/bin/kampr
 ```
-
-Repeat on each machine, or build once and copy the binary to boxes of the same architecture — it is
-statically linked against musl on Linux, so there is no glibc floor and an old Raspberry Pi is fine.
 
 ### 2. Give every node an identity
 
@@ -145,13 +217,22 @@ it is also the first-run pairing step — prints a URL, a QR code, a **pairing c
 ```
 Kampr node laptop (01M0GMAMNNCW7P6Y7WFK3WZWMD)
   config      /home/you/.config/kampr/config.toml
+  state       /home/you/.local/state/kampr
+  herdr       /home/you/.local/bin/herdr — recorded in config.toml, because a service manager's PATH is not your shell's
   identity    fdb5-34de-58b3-129e
+  push key    BO81QvDTOqOLDJoR1q3oaxczsUz5BU0dEmARQ0bXCn0dsoyoi3iAAvqoHabwjBt36Ck8clGFmQa4YgcVHvrwyDc
 
   http://127.0.0.1:8790
   bind        127.0.0.1:8790 — this machine only. A phone on the LAN cannot reach it.
+                           `kampr init --bind 0.0.0.0:8790` opens it to the network.
+
+  [a QR code for that URL]
 
   pairing code   J5XD-V3ZH
   valid for      10 minutes, one device
+
+  tier 0   secure context
+  passkeys no   notifications yes   install yes
 
   RECOVERY CODE   3DXP-LMSQ-KVDP-VZ8Y-RW5E
 ```
@@ -271,6 +352,13 @@ unlock** — none of which are possible against a bare IP, because a WebAuthn RP
 registrable domain and HTTPS on an IP address is not enough. `kampr status` tells you which tier you
 are on and what is still locked.
 
+A passkey in the **Android app** needs one more thing that a browser does not: Google's servers must
+be able to fetch `/.well-known/assetlinks.json` from your hostname, over the public internet. A
+hostname that resolves publicly to a private address does not satisfy that however correct everything
+else is (#170), and there is no local configuration that substitutes.
+[`docs/10-passkeys.md`](docs/10-passkeys.md) is the whole story, including what you keep if you skip
+it — which is a supported configuration and what most nodes run as.
+
 ---
 
 ## Back this up
@@ -326,8 +414,8 @@ therefore the answer to the only version question a mesh actually raises — *wh
 are stale* — without logging into any of them:
 
 ```
-front — this machine · kampr 0.1.1
-back  — peer · kampr 0.1.0 · 0.1.1 available
+front — this machine · kampr 0.1.21
+back  — peer · kampr 0.1.19 · 0.1.21 available
 ```
 
 A node with no route out says nothing rather than reporting an error, and the check is the
@@ -348,9 +436,9 @@ nothing, `KAMPR_ALLOW_UNVERIFIED` in your shell is not inherited, and a new bina
 run on the host is put back.
 
 ```bash
-kampr update --check              # say what is available, install nothing
-kampr update                      # take it
-kampr update --version v0.1.0     # go back to one that worked
+kampr update --check               # say what is available, install nothing
+kampr update                       # take it
+kampr update --version v0.1.19     # go back to one that worked
 ```
 
 **Nothing updates itself, and a hub cannot update a peer.** A process that can type into every
@@ -405,6 +493,7 @@ Reconstructs the pane's grid from the frame stream alone and diffs it against He
 | [`docs/07-android-release.md`](docs/07-android-release.md) | Signing, release and kobup publish |
 | [`docs/08-notifications.md`](docs/08-notifications.md) | Push, from `agent_status` to a phone |
 | [`docs/08-threat-model.md`](docs/08-threat-model.md) | Assets, adversaries and the residual risks |
+| [`docs/10-passkeys.md`](docs/10-passkeys.md) | What passkeys need, what Android needs on top, and what you keep without them |
 | [`docs/02-roadmap.md`](docs/02-roadmap.md) | The plan, and where each phase actually stands |
 
 ## Licence

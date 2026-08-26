@@ -1001,3 +1001,69 @@ async fn a_pane_whose_reads_keep_failing_is_not_treated_as_a_quiet_one() {
          idle backstop as though the pane had simply gone quiet"
     );
 }
+
+/// Probe #268. The defect the browser report was made of: one pane's grid frozen at an old screen
+/// while that same pane's conversation kept answering on the same healthy socket.
+///
+/// `PaneEntry` owns a `broadcast::Sender` of its own, so the channel never closes when the pump
+/// that feeds it goes — and `Watcher::recv` therefore cannot tell a dead feeder from a pane nobody
+/// is typing in. It simply parks. Every surface stays honest-looking: the socket is up, the herd
+/// model is fresh, `watcher_count` still counts this viewer, and the pane is dead for good.
+///
+/// This is probe #233's shape one layer in, and the rule it breaks is the one this project names
+/// above all others — a failure that wears a plausible-looking success.
+#[tokio::test]
+async fn a_watcher_whose_feeder_died_is_told_rather_than_left_parked() {
+    let (p, reg) = setup().await;
+    let mut w = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 3 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"\x1b[1;1Hhello".to_vec(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(text_of(&next(&mut w).await)[0], "hello");
+
+    // Exactly what `supervise` returning does: the provider's end of the stream goes, and nothing
+    // anywhere is told about it.
+    drop(feed);
+    p.feeds.lock().await.remove("p");
+
+    let ended = tokio::time::timeout(Duration::from_secs(2), w.recv()).await;
+    assert!(
+        ended.is_ok(),
+        "a watcher whose feeder died parked for ever instead of reporting it",
+    );
+    assert!(
+        matches!(ended.unwrap(), Err(kampr_core::registry::WatchError::Closed)),
+        "the pane went quiet without saying it had stopped",
+    );
+}
+
+/// And the recovery that makes it survivable: a dead entry is not a pane. Re-opening the pane —
+/// the one thing an operator would try — must re-open the provider rather than re-attach to the
+/// corpse. `hold_while` pins the entry across a re-watch by design (#252), so without this the
+/// stall outlives every close and reopen the operator can perform.
+#[tokio::test]
+async fn reopening_a_pane_whose_feeder_died_opens_a_live_one() {
+    let (p, reg) = setup().await;
+    let w = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 3 }).await.unwrap();
+    assert_eq!(p.opens.load(Ordering::SeqCst), 1);
+
+    drop(feed);
+    p.feeds.lock().await.remove("p");
+    // The dead pump has to actually finish before the entry can be seen to be dead.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let _second = reg.watch("p").await.unwrap();
+    assert_eq!(
+        p.opens.load(Ordering::SeqCst),
+        2,
+        "a re-watch re-attached to a pane with nothing feeding it",
+    );
+    drop(w);
+}

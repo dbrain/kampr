@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 
@@ -63,6 +64,30 @@ class ScrollbackStore {
     }
 }
 
+// Counted in herd sweeps rather than in seconds, because the sweep is what produces the evidence
+// and a wall-clock threshold would only be that number in disguise. The sweep runs every 3s for as
+// long as any pane is being streamed, so three separate sweeps each reporting this pane moving is
+// at least six seconds of the node watching it work while handing this client not one frame —
+// against a measured change-to-client latency of ~190ms, which is thirty round trips of slack.
+//
+// The number that matters is the floor, not the ceiling. One sweep is a race: a herd patch can
+// legitimately overtake the grid frame for the same change by a sweep's width. Two is a race that
+// happened twice. Three is not a race, and it still costs an idle pane nothing at all, because an
+// idle pane never moves either reading this counts.
+private const val QUIET_AFTER_MOVES = 3
+
+// What the node's socket plane says happened to this pane, read off the herd it is already
+// sending. Both readings are output-correlated and neither can be produced by a pane sitting
+// idle: rows only enter the scrollback ring when the pane writes lines that scroll off it, and an
+// agent's status only moves when the harness does something.
+//
+// Both, and not either alone, because the pane this was written for had neither on its own. A
+// full-screen agent on the alt screen keeps no scrollback at all (its ring is flat at zero), and a
+// plain shell has no agent status to move — so a detector built on one of them is blind to exactly
+// half the panes in the product, and the half it was blind to was `codex`.
+fun paneMoved(before: PaneInfo, after: PaneInfo): Boolean =
+    after.scrollbackRows > before.scrollbackRows || after.agentStatus != before.agentStatus
+
 class PaneState(val id: String, val styles: StyleTable) {
     val cells = CellBuffer(80, 24)
     val links = mutableListOf<String>()
@@ -84,6 +109,40 @@ class PaneState(val id: String, val styles: StyleTable) {
 
     var revision by mutableIntStateOf(0)
         private set
+
+    // How many times the node's *other* half has reported this pane moving with no frame arriving
+    // in between. See [`paneMoved`] for what counts as moving and why an idle pane cannot.
+    var unshownMoves by mutableIntStateOf(0)
+        private set
+
+    // **A pane whose frames have stopped while its connection is healthy.** This is the state the
+    // browser report was made of and the one nothing in the client could see: the socket was up,
+    // the herd list was fresh, this pane's own conversation was answering on that same socket, and
+    // its grid sat on a screen minutes old. Every existing signal is downstream of the socket
+    // dying — `stale` means "the socket went away since we last painted" — so all of them said the
+    // pane was fine.
+    //
+    // It is not a timeout, and that is the whole of why it is safe. A pane nobody is typing in is
+    // legitimately silent for hours, so elapsed silence is not evidence of anything. What this
+    // counts is a *contradiction*: the node's socket plane keeps saying this pane is doing things
+    // while the node's stream plane delivers nothing, and the two planes fail independently
+    // (#233). An idle pane contributes nothing to either side of it.
+    val quiet: Boolean
+        get() = painted && !stale && unshownMoves >= QUIET_AFTER_MOVES
+
+    fun noteMoved() {
+        if (painted) unshownMoves++
+    }
+
+    // The node saying outright what the count above can only infer: this pane's frames have
+    // stopped. It is latched into the same state rather than shown as its own notice because the
+    // notice does not survive — `dropRepairedFault` clears a `stream_unavailable` as soon as the
+    // pane's herd entry carries no `detail`, which a per-pane stream death never sets, so the
+    // banner would be taken down by the next sweep three seconds later. One vocabulary, and it
+    // clears the way everything else here does: when a frame arrives.
+    fun noteStreamStopped() {
+        if (painted) unshownMoves = QUIET_AFTER_MOVES
+    }
 
     // Keystrokes that never left the device. Counted rather than flagged, because "nothing you
     // typed for the last thirty seconds arrived" is a different fact from "one key was lost".
@@ -109,6 +168,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         links += msg.links
         painted = true
         stale = false
+        unshownMoves = 0
         revision++
     }
 
@@ -117,6 +177,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         msg.cursor?.let { cursor = it }
         links += msg.links
         stale = false
+        unshownMoves = 0
         revision++
     }
 

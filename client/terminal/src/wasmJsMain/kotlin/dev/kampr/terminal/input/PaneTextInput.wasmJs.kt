@@ -2,6 +2,7 @@ package dev.kampr.terminal.input
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
@@ -12,14 +13,14 @@ import kotlin.js.ExperimentalWasmJsInterop
 
 // Android soft keyboards report keyCode 229 for every printable key, so keydown is unusable as
 // the text path in a browser. The readable input is an offscreen contenteditable driven through
-// beforeinput / input / composition*, diffed against what it held last frame. keydown is kept
+// beforeinput / input / composition*, diffed against what it last held. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
 @OptIn(ExperimentalWasmJsInterop::class)
-internal fun installInput() {
+private fun installDom(notify: () -> Unit) {
     js(
         """
         (function () {
-            if (globalThis.__kamprInput) return;
+            if (globalThis.__kamprInput) { globalThis.__kamprInput.notify = notify; return; }
             var el = document.createElement('div');
             el.setAttribute('contenteditable', 'plaintext-only');
             el.setAttribute('autocapitalize', 'off');
@@ -34,13 +35,20 @@ internal fun installInput() {
                 'background:transparent;overflow:hidden;z-index:-1;';
             document.body.appendChild(el);
 
-            var state = { el: el, queue: [] };
+            var state = { el: el, queue: [], hold: false, notify: notify };
             globalThis.__kamprInput = state;
 
             var composed = '';
             var handled = false;
 
             function push(text) { if (text) state.queue.push(text); }
+
+            function listen(type, handler) {
+                el.addEventListener(type, function (e) {
+                    handler(e);
+                    if (state.queue.length && state.notify) state.notify();
+                });
+            }
 
             function diff(previous, current) {
                 var shared = 0;
@@ -51,20 +59,20 @@ internal fun installInput() {
                 return out + current.slice(shared);
             }
 
-            el.addEventListener('compositionstart', function () { composed = ''; });
-            el.addEventListener('compositionupdate', function (e) {
+            listen('compositionstart', function () { composed = ''; });
+            listen('compositionupdate', function (e) {
                 var data = e.data || '';
                 push(diff(composed, data));
                 composed = data;
             });
-            el.addEventListener('compositionend', function (e) {
+            listen('compositionend', function (e) {
                 var data = e.data || '';
                 push(diff(composed, data));
                 composed = '';
                 el.textContent = '';
             });
 
-            el.addEventListener('beforeinput', function (e) {
+            listen('beforeinput', function (e) {
                 if (e.isComposing) return;
                 var kind = e.inputType;
                 handled = true;
@@ -86,7 +94,7 @@ internal fun installInput() {
                 e.preventDefault();
             });
 
-            el.addEventListener('input', function (e) {
+            listen('input', function (e) {
                 if (e.isComposing) return;
                 var current = el.textContent || '';
                 if (!handled && current.length) push(current);
@@ -120,7 +128,7 @@ internal fun installInput() {
                 return sequence;
             }
 
-            el.addEventListener('keydown', function (e) {
+            listen('keydown', function (e) {
                 if (e.isComposing || e.keyCode === 229) return;
                 var sequence = named[e.key];
                 if (sequence) {
@@ -156,6 +164,38 @@ internal fun installInput() {
 internal fun drainInput(): String =
     js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
 
+// The queue used to be emptied from a Compose frame loop, and `withFrameNanos` is
+// `requestAnimationFrame`. A browser stops calling that back for a hidden tab, so the drain parked
+// with the tab and whatever was in the array arrived in one lump when the tab came back, with
+// nothing saying so; and even on a visible tab every keystroke waited up to a frame before it was
+// sent, which is the only latency Kampr still owns: #273 puts herdr's own share at 1-3 ms.
+//
+// So a listener hands over before it returns and delivery has no clock at all. The array stays,
+// because the ordering is the array: several events land in one turn of the event loop,
+// `compositionupdate` interleaves with `beforeinput`, and the order they arrived in is what the
+// operator typed. Only the emptying moved.
+//
+// A keystroke that lands with no sink standing stays queued and goes to the next one the instant
+// it stands up, which is what makes the handover between two panes lossless. Nothing waits here
+// for a frame any more, so a keystroke that does not reach the pane is one the socket could not
+// carry — and that one is counted by `PaneState.undelivered` and badged, where an operator can
+// see it. This array was upstream of every counter in the client.
+private var deliverTo: ((String) -> Unit)? = null
+
+private fun flushInput() {
+    val deliver = deliverTo ?: return
+    val pending = drainInput()
+    if (pending.isNotEmpty()) deliver(pending)
+}
+
+internal fun deliverInputTo(deliver: ((String) -> Unit)?) {
+    flushInput()
+    deliverTo = deliver
+    flushInput()
+}
+
+internal fun installInput() = installDom(::flushInput)
+
 // `touchBrowser` and not the key row's reading, because these are two questions off one browser
 // and they want different thresholds. Here the question is whether focusing would raise a soft
 // keyboard over the pane, and only a coarse pointer has one to raise — so a browser that reports
@@ -179,8 +219,43 @@ internal fun focusInput(open: Boolean) {
         (function () {
             var s = globalThis.__kamprInput;
             if (!s) return;
+            s.hold = open;
             if (open) { s.el.textContent = ''; s.el.focus({ preventScroll: true }); }
             else { s.el.blur(); }
+        })()
+        """
+    )
+}
+
+// DOM focus is one slot for the whole page, and the pane's claim on it used to be asserted exactly
+// once — from a `LaunchedEffect` keyed on the keyboard cap, a focus request, a settled gesture and
+// `enabled`. None of those move when something else on the page takes the slot, so the claim was
+// never renewed: the conversation composer, a button, any page chrome took the keyboard and kept
+// it, and the pane went on painting frames from the desk while every keystroke went to the page.
+// A pane that shows output and takes no keys, with nothing complaining, is the shape this exists
+// to stop.
+//
+// Renewed per frame rather than on `focusout`, because the strand is usually the *second* move.
+// The composer takes the focus legitimately, and then hands it back to the body when it closes —
+// and no event fires on an element that lost the focus some time ago, so there is nothing to hang
+// a listener on. A standing claim has to be re-checked to be worth anything.
+//
+// Standing down for a live text field is what keeps the composer usable: Compose's own text input
+// is a real `<textarea>` in this DOM, so an editable element holding the focus is always someone
+// who needs the keys more than the pane does. Everything else — a button, the body, nothing at
+// all — is not typing, and the pane takes the slot back.
+@OptIn(ExperimentalWasmJsInterop::class)
+internal fun reclaimInputFocus() {
+    js(
+        """
+        (function () {
+            var s = globalThis.__kamprInput;
+            if (!s || !s.hold) return;
+            var active = document.activeElement;
+            if (active === s.el) return;
+            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
+                           active.isContentEditable)) return;
+            s.el.focus({ preventScroll: true });
         })()
         """
     )
@@ -198,12 +273,18 @@ actual fun PaneTextInput(
     LaunchedEffect(session.keyboardOpen, session.focusRequests, session.surfaceSettled, enabled) {
         focusInput(holdsInput(enabled, session.keyboardOpen, touch))
     }
+    DisposableEffect(sink, enabled) {
+        deliverInputTo(if (enabled) sink::type else null)
+        onDispose { deliverInputTo(null) }
+    }
+    // A frame is the wrong clock for delivering a keystroke and the only one there is for renewing
+    // a focus claim: nothing fires when the slot is lost to something that took it a while ago, so
+    // the claim has to be re-checked, and a hidden tab has no focus to lose.
     LaunchedEffect(enabled) {
         if (!enabled) return@LaunchedEffect
         while (true) {
             withFrameNanos { }
-            val pending = drainInput()
-            if (pending.isNotEmpty()) sink.type(pending)
+            reclaimInputFocus()
         }
     }
     Box(modifier)

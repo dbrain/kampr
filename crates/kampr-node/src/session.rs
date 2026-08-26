@@ -1378,7 +1378,20 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     loop {
         tokio::select! {
             update = watcher.recv() => {
-                let Ok(update) = update else { return };
+                // **Never a bare `return`.** This is the one place the node learns that a pane's
+                // frames have stopped for a reason that is not the socket going away, and for as
+                // long as it was silent the pane sat frozen on an old screen while its own
+                // conversation kept answering over the same healthy connection — the whole of the
+                // browser report behind #268. The pane is dropped either way; saying so is what
+                // separates it from a pane nobody is typing in.
+                let Ok(update) = update else {
+                    wire.error(
+                        ErrorCode::StreamUnavailable,
+                        "this pane's frames stopped arriving; reopen it to restart the stream",
+                        Some(&global),
+                    );
+                    return;
+                };
                 if wire.outbox().congested() {
                     let dropped = wire.outbox().purge_pane(&global);
                     debug!(pane = %global, dropped, "client is behind; resetting instead of buffering");

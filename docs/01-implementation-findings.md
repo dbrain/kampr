@@ -778,8 +778,8 @@ kampr service install # systemd --user unit (launchd on macOS), plus loginctl en
 ```
 
 Fetched to a file, not piped: `curl -fsSL … | sh` pipes nothing into `sh` when the URL 404s and
-the pipeline still exits 0, so a release that does not exist yet fails silently. Nothing is
-published at the time of writing, so this path has nothing to fetch — build from source instead.
+the pipeline still exits 0, so a release that does not exist fails silently. This is now the
+documented and exercised path — releases have existed since `v0.1.0`.
 
 **From source**, a Gradle build for the web bundle and then
 `KAMPR_REQUIRE_BUNDLE=1 cargo build --release -p kampr-cli`. Not `cargo install --path .`: the

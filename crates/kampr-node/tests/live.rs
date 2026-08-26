@@ -4875,3 +4875,108 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
         "the session was stopped and is still an online node"
     );
 }
+
+/// Probe #272: keypress-to-glyph, socket in to socket out, against a real herdr.
+///
+/// The hop this measures is everything the node owns — websocket read, `pane.send_text` over the
+/// herdr socket, the PTY, herdr's own render and its `observe` frame, the `vte` emulator, the diff
+/// and the wire encode — but not the browser's frame-drained input queue and not the LAN. It is
+/// the number that did not exist: #22 measured herdr alone through `session control`, and #257
+/// measured a frame's round trip under an attachment's load, but nothing measured a keystroke
+/// going all the way through a node and coming back as a glyph.
+///
+/// One character at a time and no newline: a shell that runs a command answers on its own
+/// schedule, and this is asking what the echo costs.
+///
+/// **It is `bash`'s echo, and on a machine with `ble.sh` that is nearly all of the number.** The
+/// same keystrokes into a pane running `cat` come back in **1.2 ms** and into `bash --norc` in
+/// 1.2 ms, against 26.5 ms into an interactive `bash` with the operator's rc (#273) — so what this
+/// records is a ceiling on the whole path, not a reading of the node's share, and the node's share
+/// is the part that is genuinely below the instrument.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
+    let h = harness!("latency");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+
+    // A prompt that has not finished painting keeps sending frames of its own, and they would be
+    // counted as the answer to the first keystroke.
+    drain(&mut socket, Duration::from_millis(600)).await;
+
+    let mut readings = Vec::new();
+    for round in 0..48u32 {
+        // Every keystroke is a character the screen does not already hold, so the frame that
+        // carries it cannot be a repaint of something older.
+        let ch = char::from(b'a' + (round % 26) as u8);
+        let at = std::time::Instant::now();
+        send(
+            &mut socket,
+            json!({ "t": "input", "pane": pane, "text": ch.to_string() }),
+        )
+        .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut took = None;
+        while tokio::time::Instant::now() < deadline && took.is_none() {
+            let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+                continue;
+            };
+            if message["pane"] != pane.as_str() {
+                continue;
+            }
+            if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+                continue;
+            }
+            if message.to_string().contains(ch) {
+                took = Some(at.elapsed());
+            }
+        }
+        let took = took.unwrap_or_else(|| panic!("round {round}: {ch} never came back as a glyph"));
+        readings.push(took.as_secs_f64() * 1000.0);
+
+        // Take the line back so the next keystroke is landing on a clean prompt, and wait an
+        // uneven amount before the next one. A fixed cadence puts every keystroke at the same
+        // phase of whatever else in the path is periodic and the readings all land together: the
+        // first run of this used a flat 120 ms and measured a p50 of 98 ms, against 31 ms with the
+        // jitter (#272). That was read as a ~100 ms tick in herdr and it is not one — herdr's only
+        // periodicity is a 16 ms floor between frames and it delivers a write in ~1 ms (#274) —
+        // so the aliasing is in the pane's own shell. The jitter stays because the number moves
+        // by a factor of three without it.
+        send(
+            &mut socket,
+            json!({ "t": "input", "pane": pane, "keys": ["BSpace"] }),
+        )
+        .await;
+        let jitter = 50 + (round as u64 * 37) % 190;
+        drain(&mut socket, Duration::from_millis(jitter)).await;
+    }
+
+    readings.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let at = |q: f64| readings[((readings.len() as f64 - 1.0) * q).round() as usize];
+    eprintln!(
+        "keypress-to-glyph over {} readings: min {:.1} ms  p50 {:.1} ms  p90 {:.1} ms  max {:.1} ms",
+        readings.len(),
+        readings[0],
+        at(0.50),
+        at(0.90),
+        readings[readings.len() - 1],
+    );
+
+    // Load-sensitive, so this is a ceiling that says "the path is not broken", not the measurement.
+    // The measurement is the line above; #272 is where it is written down and #273 is what it
+    // turned out to be a measurement of.
+    assert!(
+        at(0.50) < 250.0,
+        "the median keystroke took {:.1} ms to come back as a glyph",
+        at(0.50)
+    );
+}
+
+async fn drain(socket: &mut Socket, quiet: Duration) {
+    while recv(socket, quiet).await.is_some() {}
+}

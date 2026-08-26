@@ -207,7 +207,20 @@ struct PaneEntry {
     history: Arc<Mutex<ScrollbackRing>>,
     status: Arc<Mutex<HistoryStatus>>,
     tx: broadcast::Sender<PaneUpdate>,
+    /// Whether [`pump`] is still running. The entry owns a `Sender` of its own so the broadcast
+    /// channel can outlive its feeder, which is what made a dead pump indistinguishable from a
+    /// pane nobody is typing in: `recv` simply parked, for ever, while the socket carrying it
+    /// stayed up and answered every other question correctly (#268, and #233's shape one layer
+    /// in). The pump holds the other half of this and nothing else does, so it goes when the task
+    /// does — including when the task panics or is aborted, which no explicit flag would catch.
+    alive: tokio::sync::watch::Receiver<()>,
     tasks: [JoinHandle<()>; 2],
+}
+
+impl PaneEntry {
+    fn feeding(&self) -> bool {
+        self.alive.has_changed().is_ok()
+    }
 }
 
 impl Drop for PaneEntry {
@@ -344,6 +357,7 @@ impl PaneRegistry {
             poll: self.config.history.fastest,
             rows_per_sec: 0.0,
         }));
+        let (alive_tx, alive) = tokio::sync::watch::channel(());
         let tasks = [
             tokio::spawn(pump(
                 stream,
@@ -351,6 +365,7 @@ impl PaneRegistry {
                 tx.clone(),
                 self.config.reset_flush_after,
                 activity.clone(),
+                alive_tx,
             )),
             tokio::spawn(accumulate_history(
                 self.provider.clone(),
@@ -368,6 +383,7 @@ impl PaneRegistry {
             history,
             status,
             tx,
+            alive,
             tasks,
         });
         self.panes
@@ -405,8 +421,18 @@ impl PaneRegistry {
         hold
     }
 
+    /// **An entry whose pump has stopped is not a pane.** It still holds the last grid, so
+    /// re-attaching to it hands a joiner a screen that looks right and then never moves again —
+    /// and `hold_while` pins it across a re-watch by design (#252), so the stall would outlive
+    /// every close and reopen an operator could perform. Refusing it here is what makes reopening
+    /// the pane the recovery it looks like.
     fn lookup(&self, pane_id: &str) -> Option<Arc<PaneEntry>> {
-        self.panes.lock().unwrap().get(pane_id).and_then(Weak::upgrade)
+        self.panes
+            .lock()
+            .unwrap()
+            .get(pane_id)
+            .and_then(Weak::upgrade)
+            .filter(|entry| entry.feeding())
     }
 
     /// Subscribes before releasing the state lock, so the grid handed to a joiner and the stream
@@ -420,6 +446,7 @@ impl PaneRegistry {
         entry.watchers.fetch_add(1, Ordering::Relaxed);
         self.watcher_changes.send_modify(|n| *n += 1);
         Watcher {
+            alive: entry.alive.clone(),
             entry,
             rx,
             initial,
@@ -437,6 +464,7 @@ pub struct PaneHold {
 pub struct Watcher {
     entry: Arc<PaneEntry>,
     rx: broadcast::Receiver<PaneUpdate>,
+    alive: tokio::sync::watch::Receiver<()>,
     initial: PaneUpdate,
     ready: bool,
     watcher_changes: Arc<tokio::sync::watch::Sender<u64>>,
@@ -466,9 +494,18 @@ impl Watcher {
     }
 
     /// A watcher that falls behind is caught up with one full grid rather than a queue of
-    /// patches it can never drain.
+    /// patches it can never drain; a watcher whose feeder has stopped is told so.
+    ///
+    /// `biased`, because the two are not equal claims: whatever is already in the broadcast was
+    /// produced before the pump died and is still the truth about the pane, so it is drained
+    /// first and the death is reported only once there is nothing left to say.
     pub async fn recv(&mut self) -> Result<PaneUpdate, WatchError> {
-        match self.rx.recv().await {
+        let received = tokio::select! {
+            biased;
+            r = self.rx.recv() => r,
+            _ = self.alive.changed() => return Err(WatchError::Closed),
+        };
+        match received {
             Ok(u) => Ok(u),
             Err(RecvError::Lagged(_)) => Ok(full_update(&self.entry.state.lock().unwrap())),
             Err(RecvError::Closed) => Err(WatchError::Closed),
@@ -510,12 +547,15 @@ fn publish_reset(state: &Arc<Mutex<PaneState>>, tx: &broadcast::Sender<PaneUpdat
     let _ = tx.send(full_update(&st));
 }
 
+/// `_alive` is held and never used: dropping it is the signal, and it drops however this task
+/// ends — a stream that closed, a panic, an abort at teardown.
 async fn pump(
     mut stream: PaneStream,
     state: Arc<Mutex<PaneState>>,
     tx: broadcast::Sender<PaneUpdate>,
     flush_after: Duration,
     activity: Arc<Activity>,
+    _alive: tokio::sync::watch::Sender<()>,
 ) {
     loop {
         let pending = state.lock().unwrap().pending_reset;
