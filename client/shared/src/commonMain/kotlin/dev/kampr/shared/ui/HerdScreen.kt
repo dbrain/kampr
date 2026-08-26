@@ -3,6 +3,7 @@ package dev.kampr.shared.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -115,7 +116,6 @@ fun HerdLandscape(
 ) {
     val tokens = Kampr.tokens
     val groups = herd.groups()
-    val columns = groups.chunkedColumns()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -149,22 +149,26 @@ fun HerdLandscape(
                     HerdEmpty(connection, compact = true)
                 }
             } else {
-                Row(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    for (column in columns) {
-                        Column(Modifier.weight(1f)) {
-                            if (column === columns.first() && triage.isNotEmpty()) {
-                                Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                                    TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                BoxWithConstraints(Modifier.weight(1f)) {
+                    val plan = columnPlan(maxWidth - 20.dp, COLUMN_GAP, wanted = groups.size)
+                    val columns = groups.balancedColumns(plan.count)
+                    Row(
+                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(COLUMN_GAP, Alignment.CenterHorizontally),
+                    ) {
+                        for (column in columns) {
+                            Column(Modifier.width(plan.width)) {
+                                if (column === columns.first() && triage.isNotEmpty()) {
+                                    Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                                        TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                                    }
                                 }
-                            }
-                            for (group in column) {
-                                NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    for (pane in group.panes) {
-                                        PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                for (group in column) {
+                                    NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        for (pane in group.panes) {
+                                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                        }
                                     }
                                 }
                             }
@@ -177,22 +181,17 @@ fun HerdLandscape(
     }
 }
 
-private fun List<NodeGroup>.chunkedColumns(): List<List<NodeGroup>> {
-    val left = mutableListOf<NodeGroup>()
-    val right = mutableListOf<NodeGroup>()
-    var leftWeight = 0
-    var rightWeight = 0
+private val COLUMN_GAP = 10.dp
+
+private fun List<NodeGroup>.balancedColumns(count: Int): List<List<NodeGroup>> {
+    val columns = List(count) { mutableListOf<NodeGroup>() }
+    val heights = IntArray(count)
     for (group in this) {
-        val weight = group.panes.size + 1
-        if (leftWeight <= rightWeight) {
-            left += group
-            leftWeight += weight
-        } else {
-            right += group
-            rightWeight += weight
-        }
+        val shortest = heights.indices.minBy { heights[it] }
+        columns[shortest] += group
+        heights[shortest] += group.panes.size + 1
     }
-    return listOf(left, right)
+    return columns
 }
 
 @Composable

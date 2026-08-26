@@ -194,7 +194,6 @@ class ThemeMatrixTest {
             AppearanceScreen(
                 selected = spec.id,
                 mode = if (ground == Ground.Light) ThemeMode.Light else ThemeMode.Dark,
-                columns = 1,
                 onSelect = {},
                 onMode = {},
                 onBack = {},

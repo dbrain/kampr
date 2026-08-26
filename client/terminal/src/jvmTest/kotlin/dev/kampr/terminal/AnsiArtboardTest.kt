@@ -55,7 +55,6 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-private val OUT = File("build/artboards")
 
 private fun rgb(hex: Int) = ColorSpec.Rgb((hex shr 16) and 0xFF, (hex shr 8) and 0xFF, hex and 0xFF)
 

@@ -131,11 +131,20 @@ class PaneChromeTest {
     // Landscape is a first-class layout, and an agent pane opens in Conversation: with the switcher
     // hidden there is no way to reach the terminal at all without rotating the phone.
     @Test
-    fun landscapeCanStillReachTheTerminalAndTheZoom() = runComposeUiTest {
+    fun landscapeCanStillReachTheTerminal() = runComposeUiTest {
         val probe = ChromeProbe()
         screen(probe, 914.dp, 411.dp, landscape = true, view = PaneView.Conversation)
         onNodeWithContentDescription("Terminal view").assertExists()
         onNodeWithContentDescription("Conversation view").assertExists()
+    }
+
+    // The zoom goes with the surface it zooms. Only the terminal draws the sheet it opens, so on
+    // the transcript it did nothing at all — and then the sheet was already up when you switched
+    // back to the pane it belongs to.
+    @Test
+    fun landscapeCarriesTheZoomOnTheTerminalAndNotOnTheTranscript() = runComposeUiTest {
+        val probe = ChromeProbe()
+        screen(probe, 914.dp, 411.dp, landscape = true, view = PaneView.Terminal)
         onNodeWithContentDescription(ZOOM_PROBE).assertExists()
     }
 }

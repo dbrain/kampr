@@ -40,7 +40,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private val OUT = File("build/artboards")
 private const val COLS = 16
 
 private fun paneOf(vararg rows: List<Run>): PaneState {

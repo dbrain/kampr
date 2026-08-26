@@ -7,6 +7,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class HandScrollTest {
@@ -49,5 +50,27 @@ class HandScrollTest {
         waitForIdle()
 
         assertFalse(session.keyboardOpen, "catching a fling raised the keyboard")
+    }
+
+    // A browser blurs the offscreen input on the pointer down that starts the scroll, and a desk
+    // browser holds that focus without ever asking for a keyboard — so a flick that correctly
+    // raises no keyboard still has to say it is over, or the pane is deaf until something taps it.
+    @Test
+    fun aFlickThatRaisesNoKeyboardStillSaysTheGestureIsOver() = runComposeUiTest {
+        val pane = Phone.shell()
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(pane, session)
+        val before = session.surfaceSettled
+
+        onRoot().performTouchInput {
+            down(Offset(centerX, centerY))
+            advanceEventTime(8)
+            moveBy(Offset(0f, 180f))
+            up()
+        }
+        waitForIdle()
+
+        assertFalse(session.keyboardOpen, "a flick raised the keyboard")
+        assertTrue(session.surfaceSettled > before, "the flick left the offscreen input blurred")
     }
 }

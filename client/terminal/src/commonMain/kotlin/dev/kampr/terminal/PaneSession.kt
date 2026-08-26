@@ -28,6 +28,12 @@ class PaneSession(val paneId: String) {
         private set
     var focusRequests by mutableIntStateOf(0)
         private set
+
+    // Every gesture that ends on the pane surface, asked-for keyboard or not. A browser holding
+    // focus for a hardware keyboard never asks for one, so this is the only cue it gets that the
+    // pointer down took the offscreen input's focus away and it is time to take it back.
+    var surfaceSettled by mutableIntStateOf(0)
+        private set
     var keyRowHeight by mutableStateOf(0f)
 
     // Measured, not guessed: the strip grows with the review pill, the type scale and the
@@ -52,6 +58,7 @@ class PaneSession(val paneId: String) {
     // A browser blurs the offscreen input on any pointer down on the canvas, the key row included,
     // so focus is claimed back once the gesture is over or the next keystrokes go nowhere.
     fun reclaimKeyboard() {
+        surfaceSettled++
         if (keyboardOpen) focusRequests++
     }
 }

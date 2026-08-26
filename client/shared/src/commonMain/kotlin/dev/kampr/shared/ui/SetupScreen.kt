@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,9 +56,10 @@ private val unlockCopy = mapOf(
 )
 
 // A measure, not a window: a settings card read at 900 dp wide is one long line per sentence.
-// The width a desktop has spare goes into a second column instead.
-private val COLUMN_MAX = 520.dp
+// The width a desktop has spare goes into a second column instead. `COLUMN_MAX` is shared with
+// the herd, which measured the same number from the other end.
 private val TWO_COLUMN_MIN = 760.dp
+private val COLUMN_GAP = 4.dp
 
 // The ladder is built from hello.security, never from the URL: a rung whose affordance cannot
 // work on this node is absent rather than present-and-failing.
@@ -158,11 +160,21 @@ fun SetupScreen(
             // layouts, and a desktop one sharing its window with the sidebar and a narrow pane,
             // are not, and get the single column they had.
             val twoColumn = wide && maxWidth >= TWO_COLUMN_MIN
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                Intro(running)
+            // Weights split the window; a measure does not want the window. On an ultrawide the
+            // two halves put one 520 dp card against the left edge and the other a thousand dp
+            // away, so the pair is sized to the measure and set down in the middle instead.
+            val column = columnWidth(maxWidth, COLUMN_GAP, 2)
+            val band = column * 2 + COLUMN_GAP
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                horizontalAlignment = if (twoColumn) Alignment.CenterHorizontally else Alignment.Start,
+            ) {
+                // The intro belongs to the left column, not to the window: centring the pair and
+                // leaving the greeting at the edge is the same canyon turned on its side.
+                Box(if (twoColumn) Modifier.width(band) else Modifier) { Intro(running) }
                 if (twoColumn) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Column(Modifier.weight(1f)) {
+                    Row(Modifier.width(band), horizontalArrangement = Arrangement.spacedBy(COLUMN_GAP)) {
+                        Column(Modifier.width(column)) {
                             NodeBlock(
                                 status, security, running, endpoint, pairingCode, pairingError,
                                 scanned, offeredCode, recentAddresses, wide,
@@ -171,7 +183,7 @@ fun SetupScreen(
                             )
                             LadderBlock(security, onPasskeys, onInstall)
                         }
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.width(column)) {
                             MachinesBlock(nodes)
                             DeviceBlock(status, security, onDevices, onAppearance, onNotifications)
                         }

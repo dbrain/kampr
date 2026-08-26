@@ -499,6 +499,46 @@ it.
 | 264 | **A withdrawal cannot reach a client that comes back on a different socket, and no amount of server-side memory can — the node restarts too** | traced against the deployment: `pleader`'s node restarted twice inside one day (`journalctl --user -u kampr`), and `KamprConnection.session` re-watches every pane in `watched` on every reconnect while `KamprStore.paneStates` is a `getOrPut` map nothing prunes — then driven end to end in `kampr-node/tests/live.rs::a_page_a_reconnecting_client_could_not_have_been_told_about_replaces_what_it_holds` | The node's record of what a client holds lives with that client's session ([#261](#)), and a reconnecting phone gets a new one — so the turns are on the screen and the node cannot name them. Keying the record on the device instead would still lose it the moment the node restarts, which is a thing that happens. So the **page** says so: `convo` carries an additive `fresh`, set when the pump's first page is for a transcript this client is not already showing, and the client drops what it holds for the pane before applying it. `convo.load` answers are never `fresh` — they are older slices of the transcript already on screen, and marking them would throw away the page above. Four mutations, each red: the page never marked; every page marked; the client ignoring the field; the codec dropping it. For a **relayed** pane neither end can answer it — the peer's record is of what it sent the *hub* — so the hub marks the first page it hands each client for each pane, which is the one place that fact lives | 
 | 261 | **The withdrawal that takes a stale conversation off the client lived with the pump, and the pump dies on every `unwatch` — so a `/clear` between leaving a pane's screen and returning to it was never withdrawn at all** | a real node, a real herdr, a real process in the pane and a real `~/.claude/sessions/<pid>.json`: watched a pane with `conversation`, took a page and a following revision, `unwatch`, moved the session as [#259](#) measures `/clear` moving it, then watched again — `kampr-node/tests/live.rs::a_conversation_that_moved_while_the_pane_was_unwatched_is_still_taken_off_the_client` | **The new page arrives with no withdrawal in front of it.** `applyConvo` in `PaneState.kt` merges by id and *prepends* what it does not recognise, and `KamprStore.paneStates` is a `getOrPut` map nothing ever prunes — so the new conversation lands above one that is still on the screen, and a conversation view sitting at its bottom shows the old session. The pump is created by `watch` and aborted by `unwatch`, which is what leaving a pane's screen does (`AppState.kt:372`), so its record of what the client holds went with it. The record now belongs to the client's pane entry and outlives the pump, and it is kept current at every send rather than only when a transcript is closed — an aborted pump never reaches its close. Three mutations, each red: sharing the record removed, the record taken at open removed, the record extended at each send removed. **Not fixed by this**: a client that *reconnects* re-watches on a socket the node has no memory of, and the node cannot know what that client is holding — the withdrawal there has to come from the client, or from a page that says it replaces |
 
+## What `pane.zoom` actually does, and to whom (throwaway `kampr-probe-265`, real herdr 0.8.2)
+
+The operator, verbatim: *"i dont even get what zoom at the desk is aha"*, and a previous reading
+that its effect is invisible in Kampr. Both halves of that are wrong, and the reason is a
+distinction nothing in the log had drawn: whether a desk client is attached. Driven with
+`research/probe/rpc.py` against `herdr server --session kampr-probe-265`, and then again with a
+real `herdr --session kampr-probe-265` forked under a PTY at 200x60 — **with every `HERDR_*`
+variable stripped from the child**, because nested herdr is refused by default and the first three
+attempts measured a client that had printed *"nested herdr is disabled by default"* and exited.
+
+| # | Claim | How | Result |
+|---|---|---|---|
+| 265 | **`pane.zoom` really does resize the PTY, but only with a client attached — and the layout rect never moves either way, so the only pane geometry that follows a zoom is `scroll.viewport_rows`, and only when the split was vertical** | one workspace, one right split and one down split, `pane.zoom on`/`off` against each; `stty size` written to a file from inside each pane, `session.snapshot` rects and `pane.list` `scroll.viewport_rows` read either side; repeated headless and against a real 200x60 client | **Headless: nothing moves at all.** The PTY never followed the split in the first place (#68/#84) so there is nothing for a zoom to move: rect `47x40`, PTY `93x40`, unchanged through `on` and `off`, and `changed: true, zoom_changed: true` returned each time. **Attached, right split:** PTY `84x58` → **`171x58`** → `84x58`, while the rect stays `87x60` and `viewport_rows` stays `58` **in all three states**. **Attached, down split:** PTY `171x28` → **`171x57`** → `171x28`, rect stays `174x30`, and `viewport_rows` moves `28` → **`57`** → `28`. So the rect is fiction during a zoom exactly as it is in a headless session, and `viewport_rows` is honest exactly as [#84](#) found — it is the PTY's rows and not the rect's — but it says nothing about columns, and nothing on the socket does ([#221](#)) |
+
+Which settles what a phone sees, without a new live test — and a new live test is why this is a
+probe row rather than one. **`live.rs` runs headless**, so a zoom test there would drive an op that
+cannot move a PTY, and would go green with the whole width path deleted: a harness that was never
+the app ([#191](#)). What the chain is made of is already measured:
+
+- **A down-split zoom is seen immediately.** `observe_geometry` takes rows from
+  `scroll.viewport_rows`, the snapshot sweep notices `28 → 57`, `Stop::GeometryChanged` fires and
+  the observer respawns at the new height. Guarded end to end by the width-following live tests.
+- **A right-split zoom is seen by the width poll, and by nothing else.** Nothing in the snapshot
+  moves, so `Stop::GeometryChanged` cannot fire — but herdr **re-wraps the pane the instant it is
+  zoomed**, with no new output: the same 300-column logical line read back as rows of `84` before
+  the zoom and rows of **`171`** after it, from a pane nobody had typed into. That is [#85](#)'s
+  proof, so `probe_width` proves the new width on its next tick and `Stop::WidthChanged` restarts
+  the stream. `width_poll` is **3 s**, which is the lag an operator is looking at, and it is the
+  same poll-only story as a desk resize ([#52](#)).
+- **A pane with no wrapped line has no proof**, and falls back to `max(rect, floor)` — the rect
+  being the frozen pre-zoom one. It cannot crop content, because the floor is the widest row
+  actually rendered and can only widen the stream, but the pane will not use its new width until
+  something on it wraps.
+
+**The naming, which is what the operator actually hit.** Kampr already has a control called Zoom —
+the magnification of the rendered grid, in the pane header, announced as *"Zoom, currently 1.6x"* —
+and the actions sheet offered a second chip called `zoom`, one screen away, for an unrelated herdr
+op, with *"at the desk"* carrying the entire distinction. The sheet's chip is now **`fill the tab`**.
+
+
 ## Still open
 
 - ~~A client that reconnects gets no withdrawal, because the node has no memory of what it is

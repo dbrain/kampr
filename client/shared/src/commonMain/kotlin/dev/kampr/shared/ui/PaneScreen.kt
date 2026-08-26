@@ -33,6 +33,7 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
+import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
@@ -164,7 +165,9 @@ fun PaneScreenMobile(
                     // Landscape has no second row to hang these off, and an agent pane opens in
                     // Conversation: without them here the terminal is unreachable without rotating.
                     if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
-                    surfaces.Zoom(pane, Modifier)
+                    // The zoom sheet belongs to the terminal surface, so the control that opens
+                    // it goes wherever that surface is: on the transcript it opens nothing.
+                    if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
@@ -193,7 +196,7 @@ fun PaneScreenMobile(
                 ) {
                     PaneMarks(pane, info, readOnly)
                     if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f)) else Box(Modifier.weight(1f))
-                    surfaces.Zoom(pane, Modifier)
+                    if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
                 }
             }
         }
@@ -271,10 +274,10 @@ private fun geometryLine(info: PaneInfo?, pane: PaneState, others: Int): String 
     // omits `cols` rather than reporting a number no row was ever wrapped at.
     val size = info?.let { "${it.cols?.toString() ?: "—"}×${it.rows}" }
         ?: "${pane.cells.cols}×${pane.cells.rows}"
-    // "observing" is a constant and this line is ellipsised on a phone, so a trailing tag never
-    // survives to be read. The tag takes the constant's place, because it is the half of the line
-    // that is actually news.
-    return listOf(node, local, size, watchersTag(others) ?: "observing")
+    // Only what is news. This line ellipsises at `… · observ…` on a 411 dp phone (#129), and the
+    // constant that used to hold the last slot said the same thing about every pane — which one
+    // operator read as a mode they were stuck in rather than as the absence of company.
+    return listOfNotNull(node, local, size, watchersTag(others))
         .filter { it.isNotEmpty() }
         .joinToString(" · ")
 }
@@ -400,6 +403,7 @@ fun PaneScreenDesktop(
                     what = "view",
                 )
             }
+            if (shown != PaneView.Conversation) surfaces.Zoom(pane, Modifier)
         }
 
         streamFault(pane, info)?.let {
@@ -414,9 +418,18 @@ fun PaneScreenDesktop(
                 .padding(top = (chrome ?: 56.dp) + 8.dp, end = 14.dp),
         )
 
-        if (!readOnly && shown == PaneView.Terminal) {
-            pane.pending?.let {
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth()) { PendingBar(it, onAnswer) }
+        // The desktop breakpoint is not a desk. An Android tablet in landscape is 1280x800 dp,
+        // which lands here, and it has no keys — so this layout offered no Escape, no Ctrl and no
+        // arrow cluster to a device whose only keyboard is the one the app draws. What decides it
+        // is therefore whether a keyboard is attached, and not how wide the window is.
+        //
+        // Terminal only, not Split: in Split the transcript has half the window and its own
+        // composer at the bottom of it, and a full-width row of caps across both halves is a
+        // second input surface laid over the first.
+        if (shown == PaneView.Terminal) {
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
+                if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
+                if (!LocalHardKeyboard.current) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())
             }
         }
     }

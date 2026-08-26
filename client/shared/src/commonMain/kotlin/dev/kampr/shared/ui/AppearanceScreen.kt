@@ -4,12 +4,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,57 +30,85 @@ import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
 
+private val GRID_GAP = 14.dp
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AppearanceScreen(
     selected: ThemeId,
     mode: ThemeMode,
-    columns: Int,
     onSelect: (ThemeId) -> Unit,
     onMode: (ThemeMode) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    Column(modifier.fillMaxSize().background(tokens.color.bg)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, top = 18.dp, end = 24.dp, bottom = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            BackAction("Back", onBack)
-            KText("One token layer, four skins", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-            KText(
-                "Soft native ships. The rest stay one attribute away.",
-                tokens.type.caption,
-                tokens.color.dim,
-                Modifier.weight(1f),
-            )
-        }
-        Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            GroundPicker(mode, onMode)
-            AllThemes.chunked(columns).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    for (spec in row) {
-                        Box(Modifier.weight(1f)) {
-                            ThemeCard(spec, spec.id == selected) { onSelect(spec.id) }
-                        }
-                    }
-                    repeat(columns - row.size) { Box(Modifier.weight(1f)) }
-                }
+    BoxWithConstraints(modifier.fillMaxSize().background(tokens.color.bg)) {
+        // A theme card is a card, not a window: past its measure the swatches, the key caps and
+        // the specimen row are all stretch, and under it the credit line wraps. The grid keeps the
+        // width it needs and takes the middle of whatever is left.
+        //
+        // The count comes off the window rather than off the breakpoint, because the breakpoint is
+        // not the width this screen gets: a 900 dp desktop is about 600 dp here once the sidebar
+        // has had its share, and four columns of it is 129 dp a card.
+        val available = maxWidth - 40.dp
+        val fitted = columnPlan(available, GRID_GAP, AllThemes.size, min = THEME_COLUMN_MIN).count
+        // Rendered before it was believed: three columns of four themes is a lone card with a hole
+        // beside it, which reads as broken next to the same four in a row or in a square. So the
+        // count steps down off a last row of one — not down to an exact divisor, which would put a
+        // fifth theme in a single column for ever. `count = 1` always satisfies it, so this ends.
+        val columns = generateSequence(fitted) { it - 1 }.first { AllThemes.size % it != 1 }
+        val card = columnWidth(available, GRID_GAP, columns)
+        val grid = card * columns + GRID_GAP * (columns - 1)
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+            // The header is given the grid's width rather than the window's, so that on a wide
+            // monitor it arrives with the thing it heads instead of staying at an edge 660 dp
+            // away — the same rule the setup screen's greeting was already given.
+            //
+            // Flowing rather than a Row: the caption is a whole sentence sharing a line with a
+            // back arrow and a screen title, and with a weight it was handed 87 dp on a 600 dp
+            // body and ellipsised mid-word. A sentence squeezed to nothing is not a sentence.
+            FlowRow(
+                Modifier.width(grid).padding(top = 18.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                BackAction("Back", onBack)
+                KText("One token layer, four skins", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
+                KText(
+                    "Soft native ships. The rest stay one attribute away.",
+                    tokens.type.caption,
+                    tokens.color.dim,
+                )
             }
-            Box(Modifier.height(20.dp))
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                GroundPicker(mode, onMode, Modifier.width(grid))
+                AllThemes.chunked(columns).forEach { row ->
+                    Row(Modifier.width(grid), horizontalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                        for (spec in row) {
+                            Box(Modifier.width(card)) {
+                                ThemeCard(spec, spec.id == selected) { onSelect(spec.id) }
+                            }
+                        }
+                        repeat(columns - row.size) { Box(Modifier.width(card)) }
+                    }
+                }
+                Box(Modifier.height(20.dp))
+            }
         }
     }
 }
 
 @Composable
-private fun GroundPicker(mode: ThemeMode, onMode: (ThemeMode) -> Unit) {
+private fun GroundPicker(mode: ThemeMode, onMode: (ThemeMode) -> Unit, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LabelText("Ground", tokens.type.sectionLabel, tokens.color.mute)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (option in ThemeMode.entries) {
@@ -187,4 +219,3 @@ private fun KeyCap(label: String, latched: Boolean, modifier: Modifier = Modifie
         LabelText(label, tokens.type.key, if (latched) tokens.color.onAccent else tokens.color.text)
     }
 }
-

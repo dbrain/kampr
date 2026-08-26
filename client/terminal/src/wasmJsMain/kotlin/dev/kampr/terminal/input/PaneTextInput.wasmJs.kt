@@ -3,8 +3,10 @@ package dev.kampr.terminal.input
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import dev.kampr.shared.platform.touchBrowser
 import dev.kampr.terminal.PaneSession
 import kotlin.js.ExperimentalWasmJsInterop
 
@@ -13,7 +15,7 @@ import kotlin.js.ExperimentalWasmJsInterop
 // beforeinput / input / composition*, diffed against what it held last frame. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun installInput() {
+internal fun installInput() {
     js(
         """
         (function () {
@@ -151,11 +153,21 @@ private fun installInput() {
 }
 
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun drainInput(): String =
+internal fun drainInput(): String =
     js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
 
+// The touch reading is `dev.kampr.shared.platform.touchBrowser`, because the pane screen asks the
+// same question for the key row and one answer is enough. What it means here: focusing is what
+// raises the keys, so a touch browser is left alone until the operator asks — a pane that opened
+// underneath the keyboard is the regression this guards. A desk browser has no keys to raise, so
+// the input holds the focus for as long as a pane is on screen, which is the only thing that makes
+// a hardware keyboard reach the pane at all.
+
+internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean): Boolean =
+    enabled && (keyboardAsked || !touch)
+
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun focusInput(open: Boolean) {
+internal fun focusInput(open: Boolean) {
     js(
         """
         (function () {
@@ -176,8 +188,9 @@ actual fun PaneTextInput(
     modifier: Modifier,
 ) {
     LaunchedEffect(Unit) { installInput() }
-    LaunchedEffect(session.keyboardOpen, session.focusRequests, enabled) {
-        focusInput(enabled && session.keyboardOpen)
+    val touch = remember { touchBrowser() }
+    LaunchedEffect(session.keyboardOpen, session.focusRequests, session.surfaceSettled, enabled) {
+        focusInput(holdsInput(enabled, session.keyboardOpen, touch))
     }
     LaunchedEffect(enabled) {
         if (!enabled) return@LaunchedEffect

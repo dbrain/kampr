@@ -31,6 +31,8 @@ import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.net.SetupStatus
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.wallClockMillis
+import dev.kampr.shared.platform.LocalHardKeyboard
+import dev.kampr.shared.platform.hardKeyboardAttached
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.KamprTheme
 import dev.kampr.shared.theme.ThemeId
@@ -153,6 +155,10 @@ fun KamprApp(
                 // Provided once, here, so a screen cannot forget it — and so a test can put the
                 // system bars back, which is the only way this suite can see them at all.
                 LocalSafeArea provides systemSafeArea(),
+                // Read here so every layout under it gets one answer, and so the platforms that
+                // can only answer by watching — Android's configuration, the browser's first
+                // hardware keydown — have one place to be watched from.
+                LocalHardKeyboard provides hardKeyboardAttached(),
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
                 LocalManage provides remember(state) { AppManage(state) },
                 LocalMosaic provides remember(state, mosaic) {
@@ -348,7 +354,7 @@ internal fun AppScaffold(
                                     auth.devices, auth.currentDeviceId, now,
                                     { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                                 )
-                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 4, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                                 Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                                 Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                             }
@@ -398,7 +404,7 @@ internal fun AppScaffold(
                             auth.devices, auth.currentDeviceId, now,
                             { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                         )
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 2, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
                             herd, connectionStatus, now, localRtt, triage, state::openPane, null,
@@ -444,7 +450,7 @@ internal fun AppScaffold(
                             auth.devices, auth.currentDeviceId, now,
                             { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
                         )
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, 1, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
                         Screen.Herd, Screen.Mosaic -> HerdPortrait(
                             herd, connectionStatus, now, localRtt, triage,

@@ -1,27 +1,14 @@
 package dev.kampr.terminal
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.platform.Font
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
-import dev.kampr.shared.theme.FamilyId
-import dev.kampr.shared.theme.KamprFonts
-import dev.kampr.shared.theme.KamprTokens
-import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
-import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneScreenMobile
@@ -53,39 +40,6 @@ private object ArtboardIo : PaneIo {
         cwd = "~/dev/kampr", agent = null, agentStatus = "idle", cols = 62, rows = 24,
         scrollbackRows = 900,
     )
-}
-
-private fun family(id: FamilyId): FontFamily {
-    val dir = File("../shared/src/commonMain/composeResources/font")
-    fun face(name: String, weight: FontWeight) = Font(name, File(dir, "$name.ttf").readBytes(), weight)
-    return when (id) {
-        FamilyId.Manrope -> FontFamily(
-            face("manrope_400", FontWeight.W400), face("manrope_500", FontWeight.W500),
-            face("manrope_600", FontWeight.W600), face("manrope_700", FontWeight.W700),
-            face("manrope_800", FontWeight.W800),
-        )
-        FamilyId.IbmPlexMono -> FontFamily(
-            face("ibmplexmono_400", FontWeight.W400), face("ibmplexmono_500", FontWeight.W500),
-            face("ibmplexmono_600", FontWeight.W600),
-        )
-        FamilyId.JetBrainsMono -> FontFamily(
-            face("jetbrainsmono_400", FontWeight.W400), face("jetbrainsmono_500", FontWeight.W500),
-            face("jetbrainsmono_700", FontWeight.W700),
-        )
-        FamilyId.InstrumentSans -> FontFamily(
-            face("instrumentsans_400", FontWeight.W400), face("instrumentsans_500", FontWeight.W500),
-            face("instrumentsans_600", FontWeight.W600),
-        )
-        FamilyId.Archivo -> FontFamily(
-            face("archivo_500", FontWeight.W500), face("archivo_700", FontWeight.W700),
-            face("archivo_900", FontWeight.W900),
-        )
-    }
-}
-
-private fun tokensFor(spec: ThemeSpec): KamprTokens {
-    val fonts = KamprFonts(family(spec.ui), family(spec.mono), family(FamilyId.JetBrainsMono))
-    return KamprTokens(spec, fonts, typography(fonts, spec.label, TypeScale.Phone))
 }
 
 private val SESSION_LINES = listOf(
@@ -169,39 +123,20 @@ class ConfirmArtboardTest {
         InputSink(PANE, ArtboardIo, session.latches, guard).raw(Esc.ENTER)
         assertNotNull(session.confirm.held, "the artboard has to be of a real hold, not a fake one")
 
-        val density = Density(2f)
-        val scene = ImageComposeScene(
-            width = with(density) { 390.dp.roundToPx() },
-            height = with(density) { 844.dp.roundToPx() },
-            density = density,
-        ) {
-            CompositionLocalProvider(
-                LocalTokens provides tokensFor(SoftTheme),
-                LocalPaneIo provides ArtboardIo,
-            ) {
-                Box(Modifier.fillMaxSize()) {
-                    PaneScreenMobile(
-                        pane = pane,
-                        info = ArtboardIo.info(PANE),
-                        view = PaneView.Terminal,
-                        surfaces = ArtboardSurfaces(session),
-                        landscape = false,
-                        readOnly = false,
-                        onBack = {},
-                        onView = {},
-                        onAnswer = {},
-                    )
-                }
+        renderArtboard(390.dp, 844.dp, SoftTheme, TypeScale.Phone, File(OUT, "destructive-confirm.png")) {
+            CompositionLocalProvider(LocalPaneIo provides ArtboardIo) {
+                PaneScreenMobile(
+                    pane = pane,
+                    info = ArtboardIo.info(PANE),
+                    view = PaneView.Terminal,
+                    surfaces = ArtboardSurfaces(session),
+                    landscape = false,
+                    readOnly = false,
+                    onBack = {},
+                    onView = {},
+                    onAnswer = {},
+                )
             }
-        }
-        try {
-            scene.render()
-            val image = scene.render()
-            val file = File("build/artboards/destructive-confirm.png")
-            file.parentFile.mkdirs()
-            file.writeBytes(requireNotNull(image.encodeToData()).bytes)
-        } finally {
-            scene.close()
         }
     }
 }

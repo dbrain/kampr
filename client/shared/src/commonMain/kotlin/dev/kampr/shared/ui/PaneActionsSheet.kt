@@ -145,11 +145,17 @@ private fun Target(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Chip("focus", false, { onManage(ManageOp.Focus(at)) }, label = "Focus this $kind at the desk")
+                Chip("focus", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) }, label = "Focus this $kind at the desk")
                 if (zoomable) {
+                    // Not "zoom". Kampr's own zoom is one screen away in the pane header, it
+                    // magnifies the rendered grid, and it is announced as "Zoom, currently 1.6x" —
+                    // so a second control of the same name is two unrelated things one tap apart,
+                    // and "at the desk" was carrying the entire distinction. This one is herdr's
+                    // `pane.zoom`: the pane fills its tab on the machine and its siblings go away,
+                    // which is what the name now says (probe #265).
                     Chip(
-                        "zoom", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
-                        label = "Toggle zoom on this $kind at the desk",
+                        "fill the tab", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
+                        label = "Make this $kind fill its tab at the desk, and put the others back when it already does",
                     )
                 }
                 Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind", )

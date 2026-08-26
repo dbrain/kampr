@@ -13,6 +13,7 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
@@ -190,6 +191,65 @@ class PaneViewTest {
         mobile(411.dp, 914.dp, landscape = false, view = PaneView.Conversation, conversation = false)
         assertEquals(0, count(CONVERSATION_SURFACE), "a shell pane rendered a transcript view")
         onNodeWithContentDescription(TERMINAL_SURFACE).assertIsDisplayed()
+    }
+
+    // The desktop layout is the one a browser lands in, and the only one that carries no key row
+    // — so nothing else on it can reach the zoom. Its header did not offer one at all.
+    @Test
+    fun theDesktopPaneOffersTheSameZoomThePhoneDoes() = runComposeUiTest {
+        desktop(view = PaneView.Terminal, conversation = false)
+        onNodeWithContentDescription(ZOOM).assertExists()
+    }
+
+    @Test
+    fun aSplitDesktopPaneKeepsItsZoomBecauseTheTerminalHalfIsStillThere() = runComposeUiTest {
+        desktop(view = PaneView.Split, conversation = true)
+        onNodeWithContentDescription(ZOOM).assertExists()
+    }
+
+    // The zoom sheet is drawn by the terminal surface, so a zoom control on a screen showing only
+    // the transcript is a control that opens nothing.
+    @Test
+    fun aPaneShowingOnlyItsTranscriptOffersNoZoom() = runComposeUiTest {
+        mobile(411.dp, 914.dp, landscape = false, view = PaneView.Conversation, conversation = true)
+        assertEquals(0, count(ZOOM), "a zoom control was offered with no terminal surface to zoom")
+    }
+
+    @Test
+    fun aPaneShowingOnlyItsTranscriptOffersNoZoomInLandscapeEither() = runComposeUiTest {
+        mobile(914.dp, 411.dp, landscape = true, view = PaneView.Conversation, conversation = true)
+        assertEquals(0, count(ZOOM), "a zoom control was offered with no terminal surface to zoom")
+    }
+
+    @Test
+    fun aDesktopPaneShowingOnlyItsTranscriptOffersNoZoom() = runComposeUiTest {
+        desktop(view = PaneView.Conversation, conversation = true)
+        assertEquals(0, count(ZOOM), "a zoom control was offered with no terminal surface to zoom")
+    }
+
+    // Reported as a mode: "wasm opening a terminal seems to go into observing mode rather than
+    // letting me type". It never was one — the word is what the meta line says when nobody else
+    // has the pane open, which is almost always, so it said nothing and read as read-only. #129
+    // measured that this line ellipsises at `… · observ…` on a phone; the constant it was keeping
+    // room for is the half that was never news.
+    @Test
+    fun aPaneNobodyElseIsWatchingSaysNothingAboutBeingWatched() = runComposeUiTest {
+        mobile(411.dp, 914.dp, landscape = false, view = PaneView.Terminal, conversation = false)
+        assertEquals(
+            0,
+            onAllNodesWithText("observing", substring = true).fetchSemanticsNodes().size,
+            "the meta line called a lone operator an observer",
+        )
+    }
+
+    @Test
+    fun aDesktopPaneNobodyElseIsWatchingSaysNothingAboutBeingWatchedEither() = runComposeUiTest {
+        desktop(view = PaneView.Terminal, conversation = false)
+        assertEquals(
+            0,
+            onAllNodesWithText("observing", substring = true).fetchSemanticsNodes().size,
+            "the meta line called a lone operator an observer",
+        )
     }
 }
 
