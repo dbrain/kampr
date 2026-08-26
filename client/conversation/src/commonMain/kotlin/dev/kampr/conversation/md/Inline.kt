@@ -12,16 +12,6 @@ import androidx.compose.ui.text.withStyle
 
 data class InlineStyles(val code: SpanStyle, val link: SpanStyle)
 
-// Agent output can carry fetched web content, so a URL is data, not an instruction: only schemes
-// that can do nothing but navigate become live links, and anything else stays inert text.
-private val SAFE_SCHEME = Regex("^(https?|mailto):", RegexOption.IGNORE_CASE)
-
-private fun safeUrl(raw: String): String? {
-    val url = raw.trim()
-    if (url.isEmpty() || url.any { it.isWhitespace() || it.code < 0x20 }) return null
-    return url.takeIf { SAFE_SCHEME.containsMatchIn(it) }
-}
-
 fun inlineMarkdown(source: String, styles: InlineStyles): AnnotatedString = buildAnnotatedString {
     Inline(source, styles, this).run()
 }
@@ -30,6 +20,9 @@ private class Inline(
     private val src: String,
     private val styles: InlineStyles,
     private val out: AnnotatedString.Builder,
+    // Off inside the label of a written link, which is already a target: scanning it again would
+    // stack a second annotation over the same characters and aim it somewhere else.
+    private val linkify: Boolean = true,
 ) {
     private var at = 0
 
@@ -55,6 +48,10 @@ private class Inline(
                     flush(); if (!wrap("~~", SpanStyle(textDecoration = TextDecoration.LineThrough))) pending.append(src[at++])
                 }
                 c == '*' || c == '_' -> { flush(); if (!emphasis(c)) pending.append(src[at++]) }
+                c == 'h' || c == 'H' || c == 'm' || c == 'M' -> {
+                    val url = if (linkify) urlAt(src, at) else null
+                    if (url == null) { pending.append(c); at++ } else { flush(); target(url); at += url.length }
+                }
                 else -> { pending.append(c); at++ }
             }
         }
@@ -94,7 +91,7 @@ private class Inline(
         val target = src.substring(close + 2, end).substringBefore(' ')
         val url = safeUrl(target)
         val start = out.length
-        Inline(label, styles, out).run()
+        Inline(label, styles, out, linkify = false).run()
         out.addStyle(styles.link, start, out.length)
         if (url != null) {
             out.addLink(LinkAnnotation.Url(url, TextLinkStyles(styles.link)), start, out.length)
@@ -107,12 +104,16 @@ private class Inline(
         val close = src.indexOf('>', at + 1)
         if (close < 0) return false
         val url = safeUrl(src.substring(at + 1, close)) ?: return false
+        target(url)
+        at = close + 1
+        return true
+    }
+
+    private fun target(url: String) {
         val start = out.length
         out.append(url)
         out.addStyle(styles.link, start, out.length)
         out.addLink(LinkAnnotation.Url(url, TextLinkStyles(styles.link)), start, out.length)
-        at = close + 1
-        return true
     }
 
     private fun emphasis(marker: Char): Boolean {
@@ -133,7 +134,7 @@ private class Inline(
         val body = src.substring(at + token.length, probe)
         if (body.isEmpty()) return false
         val start = out.length
-        Inline(body, styles, out).run()
+        Inline(body, styles, out, linkify).run()
         out.addStyle(style, start, out.length)
         at = probe + token.length
         return true

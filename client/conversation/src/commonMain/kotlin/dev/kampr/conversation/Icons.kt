@@ -16,6 +16,9 @@ object ConversationIcons {
     val send = Icon(20f, 1.9f, trace("M10 16V4M4.8 9.2 10 4l5.2 5.2"))
     val chevronDown = Icon(14f, 1.8f, trace("M2.5 4.5 7 9l4.5-4.5"))
     val chevronUp = Icon(14f, 1.8f, trace("M2.5 9.5 7 5l4.5 4.5"))
+    // An arrow onto a floor, not a bare chevron: the bar's other two arrows step between search
+    // matches, and this one goes all the way to the end.
+    val toEnd = Icon(14f, 1.8f, trace("M7 2.4v6.6", "M3.9 5.9 7 9 10.1 5.9", "M3.2 11.9h7.6"))
     val up = Icon(14f, 1.8f, trace("M7 11V3M3.5 6.5 7 3l3.5 3.5"))
     val down = Icon(14f, 1.8f, trace("M7 3v8M3.5 7.5 7 11l3.5-3.5"))
     val history = Icon(

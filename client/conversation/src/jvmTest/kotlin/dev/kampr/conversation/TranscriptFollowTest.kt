@@ -21,7 +21,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.onRoot
@@ -34,7 +38,10 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import androidx.compose.foundation.layout.size
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.PaneScreenMobile
+import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
@@ -42,6 +49,7 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 private const val NEWEST_LINE = "This paragraph is the last thing anyone has said in this pane."
+private const val TO_END = "Go to the end of the transcript"
 private const val OLDEST_LINE = "An older page, fetched after the transcript was already open."
 
 private fun body(turn: Int) =
@@ -67,6 +75,31 @@ private fun olderPage() = ServerMsg.Convo(
     more = false,
     turns = listOf(Turn("t-0", "user", "2026-08-23T08:59:00.000Z", listOf(Block.Md(OLDEST_LINE)))),
 )
+
+// The whole pane, with the switch the reader actually presses. A tab switch is not a scroll and
+// not a recomposition: `PaneScreenMobile` swaps the surface outright, so the conversation — its
+// lazy list state with it — is disposed and built again from nothing.
+@Composable
+private fun WholePane(store: KamprStore, view: PaneView) {
+    CompositionLocalProvider(
+        LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+        LocalPaneIo provides RecordingIo,
+    ) {
+        Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+            PaneScreenMobile(
+                pane = store.pane(PANE_ID),
+                info = demoInfo(),
+                view = view,
+                surfaces = ConversationSurfaces(),
+                landscape = false,
+                readOnly = false,
+                onBack = {},
+                onView = {},
+                onAnswer = {},
+            )
+        }
+    }
+}
 
 // PaneScreenMobile lays the transcript out under a *guessed* chrome height — 108 dp in portrait,
 // 44 dp in landscape — and replaces the guess with the header's own height the moment
@@ -193,6 +226,90 @@ class TranscriptFollowTest {
         )
     }
 
+    // Reported from a phone against 0.1.17: "switching between terminal and conversation the
+    // conversation pane starts from the top every time". A tab switch disposes the conversation
+    // outright, so coming back is a first open onto a transcript that is already long — and the
+    // one thing a return has that a first open does not is a chrome height that is already
+    // correct, so nothing re-lays the list out and nothing fires a second time.
+    @Test
+    fun aReturnFromTheTerminalLandsOnTheEndOfTheTranscriptRatherThanItsTop() = runComposeUiTest {
+        val store = KamprStore()
+        store.accept(transcript(turns = 12, more = false))
+        var view by mutableStateOf(PaneView.Conversation)
+        setContent { WholePane(store, view) }
+        waitForIdle()
+        val opened = endOfTheTranscript()
+
+        view = PaneView.Terminal
+        waitForIdle()
+        assertTrue(
+            onAllNodesWithText(NEWEST_LINE, substring = true).fetchSemanticsNodes().isEmpty(),
+            "the conversation was still composed while the terminal was showing",
+        )
+        view = PaneView.Conversation
+        waitForIdle()
+        assertTrue(
+            endOfTheTranscript() <= opened + 1.dp,
+            "the return landed at ${endOfTheTranscript()}, below the $opened the first open found",
+        )
+        assertTrue(
+            onAllNodesWithText("Turn 1, paragraph 1", substring = true).fetchSemanticsNodes().isEmpty(),
+            "the return put the top of the transcript on screen",
+        )
+    }
+
+    // The manual way back, and it is only offered when it would do something: a reader standing
+    // on the end has nowhere to go, and a glyph that is always there costs the rotated bar a
+    // target for nothing. `following` is the same signal that decides whether the transcript
+    // chases its own end, so there is one notion of "away from the end" and not two.
+    @Test
+    fun theWayBackToTheEndIsOfferedOnlyOnceTheReaderHasLeftIt() = runComposeUiTest {
+        val store = KamprStore()
+        store.accept(transcript(turns = 12, more = false))
+        // The newest turn is deliberately taller than the viewport: aiming a lazy list at an
+        // item aims at its *top*, and on a turn that fits, the top and the end are the same
+        // place — which is a harness that cannot see the defect it was written for.
+        val tall = (1..20).joinToString("\n\n") { "Turn 12, paragraph $it, long enough to take a few lines of a phone." }
+        store.accept(
+            ServerMsg.ConvoTurn(
+                pane = PANE_ID,
+                turns = listOf(
+                    Turn("t-12", "assistant", "2026-08-23T09:00:00.000Z", listOf(Block.Md("$tall\n\n$NEWEST_LINE"))),
+                ),
+            ),
+        )
+        setContent { UnderChrome(store, guess = 120.dp, real = 120.dp) }
+        waitForIdle()
+        val settled = endOfTheTranscript()
+        onAllNodesWithContentDescription(TO_END).assertCountEquals(0)
+
+        scrollBack()
+        onNodeWithContentDescription(TO_END).assertExists()
+        assertTrue(
+            onAllNodesWithText(NEWEST_LINE, substring = true).fetchSemanticsNodes().isEmpty(),
+            "the drag did not actually leave the end of the transcript",
+        )
+
+        onNodeWithContentDescription(TO_END).performClick()
+        waitForIdle()
+        assertTrue(
+            endOfTheTranscript() <= settled + 1.dp,
+            "the way back landed at ${endOfTheTranscript()} rather than the $settled it started at",
+        )
+        onAllNodesWithContentDescription(TO_END).assertCountEquals(0)
+    }
+
+    private fun ComposeUiTest.scrollBack() {
+        repeat(2) {
+            onNode(hasScrollAction()).performTouchInput {
+                down(centerLeft + Offset(4f, 0f))
+                repeat(8) { moveBy(Offset(0f, 60f)) }
+                up()
+            }
+            waitForIdle()
+        }
+    }
+
     // The other half of the contract, and the one that a scroll which re-aims itself on every
     // layout would break: a reader who has scrolled back to read something stays where they put
     // themselves, however much the agent writes underneath them.
@@ -202,14 +319,7 @@ class TranscriptFollowTest {
         store.accept(transcript(turns = 12, more = false))
         setContent { UnderChrome(store, guess = 120.dp, real = 120.dp) }
         waitForIdle()
-        repeat(2) {
-            onNode(hasScrollAction()).performTouchInput {
-                down(centerLeft + Offset(4f, 0f))
-                repeat(8) { moveBy(Offset(0f, 60f)) }
-                up()
-            }
-            waitForIdle()
-        }
+        scrollBack()
         val readingHere = onNodeWithText("Turn 2, paragraph 1", substring = true)
             .getUnclippedBoundsInRoot().top
         store.accept(

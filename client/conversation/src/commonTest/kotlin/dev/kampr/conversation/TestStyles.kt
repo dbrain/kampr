@@ -12,3 +12,9 @@ fun inlineText(source: String, styles: InlineStyles): AnnotatedString = inlineMa
 
 fun linkCount(text: AnnotatedString): Int =
     text.getLinkAnnotations(0, text.length).count { it.item is LinkAnnotation.Url }
+
+fun linkUrls(text: AnnotatedString): List<String> =
+    text.getLinkAnnotations(0, text.length).mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
+
+fun linkedText(text: AnnotatedString): List<String> =
+    text.getLinkAnnotations(0, text.length).map { text.text.substring(it.start, it.end) }

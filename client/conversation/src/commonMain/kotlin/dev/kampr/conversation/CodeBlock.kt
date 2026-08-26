@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.md.markUrls
 import dev.kampr.conversation.syntax.langSpec
 import dev.kampr.conversation.syntax.scan
 import dev.kampr.shared.theme.Kampr
@@ -41,7 +43,7 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
     val body = remember(code, lang, palette) { highlight(code, lang, palette) }
-    val marked = remember(body, query, palette) { body.markMatches(query, palette.match) }
+    val marked = remember(body, query, palette) { body.markUrls(CODE_LINK).markMatches(query, palette.match) }
 
     Surface(modifier.fillMaxWidth(), background = palette.codeGround, radius = tokens.radii.md) {
         Column {
@@ -51,7 +53,9 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 KText(lang ?: "text", tokens.type.meta, tokens.color.mute)
-                CopyButton(code, lang)
+                // A caption is chrome: dragging across the card must copy the code, not the word
+                // sitting above it offering to copy the code.
+                DisableSelection { CopyButton(code, lang) }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
             BasicText(

@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.md.Markdown
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
@@ -78,6 +79,7 @@ fun TurnView(
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier,
     attachments: AttachmentStore = rememberAttachmentStore(""),
+    now: Double = wallClockMillis(),
 ) {
     val tokens = Kampr.tokens
     val pieces = groupBlocks(turn.blocks)
@@ -103,11 +105,33 @@ fun TurnView(
         }
         return
     }
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-        for ((index, piece) in pieces.withIndex()) {
-            PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
+    // A folded turn is not composed rather than not painted, which is what keeps its text out of
+    // a selection drag as well as off the screen. It unfolds itself around a search match for the
+    // reason a run of tool calls does: a hit the counter promises and the screen hides is worse
+    // than a screen that is too long.
+    val fold = foldKey(turn)
+    val folded = fold != null && fold in expanded && !turnMatches(turn, query)
+    // The header sits straight on top of what it belongs to, with nothing between them: its own
+    // touch height is the only gap, and any more of one leaves a stamp and a chevron floating
+    // above a message they read as no part of.
+    Column(modifier.fillMaxWidth()) {
+        if (fold != null) {
+            TurnHeader(
+                stamp = turnStamp(turn.at, now),
+                gist = turnGist(turn),
+                parts = pieces.size,
+                folded = folded,
+                onToggle = { onToggle(fold) },
+            )
         }
-        if (turn.id == LIVE_TURN_ID) StreamingStrip()
+        if (!folded) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                for ((index, piece) in pieces.withIndex()) {
+                    PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
+                }
+                if (turn.id == LIVE_TURN_ID) StreamingStrip()
+            }
+        }
     }
 }
 

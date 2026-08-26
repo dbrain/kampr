@@ -309,7 +309,11 @@ internal fun AppScaffold(
                             onSettings = { state.go(Screen.Setup) },
                             onResync = { state.connection.send(ClientMsg.Resync) },
                         )
-                        ScreenBody(Modifier.weight(1f).fillMaxSize(), bottomChrome(breakpoint, state.screen)) {
+                        ScreenBody(
+                            Modifier.weight(1f).fillMaxSize(),
+                            bottomChrome(breakpoint, state.screen),
+                            screenSelects(state.screen),
+                        ) {
                             when (val screen = state.screen) {
                                 is Screen.Pane -> PaneScreenDesktop(
                                     pane = state.store.pane(screen.paneId),

@@ -12,15 +12,21 @@ fun blockText(block: Block): String = when (block) {
     is Block.Md -> block.att?.let { listOfNotNull(it.name, it.mime).joinToString(" ") } ?: block.text
     is Block.Code -> block.text
     is Block.Diff -> listOfNotNull(block.path, block.text).joinToString("\n")
-    is Block.Tool -> listOfNotNull(block.name, block.summary).joinToString(" ")
+    is Block.Tool -> toolLabel(block, " ")
     is Block.Unknown -> ""
 }
 
 fun turnText(turn: Turn): String = turn.blocks.joinToString("\n", transform = ::blockText)
 
-fun searchHits(turns: List<Turn>, query: String): List<Int> {
+fun turnMatches(turn: Turn, query: String): Boolean =
+    query.length >= 2 && turnText(turn).contains(query, ignoreCase = true)
+
+// Rows, not turns: what a hit is worth is the list being able to aim at it, and a run of tool
+// calls is one item of that list however many turns it holds. A run holding a match is never
+// collapsed, so every index this returns is a row the reader can read once they arrive.
+fun searchHits(rows: List<TranscriptRow>, query: String): List<Int> {
     if (query.length < 2) return emptyList()
-    return turns.indices.filter { turnText(turns[it]).contains(query, ignoreCase = true) }
+    return rows.indices.filter { at -> rows[at].turns.any { turnMatches(it, query) } }
 }
 
 fun matchRanges(text: String, query: String): List<IntRange> {

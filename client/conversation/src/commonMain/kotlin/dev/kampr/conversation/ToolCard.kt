@@ -27,6 +27,8 @@ import dev.kampr.shared.wire.Block
 const val TOOL_RUNNING = "running"
 const val TOOL_ERROR = "error"
 
+fun toolLabel(tool: Block.Tool, gap: String): String = tool.summary?.let { "${tool.name}$gap$it" } ?: tool.name
+
 @Composable
 fun ToolCard(
     tool: Block.Tool,
@@ -49,7 +51,7 @@ fun ToolCard(
         TOOL_ERROR -> "failed"
         else -> tool.lines?.let { "$it lines" } ?: "finished"
     }
-    val named = listOfNotNull(tool.name, tool.summary).joinToString(", ")
+    val named = toolLabel(tool, ", ")
     Surface(modifier.fillMaxWidth(), radius = tokens.radii.md) {
         Column {
             Row(
@@ -78,7 +80,7 @@ fun ToolCard(
                     7.dp,
                 )
                 KText(
-                    listOfNotNull(tool.name, tool.summary).joinToString(" · "),
+                    toolLabel(tool, " · "),
                     tokens.type.meta,
                     if (running) tokens.color.text else tokens.color.dim,
                     Modifier.weight(1f),

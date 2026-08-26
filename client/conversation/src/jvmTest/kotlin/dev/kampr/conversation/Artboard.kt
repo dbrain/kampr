@@ -64,6 +64,12 @@ fun demoPane(vararg frames: String): Pair<KamprStore, PaneState> {
     return store to store.pane(PANE_ID)
 }
 
+fun runPane(): PaneState {
+    val store = KamprStore()
+    store.accept(ServerMsg.Convo(pane = PANE_ID, cursor = "r-1", more = false, turns = TOOL_RUN_TURNS))
+    return store.pane(PANE_ID)
+}
+
 fun demoInfo(agent: String? = "claude", conversation: Boolean = true) = PaneInfo(
     id = PANE_ID,
     nodeId = "01JNODE",

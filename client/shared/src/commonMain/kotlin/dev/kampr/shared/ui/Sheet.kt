@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -109,21 +110,25 @@ fun BottomSheet(
             val room = maxHeight - safe.top - safe.bottom
             val tall = room * (if (breakpoint == Breakpoint.Portrait) 0.92f else 0.94f)
             val shape = RoundedCornerShape(tokens.radii.lg)
-            Column(
-                Modifier
-                    .absolutePadding(
-                        left = safe.left,
-                        top = safe.top,
-                        right = safe.right,
-                        bottom = safe.bottom,
-                    )
-                    .width(width)
-                    .heightIn(max = tall)
-                    .background(tokens.color.bar, shape)
-                    .modal(onDismiss)
-                    .edge(tokens.chrome, shape),
-                content = content,
-            )
+            // Mounted beside the screen body rather than inside it, so the sheet asks for its own
+            // selection. The scrim stays outside it and keeps its tap-to-dismiss.
+            SelectionContainer {
+                Column(
+                    Modifier
+                        .absolutePadding(
+                            left = safe.left,
+                            top = safe.top,
+                            right = safe.right,
+                            bottom = safe.bottom,
+                        )
+                        .width(width)
+                        .heightIn(max = tall)
+                        .background(tokens.color.bar, shape)
+                        .modal(onDismiss)
+                        .edge(tokens.chrome, shape),
+                    content = content,
+                )
+            }
         }
     }
 }

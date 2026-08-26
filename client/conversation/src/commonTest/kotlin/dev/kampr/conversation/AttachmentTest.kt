@@ -120,10 +120,10 @@ class AttachmentTest {
     @Test
     fun searchFindsAnAttachmentByItsNameRatherThanByTheMarkerItReplaced() {
         val turns = turnsOf(ATTACHED_CONVO)
-        assertEquals(listOf(0), searchHits(turns, "shot.png"))
-        assertEquals(listOf(2), searchHits(turns, "logs.zip"))
-        assertEquals(listOf(0, 1), searchHits(turns, "image/png"), "the mime is worth finding, the marker is not")
-        assertTrue(searchHits(turns, "[image").isEmpty(), "a match nothing on screen carries")
+        assertEquals(listOf(0), hitRows(turns, "shot.png"))
+        assertEquals(listOf(2), hitRows(turns, "logs.zip"))
+        assertEquals(listOf(0, 1), hitRows(turns, "image/png"), "the mime is worth finding, the marker is not")
+        assertTrue(hitRows(turns, "[image").isEmpty(), "a match nothing on screen carries")
     }
 
     @Test

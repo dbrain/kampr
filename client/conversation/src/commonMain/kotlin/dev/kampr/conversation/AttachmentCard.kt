@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -108,20 +109,26 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                         Modifier.fillMaxWidth().announce(state.reason),
                         maxLines = 3,
                     )
-                    QuietAction(
-                        "Try again",
-                        { scope.launch { attachments.open(io, att) } },
-                        Modifier.fillMaxWidth(),
-                        label = "Try again, $headline",
-                    )
+                    // The node's own reason for the failure stays selectable above this; the
+                    // press is chrome, and a caption pasted into a bug report is noise.
+                    DisableSelection {
+                        QuietAction(
+                            "Try again",
+                            { scope.launch { attachments.open(io, att) } },
+                            Modifier.fillMaxWidth(),
+                            label = "Try again, $headline",
+                        )
+                    }
                 }
 
-                else -> QuietAction(
-                    offer.label,
-                    { scope.launch { attachments.open(io, att) } },
-                    Modifier.fillMaxWidth(),
-                    label = "${offer.label}, $headline",
-                )
+                else -> DisableSelection {
+                    QuietAction(
+                        offer.label,
+                        { scope.launch { attachments.open(io, att) } },
+                        Modifier.fillMaxWidth(),
+                        label = "${offer.label}, $headline",
+                    )
+                }
             }
         }
     }

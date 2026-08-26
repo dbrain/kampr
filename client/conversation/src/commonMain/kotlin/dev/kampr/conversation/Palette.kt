@@ -57,6 +57,11 @@ class ConversationPalette(tokens: KamprTokens) {
     }
 }
 
+// In code, in tool output and in a patch the ink already carries meaning — a syntax token, an
+// added line — so a target says it is one with an underline and keeps the colour it had. Prose has
+// no such claim on its ink, which is why `InlineStyles.link` repaints there and this does not.
+val CODE_LINK = SpanStyle(textDecoration = TextDecoration.Underline)
+
 @Composable
 fun rememberConversationPalette(): ConversationPalette {
     val tokens = Kampr.tokens

@@ -15,11 +15,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
@@ -27,9 +30,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
@@ -50,6 +55,7 @@ import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
+import kotlinx.coroutines.launch
 
 // Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
 // on a long answer opened at the start of that answer — which read as "somewhere above the
@@ -75,13 +81,20 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     var searching by remember { mutableStateOf(false) }
     var focus by remember { mutableStateOf(0) }
     val expanded = remember { mutableStateListOf<String>() }
+    val toggle: (String) -> Unit = { key -> if (key in expanded) expanded.remove(key) else expanded.add(key) }
     // Per pane, and dropped with it: what bounds how many decoded images this client is holding
     // is that leaving the pane lets go of all of them.
     val attachments = rememberAttachmentStore(pane.id)
     val listState = rememberLazyListState()
-    val hits = remember(pane.revision, query) { searchHits(turns, query) }
+    val rows = remember(pane.revision, query) { transcriptRows(turns, query) }
+    // Read once per revision rather than ticked: the ages on a transcript that is being written
+    // refresh with every frame the node sends, and a transcript nobody is writing has ages that
+    // were true when the reader arrived.
+    val now = remember(pane.revision) { wallClockMillis() }
+    val hits = remember(rows, query) { searchHits(rows, query) }
     val leading = if (pane.convoMore) 1 else 0
 
+    val scope = rememberCoroutineScope()
     val stillness = LocalReduceMotion.current
     LaunchedEffect(hits, focus) {
         val target = hits.getOrNull(focus) ?: return@LaunchedEffect
@@ -123,12 +136,14 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // The transcript follows its own end, and it is aimed at that end again whenever the end can
     // have moved without the reader asking it to. Two things move it, and neither is a count of
     // anything: the node writing — a turn appended, a live answer revised, a page of older turns
-    // prepended — and the pane's own box changing height. The second is the one every earlier fix
-    // missed. `PaneScreenMobile` lays the transcript out under a *guessed* chrome height and
-    // replaces the guess with the header's own the moment `onGloballyPositioned` reports it, which
-    // is after the transcript's first layout; the keyboard then takes the bottom of the window
-    // over a quarter of a second. A lazy list anchors on its *first* visible item, so a box that
-    // loses height pushes its end below the fold and leaves it there. Measured in the harness: a
+    // prepended — and the list's own box changing height. The second is the one every earlier fix
+    // missed. It is the *list's* box and not the pane's, because the question card below takes a
+    // band off the top of the list and off nothing else. `PaneScreenMobile` lays the transcript
+    // out under a *guessed* chrome height and replaces the guess with the header's own the moment
+    // `onGloballyPositioned` reports it, which is after the transcript's first layout; the
+    // keyboard then takes the bottom of the window over a quarter of a second. A lazy list
+    // anchors on its *first* visible item, so a box that loses height pushes its end below the
+    // fold and leaves it there. Measured in the harness: a
     // chrome guess 52 dp short leaves the last line 52 dp below the fold, on every open.
     //
     // Deliberately *not* keyed on how tall the content measures. A tool card unfolding and a
@@ -141,8 +156,8 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
     var viewport by remember { mutableStateOf(0) }
     LaunchedEffect(turns, viewport) {
-        if (following && turns.isNotEmpty()) {
-            listState.requestScrollToItem(turns.lastIndex + leading, END_OF_THE_ITEM)
+        if (following && rows.isNotEmpty()) {
+            listState.requestScrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM)
         }
     }
 
@@ -151,6 +166,17 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // with a keyboard open is writing rather than reading a turn count. Unless the search field is
     // the thing holding the keyboard, in which case the bar *is* what is being typed into.
     val keyboardOpen = LocalSafeArea.current.ime > 0.dp
+
+    // The question card floats over the top of the transcript rather than standing in the column
+    // with it, because the column is where the reply box is measured and a rotated phone with the
+    // keys up has no room to spend on a card there (commit cca3022, ComposerInsetTest). An
+    // overlay that takes nothing back occludes instead: the transcript scrolled under it and the
+    // card sliced through whatever line was behind its top edge. So the transcript is handed that
+    // much of its own box, which both reserves the band and clips it — measured, never named,
+    // because the card wraps onto a different number of rows for every question it carries.
+    val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
+    var strip by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         if (searching || !keyboardOpen) {
             TranscriptBar(
@@ -163,52 +189,71 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                 onSearching = { searching = it; if (!it) query = "" },
                 onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
                 agent = info?.agent,
+                adrift = !following && rows.isNotEmpty(),
+                onEnd = { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
             )
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { viewport = it.height }) {
-            if (turns.isEmpty()) {
-                KText(
-                    "waiting for the transcript",
-                    tokens.type.caption,
-                    tokens.color.mute,
-                    Modifier.align(Alignment.Center),
-                )
-            }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
-                ),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                if (pane.convoMore) {
-                    item(key = "older") {
-                        Row(
-                            Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
-                            KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
+        // Everything the transcript shows, under one selection: the turns, the prompt the agent
+        // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
+        // list only holds the items it has composed, so a drag reaches as far as the reader has
+        // scrolled and no further — the alternative is laying an unbounded transcript out at once.
+        SelectionContainer(Modifier.weight(1f)) {
+            Box(Modifier.fillMaxSize()) {
+                if (turns.isEmpty()) {
+                    KText(
+                        "waiting for the transcript",
+                        tokens.type.caption,
+                        tokens.color.mute,
+                        Modifier.align(Alignment.Center),
+                    )
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
+                        .onSizeChanged { viewport = it.height },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    if (pane.convoMore) {
+                        item(key = "older") {
+                            DisableSelection {
+                                Row(
+                                    Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
+                                    KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
+                                }
+                            }
+                        }
+                    }
+                    items(rows, key = { it.key }) { row ->
+                        when (row) {
+                            is TranscriptRow.One ->
+                                TurnView(row.turn, query, expanded, toggle, attachments = attachments, now = now)
+                            is TranscriptRow.Run ->
+                                ToolRunCard(row, row.key in expanded, { toggle(row.key) }) {
+                                    for (turn in row.turns) {
+                                        TurnView(turn, query, expanded, toggle, attachments = attachments, now = now)
+                                    }
+                                }
                         }
                     }
                 }
-                items(turns, key = { it.id }) { turn ->
-                    TurnView(
-                        turn = turn,
-                        query = query,
-                        expanded = expanded,
-                        onToggle = { key -> if (key in expanded) expanded.remove(key) else expanded.add(key) },
-                        attachments = attachments,
+                question?.let {
+                    PendingStrip(
+                        it,
+                        onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
+                        modifier = Modifier.onSizeChanged { size -> strip = size.height },
                     )
                 }
             }
-
-        if (!io.readOnly) {
-            pane.pending?.let { PendingStrip(it, onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) }) }
-        }
         }
 
         Composer(
@@ -230,6 +275,8 @@ private fun TranscriptBar(
     onSearching: (Boolean) -> Unit,
     onStep: (Int) -> Unit,
     agent: String?,
+    adrift: Boolean,
+    onEnd: () -> Unit,
 ) {
     val tokens = Kampr.tokens
     Row(
@@ -253,6 +300,15 @@ private fun TranscriptBar(
                     .asHeading()
                     .named("Transcript of ${agent ?: "this pane"}, $count turns"),
             )
+            // Only while it would do something, and to the *left* of search: a control that comes
+            // and goes must not move the one that is always there out from under a thumb. It costs
+            // the rotated bar width rather than height, which is the axis that bar is short of.
+            if (adrift) {
+                GlyphTarget(
+                    ConversationIcons.toEnd, "Go to the end of the transcript", tokens.color.accent,
+                    onEnd, target = LANDSCAPE_TOUCH, glyph = 15.dp,
+                )
+            }
             GlyphTarget(
                 ConversationIcons.search, "Search the transcript", tokens.color.dim,
                 { onSearching(true) }, target = LANDSCAPE_TOUCH, glyph = 15.dp,

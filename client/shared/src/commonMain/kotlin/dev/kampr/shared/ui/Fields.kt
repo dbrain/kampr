@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +45,12 @@ fun KField(
             .edge(tokens.card, shape)
             .padding(horizontal = 11.dp, vertical = 10.dp),
     ) {
-        if (value.text.isEmpty()) KText(hint, style, tokens.color.mute)
+        // A field already selects its own contents, with its own handles. A container above it
+        // would draw a second selection over the same glyphs and drag the hint painted behind
+        // them into the copy.
+        DisableSelection {
+            if (value.text.isEmpty()) KText(hint, style, tokens.color.mute)
+        }
         BasicTextField(
             value = value,
             onValueChange = onChange,

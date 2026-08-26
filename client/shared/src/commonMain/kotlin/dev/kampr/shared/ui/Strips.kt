@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,14 +67,18 @@ internal fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () ->
     val spoken = "${message.ifBlank { code }} ($code). Activate to dismiss."
     Strip(tokens.color.blockedBg, tokens.color.blocked, spoken, urgent = true, onActivate = onDismiss) {
         IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked, Modifier.padding(top = 2.dp))
-        KText(
-            message.ifBlank { code },
-            tokens.type.caption,
-            tokens.color.text,
-            Modifier.weight(1f),
-            maxLines = STRIP_MAX_LINES,
-        )
-        KText(code, tokens.type.meta, tokens.color.mute, Modifier.padding(top = 2.dp))
+        // A strip floats over every screen, so it is outside the body that makes a screen
+        // selectable — and it carries the node's own words, which is the text most worth quoting
+        // in a report. A tap still dismisses it; only a long press selects.
+        SelectionContainer(Modifier.weight(1f)) {
+            KText(
+                message.ifBlank { code },
+                tokens.type.caption,
+                tokens.color.text,
+                maxLines = STRIP_MAX_LINES,
+            )
+        }
+        SelectionContainer { KText(code, tokens.type.meta, tokens.color.mute, Modifier.padding(top = 2.dp)) }
     }
 }
 
@@ -86,7 +91,9 @@ internal fun BoxScope.NoteStrip(message: String, onDismiss: () -> Unit, accent: 
     val spoken = "$message Activate to dismiss."
     Strip(tokens.color.surface2, accent, spoken, urgent = false, onActivate = onDismiss) {
         Mark(accent, MarkShape.Bar, 7.dp, Modifier.padding(top = 5.dp))
-        KText(message, tokens.type.caption, tokens.color.text, Modifier.weight(1f), maxLines = STRIP_MAX_LINES)
+        SelectionContainer(Modifier.weight(1f)) {
+            KText(message, tokens.type.caption, tokens.color.text, maxLines = STRIP_MAX_LINES)
+        }
     }
 }
 
@@ -99,7 +106,9 @@ internal fun BoxScope.RefusedNotice(message: String, onPair: () -> Unit) {
     val spoken = "$message Activate to pair this device again."
     Strip(tokens.color.blockedBg, tokens.color.blocked, spoken, urgent = true, onActivate = onPair) {
         IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked, Modifier.padding(top = 2.dp))
-        KText(message, tokens.type.caption, tokens.color.text, Modifier.weight(1f), maxLines = STRIP_MAX_LINES)
+        SelectionContainer(Modifier.weight(1f)) {
+            KText(message, tokens.type.caption, tokens.color.text, maxLines = STRIP_MAX_LINES)
+        }
         KText("pair again", tokens.type.meta, tokens.color.blocked, Modifier.padding(top = 2.dp))
     }
 }

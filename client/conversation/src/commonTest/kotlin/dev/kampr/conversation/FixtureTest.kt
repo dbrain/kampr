@@ -95,14 +95,14 @@ class FixtureTest {
     fun searchSpansTheWholeTranscriptNotJustTheVisibleTurns() {
         val store = storeWith(RICH_CONVO)
         val turns = store.pane("01JNODE.../w3:p2").turns
-        assertEquals(listOf(1), searchHits(turns, "truncated"))
-        assertEquals(listOf(3), searchHits(turns, "surface_geometry"))
-        assertEquals(listOf(2, 4), searchHits(turns, "surface.rs"))
-        assertTrue(searchHits(turns, "letterbox").isEmpty())
-        assertTrue(searchHits(turns, "a").isEmpty())
+        assertEquals(listOf(1), hitRows(turns, "truncated"))
+        assertEquals(listOf(3), hitRows(turns, "surface_geometry"))
+        assertEquals(listOf(2, 4), hitRows(turns, "surface.rs"))
+        assertTrue(hitRows(turns, "letterbox").isEmpty())
+        assertTrue(hitRows(turns, "a").isEmpty())
 
         store.accept(assertNotNull(Wire.decode(RICH_REVISION)))
-        assertEquals(listOf(4, 5), searchHits(turns, "letterbox"))
+        assertEquals(listOf(4, 5), hitRows(turns, "letterbox"))
     }
 
     @Test

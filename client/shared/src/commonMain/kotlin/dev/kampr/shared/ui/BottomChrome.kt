@@ -3,6 +3,7 @@ package dev.kampr.shared.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -55,11 +56,20 @@ private fun Uncovered(covered: Dp, content: @Composable () -> Unit) {
     }
 }
 
+// Every screen but one. A pane hosts the terminal, which draws its grid on a canvas and carries
+// its own selection — anchor, head, block mode, a copy of the logical line — off gestures a
+// container above it would take first (TerminalView, SelectionLayer). The transcript a pane can
+// also show wraps its own.
+internal fun screenSelects(screen: Screen): Boolean = screen !is Screen.Pane
+
 // Where a screen goes, and what it is told about the bottom of the window. The scaffold is the one
 // thing that can see whether its own chrome is under the screen, so it is the thing that says so.
 @Composable
-internal fun ScreenBody(modifier: Modifier, chrome: Boolean, content: @Composable () -> Unit) {
-    Box(modifier) { BottomEdgeHeldBelow(chrome, content) }
+internal fun ScreenBody(modifier: Modifier, chrome: Boolean, selects: Boolean, content: @Composable () -> Unit) {
+    Box(modifier) {
+        if (selects) SelectionContainer { BottomEdgeHeldBelow(chrome, content) }
+        else BottomEdgeHeldBelow(chrome, content)
+    }
 }
 
 // A phone, either way up: the screen, and under it the tab bar that leads out of it. One shape for
@@ -78,7 +88,7 @@ internal fun PhoneScaffold(
 ) {
     val chrome = bottomChrome(breakpoint, screen)
     Column(Modifier.fillMaxSize()) {
-        ScreenBody(Modifier.weight(1f).screenInset(screen), chrome, body)
+        ScreenBody(Modifier.weight(1f).screenInset(screen), chrome, screenSelects(screen), body)
         if (chrome) {
             Uncovered(barCovered(breakpoint, screen, edge)) { BottomNav(tabFor(screen), onSelect) }
         }

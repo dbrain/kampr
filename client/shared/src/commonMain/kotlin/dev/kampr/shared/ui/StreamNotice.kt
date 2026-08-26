@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,19 +36,24 @@ internal fun StreamBadge() {
 @Composable
 fun StreamNotice(detail: String, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
+    // The one sentence on a pane the node wrote itself, and the one a reader quotes when they
+    // report that a pane never painted. The pane around it is the terminal's, which selects its
+    // own way, so this card asks for its own.
     Surface(modifier.widthIn(max = NOTICE_MAX_WIDTH).announce(detail, urgent = true)) {
-        Column(
-            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp),
+        SelectionContainer {
+            Column(
+                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconGlyph(KamprIcons.warning, 15.dp, tokens.color.blocked)
-                KText(NO_PICTURE, tokens.type.bodyStrong, tokens.color.text)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                ) {
+                    IconGlyph(KamprIcons.warning, 15.dp, tokens.color.blocked)
+                    KText(NO_PICTURE, tokens.type.bodyStrong, tokens.color.text)
+                }
+                KText(detail, tokens.type.caption, tokens.color.mute, maxLines = 10)
             }
-            KText(detail, tokens.type.caption, tokens.color.mute, maxLines = 10)
         }
     }
 }

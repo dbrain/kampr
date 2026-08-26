@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -142,6 +143,8 @@ fun Divider(modifier: Modifier = Modifier) {
     Box(modifier.background(Kampr.tokens.color.line))
 }
 
+// A button's caption is chrome. Dragging across a screen to copy what it says must not splice
+// the words on its buttons into the paste.
 @Composable
 fun PrimaryAction(
     text: String,
@@ -163,7 +166,7 @@ fun PrimaryAction(
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
-        KText(text, style, if (enabled) tokens.color.onAccent else tokens.color.mute)
+        DisableSelection { KText(text, style, if (enabled) tokens.color.onAccent else tokens.color.mute) }
     }
 }
 
@@ -188,7 +191,7 @@ fun QuietAction(
             .padding(vertical = vertical),
         contentAlignment = Alignment.Center,
     ) {
-        KText(text, style, if (enabled) tokens.color.text else tokens.color.mute)
+        DisableSelection { KText(text, style, if (enabled) tokens.color.text else tokens.color.mute) }
     }
 }
 

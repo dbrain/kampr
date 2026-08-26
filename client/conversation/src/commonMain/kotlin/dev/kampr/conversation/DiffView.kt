@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.md.markUrls
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
@@ -93,7 +94,9 @@ private fun DiffRow(line: DiffLine, query: String, palette: ConversationPalette)
         DiffKind.Context -> tokens.color.dim
     }
     val text = remember(line, query, palette) {
-        androidx.compose.ui.text.AnnotatedString(line.text.ifEmpty { " " }).markMatches(query, palette.match)
+        androidx.compose.ui.text.AnnotatedString(line.text.ifEmpty { " " })
+            .markUrls(CODE_LINK)
+            .markMatches(query, palette.match)
     }
     BasicText(
         text = text,
