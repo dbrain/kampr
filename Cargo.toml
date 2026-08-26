@@ -7,7 +7,7 @@ members = ["crates/*"]
 # `kampr update` compares against the release tag. **Bump it to the tag before tagging**: a
 # release whose binary reports the previous version tells every node in the herd, forever, that
 # it is one release behind — and updating does not clear it.
-version = "0.1.21"
+version = "0.1.22"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
