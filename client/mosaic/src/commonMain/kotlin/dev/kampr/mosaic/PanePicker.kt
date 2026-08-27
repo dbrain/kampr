@@ -14,24 +14,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.groups
+import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
-import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.Breakpoint
-import dev.kampr.shared.ui.BottomSheet
-import dev.kampr.shared.ui.Dot
-import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.named
-import dev.kampr.shared.ui.statusWord
-import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.model.watchersTag
+import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.BottomSheet
+import dev.kampr.shared.ui.Breakpoint
+import dev.kampr.shared.ui.Dot
+import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.SheetCard
 import dev.kampr.shared.ui.SheetHeader
 import dev.kampr.shared.ui.SheetSection
+import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.nodeReach
 import dev.kampr.shared.ui.statusColor
 import dev.kampr.shared.ui.statusIcon
+import dev.kampr.shared.ui.statusWord
 import dev.kampr.shared.util.formatLatency
 
 // Grouped by node, then by session, because that is what a merged herd is: a named session is
@@ -80,7 +81,7 @@ fun PanePicker(
                         LabelText(node.session, tokens.type.micro, tokens.color.dim)
                         KText(
                             listOfNotNull(
-                                if (node.kind == "local") "local" else "tailnet",
+                                nodeReach(node),
                                 formatLatency(node.rttMs),
                                 node.build,
                             ).joinToString(" · "),

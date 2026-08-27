@@ -385,6 +385,15 @@ which happened.
 it, so tables stay tables. A `diff` block carries `text` and an optional `path`. `cursor` is
 **absent** when there is nothing further back to ask for, which is not the same as `more: false`.
 
+`role` is `user` | `assistant`, and `user` means **a person typed this**. Every harness writes some
+of its own text into a user record — a background agent finishing, a slash command's envelope, the
+environment block codex opens a session with — and across every transcript on this machine that is
+45% of what claude files under a user role ([#286](./03-probe-log.md)). A node strips those before
+it serves a turn and drops a turn that was nothing else, because a client has no way to tell them
+apart and two things break if it tries: the reader is told they said something they did not, and a
+view that groups an exchange between one prompt and the next cuts an answer in half wherever a
+notification landed in the middle of it.
+
 `at` is the harness's own stamp, copied through. It is optional, and where it is present it is
 **RFC 3339 with an explicit zone** — every adapter in tree writes UTC and says so with a `Z`
 ([#285](./03-probe-log.md)), which is what lets a client draw it as a time of day in the reader's

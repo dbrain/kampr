@@ -211,7 +211,11 @@ fun ConversationView(
     // much of its own box, which both reserves the band and clips it — measured, never named,
     // because the card wraps onto a different number of rows for every question it carries.
     val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
-    val pinned by remember(leading) { derivedStateOf { pinnedBlock(listState, shown, leading) } }
+    // Keyed on the rows, and it has to be: a `remember` that outlives them closes over the list it
+    // was created with, and on a real open that list is the empty one the screen composes before
+    // the transcript arrives. The bar then had nothing to name for the life of the pane, while
+    // three harness tests that handed the view a finished transcript all said it worked.
+    val pinned by remember(shown, leading) { derivedStateOf { pinnedBlock(listState, shown, leading) } }
     var strip by remember { mutableStateOf(0) }
     val density = LocalDensity.current
     // Over the whole pane and outside the transcript's own column, because that is what a picture

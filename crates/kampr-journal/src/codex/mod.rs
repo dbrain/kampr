@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
 use crate::discover;
+use crate::envelope::push_text;
 use crate::error::JournalError;
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
@@ -191,7 +192,7 @@ impl CodexParser {
                     match item.kind.as_str() {
                         "input_text" | "output_text" => {
                             if let Some(text) = item.text.filter(|t| !t.is_empty()) {
-                                turn.blocks.push(Block::md(text));
+                                push_text(&mut turn, text);
                             }
                         }
                         "input_image" => turn.blocks.push(Block::Md {

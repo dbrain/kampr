@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
 use crate::discover;
+use crate::envelope::push_text;
 use crate::error::JournalError;
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
@@ -194,7 +195,7 @@ impl ClaudeParser {
         let mut atts = atts.into_iter();
 
         match content {
-            Content::Text(text) => turn.blocks.push(Block::md(text)),
+            Content::Text(text) => push_text(&mut turn, text),
             Content::Blocks(blocks) => {
                 for block in blocks {
                     self.ingest_block(block, &id, &mut turn, record.tool_use_result.as_ref(), &mut atts);
@@ -216,7 +217,7 @@ impl ClaudeParser {
         atts: &mut impl Iterator<Item = Attachment>,
     ) {
         match block {
-            ContentBlock::Text { text } => turn.blocks.push(Block::md(text)),
+            ContentBlock::Text { text } => push_text(turn, text),
             ContentBlock::Image { source } => turn.blocks.push(Block::Md {
                 text: image_marker(image_subtype(&source)),
                 att: image(&source).and_then(|_| atts.next()),

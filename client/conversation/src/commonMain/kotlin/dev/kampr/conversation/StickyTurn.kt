@@ -22,7 +22,9 @@ import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.touchable
 
 // The block the reader is standing in the middle of, and the row that heads it.
-class Pinned(val head: TranscriptRow, val index: Int)
+// A value, so the derived state it is read through settles: it is recomputed on every scrolled
+// pixel and only a `Pinned` that differs from the last one is worth a recomposition.
+data class Pinned(val head: TranscriptRow, val index: Int)
 
 // Read off `layoutInfo` rather than composed as a `stickyHeader`: a sticky header is a list item,
 // so every block would need one, which moves every index the search hits, the paging trigger and

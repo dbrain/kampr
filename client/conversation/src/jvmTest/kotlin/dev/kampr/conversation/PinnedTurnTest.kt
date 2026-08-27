@@ -90,6 +90,25 @@ class PinnedTurnTest {
         onAllNodesWithContentDescription(PIN, substring = true).assertCountEquals(0)
     }
 
+    // The one the other two could not see. Every case above hands the view a transcript that is
+    // already there, and no phone ever does: a pane is watched, the screen composes empty, and the
+    // turns arrive a round trip later. The bar was read off a list captured at the first
+    // composition, which on a real open is the empty one, so it never appeared on a device while
+    // three tests said it did — #191's shape exactly.
+    @Test
+    fun theHeadIsPinnedOnATranscriptThatArrivedAfterTheScreenDid() = runComposeUiTest {
+        val store = KamprStore()
+        setContent { Transcript(store) }
+        waitForIdle()
+        onAllNodesWithContentDescription(PIN, substring = true).assertCountEquals(0)
+
+        store.accept(ServerMsg.Convo(pane = PANE_ID, cursor = LONG.id, more = false, turns = listOf(LONG)))
+        waitForIdle()
+
+        onNodeWithText(ENDS, substring = true).assertIsDisplayed()
+        onNodeWithContentDescription(PIN, substring = true).assertIsDisplayed()
+    }
+
     // A bar that appears when there is nothing above the fold is chrome that says nothing, and it
     // costs the transcript a row of its own height to say it.
     @Test

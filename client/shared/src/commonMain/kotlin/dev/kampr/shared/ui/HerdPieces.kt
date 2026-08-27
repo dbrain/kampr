@@ -191,6 +191,12 @@ fun StaleHerdNote(connection: ConnectionStatus, modifier: Modifier = Modifier) {
     }
 }
 
+// How this client reaches a machine, in the one word the wire supports. `kind` is all the node
+// says — `local` for the one this client is connected to, `peer` for anything it relays — and
+// three surfaces used to answer "tailnet", which is a claim about the transport nobody measured
+// and is wrong on a herd of LAN machines.
+fun nodeReach(node: NodeInfo): String = if (node.kind == "local") "local" else "peer"
+
 // One vocabulary for a machine wherever one is listed — the herd's own sheet and the settings
 // screen — so a peer cannot be a "peer" on one surface and something else on the other.
 // `withStatus` adds the one fact the eye takes from the mark beside the row and the ear takes
@@ -272,18 +278,17 @@ fun NodeListSheet(
 @Composable
 fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
     val tokens = Kampr.tokens
-    val transportWord = if (node.kind == "local") "local" else "tailnet"
+    val reach = nodeReach(node)
     Row(
         Modifier
             .fillMaxWidth()
-            .named("${node.name}, $transportWord, ${formatLatency(node.rttMs ?: measuredRtt)}")
+            .named("${node.name}, $reach, ${formatLatency(node.rttMs ?: measuredRtt)}")
             .padding(padding),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
         LabelText(node.name, tokens.type.sectionLabel, tokens.color.text)
-        val transport = if (node.kind == "local") "local" else "tailnet"
-        KText("$transport · ${formatLatency(node.rttMs ?: measuredRtt)}", tokens.type.meta, tokens.color.mute)
+        KText("$reach · ${formatLatency(node.rttMs ?: measuredRtt)}", tokens.type.meta, tokens.color.mute)
     }
 }
 

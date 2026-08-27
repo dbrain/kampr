@@ -4,6 +4,7 @@ pub mod attach;
 pub mod claude;
 pub mod codex;
 pub(crate) mod discover;
+pub mod envelope;
 pub mod error;
 pub mod live;
 pub mod model;
