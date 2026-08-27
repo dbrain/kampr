@@ -7,29 +7,35 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 private const val AT = "2026-08-23T09:00:00.000Z"
+private const val FLOATING = "2026-08-23T09:00:00.000"
 private val NOW = requireNotNull(parseIsoMillis(AT))
+private val FACE = Regex("^(\\d{2}:\\d{2}|[A-Z][a-z]{2} \\d{2}:\\d{2}|\\d{1,2} [A-Z][a-z]{2}( \\d{4})? \\d{2}:\\d{2})$")
 
 class TurnFoldTest {
-    // A header is a row of chrome and a 36 dp target, so it has to buy more than it costs. Nothing
-    // here would save a line by folding: a reply is short by construction and already says who
-    // wrote it by where it sits, a turn of nothing but calls is the run's business and wears a
-    // chevron already, and a preview is being rewritten under the reader as they look at it.
+    // A chevron is a 36 dp target, so it has to buy more than it costs. Nothing here would save a
+    // line by folding: a turn of nothing but calls is the run's business and wears a chevron
+    // already, and a preview is being rewritten under the reader as they look at it.
     @Test
-    fun nothingThatWouldNotSaveALineWearsAHeader() {
+    fun nothingThatWouldNotSaveALineWearsAChevron() {
         val cases = mapOf(
-            "a reply" to proseTurn("u-1", "run the tests\nand the lint\nplease", role = "user"),
+            "a short reply" to proseTurn("u-1", "run the tests please", role = "user"),
             "one line" to proseTurn("a-1", "Done."),
             "one paragraph that merely wraps" to proseTurn("a-2", "The letterbox came from min where max was meant, and every pane on a phone showed it."),
             "a turn of calls" to bashTurn("a-3", "cargo test", "done", 3),
             "a preview" to proseTurn(LIVE_TURN_ID, "I will write the file,\nthen explain\nwhat it does."),
         )
-        for ((what, turn) in cases) assertNull(foldKey(turn), "$what was given a header")
+        for ((what, turn) in cases) assertNull(foldKey(turn), "$what was given a chevron")
     }
 
+    // A reply used to be excluded outright, because it sat in its own gutter on the right and was
+    // short by construction. It is a full-width card now, and a pasted stack trace is a reply, so
+    // the size test decides for whoever wrote it.
     @Test
     fun ananswerLongEnoughToBeWorthTheControlGetsOne() {
+        assertEquals("fold:u-1", foldKey(proseTurn("u-1", "run the tests\nand the lint\nplease", role = "user")))
         assertEquals("fold:a-9", foldKey(proseTurn("a-9", "First.\n\nSecond.\n\nThird.")))
         assertNotNull(
             foldKey(Turn("a-10", "assistant", AT, listOf(Block.Md("here:"), Block.Code("bash", "ls")))),
@@ -37,14 +43,17 @@ class TurnFoldTest {
         )
     }
 
-    // The node copies whatever the harness wrote, and the harness is not this client's to trust:
-    // an age is correct in every timezone, which the time of day in an unread offset is not.
+    // Which of the two forms a stamp takes, rather than what either one reads: a face is drawn in
+    // the *runner's* zone, so pinning the characters here would pin the machine the suite runs on.
+    // `TimeTest` owns the face itself, against a fixed offset.
     @Test
-    fun theStampIsAnAgeAndAnUnreadableOneIsNoStampAtAll() {
-        assertEquals("now", turnStamp(AT, NOW))
-        assertEquals("12m", turnStamp(AT, NOW + 12 * 60_000))
-        assertEquals("3h", turnStamp(AT, NOW + 3 * 3_600_000))
-        assertEquals("2d", turnStamp(AT, NOW + 2 * 86_400_000))
+    fun aZonedStampIsATimeOfDayAndAZonelessOneIsAnAgeInstead() {
+        for (now in listOf(NOW, NOW + 2 * 86_400_000, NOW + 400 * 86_400_000.0)) {
+            val face = assertNotNull(turnStamp(AT, now), "a zoned stamp had no reading at all")
+            assertTrue(FACE.matches(face), "a zoned stamp read as \"$face\"")
+        }
+        assertEquals("now", turnStamp(FLOATING, NOW))
+        assertEquals("12m", turnStamp(FLOATING, NOW + 12 * 60_000))
         assertNull(turnStamp(null, NOW))
         assertNull(turnStamp("whenever", NOW))
     }

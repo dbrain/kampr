@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +56,7 @@ import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
@@ -87,10 +89,19 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     val attachments = rememberAttachmentStore(pane.id)
     val listState = rememberLazyListState()
     val rows = remember(pane.revision, query) { transcriptRows(turns, query) }
-    // Read once per revision rather than ticked: the ages on a transcript that is being written
-    // refresh with every frame the node sends, and a transcript nobody is writing has ages that
-    // were true when the reader arrived.
-    val now = remember(pane.revision) { wallClockMillis() }
+    // Ticked, and it has to be: the stamps used to be read once per revision, so a transcript
+    // nobody was writing kept whatever ages were true when the reader arrived and the newest
+    // message read "now" for as long as the pane stayed open. What the stamps carry now is a time
+    // of day (#285), which does not move on its own — this is what moves the *bucket* it is drawn
+    // in, from a bare clock to a weekday to a date, and what carries the age a zoneless stamp
+    // still falls back to. A minute is finer than any of those need.
+    var now by remember { mutableStateOf(wallClockMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000)
+            now = wallClockMillis()
+        }
+    }
     val hits = remember(rows, query) { searchHits(rows, query) }
     val leading = if (pane.convoMore) 1 else 0
 
@@ -175,6 +186,9 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // much of its own box, which both reserves the band and clips it — measured, never named,
     // because the card wraps onto a different number of rows for every question it carries.
     val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
+    val pinned by remember(rows, query, leading) {
+        derivedStateOf { pinnedTurn(listState, rows, leading, query) }
+    }
     var strip by remember { mutableStateOf(0) }
     val density = LocalDensity.current
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -235,16 +249,41 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                     }
                     items(rows, key = { it.key }) { row ->
                         when (row) {
-                            is TranscriptRow.One ->
-                                TurnView(row.turn, query, expanded, toggle, attachments = attachments, now = now)
+                            is TranscriptRow.One -> TurnView(
+                                row.turn, query, expanded, toggle,
+                                attachments = attachments, now = now, agent = info?.agent,
+                            )
                             is TranscriptRow.Run ->
                                 ToolRunCard(row, row.key in expanded, { toggle(row.key) }) {
                                     for (turn in row.turns) {
-                                        TurnView(turn, query, expanded, toggle, attachments = attachments, now = now)
+                                        TurnView(
+                                            turn, query, expanded, toggle,
+                                            attachments = attachments, now = now,
+                                            agent = info?.agent, framed = false,
+                                        )
                                     }
                                 }
                         }
                     }
+                }
+                // The header of whatever the reader is standing in the middle of, pinned where
+                // that turn's own header used to be, so putting a long message away never means
+                // scrolling back up to find the chevron that does it. It sits under the question
+                // card for the same reason the list is inset by it: the card is the one thing on
+                // this screen that outranks the transcript.
+                pinned?.let { at ->
+                    PinnedTurnBar(
+                        at,
+                        info?.agent,
+                        now,
+                        onCollapse = {
+                            toggle(at.key)
+                            scope.launch { listState.scrollToItem(at.index + leading) }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() }),
+                    )
                 }
                 question?.let {
                     PendingStrip(

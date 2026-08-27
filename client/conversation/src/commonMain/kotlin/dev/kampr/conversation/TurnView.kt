@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,7 +16,6 @@ import dev.kampr.conversation.md.Markdown
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
@@ -80,59 +77,53 @@ fun TurnView(
     modifier: Modifier = Modifier,
     attachments: AttachmentStore = rememberAttachmentStore(""),
     now: Double = wallClockMillis(),
+    agent: String? = null,
+    framed: Boolean = true,
 ) {
-    val tokens = Kampr.tokens
     val pieces = groupBlocks(turn.blocks)
-    if (turn.role == "user") {
-        // A reply is not a document: it hugs its own text and leaves a gutter, so the eye can
-        // tell who spoke without reading a word of it.
-        Box(modifier.fillMaxWidth().padding(start = 44.dp), contentAlignment = Alignment.CenterEnd) {
-            Surface(
-                Modifier.widthIn(max = 460.dp),
-                background = tokens.color.raise,
-                radius = tokens.radii.lg,
-            ) {
-                Column(
-                    Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
-                ) {
-                    for ((index, piece) in pieces.withIndex()) {
-                        if (piece is Piece.Prose) Markdown(piece.text, query)
-                        else PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
-                    }
-                }
-            }
-        }
-        return
-    }
     // A folded turn is not composed rather than not painted, which is what keeps its text out of
     // a selection drag as well as off the screen. It unfolds itself around a search match for the
     // reason a run of tool calls does: a hit the counter promises and the screen hides is worse
     // than a screen that is too long.
     val fold = foldKey(turn)
     val folded = fold != null && fold in expanded && !turnMatches(turn, query)
-    // The header sits straight on top of what it belongs to, with nothing between them: its own
-    // touch height is the only gap, and any more of one leaves a stamp and a chevron floating
-    // above a message they read as no part of.
-    Column(modifier.fillMaxWidth()) {
-        if (fold != null) {
-            TurnHeader(
-                stamp = turnStamp(turn.at, now),
-                gist = turnGist(turn),
-                parts = pieces.size,
-                folded = folded,
-                onToggle = { onToggle(fold) },
-            )
+    val skin = speakerSkin(speakerOf(turn), agent)
+
+    // Nested inside an expanded run, the run's own card is already the frame — a second one around
+    // every call in it is a box drawn inside a box.
+    if (!framed) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Body(turn, pieces, query, expanded, onToggle, attachments)
         }
-        if (!folded) {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                for ((index, piece) in pieces.withIndex()) {
-                    PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
-                }
-                if (turn.id == LIVE_TURN_ID) StreamingStrip()
-            }
-        }
+        return
     }
+
+    TurnFrame(skin, modifier) {
+        TurnHeader(
+            skin = skin,
+            stamp = turnStamp(turn.at, now),
+            gist = turnGist(turn),
+            parts = pieces.size,
+            folded = folded,
+            onToggle = fold?.let { key -> { onToggle(key) } },
+        )
+        if (!folded) Body(turn, pieces, query, expanded, onToggle, attachments)
+    }
+}
+
+@Composable
+private fun Body(
+    turn: Turn,
+    pieces: List<Piece>,
+    query: String,
+    expanded: List<String>,
+    onToggle: (String) -> Unit,
+    attachments: AttachmentStore,
+) {
+    for ((index, piece) in pieces.withIndex()) {
+        PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
+    }
+    if (turn.id == LIVE_TURN_ID) StreamingStrip()
 }
 
 // Says out loud that this text came off the screen rather than out of the transcript. It is the

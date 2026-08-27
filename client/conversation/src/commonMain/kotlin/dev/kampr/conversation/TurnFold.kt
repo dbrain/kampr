@@ -12,9 +12,14 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
+import dev.kampr.shared.util.clockFace
+import dev.kampr.shared.util.isoIsZoned
+import dev.kampr.shared.util.localOffsetMillis
+import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.util.relativeTime
 import dev.kampr.shared.wire.Turn
 
@@ -23,22 +28,35 @@ import dev.kampr.shared.wire.Turn
 fun foldKey(turn: Turn): String? = if (foldable(turn)) "fold:${turn.id}" else null
 
 // A header is a row of chrome carrying a 36 dp target, so it has to buy more than it costs, which
-// is the same test the tool runs get. A reply is short by construction and already says who wrote
-// it by where it sits; a turn of nothing but calls is the run's business and wears a chevron
-// already; a preview is being rewritten under the reader and folding what is changing is the one
-// thing a fold must not do. What is left earns a header once it runs past a couple of lines or
-// holds more than one thing.
+// is the same test the tool runs get. A turn of nothing but calls is the run's business and wears
+// a chevron already; a preview is being rewritten under the reader and folding what is changing is
+// the one thing a fold must not do. What is left earns a chevron once it runs past a couple of
+// lines or holds more than one thing.
+//
+// A reply used to be excluded outright, on the grounds that it was short by construction and said
+// who wrote it by sitting in its own gutter on the right. Neither holds now that a turn is a
+// full-width card whoever wrote it, and a pasted stack trace is a reply — so the size test decides
+// for both speakers.
 fun foldable(turn: Turn): Boolean {
-    if (turn.role == "user" || turn.id == LIVE_TURN_ID) return false
+    if (turn.id == LIVE_TURN_ID) return false
     val pieces = groupBlocks(turn.blocks)
     if (pieces.isEmpty() || pieces.all { it is Piece.Call }) return false
     return pieces.size > 1 || turnText(turn).count { it == '\n' } >= 2
 }
 
-// An age, not a time of day. `at` is whatever the harness wrote and the node copied, and nothing
-// on the wire says which offset it is in — `parseIsoMillis` reads the fields and ignores the zone
-// — so a clock face here would be wrong by up to half a day and would look right while it was.
-fun turnStamp(at: String?, nowMillis: Double): String? = relativeTime(at, nowMillis).takeIf { it != "—" }
+// A time of day, in the reader's own zone, because every harness Kampr reads writes UTC and says
+// so with a `Z` (#285) — which makes `at` an absolute instant rather than the floating local time
+// this used to assume. An age was the honest reading while the offset was unknown and it is the
+// weaker one now: it goes stale where it is painted, "now" beside an hour-old message is what a
+// stopped ticker says, and it cannot be lined up against anything the operator saw elsewhere.
+//
+// A stamp that names no zone still gets an age. No adapter in tree writes one, and the day it does
+// is not the day to start guessing an offset.
+fun turnStamp(at: String?, nowMillis: Double): String? {
+    val millis = parseIsoMillis(at) ?: return null
+    if (!isoIsZoned(at)) return relativeTime(at, nowMillis)
+    return clockFace(millis, nowMillis, localOffsetMillis(millis))
+}
 
 private val DECORATION = Regex("^(#{1,6}|>+|[-*+]|\\d+\\.)\\s+")
 
@@ -55,42 +73,56 @@ fun turnGist(turn: Turn): String =
         ?.trim()
         .orEmpty()
 
+fun headerLabel(skin: SpeakerSkin, stamp: String?, gist: String, parts: Int): String = listOfNotNull(
+    skin.label,
+    stamp,
+    gist.takeIf { it.isNotEmpty() },
+    if (parts > 1) "$parts parts" else null,
+).joinToString(", ")
+
+// Who spoke, when, and — only when there is something to put away — the chevron that does it. A
+// turn that cannot be folded still gets the first two: the reader asked for the time on every
+// message, and a line of text is not the 36 dp of touch target a control would cost.
 @Composable
 fun TurnHeader(
+    skin: SpeakerSkin,
     stamp: String?,
     gist: String,
     parts: Int,
     folded: Boolean,
-    onToggle: () -> Unit,
+    onToggle: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    val held = listOfNotNull(
-        stamp,
-        gist.takeIf { it.isNotEmpty() },
-        if (parts > 1) "$parts parts" else null,
-    ).joinToString(", ")
+    val held = headerLabel(skin, stamp, gist, parts)
     DisableSelection {
         Row(
             modifier
                 .fillMaxWidth()
-                .touchable(LANDSCAPE_TOUCH)
-                .action(
-                    if (folded) "Show the message of $held" else "Hide the message of $held",
-                    onToggle,
-                    selected = !folded,
+                .then(
+                    if (onToggle == null) Modifier
+                    else Modifier
+                        .touchable(LANDSCAPE_TOUCH)
+                        .action(
+                            if (folded) "Show the message of $held" else "Hide the message of $held",
+                            onToggle,
+                            selected = !folded,
+                        ),
                 ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            LabelText(skin.label, tokens.type.metaSmall, skin.rail)
             if (stamp != null) KText(stamp, tokens.type.micro, tokens.color.mute)
             if (folded) KText(gist, tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
             else Box(Modifier.weight(1f))
-            IconGlyph(
-                if (folded) ConversationIcons.chevronDown else ConversationIcons.chevronUp,
-                12.dp,
-                tokens.color.mute,
-            )
+            if (onToggle != null) {
+                IconGlyph(
+                    if (folded) ConversationIcons.chevronDown else ConversationIcons.chevronUp,
+                    12.dp,
+                    tokens.color.mute,
+                )
+            }
         }
     }
 }

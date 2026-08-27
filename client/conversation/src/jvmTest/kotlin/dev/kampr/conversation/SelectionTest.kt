@@ -22,6 +22,10 @@ import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -86,12 +90,14 @@ private fun draggedAcrossTheTranscript(pane: PaneState): Int = withScene(
     },
     body = { scene ->
         repeat(3) { scene.render() }
-        // Measured against the rendered artboard: the first line of the first turn sits under
-        // the transcript bar at about this height on a 390x844 phone.
-        scene.sendPointerEvent(PointerEventType.Press, Offset(40f, 160f))
-        scene.sendPointerEvent(PointerEventType.Move, Offset(400f, 180f))
-        scene.sendPointerEvent(PointerEventType.Move, Offset(700f, 220f))
-        scene.sendPointerEvent(PointerEventType.Release, Offset(700f, 220f))
+        // Measured against the rendered artboard, at density 2: the first line of the first turn
+        // sits at 97 dp on a 390x844 phone, inside a card whose text starts 30 dp in. Both numbers
+        // moved when a turn became a framed card with a header — a press in the old spot lands on
+        // the frame's own padding, which selects nothing.
+        scene.sendPointerEvent(PointerEventType.Press, Offset(70f, 206f))
+        scene.sendPointerEvent(PointerEventType.Move, Offset(400f, 240f))
+        scene.sendPointerEvent(PointerEventType.Move, Offset(700f, 275f))
+        scene.sendPointerEvent(PointerEventType.Release, Offset(700f, 275f))
         highlighted(scene)
     },
 )
@@ -128,7 +134,7 @@ internal class HeldClipboard : Clipboard {
 // A long press is what starts a selection on a phone, and it is a real wall-clock wait: the
 // gesture is timed off the scene's own clock, which only a rendered frame advances.
 @OptIn(ExperimentalComposeUiApi::class)
-private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 150f): String? {
+private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 206f): String? {
     val toolbar = SelectionToolbar()
     val clipboard = HeldClipboard()
     withScene(
@@ -148,7 +154,7 @@ private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 150f): Strin
                 scene.sendPointerEvent(kind, Offset(x, y), timeMillis = at, type = PointerType.Touch)
                 at += 50
             }
-            touch(PointerEventType.Press, 40f, fromY)
+            touch(PointerEventType.Press, 70f, fromY)
             Thread.sleep(900)
             at = 900
             scene.render()
@@ -195,6 +201,11 @@ class SelectionTest {
             "the tool card was already open",
         )
         onNodeWithContentDescription("Show the output of Bash, list panes, 2 lines").performClick()
+        // Scrolled to rather than asserted where it fell: expanding a card deliberately does not
+        // move the transcript (AttachmentScrollTest), so a card opened near the end puts its own
+        // output below the fold — which is the reader's scroll to make, not a card that failed.
+        onAllNodes(hasScrollAction()).onFirst()
+            .performScrollToNode(hasText("herdr pane list --json", substring = true))
         onNodeWithText("herdr pane list --json", substring = true).assertIsDisplayed()
     }
 
@@ -220,9 +231,9 @@ class SelectionTest {
     // is exactly the paste a reader would then put into a bug report.
     @Test
     fun aButtonsCaptionIsNotSplicedIntoWhatTheReaderCopied() {
-        // A turn of more than one piece wears a fold header, so the first selectable
+        // A turn of more than one piece wears a chevron in its header, so the first selectable
         // line of this one starts below where a bare answer's does.
-        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 250f)
+        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 245f)
         assertTrue(pasted != null, "copying across the cards produced nothing")
         assertTrue("herdr pane list --json" in pasted!!, "the code itself was not copied: $pasted")
         assertTrue("shot.png" in pasted, "the attachment's name was not copied: $pasted")

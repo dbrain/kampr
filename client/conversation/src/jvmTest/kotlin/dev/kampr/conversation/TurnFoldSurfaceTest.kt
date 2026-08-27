@@ -45,7 +45,11 @@ private const val BURIED = "And the scrollbar column"
 private const val ASKED = "what did the width inference land on?"
 private const val OPEN = "Hide the message of"
 private const val SHUT = "Show the message of"
-private val AGED = Regex("$SHUT (now|\\d+[mhd]), $GIST\\.")
+// A clock face is drawn in the runner's own zone and against the runner's own today, so what is
+// pinned here is the *shape* of the row — who spoke, when, and the line it shows of itself.
+// `TimeTest` owns what a face reads.
+private val STAMP = requireNotNull(turnStamp(AT, NOW))
+private val AGED = Regex("$SHUT claude, [^,]+, $GIST\\.")
 
 private val ASK = Turn("u-1", "user", AT, listOf(Block.Md(ASKED)))
 private val ANSWER = Turn(
@@ -160,7 +164,7 @@ class TurnFoldSurfaceTest {
                     scene.sendPointerEvent(kind, Offset(x, y), timeMillis = at, type = PointerType.Touch)
                     at += 50
                 }
-                touch(PointerEventType.Press, 300f, 66f)
+                touch(PointerEventType.Press, 300f, 94f)
                 Thread.sleep(900)
                 at = 900
                 scene.render()
@@ -176,6 +180,6 @@ class TurnFoldSurfaceTest {
         assertTrue(pasted != null, "dragging across the folded message produced nothing at all")
         assertTrue("inference" in pasted!!, "nothing above the folded message was copied: $pasted")
         assertTrue(GIST !in pasted, "the folded message's own first line was copied: $pasted")
-        assertTrue("now" !in pasted, "the age beside the folded message was copied: $pasted")
+        assertTrue(STAMP !in pasted, "the stamp beside the folded message was copied: $pasted")
     }
 }

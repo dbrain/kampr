@@ -10,9 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.wire.Block
+import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.PhosphorTheme
@@ -25,6 +27,9 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 private val OUT = File("build/artboards")
+
+private fun spoken(id: String, role: String, at: String, text: String) =
+    Turn(id, role, at, listOf(Block.Md(text)))
 
 class ArtboardTest {
     private fun mobile(landscape: Boolean): @Composable () -> Unit = {
@@ -49,6 +54,33 @@ class ArtboardTest {
             File(OUT, "conversation-portrait.png"), content = mobile(landscape = false),
         )
         assertTrue(image.width == 780 && image.height == 1688, "${image.width}x${image.height}")
+    }
+
+    // Both speakers on one screen, which is the only way to look at what tells them apart. The
+    // reply is long enough to wrap so its card reaches the same right edge the answer's does.
+    @Test
+    fun bothSpeakersArtboardRenders() {
+        renderArtboard(PORTRAIT.first, 520.dp, SoftTheme, TypeScale.Phone, File(OUT, "conversation-speakers.png")) {
+            val store = KamprStore()
+            store.accept(
+                ServerMsg.Convo(
+                    pane = PANE_ID, cursor = "u-1", more = false,
+                    turns = listOf(
+                        spoken(
+                            "u-1", "user", "2026-08-20T09:00:01Z",
+                            "which keys does the grammar accept, and does the review strip already draw them?",
+                        ),
+                        spoken(
+                            "a-2", "assistant", "2026-08-20T09:04:22Z",
+                            "Six.\n\nThey are in the probe log beside the measurement that established each one, " +
+                                "and the strip draws four of them.",
+                        ),
+                        spoken("u-3", "user", "2026-08-20T09:05:10Z", "thanks"),
+                    ),
+                ),
+            )
+            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize())
+        }
     }
 
     @Test
@@ -148,7 +180,13 @@ class ArtboardTest {
             Box(Modifier.fillMaxSize().background(Kampr.tokens.color.bg).padding(16.dp)) {
                 ToolRunCard(row, expanded = true, onToggle = {}) {
                     for (turn in row.turns) {
-                        TurnView(turn, "", listOf("${row.turns.first().id}#0"), {}, Modifier.fillMaxWidth())
+                        // `framed = false`, because that is what the transcript passes: the run's
+                        // own card is the frame, and an artboard that draws a second one inside it
+                        // is a picture of a screen nobody has.
+                        TurnView(
+                            turn, "", listOf("${row.turns.first().id}#0"), {},
+                            Modifier.fillMaxWidth(), framed = false,
+                        )
                     }
                 }
             }

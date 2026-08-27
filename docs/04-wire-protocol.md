@@ -385,6 +385,13 @@ which happened.
 it, so tables stay tables. A `diff` block carries `text` and an optional `path`. `cursor` is
 **absent** when there is nothing further back to ask for, which is not the same as `more: false`.
 
+`at` is the harness's own stamp, copied through. It is optional, and where it is present it is
+**RFC 3339 with an explicit zone** — every adapter in tree writes UTC and says so with a `Z`
+([#285](./03-probe-log.md)), which is what lets a client draw it as a time of day in the reader's
+own zone rather than as an age. A node adding an adapter must keep that: a stamp with no offset is
+a floating local time, and the only honest reading of one is an elapsed time. Clients must treat
+the zone as part of the value and must not assume UTC when it is absent.
+
 #### `fresh` — this page replaces, it does not merge
 
 A page **merges by id**: turns whose ids the client already holds are replaced in place, and each
