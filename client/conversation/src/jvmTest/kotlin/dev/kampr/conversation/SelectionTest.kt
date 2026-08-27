@@ -90,14 +90,15 @@ private fun draggedAcrossTheTranscript(pane: PaneState): Int = withScene(
     },
     body = { scene ->
         repeat(3) { scene.render() }
-        // Measured against the rendered artboard, at density 2: the first line of the first turn
-        // sits at 97 dp on a 390x844 phone, inside a card whose text starts 30 dp in. Both numbers
-        // moved when a turn became a framed card with a header — a press in the old spot lands on
-        // the frame's own padding, which selects nothing.
-        scene.sendPointerEvent(PointerEventType.Press, Offset(70f, 206f))
-        scene.sendPointerEvent(PointerEventType.Move, Offset(400f, 240f))
-        scene.sendPointerEvent(PointerEventType.Move, Offset(700f, 275f))
-        scene.sendPointerEvent(PointerEventType.Release, Offset(700f, 275f))
+        // Measured against the rendered artboard, at density 2: the first line of the first step
+        // sits at 120 dp on a 390x844 phone, inside the one box its whole reply is drawn as,
+        // whose content starts 30 dp in. A press has to land in the *first* line of it: a long
+        // press takes the word under it and the drag extends from there, so a press one line low
+        // copies an answer that starts halfway through itself.
+        scene.sendPointerEvent(PointerEventType.Press, Offset(70f, 255f))
+        scene.sendPointerEvent(PointerEventType.Move, Offset(400f, 300f))
+        scene.sendPointerEvent(PointerEventType.Move, Offset(700f, 340f))
+        scene.sendPointerEvent(PointerEventType.Release, Offset(700f, 340f))
         highlighted(scene)
     },
 )
@@ -134,7 +135,7 @@ internal class HeldClipboard : Clipboard {
 // A long press is what starts a selection on a phone, and it is a real wall-clock wait: the
 // gesture is timed off the scene's own clock, which only a rendered frame advances.
 @OptIn(ExperimentalComposeUiApi::class)
-private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 206f): String? {
+private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 255f): String? {
     val toolbar = SelectionToolbar()
     val clipboard = HeldClipboard()
     withScene(
@@ -231,9 +232,9 @@ class SelectionTest {
     // is exactly the paste a reader would then put into a bug report.
     @Test
     fun aButtonsCaptionIsNotSplicedIntoWhatTheReaderCopied() {
-        // A turn of more than one piece wears a chevron in its header, so the first selectable
-        // line of this one starts below where a bare answer's does.
-        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 245f)
+        // Both of these open on the same head, so the first selectable line of each is in the
+        // same place; this one's is its prose, above the code card.
+        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 255f)
         assertTrue(pasted != null, "copying across the cards produced nothing")
         assertTrue("herdr pane list --json" in pasted!!, "the code itself was not copied: $pasted")
         assertTrue("shot.png" in pasted, "the attachment's name was not copied: $pasted")

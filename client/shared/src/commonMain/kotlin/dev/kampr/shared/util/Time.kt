@@ -101,7 +101,31 @@ fun clockFace(atMillis: Double, nowMillis: Double, offsetMillis: Double): String
     return if (year == thisYear) "$stamp $clock" else "$stamp $year $clock"
 }
 
+// Just the face, with no day in front of it. What a *range* ends with: "16 Aug 13:30 → 16 Aug
+// 14:02" says the date twice for one afternoon, and the second one is never the news.
+fun clockTime(atMillis: Double, offsetMillis: Double): String {
+    val seconds = floorMod(((atMillis + offsetMillis) / 1000.0).toLong(), 86_400L)
+    return "${pad2(seconds / 3600L)}:${pad2(seconds % 3600L / 60L)}"
+}
+
+fun localDay(atMillis: Double, offsetMillis: Double): Long =
+    floorDiv(((atMillis + offsetMillis) / 1000.0).toLong(), 86_400L)
+
 private fun pad2(value: Long): String = if (value < 10L) "0$value" else "$value"
+
+// A stopwatch, not an age: "2m 11s" for something still running, where `elapsed` would say "2m"
+// and stop moving for the next fifty-eight seconds. Seconds are dropped past an hour, where they
+// are noise, and the whole thing is dropped below zero — a reply stamped in the future is a clock
+// disagreeing, not a negative duration.
+fun elapsedSpan(millis: Double): String? {
+    val seconds = (millis / 1000.0).toLong()
+    if (seconds < 0) return null
+    return when {
+        seconds < 60 -> "${seconds}s"
+        seconds < 3600 -> "${seconds / 60}m ${seconds % 60}s"
+        else -> "${seconds / 3600}h ${seconds % 3600 / 60}m"
+    }
+}
 
 fun formatLatency(ms: Double?): String {
     if (ms == null) return "—"

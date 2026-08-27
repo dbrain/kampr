@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
@@ -60,18 +61,23 @@ private fun Transcript(store: KamprStore) {
 @OptIn(ExperimentalTestApi::class)
 class TurnFrameSurfaceTest {
     // A reply used to hug its own text in a gutter on the right, which cost it 44 dp of a phone's
-    // width and read as a different kind of thing from the answer under it. Both are turns, and
-    // both get the whole column; what tells them apart is the colour of the card, not its inset.
+    // width and read as a different kind of thing from the answer under it. What the reader gets
+    // instead is one box per block: the head of an answer and every step of it share a column and
+    // a ground, and what separates one block from the next is the gap between the boxes.
+    //
+    // Bounds and not pixels of paint, because the box is drawn a piece at a time and no one piece
+    // holds it — `ExchangeTest` is where the pieces are proved to agree on which box they are in.
     @Test
-    fun aReplyGetsTheSameColumnTheAnswerDoes() = runComposeUiTest {
+    fun anAskAndAWholeReplyEachGetOneColumnOfTheirOwn() = runComposeUiTest {
         setContent { Transcript(bothSpeakers()) }
         waitForIdle()
-        val reply = onNodeWithText(ASKED, substring = true).fetchSemanticsNode().boundsInRoot
-        val answer = onNodeWithText(ANSWERED, substring = true).fetchSemanticsNode().boundsInRoot
-        assertEquals(answer.left, reply.left, "a reply starts at a different column from an answer")
-        // Both wrap, so both reach the column's own right edge — a bubble that hugged its text
-        // would fall short of it by whatever the last line did not use.
-        assertEquals(answer.right, reply.right, "a reply ends at a different column from an answer")
+        val ask = onNodeWithText(ASKED, substring = true).fetchSemanticsNode().boundsInRoot
+        val head = onNodeWithContentDescription("Put away the reply of", substring = true)
+            .fetchSemanticsNode().boundsInRoot
+        val step = onNodeWithText(ANSWERED, substring = true).fetchSemanticsNode().boundsInRoot
+        assertEquals(ask.left, head.left, "an ask and a reply head start at different columns")
+        assertEquals(head.left, step.left, "a step is indented out of the box its head draws")
+        assertEquals(ask.right, head.right, "an ask and a reply head end at different columns")
     }
 
     // The trap this walked into twice: `accent` and `working` are the *same colour* in Phosphor and

@@ -70,14 +70,14 @@ fun runPane(): PaneState {
     return store.pane(PANE_ID)
 }
 
-fun demoInfo(agent: String? = "claude", conversation: Boolean = true) = PaneInfo(
+fun demoInfo(agent: String? = "claude", conversation: Boolean = true, status: String = "blocked") = PaneInfo(
     id = PANE_ID,
     nodeId = "01JNODE",
     workspace = "kampr",
     tab = "1",
     cwd = "/home/dbrain/dev/kampr",
     agent = agent,
-    agentStatus = "blocked",
+    agentStatus = status,
     cols = 74,
     rows = 30,
     hasConversation = conversation,

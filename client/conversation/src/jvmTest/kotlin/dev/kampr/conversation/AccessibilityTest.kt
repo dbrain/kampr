@@ -11,6 +11,9 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.LocalTokens
@@ -80,29 +83,40 @@ class AccessibilityTest {
     // A preview is text whose wording may still change under the reader, so it says so — and it
     // stops saying so the moment the transcript takes over. Both halves, because a mark that never
     // goes away is worse than no mark.
+    // The mark moved from the live turn to the foot of the transcript when a reply became the
+    // block a reader deals with, but it says the same thing and it still has to stop saying it.
+    // Both halves, because a mark that never goes away is worse than no mark.
     @Test
-    fun aLiveTurnSaysItIsStillBeingWrittenAndThenStops() = runComposeUiTest {
+    fun aLiveReplySaysItIsStillBeingWrittenAndThenStops() = runComposeUiTest {
         setContent {
-            CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone)) {
+            CompositionLocalProvider(
+                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                LocalPaneIo provides RecordingIo,
+            ) {
                 val (_, pane) = demoPane(RICH_CONVO, LIVE_TURN)
-                for (turn in pane.turns.filter { it.isVisible() }) {
-                    TurnView(turn, "", emptyList(), {}, Modifier.fillMaxWidth())
+                Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                    ConversationView(pane, demoInfo(), Modifier.fillMaxSize())
                 }
             }
         }
-        onNodeWithContentDescription("still writing").assertExists()
+        waitForIdle()
+        onNodeWithContentDescription("writing", substring = true).assertExists()
     }
 
     @Test
     fun aWithdrawnLiveTurnSaysNothingAtAll() = runComposeUiTest {
         setContent {
-            CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone)) {
+            CompositionLocalProvider(
+                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                LocalPaneIo provides RecordingIo,
+            ) {
                 val (_, pane) = demoPane(RICH_CONVO, LIVE_TURN, LIVE_WITHDRAWN)
-                for (turn in pane.turns.filter { it.isVisible() }) {
-                    TurnView(turn, "", emptyList(), {}, Modifier.fillMaxWidth())
+                Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                    ConversationView(pane, demoInfo(), Modifier.fillMaxSize())
                 }
             }
         }
-        onNodeWithContentDescription("still writing").assertDoesNotExist()
+        waitForIdle()
+        onNodeWithContentDescription("writing", substring = true).assertDoesNotExist()
     }
 }

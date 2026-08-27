@@ -17,6 +17,8 @@ import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.util.clockFace
+import dev.kampr.shared.util.clockTime
+import dev.kampr.shared.util.localDay
 import dev.kampr.shared.util.isoIsZoned
 import dev.kampr.shared.util.localOffsetMillis
 import dev.kampr.shared.util.parseIsoMillis
@@ -56,6 +58,24 @@ fun turnStamp(at: String?, nowMillis: Double): String? {
     val millis = parseIsoMillis(at) ?: return null
     if (!isoIsZoned(at)) return relativeTime(at, nowMillis)
     return clockFace(millis, nowMillis, localOffsetMillis(millis))
+}
+
+// When a reply started and when it stopped. The second half is a bare face — the day is already
+// in front of the first one, and "16 Aug 13:30 → 16 Aug 14:02" says the date twice for one
+// afternoon. A reply of a single record, or one whose records all landed inside a minute, has
+// nothing to put on the right of an arrow and does not draw one.
+fun replySpan(from: String?, to: String?, nowMillis: Double): String? {
+    val opened = turnStamp(from, nowMillis) ?: return null
+    val began = parseIsoMillis(from) ?: return opened
+    val ended = parseIsoMillis(to) ?: return opened
+    if (!isoIsZoned(to)) return opened
+    val offset = localOffsetMillis(ended)
+    val closed = clockTime(ended, offset)
+    if (closed == clockTime(began, localOffsetMillis(began))) return opened
+    return when (localDay(began, localOffsetMillis(began))) {
+        localDay(ended, offset) -> "$opened → $closed"
+        else -> "$opened → ${turnStamp(to, nowMillis)}"
+    }
 }
 
 private val DECORATION = Regex("^(#{1,6}|>+|[-*+]|\\d+\\.)\\s+")

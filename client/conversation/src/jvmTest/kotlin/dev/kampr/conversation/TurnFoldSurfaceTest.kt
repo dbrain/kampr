@@ -43,13 +43,13 @@ private val NOW = requireNotNull(parseIsoMillis(AT))
 private const val GIST = "Seventy-four columns"
 private const val BURIED = "And the scrollbar column"
 private const val ASKED = "what did the width inference land on?"
-private const val OPEN = "Hide the message of"
-private const val SHUT = "Show the message of"
+private const val OPEN = "Put away the reply of"
+private const val SHUT = "Show the reply of"
 // A clock face is drawn in the runner's own zone and against the runner's own today, so what is
-// pinned here is the *shape* of the row — who spoke, when, and the line it shows of itself.
-// `TimeTest` owns what a face reads.
+// pinned here is the *shape* of the row — who spoke, when, how much of it there is, and the line
+// it shows of itself. `TimeTest` owns what a face reads.
 private val STAMP = requireNotNull(turnStamp(AT, NOW))
-private val AGED = Regex("$SHUT claude, [^,]+, $GIST\\.")
+private val AGED = Regex("$SHUT claude, [^,]+, 1 step, $GIST\\.")
 
 private val ASK = Turn("u-1", "user", AT, listOf(Block.Md(ASKED)))
 private val ANSWER = Turn(
@@ -81,7 +81,7 @@ class TurnFoldSurfaceTest {
     // out of a selection drag as well as off the screen, and it is the whole difference between
     // this and drawing a lid over it.
     @Test
-    fun foldingAMessageTakesEveryLineOfItOffTheScreen() = runComposeUiTest {
+    fun puttingAReplyAwayTakesEveryLineOfItOffTheScreen() = runComposeUiTest {
         setContent { Transcript(storeOfAnAnswer()) }
         waitForIdle()
         onAllNodesWithText(BURIED, substring = true).assertCountEquals(1)
@@ -92,10 +92,10 @@ class TurnFoldSurfaceTest {
         onAllNodesWithText("It comes from the pane rect", substring = true).assertCountEquals(0)
     }
 
-    // A folded row that says nothing about itself is a worse version of the tool run it sits
-    // beside, so it keeps its first line and its age.
+    // A put-away reply that says nothing about itself is a worse version of the tool run it sits
+    // beside, so it keeps its first line, its clock and how much it is holding.
     @Test
-    fun aFoldedMessageStillSaysWhenItWasSaidAndHowItStarts() = runComposeUiTest {
+    fun aPutAwayReplyStillSaysWhenItWasSaidAndHowItStarts() = runComposeUiTest {
         setContent { Transcript(storeOfAnAnswer()) }
         waitForIdle()
         onNodeWithContentDescription(OPEN, substring = true).performClick()
@@ -107,7 +107,7 @@ class TurnFoldSurfaceTest {
     }
 
     @Test
-    fun aFoldedMessageIsStillFoldedAfterTheTranscriptTicks() = runComposeUiTest {
+    fun aPutAwayReplyIsStillAwayAfterTheTranscriptTicks() = runComposeUiTest {
         val store = storeOfAnAnswer()
         setContent { Transcript(store) }
         waitForIdle()
@@ -122,7 +122,7 @@ class TurnFoldSurfaceTest {
     // The same rule the runs got, for the same reason: a match the counter promises and the
     // screen hides is worse than a screen that is too long.
     @Test
-    fun aFoldedMessageHoldingWhatTheSearchIsLookingForOpensItself() = runComposeUiTest {
+    fun aPutAwayReplyHoldingWhatTheSearchIsLookingForOpensItself() = runComposeUiTest {
         setContent { Transcript(storeOfAnAnswer()) }
         waitForIdle()
         onNodeWithContentDescription(OPEN, substring = true).performClick()

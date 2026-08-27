@@ -29,7 +29,7 @@ import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-private const val PICTURE = "shot.png, png · 52.8 KB"
+private const val PICTURE = "Open shot.png"
 
 private const val ANCHOR_LINE = "The last thing the agent said before the screenshot went up."
 
@@ -101,8 +101,11 @@ class AttachmentScrollTest {
         )
     }
 
-    // The other half of the same rule: the picture is bounded by the column it lands in rather
-    // than by its own 900x1400 pixels.
+    // The other half of the same rule, and it used to be arithmetic: the picture was drawn at the
+    // column's width and clamped to half a phone, so a 900x1400 screenshot had to be measured
+    // rather than declared or it ran 672 dp down a column it was supposed to fit inside. What
+    // lands now is a thumbnail of a fixed size, so the bound is the size itself — but the rule it
+    // enforces is the same one and this is where it is written down.
     @Test
     fun aTallScreenshotIsBoundedByTheColumnRatherThanTheOtherWayAround() = runComposeUiTest {
         val pane = paneEndingOnAnAttachment()
@@ -121,10 +124,10 @@ class AttachmentScrollTest {
             onAllNodesWithContentDescription(PICTURE).fetchSemanticsNodes().isNotEmpty()
         }
         val screen = onRoot().getUnclippedBoundsInRoot()
-        val picture = onNodeWithContentDescription(PICTURE).getUnclippedBoundsInRoot()
-        val wide = picture.right - picture.left
-        val tall = picture.bottom - picture.top
-        assertTrue(wide <= screen.right - screen.left, "the picture is $wide wide in ${screen.right - screen.left}")
-        assertTrue(tall <= 460.dp, "the picture is $tall tall")
+        val card = onNodeWithContentDescription(PICTURE).getUnclippedBoundsInRoot()
+        val wide = card.right - card.left
+        val tall = card.bottom - card.top
+        assertTrue(wide <= screen.right - screen.left, "the card is $wide wide in ${screen.right - screen.left}")
+        assertTrue(tall <= 120.dp, "a 900x1400 screenshot took $tall of the column")
     }
 }

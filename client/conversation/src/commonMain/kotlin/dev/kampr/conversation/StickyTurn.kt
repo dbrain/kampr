@@ -21,66 +21,80 @@ import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.touchable
 
-// What the reader is standing in the middle of, and the key that puts it away. Only a row that
-// has something to put away is worth pinning — a foldable turn, or a run of tool calls — so a bar
-// that appears is always a bar that does something.
-class PinnedTurn(val row: TranscriptRow, val index: Int, val key: String)
+// The block the reader is standing in the middle of, and the row that heads it.
+class Pinned(val head: TranscriptRow, val index: Int)
 
-fun pinKeyOf(row: TranscriptRow, query: String): String? = when (row) {
-    is TranscriptRow.Run -> row.key
-    is TranscriptRow.One -> foldKey(row.turn)?.takeIf { !turnMatches(row.turn, query) }
-}
-
-// The row occupying the top of the viewport, and only while its own header is above the fold.
 // Read off `layoutInfo` rather than composed as a `stickyHeader`: a sticky header is a list item,
-// so every turn would need one, which doubles the item count and moves every index the search
-// hits, the paging trigger and the follow-the-end scroll are all counted in.
-fun pinnedTurn(state: LazyListState, rows: List<TranscriptRow>, leading: Int, query: String): PinnedTurn? {
+// so every block would need one, which moves every index the search hits, the paging trigger and
+// the follow-the-end scroll are all counted in — and a reply's steps are separate items precisely
+// so a long one is not composed whole.
+//
+// The head of the block, not the row itself: what the reader wants named while they are eleven
+// tool calls deep is the reply those calls belong to, and what they want to put away is all of it.
+fun pinnedBlock(state: LazyListState, rows: List<TranscriptRow>, leading: Int): Pinned? {
     val layout = state.layoutInfo
     val top = layout.viewportStartOffset
     val item = layout.visibleItemsInfo.firstOrNull { it.offset + it.size > top } ?: return null
-    if (item.offset >= top) return null
     val at = item.index - leading
     val row = rows.getOrNull(at) ?: return null
-    val key = pinKeyOf(row, query) ?: return null
-    return PinnedTurn(row, at, key)
+    val head = when (row) {
+        is TranscriptRow.Head, is TranscriptRow.Ask -> at
+        else -> rows.subList(0, at).indexOfLast { it.key == row.block }.takeIf { it >= 0 } ?: return null
+    }
+    // Nothing to pin while the block's own header is still on the screen under its own power.
+    if (head == at && item.offset >= top) return null
+    return Pinned(rows[head], head)
 }
 
+// A reply is put away by its own key; an ask by its fold, which a short one does not have. What
+// cannot be collapsed is still worth naming, so this decides the action and not the bar.
+fun collapseKey(head: TranscriptRow): String? = when (head) {
+    is TranscriptRow.Head -> head.key
+    is TranscriptRow.Ask -> foldKey(head.turn)
+    else -> null
+}
+
+// Worded apart from the head it stands in for, because both are on the screen at once and a reader
+// hearing two identical buttons cannot tell which one they are on.
 @Composable
-fun PinnedTurnBar(
-    pinned: PinnedTurn,
+fun PinnedBlockBar(
+    pinned: Pinned,
     agent: String?,
     now: Double,
-    onCollapse: () -> Unit,
+    onCollapse: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    when (val row = pinned.row) {
-        is TranscriptRow.One -> {
-            val skin = speakerSkin(speakerOf(row.turn), agent)
+    when (val row = pinned.head) {
+        is TranscriptRow.Head -> {
+            val stamp = replySpan(row.reply.at, row.reply.until, now)
+            val skin = speakerSkin(Speaker.Agent, agent)
+            PinnedBar(modifier, onCollapse, "Put away the reply you are inside, ${replyLabel(agent, stamp, row.reply, false)}") {
+                LabelText(skin.label, tokens.type.metaSmall, skin.rail)
+                KText(replyGist(row.reply), tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
+                KText(replyTally(row.reply), tokens.type.micro, tokens.color.mute)
+            }
+        }
+        is TranscriptRow.Ask -> {
+            val skin = speakerSkin(Speaker.You, agent)
             val gist = turnGist(row.turn)
             val held = headerLabel(skin, turnStamp(row.turn.at, now), gist, groupBlocks(row.turn.blocks).size)
-            PinnedBar(modifier, "Put away the message of $held", onCollapse) {
+            PinnedBar(modifier, onCollapse, "Put away the message you are inside, $held") {
                 LabelText(skin.label, tokens.type.metaSmall, skin.rail)
                 KText(gist, tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
             }
         }
-        is TranscriptRow.Run -> {
-            val names = row.tools.map { it.name }.distinct()
-            val held = "${row.tools.size} tool calls, ${names.joinToString(", ")}"
-            PinnedBar(modifier, "Put away $held", onCollapse) {
-                LabelText("${row.tools.size} calls", tokens.type.metaSmall, tokens.color.dim)
-                KText(names.joinToString(" · "), tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
-            }
-        }
+        else -> Unit
     }
 }
 
+// A bar with nothing to collapse is still worth drawing — the reader asked to be told what they
+// are looking at as much as to be able to put it away — so the action is what is optional here.
 @Composable
 private fun PinnedBar(
     modifier: Modifier,
+    onCollapse: (() -> Unit)?,
     label: String,
-    onCollapse: () -> Unit,
     content: @Composable RowScope.() -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -90,14 +104,16 @@ private fun PinnedBar(
                 .fillMaxWidth()
                 .background(tokens.color.bar)
                 .edgeBottom()
-                .touchable(LANDSCAPE_TOUCH)
-                .action(label, onCollapse)
+                .then(
+                    if (onCollapse == null) Modifier
+                    else Modifier.touchable(LANDSCAPE_TOUCH).action(label, onCollapse),
+                )
                 .padding(horizontal = 16.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             content()
-            IconGlyph(ConversationIcons.chevronUp, 12.dp, tokens.color.mute)
+            if (onCollapse != null) IconGlyph(ConversationIcons.chevronUp, 12.dp, tokens.color.mute)
         }
     }
 }

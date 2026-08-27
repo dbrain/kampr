@@ -21,64 +21,10 @@ import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
-import dev.kampr.shared.wire.Block
-import dev.kampr.shared.wire.Turn
 
 // Three, not two: a row reading "2 tool calls" costs a tap and saves one line of screen, and the
 // reader who tapped it has to tap again to get back what they could already see.
 const val TOOL_RUN_MIN = 3
-
-// Every adapter writes one tool call per record and carries that through as one turn, so a run of
-// calls is a run of *turns* — grouping inside a turn would never fire on a real transcript. A turn
-// that does hold several at once, from a harness that batches them, joins the same run and is
-// counted by its calls rather than by itself.
-sealed interface TranscriptRow {
-    val key: String
-    val turns: List<Turn>
-
-    data class One(val turn: Turn) : TranscriptRow {
-        override val key: String = turn.id
-        override val turns: List<Turn> = listOf(turn)
-    }
-
-    data class Run(override val turns: List<Turn>) : TranscriptRow {
-        override val key: String = "run:${turns.first().id}"
-        val tools: List<Block.Tool> = turns.flatMap { turn -> turn.blocks.filterIsInstance<Block.Tool>() }
-    }
-}
-
-// A turn that says anything of its own ends the run, and that includes a turn that speaks as well
-// as calling something: a collapsed run would take the sentence down with the call. A code fence
-// or a patch that is a call's *own* output is already part of that call and does not end anything.
-private fun callsIn(turn: Turn): Int {
-    val pieces = groupBlocks(turn.blocks)
-    return if (pieces.isNotEmpty() && pieces.all { it is Piece.Call }) pieces.size else 0
-}
-
-fun transcriptRows(turns: List<Turn>, query: String): List<TranscriptRow> {
-    val out = mutableListOf<TranscriptRow>()
-    var at = 0
-    while (at < turns.size) {
-        var end = at
-        var calls = 0
-        while (end < turns.size) {
-            val more = callsIn(turns[end])
-            if (more == 0) break
-            calls += more
-            end++
-        }
-        val run = turns.subList(at, end)
-        val hides = run.any { turnMatches(it, query) }
-        if (calls >= TOOL_RUN_MIN && !hides) {
-            out += TranscriptRow.Run(run.toList())
-            at = end
-        } else {
-            out += TranscriptRow.One(turns[at])
-            at++
-        }
-    }
-    return out
-}
 
 // The collapsed row, and the first of the two taps: this one hands back the individual cards, and
 // each of those still opens its own output. A run that hid a failure or a call still in flight
@@ -109,7 +55,7 @@ fun ToolRunCard(
     ).joinToString(", ")
     val held = "${tools.size} tool calls, ${names.joinToString(", ")}" +
         if (outcome.isEmpty()) "" else ", $outcome"
-    Surface(modifier.fillMaxWidth(), radius = tokens.radii.md) {
+    Surface(modifier.fillMaxWidth(), background = tokens.color.raise, radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier

@@ -15,9 +15,9 @@ class ToolRunTest {
     @Test
     fun aRunOfToolCallsBrokenByProseCollapsesIntoTwoRowsAndNotOne() {
         val rows = transcriptRows(TOOL_RUN_TURNS, "")
-        assertEquals(listOf("r-1", "run:r-2", "r-5", "run:r-6"), keys(rows))
-        val first = rows[1] as TranscriptRow.Run
-        val second = rows[3] as TranscriptRow.Run
+        assertEquals(listOf("r-1", "reply:r-2", "run:r-2", "r-5", "run:r-6"), keys(rows))
+        val first = rows[2] as TranscriptRow.Run
+        val second = rows[4] as TranscriptRow.Run
         assertEquals(listOf("Bash", "Bash", "Bash"), first.tools.map { it.name })
         assertEquals(listOf("Bash", "Read", "Bash"), second.tools.map { it.name })
     }
@@ -28,12 +28,12 @@ class ToolRunTest {
         for (calls in 1 until TOOL_RUN_MIN) {
             val turns = (1..calls).map { bashTurn("t-$it", "cargo test $it", "done", 3) }
             assertTrue(
-                transcriptRows(turns, "").all { it is TranscriptRow.One },
+                transcriptRows(turns, "").filter { it !is TranscriptRow.Head }.all { it is TranscriptRow.One },
                 "$calls calls were collapsed behind a row",
             )
         }
         val enough = (1..TOOL_RUN_MIN).map { bashTurn("t-$it", "cargo test $it", "done", 3) }
-        assertEquals(1, transcriptRows(enough, "").size)
+        assertEquals(1, transcriptRows(enough, "").count { it is TranscriptRow.Run })
     }
 
     // A harness that batches its calls writes them into one record and the adapter carries that
@@ -45,7 +45,7 @@ class ToolRunTest {
             (1..3).flatMap { listOf(Block.Tool("Bash", "cargo test $it", 3, "done"), Block.Code("bash", "cargo test $it")) },
         )
         val rows = transcriptRows(listOf(batched), "")
-        assertEquals(3, (rows.single() as TranscriptRow.Run).tools.size)
+        assertEquals(3, (rows.filterIsInstance<TranscriptRow.Run>().single()).tools.size)
     }
 
     // A turn that speaks, a turn the reader wrote, and a turn that speaks *and* calls a tool are
@@ -81,17 +81,17 @@ class ToolRunTest {
     @Test
     fun aRunHoldingWhatTheSearchIsLookingForIsNotCollapsed() {
         assertEquals(
-            listOf("r-1", "r-2", "r-3", "r-4", "r-5", "run:r-6"),
+            listOf("r-1", "reply:r-2", "r-2", "r-3", "r-4", "r-5", "run:r-6"),
             keys(transcriptRows(TOOL_RUN_TURNS, "clippy")),
             "the run holding the clippy call stayed collapsed",
         )
         assertEquals(
-            listOf("r-1", "run:r-2", "r-5", "r-6", "r-7", "r-8"),
+            listOf("r-1", "reply:r-2", "run:r-2", "r-5", "r-6", "r-7", "r-8"),
             keys(transcriptRows(TOOL_RUN_TURNS, "kampr-node")),
             "the run holding the kampr-node call stayed collapsed",
         )
         assertEquals(
-            listOf("r-1", "run:r-2", "r-5", "run:r-6"),
+            listOf("r-1", "reply:r-2", "run:r-2", "r-5", "run:r-6"),
             keys(transcriptRows(TOOL_RUN_TURNS, "nothing at all")),
             "a query that matches nothing tore up every run on the screen",
         )
@@ -103,7 +103,7 @@ class ToolRunTest {
     fun everyMatchIsARowOfItsOwn() {
         val rows = transcriptRows(TOOL_RUN_TURNS, "cargo test")
         val hits = searchHits(rows, "cargo test")
-        assertEquals(listOf(3, 5, 7), hits)
+        assertEquals(listOf(4, 6, 8), hits)
         assertTrue(hits.all { rows[it] is TranscriptRow.One })
     }
 }

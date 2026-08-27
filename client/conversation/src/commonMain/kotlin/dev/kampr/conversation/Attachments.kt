@@ -2,7 +2,10 @@ package dev.kampr.conversation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.kampr.shared.net.AttachmentBytes
@@ -36,7 +39,14 @@ fun offerFor(att: Attachment): AttachmentOffer = when (att.kind) {
 sealed interface AttachmentState {
     data object Idle : AttachmentState
     data object Fetching : AttachmentState
-    data class Shown(val image: ImageBitmap) : AttachmentState
+    // The bytes are kept beside the picture, and they are the cheap half: a 730 KB screenshot is
+    // ~9 MB once decoded, so holding the original as well costs a twelfth of what is already held
+    // and is the only way the viewer can hand the file to the device afterwards. Re-fetching it
+    // would be a second authorised round trip for bytes that never left.
+    data class Shown(val image: ImageBitmap, val bytes: ByteArray, val mime: String?) : AttachmentState {
+        override fun equals(other: Any?): Boolean = this === other
+        override fun hashCode(): Int = image.hashCode()
+    }
     data class Saved(val where: String) : AttachmentState
     data class Failed(val reason: String) : AttachmentState
 }
@@ -82,10 +92,41 @@ class AttachmentStore(
     private val mostPixelBytesHeld: Long = MOST_PIXEL_BYTES_HELD,
 ) {
     private val states = mutableStateMapOf<String, AttachmentState>()
+    private val savedTo = mutableStateMapOf<String, String>()
+
+    // Which picture is open over the transcript, if any. Held here rather than in the card that
+    // opened it: the viewer covers the whole pane, and a card inside a lazy list is composed away
+    // the moment the thing it opened scrolls off.
+    var viewing: Attachment? by mutableStateOf(null)
+        private set
     private val held = ArrayDeque<String>()
     private val pixelBytes = HashMap<String, Long>()
 
     fun state(id: String): AttachmentState = states[id] ?: AttachmentState.Idle
+
+    fun saved(id: String): String? = savedTo[id]
+
+    fun view(att: Attachment) {
+        viewing = att
+    }
+
+    fun close() {
+        viewing = null
+    }
+
+    // Only what is already in hand. A picture that has fallen out of the held set is a button
+    // again, and the button fetches before it can be looked at, so there is no path here that
+    // saves bytes this store does not have.
+    //
+    // Off the main thread, like the fetch that put the bytes there: `saveToDevice` opens a
+    // MediaStore row and writes the whole file, and doing that under a click handler is a frame
+    // budget spent on a syscall.
+    suspend fun save(att: Attachment) {
+        val shown = states[att.id] as? AttachmentState.Shown ?: return
+        val name = attachmentFileName(att.name, shown.mime, att.id)
+        val where = withContext(Dispatchers.Default) { saveToDevice(name, shown.mime, shown.bytes) } ?: return
+        savedTo[att.id] = where
+    }
 
     suspend fun open(io: PaneIo, att: Attachment) {
         if (state(att.id) == AttachmentState.Fetching) return
@@ -106,7 +147,7 @@ class AttachmentStore(
         }
         val image = decodeImage(got.bytes)
             ?: return AttachmentState.Failed("Those bytes are not a picture this device can read.")
-        return AttachmentState.Shown(image)
+        return AttachmentState.Shown(image, got.bytes, att.mime ?: got.mime)
     }
 
     private fun hold(id: String, shown: AttachmentState.Shown) {

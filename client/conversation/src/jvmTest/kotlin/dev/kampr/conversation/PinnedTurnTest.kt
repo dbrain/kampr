@@ -27,7 +27,7 @@ import kotlin.test.Test
 
 private const val OPENS = "The width inference lands on 93 columns."
 private const val ENDS = "And the last line of it is this one."
-private const val PIN = "Put away the message of"
+private const val PIN = "Put away the reply you are inside"
 
 // Taller than the phone it is read on, which is the whole condition for pinning anything: the
 // header of a message this long is off the top of the screen by the time its end is on it.
@@ -67,25 +67,25 @@ class PinnedTurnTest {
     // the control that puts it away went with it. Pinning it is what makes a long answer
     // dismissable from where the reader actually is.
     @Test
-    fun theHeaderOfTheMessageTheReaderIsStandingInStaysOnScreen() = runComposeUiTest {
+    fun theHeadOfTheReplyTheReaderIsStandingInStaysOnScreen() = runComposeUiTest {
         setContent { Transcript(storeOf(LONG)) }
         waitForIdle()
         onNodeWithText(ENDS, substring = true).assertIsDisplayed()
-        // The message's own header went off the top with the rest of it — the copy of its first
-        // line still on screen is the pinned bar's, and it is on screen because the bar is.
+        // The reply's own head went off the top with the rest of it — the copy of its first line
+        // still on screen is the pinned bar's, and it is on screen because the bar is.
         onNodeWithContentDescription(PIN, substring = true).assertIsDisplayed()
         onAllNodesWithText(OPENS, substring = true).assertCountEquals(2)
     }
 
     @Test
-    fun thePinnedHeaderPutsTheMessageAwayFromWhereTheReaderIs() = runComposeUiTest {
+    fun thePinnedHeadPutsTheWholeReplyAwayFromWhereTheReaderIs() = runComposeUiTest {
         setContent { Transcript(storeOf(LONG)) }
         waitForIdle()
         onNodeWithContentDescription(PIN, substring = true).performClick()
         waitForIdle()
         onAllNodesWithText(ENDS, substring = true).assertCountEquals(0)
-        // Folded, so its own header is back on screen — and a folded row is not one the reader can
-        // be standing in the middle of, so nothing is pinned over it.
+        // Put away, so its own head is back on screen — and a head with nothing under it is not
+        // something the reader can be standing in the middle of, so nothing is pinned over it.
         onAllNodesWithText(OPENS, substring = true).assertCountEquals(1)
         onAllNodesWithContentDescription(PIN, substring = true).assertCountEquals(0)
     }

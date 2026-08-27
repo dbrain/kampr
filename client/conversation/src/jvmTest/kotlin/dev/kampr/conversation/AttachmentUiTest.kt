@@ -140,7 +140,7 @@ class AttachmentUiTest {
         setContent { Card(attachedTurn(SHOT), node, AttachmentStore(PANE_ID)) }
         onNodeWithContentDescription("Show image, shot.png").performClick()
         waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithContentDescription("shot.png, png · 52.8 KB").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithContentDescription("Open shot.png").fetchSemanticsNodes().isNotEmpty()
         }
         assertEquals(listOf(PANE_ID to SHOT.id), node.asked)
     }
@@ -177,7 +177,7 @@ class AttachmentUiTest {
         }
         gate.complete(Unit)
         waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithContentDescription("shot.png, png · 52.8 KB").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithContentDescription("Open shot.png").fetchSemanticsNodes().isNotEmpty()
         }
     }
 

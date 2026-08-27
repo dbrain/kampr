@@ -1,25 +1,29 @@
 package dev.kampr.conversation
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.selection.DisableSelection
 import dev.kampr.conversation.md.Markdown
-import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.announce
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
+
+// How much of a header a turn carries. An ask is a block of its own and wears the whole thing; a
+// step inside a reply wears its clock, because the reply's head cannot say when each of thirty
+// calls happened; a call inside a collapsed run wears nothing, the run's card being the header.
+sealed interface TurnHead {
+    data object Full : TurnHead
+    data class Stamp(val text: String?) : TurnHead
+    data object None : TurnHead
+}
 
 /// The node's reserved id for the message a harness is still writing. It is scraped off the pane's
 // screen, so it is an approximation of a turn that does not exist yet: it is revised as the text
@@ -79,6 +83,8 @@ fun TurnView(
     now: Double = wallClockMillis(),
     agent: String? = null,
     framed: Boolean = true,
+    head: TurnHead = TurnHead.Full,
+    edge: BlockEdge = BlockEdge.Only,
 ) {
     val pieces = groupBlocks(turn.blocks)
     // A folded turn is not composed rather than not painted, which is what keeps its text out of
@@ -92,22 +98,27 @@ fun TurnView(
     // Nested inside an expanded run, the run's own card is already the frame — a second one around
     // every call in it is a box drawn inside a box.
     if (!framed) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (head is TurnHead.Stamp) StepStamp(head.text)
             Body(turn, pieces, query, expanded, onToggle, attachments)
         }
         return
     }
 
-    TurnFrame(skin, modifier) {
-        TurnHeader(
-            skin = skin,
-            stamp = turnStamp(turn.at, now),
-            gist = turnGist(turn),
-            parts = pieces.size,
-            folded = folded,
-            onToggle = fold?.let { key -> { onToggle(key) } },
-        )
-        if (!folded) Body(turn, pieces, query, expanded, onToggle, attachments)
+    BlockFrame(skin, edge, modifier) {
+        when (head) {
+            is TurnHead.Full -> TurnHeader(
+                skin = skin,
+                stamp = turnStamp(turn.at, now),
+                gist = turnGist(turn),
+                parts = pieces.size,
+                folded = folded,
+                onToggle = fold?.let { key -> { onToggle(key) } },
+            )
+            is TurnHead.Stamp -> StepStamp(head.text)
+            TurnHead.None -> Unit
+        }
+        if (head !is TurnHead.Full || !folded) Body(turn, pieces, query, expanded, onToggle, attachments)
     }
 }
 
@@ -123,26 +134,16 @@ private fun Body(
     for ((index, piece) in pieces.withIndex()) {
         PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
     }
-    if (turn.id == LIVE_TURN_ID) StreamingStrip()
 }
 
-// Says out loud that this text came off the screen rather than out of the transcript. It is the
-// only part of a turn a reader can act on differently: the wording may still change, and it will
-// be replaced wholesale when the harness records it.
+// A step's own clock, and nothing else. Who is speaking is the reply's business and it says so
+// once at the top; when *this* step happened is not something the head can answer for it, and a
+// reader working out where an agent spent eleven minutes needs every one of them.
 @Composable
-private fun StreamingStrip() {
+fun StepStamp(stamp: String?) {
+    if (stamp == null) return
     val tokens = Kampr.tokens
-    Row(
-        Modifier.fillMaxWidth().announce("still writing"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Box(
-            Modifier.size(width = 7.dp, height = 13.dp)
-                .background(tokens.color.accent, RoundedCornerShape(tokens.radii.sm)),
-        )
-        KText("still writing", tokens.type.meta, tokens.color.mute)
-    }
+    DisableSelection { KText(stamp, tokens.type.micro, tokens.color.mute) }
 }
 
 @Composable

@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -34,7 +34,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.theme.Kampr
@@ -67,7 +69,14 @@ import kotlinx.coroutines.launch
 private const val END_OF_THE_ITEM = Int.MAX_VALUE
 
 @Composable
-fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modifier) {
+fun ConversationView(
+    pane: PaneState,
+    info: PaneInfo?,
+    modifier: Modifier = Modifier,
+    // Injected only so an artboard can be drawn against a fixed one — a picture whose stopwatch
+    // reads the real clock is a different picture every time it is rendered.
+    clock: () -> Double = ::wallClockMillis,
+) {
     val tokens = Kampr.tokens
     val io = LocalPaneIo.current
 
@@ -88,20 +97,36 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // is that leaving the pane lets go of all of them.
     val attachments = rememberAttachmentStore(pane.id)
     val listState = rememberLazyListState()
-    val rows = remember(pane.revision, query) { transcriptRows(turns, query) }
+    // `derivedStateOf` rather than a keyed `remember`: what is put away is a snapshot list, and
+    // the rows are a function of it — a collapsed reply is one row where an open one is a dozen.
+    val rows by remember(pane.revision, query) {
+        derivedStateOf { transcriptRows(turns, query, expanded) }
+    }
     // Ticked, and it has to be: the stamps used to be read once per revision, so a transcript
     // nobody was writing kept whatever ages were true when the reader arrived and the newest
     // message read "now" for as long as the pane stayed open. What the stamps carry now is a time
     // of day (#285), which does not move on its own — this is what moves the *bucket* it is drawn
     // in, from a bare clock to a weekday to a date, and what carries the age a zoneless stamp
     // still falls back to. A minute is finer than any of those need.
-    var now by remember { mutableStateOf(wallClockMillis()) }
+    var now by remember { mutableStateOf(clock()) }
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000)
-            now = wallClockMillis()
+            now = clock()
         }
     }
+    val working = info != null && statusOf(info) == AgentStatus.Working
+    val newest = (rows.lastOrNull { it is TranscriptRow.Head } as? TranscriptRow.Head)?.reply
+    val tail = newest?.takeIf { working || it.live }
+    // The progress line is an item of its own, so the end of the list is one past the last row
+    // whenever it is showing — and the end of the list is what "follow the end" aims at.
+    val trailing = if (tail == null) 0 else 1
+    // The progress line is a piece of the newest reply's box, and it is at the foot of the
+    // transcript rather than at the head of that reply because the transcript follows its own end:
+    // the end is where the reader's eye already is, and the head of a reply eleven minutes long is
+    // far above the fold, which is the one place a progress line is no use.
+    val shown = if (tail == null) rows else rows + TranscriptRow.Working(tail)
+    val stamps = remember(shown, now) { stepStamps(shown, now) }
     val hits = remember(rows, query) { searchHits(rows, query) }
     val leading = if (pane.convoMore) 1 else 0
 
@@ -166,9 +191,9 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
     var viewport by remember { mutableStateOf(0) }
-    LaunchedEffect(turns, viewport) {
+    LaunchedEffect(turns, viewport, trailing) {
         if (following && rows.isNotEmpty()) {
-            listState.requestScrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM)
+            listState.requestScrollToItem(rows.lastIndex + leading + trailing, END_OF_THE_ITEM)
         }
     }
 
@@ -186,11 +211,34 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
     // much of its own box, which both reserves the band and clips it — measured, never named,
     // because the card wraps onto a different number of rows for every question it carries.
     val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
-    val pinned by remember(rows, query, leading) {
-        derivedStateOf { pinnedTurn(listState, rows, leading, query) }
-    }
+    val pinned by remember(leading) { derivedStateOf { pinnedBlock(listState, shown, leading) } }
     var strip by remember { mutableStateOf(0) }
     val density = LocalDensity.current
+    // Over the whole pane and outside the transcript's own column, because that is what a picture
+    // opened to be looked at needs — and because the card that opened it is inside a lazy list,
+    // which composes it away the moment it scrolls off.
+    attachments.viewing?.let { att ->
+        when (val open = attachments.state(att.id)) {
+            is AttachmentState.Shown -> {
+                ImageViewer(
+                    image = open.image,
+                    headline = headlineOf(att),
+                    detail = detailOf(att),
+                    onSave = { scope.launch { attachments.save(att) } },
+                    onClose = { attachments.close() },
+                    saved = attachments.saved(att.id),
+                    modifier = modifier,
+                )
+                return
+            }
+            // Dropped out of the held set while it was open. Nothing reaches this today — the only
+            // thing that evicts is another picture being opened, and none can be while this one is
+            // — but the alternative to saying so is a blank pane with no way off it. Cleared in an
+            // effect rather than here: writing state during composition is a loop, not a fix.
+            else -> LaunchedEffect(att.id) { attachments.close() }
+        }
+    }
+
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         if (searching || !keyboardOpen) {
             TranscriptBar(
@@ -231,7 +279,10 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    // None. A block is one box drawn a piece at a time, and a gap between the
+                    // pieces is a gap in the box — the foot of each block pays the space that
+                    // separates it from the next one, outside its own paint.
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
                     if (pane.convoMore) {
                         item(key = "older") {
@@ -247,20 +298,47 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                             }
                         }
                     }
-                    items(rows, key = { it.key }) { row ->
+                    itemsIndexed(shown, key = { _, row -> row.key }) { at, row ->
+                        val stamp = stamps.getOrNull(at)
+                        val edge = blockEdge(
+                            shown.getOrNull(at - 1)?.block,
+                            row.block,
+                            shown.getOrNull(at + 1)?.block,
+                        )
                         when (row) {
-                            is TranscriptRow.One -> TurnView(
+                            is TranscriptRow.Ask -> TurnView(
                                 row.turn, query, expanded, toggle,
                                 attachments = attachments, now = now, agent = info?.agent,
+                                edge = edge,
                             )
+                            is TranscriptRow.Head -> ReplyHead(
+                                row.reply, info?.agent, now,
+                                collapsed = row.key in expanded,
+                                onToggle = { toggle(row.key) },
+                                edge = edge,
+                            )
+                            // A step is not a card of its own — it is content inside the one box
+                            // its whole reply is drawn as, and the box's own piece supplies the
+                            // ground, the rail and the margins.
+                            is TranscriptRow.One -> TurnView(
+                                row.turn, query, expanded, toggle,
+                                attachments = attachments, now = now,
+                                agent = info?.agent, head = TurnHead.Stamp(stamp), edge = edge,
+                            )
+                            is TranscriptRow.Working -> BlockFrame(
+                                speakerSkin(Speaker.Agent, info?.agent), edge,
+                            ) { WorkingStrip(row.reply, clock = clock) }
                             is TranscriptRow.Run ->
-                                ToolRunCard(row, row.key in expanded, { toggle(row.key) }) {
+                                BlockFrame(speakerSkin(Speaker.Agent, info?.agent), edge) {
+                                    StepStamp(stamp)
+                                    ToolRunCard(row, row.key in expanded, { toggle(row.key) }) {
                                     for (turn in row.turns) {
                                         TurnView(
                                             turn, query, expanded, toggle,
                                             attachments = attachments, now = now,
-                                            agent = info?.agent, framed = false,
+                                            agent = info?.agent, framed = false, head = TurnHead.None,
                                         )
+                                    }
                                     }
                                 }
                         }
@@ -272,13 +350,15 @@ fun ConversationView(pane: PaneState, info: PaneInfo?, modifier: Modifier = Modi
                 // card for the same reason the list is inset by it: the card is the one thing on
                 // this screen that outranks the transcript.
                 pinned?.let { at ->
-                    PinnedTurnBar(
+                    PinnedBlockBar(
                         at,
                         info?.agent,
                         now,
-                        onCollapse = {
-                            toggle(at.key)
-                            scope.launch { listState.scrollToItem(at.index + leading) }
+                        onCollapse = collapseKey(at.head)?.let { key ->
+                            {
+                                toggle(key)
+                                scope.launch { listState.scrollToItem(at.index + leading) }
+                            }
                         },
                         modifier = Modifier
                             .align(Alignment.TopStart)
