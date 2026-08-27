@@ -387,10 +387,21 @@ it, so tables stay tables. A `diff` block carries `text` and an optional `path`.
 
 #### `fresh` — this page replaces, it does not merge
 
-A page **merges by id**: turns whose ids the client already holds are replaced in place, and the
-rest are prepended. That is what lets `convo.load` page backwards through one transcript. It is
-also what leaves a conversation the pane has *left* sitting underneath the one it moved to, because
-the new transcript's ids match nothing.
+A page **merges by id**: turns whose ids the client already holds are replaced in place, and each
+turn it does not hold goes **where the page puts it** — after the last id the page and the client
+have in common, before the next one. When they share nothing at all, the page is prepended whole.
+That is what lets `convo.load` page backwards through one transcript. It is also what leaves a
+conversation the pane has *left* sitting underneath the one it moved to, because the new
+transcript's ids match nothing.
+
+Unconditional prepending was the older rule, and clients that still do it are on real phones. It is
+correct for `convo.load`, which pages backwards, and wrong for a transcript re-read after its pump
+was restarted, which pages forwards: the turns the client is missing are then the *newest* ones and
+every one of them lands at the top of a conversation that is scrolled to the bottom — never seen,
+and never revisited, because the node has recorded them as delivered. **A node must therefore never
+send a merging page carrying a turn newer than what the client holds.** Where the node knows the
+client is already showing this transcript, the turns go out as `convo.turn`, which appends; where
+the overlap is gone entirely, the page says `fresh`.
 
 Where the node knows what a client is holding it takes the old turns off by name — a `convo.turn`
 carrying their ids and no blocks, exactly as a live preview is retired. There are cases where it

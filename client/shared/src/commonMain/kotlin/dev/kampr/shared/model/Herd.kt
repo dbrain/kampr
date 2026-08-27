@@ -65,6 +65,24 @@ private fun statusRank(status: AgentStatus): Int = when (status) {
     AgentStatus.Unknown -> 4
 }
 
+// A pane that has left the herd, and which half of it left. A shell that exits takes its pane with
+// it; a node that goes takes every pane it had. Both leave the screen sitting on the last grid the
+// pane printed, and the operator is owed the difference — one of them is over, the other may be
+// back on its own.
+//
+// Only a herd that has arrived and is current can say a pane is absent. Before the first one there
+// is nothing to be absent from, and a stale herd is the last one that arrived rather than a
+// statement about now — reading absence out of either would report a shell closed every time the
+// socket dropped, which is the reassuring-lie shape this project has paid for before.
+enum class PaneGone { Shell, Node }
+
+fun Herd.gone(paneId: String): PaneGone? = when {
+    !known || stale -> null
+    panes.any { it.id == paneId } -> null
+    nodes.any { it.id == paneId.substringBefore('/') } -> PaneGone.Shell
+    else -> PaneGone.Node
+}
+
 fun paneTitle(pane: PaneInfo): String {
     val left = pane.label ?: pane.workspace ?: pane.id.substringAfter('/')
     val right = pane.agent ?: "bash"

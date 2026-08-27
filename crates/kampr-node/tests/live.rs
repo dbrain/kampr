@@ -4190,6 +4190,229 @@ async fn a_conversation_that_moved_while_the_pane_was_unwatched_is_still_taken_o
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
 }
 
+/// The other half of the same gap, and the one that actually happens: the transcript **does not
+/// move** while the pane is unwatched, it just grows.
+///
+/// A page merges by id, and the merge an installed phone performs files what it does not recognise
+/// at the *top* — a rule written for `convo.load`, which pages backwards. Re-opening the
+/// transcript the client is already holding pages forwards, so the turns it is missing are the
+/// newest ones and every one of them lands above a conversation from hours earlier, on a view
+/// pinned to the bottom. That is a message that was never dropped and never seen, and never
+/// revisited either, because the node then records it as delivered.
+///
+/// Phones on older releases cannot be fixed from the client side, so the node does not send them a
+/// page it knows they will misfile. Asserted through the *old* merge on purpose: a test that only
+/// checks the turn arrived passes with the defect restored.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_turn_written_while_the_pane_was_unwatched_lands_below_the_conversation_not_above_it() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("regrown", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "WHICH KEYS?", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let mut screen: Vec<String> = opening["turns"]
+        .as_array()
+        .expect("turns")
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!screen.is_empty(), "{opening}");
+
+    // The operator leaves the pane's screen. `AppState` unwatches; the client keeps every turn it
+    // was ever sent, because `paneStates` is never pruned.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+
+    // The agent answers while nobody is on that screen. Same transcript, same session, one turn
+    // longer — this is the ordinary case, not `/clear`.
+    fixture.append(
+        "11111111-1111-4111-8111-111111111111",
+        "the-answer",
+        "HERE IS THE ANSWER",
+    );
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane {
+            continue;
+        }
+        let tag = message["t"].as_str().unwrap_or("");
+        if tag != "convo" && tag != "convo.turn" {
+            continue;
+        }
+        merge_as_an_older_client_would(&mut screen, &message);
+        if screen.iter().any(|id| id == "the-answer") {
+            assert_eq!(
+                screen.last().map(String::as_str),
+                Some("the-answer"),
+                "the answer was filed above the conversation instead of below it: {screen:?} from {message}",
+            );
+            return;
+        }
+    }
+    panic!("the answer never reached the client at all");
+}
+
+/// The merge performed by every client already installed on a phone, from
+/// `docs/04-wire-protocol.md`: a page replaces known ids in place and **prepends** the rest unless
+/// it says `fresh`, and a `convo.turn` replaces known ids in place and appends the rest.
+fn merge_as_an_older_client_would(screen: &mut Vec<String>, message: &Value) {
+    let turns = message["turns"].as_array().cloned().unwrap_or_default();
+    let ids: Vec<String> = turns
+        .iter()
+        .filter_map(|t| t["id"].as_str())
+        .map(str::to_string)
+        .collect();
+    if message["t"] == "convo" && message["fresh"] == json!(true) {
+        screen.clear();
+    }
+    let unknown: Vec<String> = ids.iter().filter(|id| !screen.contains(id)).cloned().collect();
+    if message["t"] == "convo" {
+        screen.splice(0..0, unknown);
+    } else {
+        screen.extend(unknown);
+    }
+}
+
+/// A client that **freezes rather than closes** is reaped, and one that is merely quiet is not.
+///
+/// Every path where the node learns the client is gone already tears down cleanly — `unwatch`, a
+/// clean close, an abrupt RST, the pane closing (#284). The hole is the peer whose kernel is alive
+/// and ACKing while the application never reads again: a phone frozen in the background, a
+/// suspended laptop, a NAT that dropped the flow. Its socket sits in TCP zero-window persist,
+/// which resets the probe counter on every probe, so nothing below ever errors, the writer never
+/// breaks, and `outbox.close()` never happens. Measured: the watch was still held after 25
+/// minutes, costing herdr exactly what a watched pane costs and holding one of 64 socket permits
+/// for ever. The mesh link has had this guard all along; the link a phone uses had none.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_stops_answering_is_dropped_and_a_quiet_one_is_not() {
+    let h = harness!("keepalive", |c: &mut Config| c.limits.client_keepalive_secs = 1);
+    let deadline = Duration::from_secs(3);
+    let token = h.token(Role::Full).await;
+
+    // The control, and it has to come first: a client that answers is *quiet* on this wire too —
+    // it sends nothing at all once it has greeted — so a reaper keyed on inbound traffic rather
+    // than on the pong would take every idle phone with it, and this test would be the only thing
+    // between that and a release. Polling the socket is the whole of what an awake client does:
+    // `tungstenite` answers the node's pings from inside `next`, and never touching it is what
+    // "frozen" means below.
+    let mut awake = h.connect(&token).await;
+    until(&mut awake, "hello", 10).await;
+    assert!(
+        !closed_within(&mut awake, deadline * 3).await,
+        "an idle client that still answers its pings was dropped"
+    );
+    send(&mut awake, json!({ "t": "resync" })).await;
+    until(&mut awake, "herd", 10).await;
+
+    // And now one that goes away without saying so. Nothing is read from this socket at all, so
+    // every ping the node sends goes unanswered.
+    let mut frozen = h.connect(&token).await;
+    until(&mut frozen, "hello", 10).await;
+    tokio::time::sleep(deadline * 3).await;
+    assert!(
+        closed_within(&mut frozen, Duration::from_secs(20)).await,
+        "a client that stopped answering was still being served past its deadline"
+    );
+}
+
+/// The expensive case end to end: a frozen client **holding a watch on a producing pane**, which
+/// is the one that costs herdr what a live watcher costs (#284) — a frozen client on a quiet pane
+/// costs nothing but a socket permit.
+///
+/// **What this does not prove.** The intended guard here is the deadline on `out.send`: once the
+/// socket's buffers fill, the send pends inside the `select!` and the keepalive arm is never polled
+/// again, so the ping cannot fire at all. Disabling the ping shows this test still failing, so the
+/// send never stalls for a whole deadline at this volume — `pump_pane` purges a congested pane's
+/// frames rather than queueing them, which keeps the writer from feeding the socket fast enough to
+/// fill it. The state is real regardless: #284 captured `Send-Q 2636553 notsent rwnd_limited:100%`
+/// on a socket in exactly this condition. So the send deadline stands on that measurement and on a
+/// reading of the `select!`, and **not** on this test, which the ping is what passes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frozen_client_watching_a_producing_pane_is_dropped() {
+    let h = harness!("keepalive-write", |c: &mut Config| c
+        .limits
+        .client_keepalive_secs = 1);
+    let token = h.token(Role::Full).await;
+    let pane = h.pane_id();
+
+    let mut frozen = h.connect(&token).await;
+    until(&mut frozen, "hello", 10).await;
+    send(
+        &mut frozen,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until_pane(&mut frozen, "grid.reset", &pane, 25).await;
+
+    // From here the socket is never read again, and the pane is told to fill it. The wait has to
+    // be a bare sleep: `closed_within` *reads*, and a read is `tungstenite` answering the node's
+    // pings from inside `next` — which is the client waking up, not the client being frozen.
+    send(
+        &mut frozen,
+        json!({ "t": "input", "pane": pane, "text": "seq 1 200000\n" }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    assert!(
+        closed_within(&mut frozen, Duration::from_secs(30)).await,
+        "a client that stopped reading was written to for ever instead of being dropped"
+    );
+}
+
+/// Whether the node closed this socket, as distinct from it having nothing to say. [`recv`] folds
+/// a timeout, a close and an undecodable frame into the same `None`, and the difference is the
+/// whole claim here.
+async fn closed_within(socket: &mut Socket, within: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(500), socket.next()).await {
+            Err(_) => continue,
+            Ok(None) | Ok(Some(Err(_))) => return true,
+            Ok(Some(Ok(tungstenite::Message::Close(_)))) => return true,
+            Ok(Some(Ok(_))) => continue,
+        }
+    }
+    false
+}
+
 /// The half a withdrawal cannot reach: a client that comes back on a **different socket**.
 ///
 /// The node's record of what a client is holding lives with that client's session, and a

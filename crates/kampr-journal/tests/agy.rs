@@ -8,6 +8,7 @@
 mod common;
 
 use std::fs::File;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -393,6 +394,83 @@ fn a_held_lock_with_no_transcript_behind_it_resolves_to_nothing() {
     let lock = File::options().write(true).open(&path).unwrap();
     lock.lock().unwrap();
     assert_eq!(located(&home, &me()), None);
+}
+
+/// **One read of `/proc/locks` is not evidence.** It is a `seq_file`, and its iteration restarts
+/// by index every time the kernel's ~4 KiB buffer is drained, so a lock released *before* that
+/// boundary between two of the `read` calls behind one `read_to_string` shifts every later record
+/// up one and the record sitting on the boundary is never printed. Measured on a 112-line table by
+/// re-reading it inside `holder` at the instant it answered wrongly: the dropped record was a lock
+/// the caller was still holding, and it came straight back on the next read.
+///
+/// Dropping a record is the dangerous direction, not the noisy one. A pid holding two presence
+/// locks whose second lock falls out of the view resolves to the first — the wrong-conversation
+/// answer this module exists to refuse — so a lock seen in *any* read is a lock held.
+#[test]
+fn a_lock_one_table_read_dropped_is_not_a_lock_released() {
+    let home = presence_home("agy-dropped", &[AGY_SESSION, HELD]);
+    let pid = std::process::id();
+    let both = fake_table(&home, pid, &[HELD, AGY_SESSION]);
+    let dropped = fake_table(&home, pid, &[HELD]);
+    let presence = home.join("presence");
+
+    for view in [
+        vec![dropped.clone(), both.clone(), both.clone(), both.clone()],
+        vec![both.clone(), dropped.clone(), dropped.clone(), dropped.clone()],
+    ] {
+        let mut reads = view.into_iter();
+        assert_eq!(
+            kampr_journal::agy::holder_from(&presence, pid, || reads.next()),
+            None,
+            "a read that lost one of the two locks is not a read that says there is one"
+        );
+    }
+
+    let mut reads = std::iter::repeat_n(dropped, 4);
+    assert_eq!(
+        kampr_journal::agy::holder_from(&presence, pid, || reads.next()).as_deref(),
+        Some(HELD),
+        "and a lock no read ever saw is not held — without which the two above prove nothing"
+    );
+}
+
+/// `/proc/locks` as the kernel prints it, for locks this process is not really holding. The
+/// device field is the kernel's own `major:minor` encoding, so a line the kernel wrote about a
+/// lock this process *is* holding is captured and its inode swapped, rather than the encoding
+/// being re-derived here and drifting from `presence.rs`.
+fn fake_table(home: &Path, pid: u32, ids: &[&str]) -> String {
+    let witness_path = home.join("presence/witness.lock");
+    File::create(&witness_path).unwrap();
+    let witness = File::options().write(true).open(&witness_path).unwrap();
+    witness.lock().unwrap();
+    let held = std::fs::metadata(&witness_path).unwrap().ino();
+    let line = (0..64)
+        .find_map(|_| {
+            let table = std::fs::read_to_string("/proc/locks").unwrap();
+            table
+                .lines()
+                .find(|line| {
+                    kampr_journal::agy::flocks(line)
+                        .first()
+                        .is_some_and(|(owner, _, _, inode)| *owner == pid && *inode == held)
+                })
+                .map(str::to_string)
+        })
+        .expect("the kernel prints a lock this process holds");
+    drop(witness);
+    std::fs::remove_file(&witness_path).unwrap();
+
+    let (head, _) = line
+        .rsplit_once(':')
+        .expect("the kernel writes major:minor:inode");
+    ids.iter()
+        .map(|id| {
+            let inode = std::fs::metadata(home.join(format!("presence/{id}.lock")))
+                .unwrap()
+                .ino();
+            format!("{head}:{inode} 0 EOF\n")
+        })
+        .collect()
 }
 
 fn locks(name: &str) -> String {

@@ -175,8 +175,9 @@ internal fun capPress(cap: KeyCap, session: PaneSession, sink: InputSink) {
     when (cap.kind) {
         CapKind.Latch -> {
             val riding = cap.hold?.takeIf { session.latches[it].active() }
-            if (riding != null) session.latches.tap(riding) else cap.latch?.let(session.latches::tap)
-            session.reclaimKeyboard()
+            val which = riding ?: cap.latch
+            which?.let(session.latches::tap)
+            session.settleLatch(which)
         }
         CapKind.Keyboard -> session.toggleKeyboard()
         CapKind.Text -> {
@@ -189,8 +190,9 @@ internal fun capPress(cap: KeyCap, session: PaneSession, sink: InputSink) {
 internal fun capHold(cap: KeyCap, session: PaneSession, sink: InputSink) {
     when (cap.kind) {
         CapKind.Latch -> {
-            cap.hold?.let(session.latches::tap) ?: cap.latch?.let(session.latches::lock)
-            session.reclaimKeyboard()
+            val hold = cap.hold
+            if (hold != null) session.latches.tap(hold) else cap.latch?.let(session.latches::lock)
+            session.settleLatch(hold ?: cap.latch)
         }
         CapKind.Keyboard -> session.toggleKeyboard()
         CapKind.Text -> {
@@ -198,4 +200,19 @@ internal fun capHold(cap: KeyCap, session: PaneSession, sink: InputSink) {
             session.reclaimKeyboard()
         }
     }
+}
+
+// Ctrl and alt are prefixes, and the key they take is nearly always a letter — the one thing this
+// row does not carry. Arming one with the keyboard down leaves a chord that cannot be finished,
+// and nothing on screen says so, because the cap lights up either way. So arming one is a request
+// for the keyboard, the same as tapping the grid is.
+//
+// Not shift, which rides the arrows and tab the row already has, and not fn, which *is* the row.
+// Nor clearing one: after that tap the latch is off, and turning a modifier off is the opposite of
+// asking for something to modify.
+private fun Latch.takesALetter(): Boolean = this == Latch.Ctrl || this == Latch.Alt
+
+private fun PaneSession.settleLatch(latch: Latch?) {
+    if (latch != null && latch.takesALetter() && latches[latch].active()) openKeyboard()
+    reclaimKeyboard()
 }

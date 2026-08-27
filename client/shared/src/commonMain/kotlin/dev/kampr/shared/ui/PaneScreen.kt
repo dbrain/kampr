@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.PaneGone
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
@@ -104,12 +105,24 @@ private fun StatusChip(info: PaneInfo?) {
     }
 }
 
+// The name a pane had, held past the herd entry that carried it. A pane that leaves the herd takes
+// its title and its geometry with it, and every fallback in this header is the raw id — which is
+// what the operator saw when a shell exited. Monotone on purpose: nothing here is ever cleared,
+// because the last thing the node said about this pane stays the last thing anyone knows.
+@Composable
+private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
+    var last by remember(paneId) { mutableStateOf(info) }
+    if (info != null) last = info
+    return last
+}
+
 // Everything the header says *about* the pane rather than which pane it is: what the frame stream
 // is doing, what the keyboard is doing, what the agent is doing. Emitted as siblings so the row
 // that hosts them decides how they lay out.
 @Composable
-private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean) {
+private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?) {
     val tokens = Kampr.tokens
+    if (gone != null) GoneBadge(gone)
     if (info?.detail != null) StreamBadge()
     if (pane.stale) StaleBadge()
     if (pane.quiet) QuietBadge()
@@ -132,6 +145,7 @@ fun PaneScreenMobile(
     surfaces: PaneSurfaces,
     landscape: Boolean,
     readOnly: Boolean,
+    gone: PaneGone? = null,
     onBack: () -> Unit,
     onView: (PaneView) -> Unit,
     onAnswer: (String) -> Unit,
@@ -151,6 +165,7 @@ fun PaneScreenMobile(
     var chrome by remember { mutableStateOf<Dp?>(null) }
     val presence = rememberWatchPresence(pane.id, info)
     val shown = viewOn(info, view)
+    val named = rememberLastKnown(pane.id, info)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             when (shown) {
@@ -187,15 +202,15 @@ fun PaneScreenMobile(
             ) {
                 BackAction("Back to the herd", onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
                 if (landscape) {
-                    KText(info?.let(::paneTitle) ?: pane.id, tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
-                    KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+                    KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading())
+                    KText(geometryLine(named, pane, presence.others), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
                     // Leading the cluster the weighted line pins to the right edge, which is as far
                     // left as it goes here: ahead of it is Back and the pane title, and a zoom
                     // control wedged between a screen's back arrow and its heading reads as neither.
                     // It is also where the held slot costs nothing to look at — on the transcript
                     // the gap merges into the whitespace the geometry line already trails.
                     ZoomSlot(pane, surfaces, shown)
-                    PaneMarks(pane, info, readOnly)
+                    PaneMarks(pane, info, readOnly, gone)
                     NewAction(pane.id)
                     PaneManageAction(pane.id)
                     // Landscape has no second row to hang these off, and an agent pane opens in
@@ -203,8 +218,8 @@ fun PaneScreenMobile(
                     if (info.talks) ViewSwitch(shown, onView, Modifier.width(210.dp))
                 } else {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-                        KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
+                        KText(paneName(named, pane), tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
+                        KText(geometryLine(named, pane, presence.others), tokens.type.meta, tokens.color.mute)
                     }
                     // The marks go on the row below. At 480 dpi the phone is 360 dp wide and the
                     // title is the only elastic thing on this line, so it is handed whatever the
@@ -227,7 +242,7 @@ fun PaneScreenMobile(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PaneMarks(pane, info, readOnly)
+                    PaneMarks(pane, info, readOnly, gone)
                     // Left of the switch, which is the ask, but after the badges rather than ahead
                     // of them: the held slot has to sit somewhere, and leading the row it indents
                     // every badge off the margin the line above starts at whenever the transcript
@@ -243,6 +258,7 @@ fun PaneScreenMobile(
                     if (info.talks) ViewSwitch(shown, onView, Modifier.weight(1f))
                 }
             }
+            gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
         }
 
         // A pane that can never paint, in the space it was never going to fill. Gated on
@@ -265,7 +281,9 @@ fun PaneScreenMobile(
 
         // The conversation surface renders its own prompt strip and reply box, so the terminal
         // chrome stands down rather than stacking a second one underneath it.
-        if (shown != PaneView.Conversation) {
+        // Nothing typed here can reach a pane the node no longer has, and a row of keys that
+        // works perfectly and delivers nothing is the shape this codebase has paid for twice.
+        if (shown != PaneView.Conversation && gone == null) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
                 if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
                 surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
@@ -328,9 +346,18 @@ private fun UnsentBadge(count: Int) {
     }
 }
 
+// Never the raw id. `pane.id` is a node ULID and a herdr coordinate, and a header that falls back
+// to it has told the operator their pane is gone in the one vocabulary that reads as a fault in
+// the app. The name a pane had outlives the herd entry; what says it is over is the strip.
+private fun paneName(info: PaneInfo?, pane: PaneState): String =
+    info?.let(::paneTitle) ?: pane.id.substringAfter('/')
+
 private fun geometryLine(info: PaneInfo?, pane: PaneState, others: Int): String {
-    val node = info?.id?.substringBefore('/')?.take(8) ?: ""
-    val local = info?.id?.substringAfter('/') ?: pane.id
+    // Off the pane's own id when the herd entry has gone with it. The fallback used to be the
+    // whole id in the local column, which is the same node ULID the title was reported for.
+    val id = info?.id ?: pane.id
+    val node = id.substringBefore('/').take(8)
+    val local = id.substringAfter('/')
     // A pane nobody has watched has no measured width, and the layout rect is not one — the node
     // omits `cols` rather than reporting a number no row was ever wrapped at.
     val size = info?.let { "${it.cols?.toString() ?: "—"}×${it.rows}" }
@@ -389,6 +416,7 @@ fun PaneScreenDesktop(
     view: PaneView,
     surfaces: PaneSurfaces,
     readOnly: Boolean,
+    gone: PaneGone? = null,
     onView: (PaneView) -> Unit,
     onAnswer: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -399,6 +427,7 @@ fun PaneScreenDesktop(
     var chrome by remember { mutableStateOf<Dp?>(null) }
     val presence = rememberWatchPresence(pane.id, info)
     val shown = viewOn(info, view)
+    val named = rememberLastKnown(pane.id, info)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             Row(Modifier.fillMaxSize()) {
@@ -417,22 +446,27 @@ fun PaneScreenDesktop(
             }
         }
 
-        Row(
+        Column(
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
+                .readingOrder(-1f)
+                .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } },
+        ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
                 .background(tokens.color.bar)
                 .edgeBottom()
-                .readingOrder(-1f)
-                .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } }
                 .absolutePadding(left = 18.dp + safe.left, top = 13.dp + safe.top, right = 18.dp + safe.right, bottom = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                KText(info?.let(::paneTitle) ?: pane.id, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
-                KText(geometryLine(info, pane, presence.others), tokens.type.meta, tokens.color.mute)
+                KText(paneName(named, pane), tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
+                KText(geometryLine(named, pane, presence.others), tokens.type.meta, tokens.color.mute)
             }
+            if (gone != null) GoneBadge(gone)
             if (info?.detail != null) StreamBadge()
             if (pane.stale) StaleBadge()
             if (pane.quiet) QuietBadge()
@@ -470,6 +504,8 @@ fun PaneScreenDesktop(
                 )
             }
         }
+            gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
+        }
 
         streamFault(pane, info)?.let {
             StreamNotice(it, Modifier.align(Alignment.Center).readingOrder(-0.4f).padding(24.dp))
@@ -491,7 +527,7 @@ fun PaneScreenDesktop(
         // Terminal only, not Split: in Split the transcript has half the window and its own
         // composer at the bottom of it, and a full-width row of caps across both halves is a
         // second input surface laid over the first.
-        if (shown == PaneView.Terminal) {
+        if (shown == PaneView.Terminal && gone == null) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
                 if (!readOnly) pane.pending?.let { PendingBar(it, onAnswer) }
                 if (keyRowNeeded()) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::debug;
+use tracing::{debug, warn};
 
 const SCROLLBACK_POLL: Duration = Duration::from_secs(3);
 
@@ -46,6 +46,13 @@ const DEVICE_RECHECK: Duration = Duration::from_secs(2);
 /// instead, and a client that reconnects is refused at the door for the same reason.
 const DEVICE_READ_FAILURES: u32 = 3;
 
+/// Keepalives a client may leave unanswered before the node stops serving it.
+///
+/// Three, the same as the mesh link's, and for the same reason: one missed answer is a scheduling
+/// hiccup on a loaded phone, two is a coincidence, three is a peer that is not there. What it
+/// bounds is real — an abandoned watcher costs herdr what a live one costs (#284).
+const MISSED_PONGS: u32 = 3;
+
 const MAX_PREFS_BYTES: usize = 2048;
 
 /// Attachments this node will be chunking towards one hub at a time.
@@ -68,9 +75,9 @@ const CLIENT_VERBS: [&str; 7] = [
 ];
 
 pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
-    let link = crate::mesh::split(socket);
+    let (link, heard) = crate::mesh::split(socket);
     let (out, incoming) = link.split();
-    run_on(out, incoming, node, device, peer, Caller::Client).await;
+    run_on_watched(out, incoming, node, device, peer, Caller::Client, Some(heard)).await;
 }
 
 /// One client session, over any framed link.
@@ -81,22 +88,88 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
 /// read-only refusal, the device re-read before every write, the audit line, the bounded queue and
 /// its purge rule all apply at the mesh hop because they are the same code.
 pub async fn run_on<O: Outgoing, I: Incoming>(
+    out: O,
+    incoming: I,
+    node: Arc<Node>,
+    device: Device,
+    peer: String,
+    caller: Caller,
+) {
+    run_on_watched(out, incoming, node, device, peer, caller, None).await;
+}
+
+/// [`run_on`], plus the liveness half for a transport that can be lied to.
+///
+/// **A peer that freezes rather than closing is invisible from every other angle** (#284). Its
+/// kernel stays alive and ACKs each of TCP's window probes with a zero window, which resets the
+/// probe counter, so the connection never times out and a write never errors; the writer never
+/// breaks, `outbox.close()` is never reached, and the node serves its watches for ever — measured
+/// still held after twenty-five minutes, costing herdr exactly what a live watcher costs and
+/// holding one of the node's socket permits. The application backpressure cannot notice either,
+/// because `pump_pane` *purges* a congested pane's frames rather than queueing them, so the
+/// bounded queue never reaches the cap that would close it.
+///
+/// So the node asks. Two questions, because the two states fail differently: a **ping**, for a
+/// peer with nothing queued for it, whose socket is idle and will never time out on its own; and a
+/// **deadline on the send itself**, for a peer that is being written to, where the write is what
+/// hangs and the ticker below is never polled again. `heard` is `None` for a transport that has
+/// its own liveness or cannot be lied to.
+///
+/// The ping is what the tests pin, both cases. The send deadline is not reproduced by any of them
+/// — at test volumes `pump_pane`'s purge keeps the socket from filling — and it stands instead on
+/// #284's `ss` capture of a real one in that state and on the `select!` below being unable to
+/// reach the ticker from inside a pending `send`. It is the only guard covering that state.
+#[allow(clippy::too_many_arguments)]
+async fn run_on_watched<O: Outgoing, I: Incoming>(
     mut out: O,
     mut incoming: I,
     node: Arc<Node>,
     device: Device,
     peer: String,
     caller: Caller,
+    heard: Option<Arc<crate::mesh::Heard>>,
 ) {
     let outbox = Arc::new(Outbox::new(node.config.limits.client_queue));
     let wire = Arc::new(Wire::new(outbox.clone()));
 
+    let every = Duration::from_secs(node.config.limits.client_keepalive_secs.max(1));
+    let patience = every * MISSED_PONGS;
     let writer = tokio::spawn({
         let outbox = outbox.clone();
+        let who = peer.clone();
         async move {
-            while let Some(frame) = outbox.next().await {
-                if !out.send(frame.json).await {
-                    break;
+            let mut ticker = tokio::time::interval(every);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await;
+            let mut unanswered = 0u32;
+            loop {
+                tokio::select! {
+                    frame = outbox.next() => {
+                        let Some(frame) = frame else { break };
+                        match tokio::time::timeout(patience, out.send(frame.json)).await {
+                            Ok(true) => {}
+                            Ok(false) => break,
+                            Err(_) => {
+                                warn!(peer = %who, "a client stopped reading; dropping it");
+                                break;
+                            }
+                        }
+                    }
+                    _ = ticker.tick(), if heard.is_some() => {
+                        if heard.as_ref().is_some_and(|h| h.take()) {
+                            unanswered = 0;
+                        } else {
+                            unanswered += 1;
+                            if unanswered >= MISSED_PONGS {
+                                warn!(peer = %who, "a client stopped answering keepalives");
+                                break;
+                            }
+                        }
+                        match tokio::time::timeout(patience, out.ping()).await {
+                            Ok(true) => {}
+                            _ => break,
+                        }
+                    }
                 }
             }
             outbox.close();

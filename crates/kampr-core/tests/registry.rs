@@ -434,6 +434,70 @@ fn read_at(lines: &[String], viewport_rows: u16, cols: u16) -> RawScrollback {
     }
 }
 
+/// The cadence the poller advertises is the cadence it uses.
+///
+/// `interval_for_rate` exists so a pane trickling output is read at the rate its output justifies
+/// rather than at the floor. It was computed correctly and then thrown away: the wait is a
+/// `select!` against `activity.woken`, and `saw_frame` notifies on **every** frame while `Notify`
+/// stores a permit — so any frame arriving during the wait ended it, and only `fastest` was ever
+/// served. Measured against a real herdr at 10 lines/s: the policy chose 2 s on 397 of 413 polls
+/// and the interval that actually followed had a median of 102 ms (#282).
+///
+/// The wake is for output *starting*, which is the one thing the estimate cannot know in advance —
+/// so it belongs to the idle wait and to nothing else, which is what the comment above it always
+/// said.
+#[tokio::test]
+async fn a_pane_trickling_output_is_polled_at_the_cadence_its_rate_earns() {
+    let p = Arc::new(Scripted::default());
+    let policy = brisk();
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: policy,
+            ..RegistryConfig::default()
+        },
+    );
+    {
+        let mut q = p.reads.lock().await;
+        // One row per read, so the measured rate stays low and the policy keeps choosing `quiet`.
+        for i in 1..=200 {
+            q.push_back(read(&[format!("line-{i}")], 1));
+        }
+    }
+
+    let _w = reg.watch("p").await.unwrap();
+    let feed = p.feed("p").await;
+    let settle = Duration::from_millis(200);
+    tokio::time::sleep(settle).await;
+
+    // A frame every `fastest`, which is the shape that defeated the cadence: often enough that a
+    // wake always lands inside the wait, slow enough that the rate never justifies the floor.
+    let before = p.reads_done.load(Ordering::SeqCst);
+    let window = Duration::from_millis(600);
+    let until = tokio::time::Instant::now() + window;
+    while tokio::time::Instant::now() < until {
+        let _ = feed
+            .send(PaneEvent::Bytes {
+                bytes: b"x".to_vec(),
+                full: false,
+            })
+            .await;
+        tokio::time::sleep(policy.fastest).await;
+    }
+    let reads = p.reads_done.load(Ordering::SeqCst) - before;
+
+    // `quiet` is 40ms and the window is 600ms, so the cadence admits ~15 reads; the floor is 20ms
+    // and admits ~30. The bound is generous on purpose — the claim is that the poller is on the
+    // cadence rather than on the floor, not that it hits a particular count.
+    let earned = window.as_millis() / policy.quiet.as_millis();
+    assert!(
+        (reads as u128) <= earned + earned / 2,
+        "the poller ran at its floor rather than the {}ms cadence its rate earned: {reads} reads in {}ms",
+        policy.quiet.as_millis(),
+        window.as_millis(),
+    );
+}
+
 #[tokio::test]
 async fn a_watched_pane_stitches_its_history_across_reads() {
     let p = Arc::new(Scripted::default());

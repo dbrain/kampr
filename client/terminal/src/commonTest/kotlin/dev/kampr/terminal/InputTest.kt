@@ -48,21 +48,60 @@ class InputTest {
             session.openKeyboard()
             val before = session.focusRequests
             capPress(cap, session, keys)
-            assertTrue(session.keyboardOpen, "${'$'}{cap.label} closed the keyboard")
-            assertTrue(session.focusRequests > before, "${'$'}{cap.label} never claimed focus back")
+            assertTrue(session.keyboardOpen, "${cap.label} closed the keyboard")
+            assertTrue(session.focusRequests > before, "${cap.label} never claimed focus back")
             val held = session.focusRequests
             capHold(cap, session, keys)
-            assertTrue(session.focusRequests > held, "holding ${'$'}{cap.label} never claimed focus back")
+            assertTrue(session.focusRequests > held, "holding ${cap.label} never claimed focus back")
         }
     }
 
     @Test
-    fun aClosedKeyboardStaysClosedWhenACapIsPressed() {
+    fun aClosedKeyboardStaysClosedWhenACharacterIsSent() {
         val (_, keys) = sink()
         val session = PaneSession("n/w1:p1")
         val slash = allCaps().first { it.label == "/" }
         capPress(slash, session, keys)
-        assertFalse(session.keyboardOpen, "a cap must not raise a keyboard nobody asked for")
+        assertFalse(session.keyboardOpen, "a cap that sends its own key must not raise a keyboard")
+    }
+
+    // Ctrl and alt are prefixes and the key they take is nearly always a letter, which is the one
+    // thing this row does not carry. Arming one with the keyboard down leaves a chord that cannot
+    // be finished, so arming one is the ask.
+    @Test
+    fun armingCtrlOrAltRaisesTheKeyboardTheChordNeeds() {
+        for (label in listOf("ctrl", "alt")) {
+            val (_, keys) = sink()
+            val session = PaneSession("n/w1:p1")
+            val cap = allCaps().first { it.label == label }
+            val before = session.focusRequests
+            capPress(cap, session, keys)
+            assertTrue(session.keyboardOpen, "$label armed with no keyboard to finish the chord")
+            assertTrue(session.focusRequests > before, "$label never asked for focus")
+        }
+    }
+
+    // The other half of the same rule. Shift rides the arrows and tab that are already on the row
+    // and fn *is* the row, so neither is a request for letters; and clearing a modifier is the
+    // opposite of asking for one.
+    @Test
+    fun onlyArmingALetterPrefixRaisesTheKeyboard() {
+        val (_, keys) = sink()
+        val ctrl = allCaps().first { it.label == "ctrl" }
+        val alt = allCaps().first { it.label == "alt" }
+
+        for (cap in listOf(ctrl, alt)) {
+            val session = PaneSession("n/w1:p1")
+            capHold(cap, session, keys)
+            assertFalse(session.keyboardOpen, "holding ${cap.label} rides shift or fn, not letters")
+        }
+
+        for ((cap, latch) in listOf(ctrl to Latch.Ctrl, alt to Latch.Alt)) {
+            val session = PaneSession("n/w1:p1")
+            session.latches.lock(latch)
+            capPress(cap, session, keys)
+            assertFalse(session.keyboardOpen, "clearing ${cap.label} asked for a keyboard")
+        }
     }
 
     // The only affordance that names the keyboard is the one that has to be able to bring it back.

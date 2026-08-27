@@ -49,7 +49,25 @@ impl Drop for Supervised {
 
 pub struct WsOut(SplitSink<WebSocket, Message>);
 
-pub struct WsIn(SplitStream<WebSocket>);
+pub struct WsIn(SplitStream<WebSocket>, Arc<Heard>);
+
+/// Whether anything has arrived from the far end since it was last asked.
+///
+/// A pong is the only frame a frozen peer still produces — its websocket library answers one
+/// without waking the application — so this counts *every* frame rather than only the text ones
+/// `recv` passes up. Read and cleared by the writer's keepalive; see [`Outgoing::ping`].
+#[derive(Default)]
+pub struct Heard(std::sync::atomic::AtomicBool);
+
+impl Heard {
+    fn note(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn take(&self) -> bool {
+        self.0.swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+}
 
 impl Outgoing for WsOut {
     async fn send(&mut self, text: String) -> bool {
@@ -59,23 +77,31 @@ impl Outgoing for WsOut {
     async fn close(&mut self) {
         let _ = self.0.close().await;
     }
+
+    async fn ping(&mut self) -> bool {
+        self.0.send(Message::Ping(Default::default())).await.is_ok()
+    }
 }
 
 impl Incoming for WsIn {
     async fn recv(&mut self) -> Option<String> {
         loop {
             match self.0.next().await? {
-                Ok(Message::Text(text)) => return Some(text.to_string()),
+                Ok(Message::Text(text)) => {
+                    self.1.note();
+                    return Some(text.to_string());
+                }
                 Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => {}
+                Ok(_) => self.1.note(),
             }
         }
     }
 }
 
-pub fn split(socket: WebSocket) -> Link<WsOut, WsIn> {
+pub fn split(socket: WebSocket) -> (Link<WsOut, WsIn>, Arc<Heard>) {
     let (sink, stream) = socket.split();
-    Link::new(WsOut(sink), WsIn(stream))
+    let heard = Arc::new(Heard::default());
+    (Link::new(WsOut(sink), WsIn(stream, heard.clone())), heard)
 }
 
 /// The hub half: a node dialled in, so authenticate it and then let it drive this node's panes.
@@ -96,7 +122,7 @@ pub async fn accept(
             return;
         }
     };
-    let mut link = split(socket);
+    let (mut link, _heard) = split(socket);
     let presence = node.presence();
     let accepted = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,

@@ -326,6 +326,72 @@ class ModelTest {
         assertFalse(pane.convoMore)
     }
 
+    // The report: a question was asked, the answer never appeared in the conversation pane, it was
+    // in the terminal all along — and later turns arrived perfectly well while that one stayed
+    // missing for ever.
+    //
+    // It was never dropped. A pane whose journal is closed and re-opened on the *same* transcript
+    // sends a merging page, and a page merges by prepending whatever the client does not already
+    // hold — a rule written for `convo.load`, which pages *backwards*. A re-open pages forwards:
+    // the turns the client is missing are the ones written while the pump was down, so the newest
+    // turn in the conversation landed at index 0, above turns from hours earlier, on a view that
+    // is pinned to the bottom. Never seen, and never revisited, because the node then recorded it
+    // as delivered.
+    //
+    // So an unknown turn goes where the *page* puts it, against the ids the page and the client
+    // share. Prepending stays what happens when they share nothing, which is the `convo.load` case
+    // the rule was written for.
+    @Test
+    fun aMergingPageDoesNotFileANewerTurnAboveTheConversation() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"which keys does it take?"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"thinking"}]}]}"""
+            )!!
+        )
+        // The same transcript, re-read after the pump was restarted, one turn longer.
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"which keys does it take?"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"thinking"}]},
+                   {"id":"t3","role":"assistant","blocks":[{"b":"md","text":"here is the answer"}]}]}"""
+            )!!
+        )
+        assertEquals(listOf("t1", "t2", "t3"), store.pane("p").turns.map { it.id })
+    }
+
+    // The same rule from the other side: a turn that arrives between two the client holds belongs
+    // between them, not at either end.
+    @Test
+    fun aMergingPageFilesEachUnknownTurnWhereThePagePutsIt() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t0","more":false,"turns":[
+                   {"id":"t0","role":"user","blocks":[{"b":"md","text":"z"}]},
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]},
+                   {"id":"t3","role":"assistant","blocks":[{"b":"md","text":"c"}]},
+                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]},
+                   {"id":"t5","role":"assistant","blocks":[{"b":"md","text":"e"}]}]}"""
+            )!!
+        )
+        assertEquals(
+            listOf("t0", "t1", "t2", "t3", "t4", "t5"),
+            store.pane("p").turns.map { it.id },
+        )
+    }
+
     // A pane's turns outlive the socket they arrived on — `paneStates` is never pruned, and a
     // reconnecting client re-watches every pane it holds. The node cannot name what a socket it
     // has never seen is still showing, so a page it knows to be a different transcript says so,

@@ -509,6 +509,18 @@ Live sockets and inbound message size are bounded too: `limits.sockets` client s
 client protocol backwards, so a hub *reads* a peer's server frames, and a scrollback document runs
 to several megabytes on a pane deep enough to fill the ring.
 
+A cap on sessions is only a bound if sessions are also *released*, and one class of client never
+released: a peer that freezes rather than closing — a phone suspended in the background, a laptop
+asleep, a NAT that dropped the flow — leaves a socket whose kernel is alive and answering TCP's
+window probes with a zero window, which resets the probe counter, so nothing below ever errors and
+the session was served indefinitely (#284, measured still held after twenty-five minutes). It cost
+a permit out of `limits.sockets` and, while it held a watch on a producing pane, as much of herdr
+as a live viewer. `limits.client_keepalive_secs` is the answer: the node pings each client socket
+on that interval and drops one that leaves three unanswered, and bounds the send itself by the same
+deadline for the case where the write is what hangs. Unauthenticated exhaustion of `limits.sockets`
+was never the risk — a socket needs a token — but a fleet of phones that come and go is the
+ordinary case, not an attack.
+
 **Connection-rate and per-IP limiting are still the reverse proxy's job.** A publicly exposed node
 is expected to sit behind nginx with `limit_conn` and `limit_req`; nothing in Kampr replaces those,
 and the bounds above are a floor for the case where the proxy is misconfigured, not a substitute

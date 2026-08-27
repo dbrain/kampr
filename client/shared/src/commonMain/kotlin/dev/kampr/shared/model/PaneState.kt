@@ -186,16 +186,39 @@ class PaneState(val id: String, val styles: StyleTable) {
         revision++
     }
 
-    // A page is a slice of the transcript running backwards from where the client already is, so
-    // it prepends. Transcript order is the node's, not the client's: a resumed session stamps
-    // later records with earlier times, and sorting on `at` would shuffle a real conversation.
+    // A page merges by id, and an id the client does not hold goes **where the page puts it** —
+    // after the last turn the two have in common, before the next one. Transcript order is the
+    // node's, not the client's: a resumed session stamps later records with earlier times, and
+    // sorting on `at` would shuffle a real conversation, so the page's own order is the only
+    // order there is.
+    //
+    // Unconditional prepending was the rule, written for `convo.load`, which pages *backwards*.
+    // A journal that is closed and re-opened on the same transcript pages *forwards*: the turns
+    // the client is missing are the ones written while the pump was down, and every one of them
+    // landed at index 0 — the newest turn in the conversation, above turns from hours earlier, on
+    // a view pinned to the bottom. That is a message that was never dropped and never seen, and
+    // never revisited either, because the node had recorded it as delivered.
+    //
+    // Prepending is still what happens when the page and the conversation share nothing, which is
+    // the older-page case the rule was written for and the only case where position is a guess.
     fun applyConvo(msg: ServerMsg.Convo) {
-        val older = mutableListOf<Turn>()
+        var after = -1
+        val waiting = mutableListOf<Turn>()
         for (turn in msg.turns) {
             val at = turns.indexOfFirst { it.id == turn.id }
-            if (at >= 0) turns[at] = turn else older += turn
+            if (at < 0) {
+                waiting += turn
+                continue
+            }
+            turns[at] = turn
+            after = at
+            if (waiting.isNotEmpty()) {
+                turns.addAll(at, waiting)
+                after = at + waiting.size
+                waiting.clear()
+            }
         }
-        turns.addAll(0, older)
+        if (waiting.isNotEmpty()) turns.addAll(if (after < 0) 0 else after + 1, waiting)
         convoCursor = msg.cursor
         convoMore = msg.more
         revision++

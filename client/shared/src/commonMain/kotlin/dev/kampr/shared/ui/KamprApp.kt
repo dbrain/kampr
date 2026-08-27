@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.gone
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.DeviceRecord
@@ -325,6 +326,7 @@ internal fun AppScaffold(
                                 is Screen.Pane -> PaneScreenDesktop(
                                     pane = state.store.pane(screen.paneId),
                                     info = state.store.paneInfo(screen.paneId),
+                                    gone = herd.gone(screen.paneId),
                                     view = screen.view,
                                     surfaces = surfaces,
                                     readOnly = readOnly,
@@ -373,6 +375,7 @@ internal fun AppScaffold(
                         is Screen.Pane -> PaneScreenMobile(
                             pane = state.store.pane(screen.paneId),
                             info = state.store.paneInfo(screen.paneId),
+                            gone = herd.gone(screen.paneId),
                             view = screen.view,
                             surfaces = surfaces,
                             landscape = true,
@@ -419,6 +422,7 @@ internal fun AppScaffold(
                         is Screen.Pane -> PaneScreenMobile(
                             pane = state.store.pane(screen.paneId),
                             info = state.store.paneInfo(screen.paneId),
+                            gone = herd.gone(screen.paneId),
                             view = screen.view,
                             surfaces = surfaces,
                             landscape = false,

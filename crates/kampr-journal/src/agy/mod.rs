@@ -17,7 +17,7 @@ use crate::tail::TranscriptParser;
 
 use record::{Record, ToolCall, arg, diff, exit_failed, request, result_body, summarise};
 
-pub use presence::flocks;
+pub use presence::{flocks, holder_from};
 
 pub const AGENT: &str = "agy";
 

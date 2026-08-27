@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.PaneGone
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.WatchPresence
 import dev.kampr.shared.model.statusOf
@@ -135,6 +136,7 @@ fun MosaicCell(
     onFocus: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
+    gone: PaneGone? = null,
     header: Dp = CELL_HEADER,
     drag: MosaicDrag? = null,
     place: String = "",
@@ -202,7 +204,7 @@ fun MosaicCell(
         }
 
         CellHeader(
-            pane, info, node, presence, focused, onRemove, drag, place, onDrop, onMove,
+            pane, info, node, gone, presence, focused, onRemove, drag, place, onDrop, onMove,
             Modifier.align(Alignment.TopStart).height(header),
         )
 
@@ -222,6 +224,7 @@ private fun CellHeader(
     pane: PaneState,
     info: PaneInfo?,
     node: NodeInfo?,
+    gone: PaneGone?,
     presence: WatchPresence,
     focused: Boolean,
     onRemove: () -> Unit,
@@ -234,7 +237,10 @@ private fun CellHeader(
     val tokens = Kampr.tokens
     val status = info?.let(::statusOf) ?: AgentStatus.Unknown
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
-    val title = info?.let(::paneTitle) ?: pane.id
+    // Never the whole id. A pane that has left the herd took its name with it, and a node ULID in
+    // the slot the name was in reads as the mosaic having lost its place rather than as the shell
+    // having finished. `CLOSED` beside it is what says which.
+    val title = info?.let(::paneTitle) ?: pane.id.substringAfter('/')
     Row(
         modifier
             .fillMaxWidth()
@@ -255,7 +261,11 @@ private fun CellHeader(
         )
         KText(cellPlace(info, node, pane), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
         node?.rttMs?.let { KText(formatLatency(it), tokens.type.meta, latencyTone(node)) }
-        if (pane.stale) KText("STALE", tokens.type.metaSmall, tokens.color.working)
+        when (gone) {
+            PaneGone.Shell -> KText("CLOSED", tokens.type.metaSmall, tokens.color.blocked)
+            PaneGone.Node -> KText("NODE GONE", tokens.type.metaSmall, tokens.color.blocked)
+            null -> if (pane.stale) KText("STALE", tokens.type.metaSmall, tokens.color.working)
+        }
         watchersTag(presence.others)?.let {
             KText(it.uppercase(), tokens.type.metaSmall, tokens.color.mute)
         }

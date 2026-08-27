@@ -12,6 +12,14 @@ pub trait Outgoing: Send + 'static {
     /// `false` once the far end is gone, which is the signal for a producer to stop.
     fn send(&mut self, text: String) -> impl Future<Output = bool> + Send;
     fn close(&mut self) -> impl Future<Output = ()> + Send;
+    /// A frame the far end's websocket library answers on its own, without the application it
+    /// belongs to running at all — which is the only question worth asking of a peer that has
+    /// frozen rather than closed (#284). Defaulted, because a transport with a liveness check of
+    /// its own has nothing to do here: the mesh link keeps its own, and an in-process pair cannot
+    /// be lied to.
+    fn ping(&mut self) -> impl Future<Output = bool> + Send {
+        async { true }
+    }
 }
 
 /// The half a mesh link reads from. `None` ends the link; non-text frames are skipped rather

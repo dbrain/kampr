@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.gone
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.Icon
@@ -111,6 +112,7 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
                             onFocus = { mosaic.focus(paneId) },
                             onRemove = { mosaic.remove(paneId) },
                             modifier = Modifier.weight(1f).fillMaxSize(),
+                            gone = herd.gone(paneId),
                             drag = drag,
                             place = "cell ${at + 1} of ${mosaic.panes.size}",
                             onDrop = { onto -> mosaic.move(paneId, mosaic.panes.indexOf(onto)) },

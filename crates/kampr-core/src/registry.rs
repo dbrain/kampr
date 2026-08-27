@@ -712,18 +712,29 @@ async fn accumulate_history(
             "history poll"
         );
         // A pane that has gone quiet waits on its own output rather than on a timer, which is
-        // what makes an idle pane free. The interval is only a ceiling: any frame cuts the wait
-        // short, because output starting is the one moment the estimate cannot know about yet.
-        let wait = if added == 0 && !producing && !gapped && !failed {
-            policy.idle
-        } else {
-            next
-        };
+        // what makes an idle pane free: a frame cuts that wait short, because output *starting* is
+        // the one moment the estimate cannot know about yet.
+        //
+        // Only that wait. `saw_frame` notifies on every frame and `Notify` holds a permit, so
+        // racing the wake against a *computed* interval means any frame at all ends it and the
+        // cadence collapses to `fastest` — measured at 20x, with the policy choosing 2s on 96% of
+        // polls and the poller serving 102ms (#282). The estimate has nothing to learn from a
+        // frame on a pane it already knows is producing; the interval is what that knowledge is
+        // for. A permit left over from the producing stretch resolves the first idle wait
+        // immediately, which is correct rather than spurious: it says a frame landed after the
+        // reading that made this pane look quiet.
+        let quiet = added == 0 && !producing && !gapped && !failed;
+        let wait = if quiet { policy.idle } else { next };
         tokio::time::sleep(policy.fastest.min(wait)).await;
         if let Some(remainder) = wait.checked_sub(policy.fastest).filter(|r| !r.is_zero()) {
-            tokio::select! {
-                _ = tokio::time::sleep(remainder) => {}
-                _ = activity.woken.notified() => {}
+            match quiet {
+                true => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(remainder) => {}
+                        _ = activity.woken.notified() => {}
+                    }
+                }
+                false => tokio::time::sleep(remainder).await,
             }
         }
     }

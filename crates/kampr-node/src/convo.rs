@@ -106,6 +106,36 @@ pub fn page(journal: &Open, pane: &str, before: Option<&str>, fresh: bool) -> Op
     ))
 }
 
+/// The first message a re-opened transcript sends the client.
+///
+/// **A page merges by prepending what the client does not recognise**, which is a rule written for
+/// `convo.load` — that pages *backwards*, so everything unknown in it really is older. Re-opening
+/// the transcript a client is already holding pages *forwards*: what it is missing is whatever was
+/// written while the pump was down, and a page files those at the top, above a conversation from
+/// hours earlier, on a view pinned to the bottom. The turn is then recorded as delivered and never
+/// re-sent, so it is not lost so much as permanently misfiled — which is exactly how it was
+/// reported: an answer that never appeared while every later turn arrived perfectly well.
+///
+/// Clients already installed on phones cannot be fixed from here, so the node does not send them a
+/// page it knows they will misfile. The turns go out as `convo.turn` instead, which replaces by id
+/// and **appends** the rest — the shape the tail already uses, so nothing on the wire is new.
+///
+/// Only while the two still overlap. A gap wide enough that nothing in the page is on the client's
+/// screen cannot be ordered from either end, and that is a replacing page saying so.
+fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>) -> Option<ServerMsg> {
+    let Some(ids) = showing else {
+        return page(journal, pane, None, true);
+    };
+    let turns = journal.lock().unwrap().as_ref()?.page_before(None, PAGE).turns;
+    match turns.iter().any(|turn| ids.contains(&turn.id)) {
+        true => Some(ServerMsg::ConvoTurn {
+            pane: pane.to_string(),
+            turns,
+        }),
+        false => page(journal, pane, None, true),
+    }
+}
+
 /// What a pane has to keep for its conversation to be the same conversation: the harness, the
 /// working directory, and the session inside them. A change to any of the three is a different
 /// transcript, and the one the client is holding has to be taken off the screen.
@@ -211,13 +241,15 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
-                    // What the client is holding, when this node knows: a page for the transcript
-                    // it is already showing merges into it, and every other page replaces it.
-                    let replaces = held
+                    // What the client is holding *of this transcript*, when this node knows. A
+                    // page for a transcript it is already showing merges into it; every other
+                    // page replaces it. Read before [`withdraw`], which takes the record.
+                    let showing_already = held
                         .lock()
                         .unwrap()
                         .as_ref()
-                        .is_none_or(|(path, _)| path != fresh.path());
+                        .filter(|(path, _)| path == fresh.path())
+                        .map(|(_, ids)| ids.clone());
                     if !withdraw(&wire, &global, &held, fresh.path()) {
                         return;
                     }
@@ -226,7 +258,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     // The first read is the page the client is about to be sent, so it must not
                     // also arrive behind it as a revision.
                     let _ = drain(&journal).await;
-                    match page(&journal, &global, None, replaces) {
+                    match reopened(&journal, &global, showing_already.as_deref()) {
                         Some(first) if wire.send(&first) => {}
                         _ => return,
                     }

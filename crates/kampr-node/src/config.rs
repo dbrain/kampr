@@ -223,6 +223,9 @@ pub struct Limits {
     /// join code an anonymous caller chose, so this is what bounds that memory — a limiter keyed
     /// on the source address cannot, because addresses rotate.
     pub mesh_handshakes: usize,
+    /// How often a client socket is pinged, and — times the missed-pong count — how long a client
+    /// that has stopped answering is served before it is dropped (#284).
+    pub client_keepalive_secs: u64,
 }
 
 impl Default for Server {
@@ -265,6 +268,7 @@ impl Default for Limits {
             scrollback_max_rows: kampr_core::scrollback::DEFAULT_MAX_ROWS,
             sockets: 64,
             mesh_handshakes: 4,
+            client_keepalive_secs: 15,
         }
     }
 }
