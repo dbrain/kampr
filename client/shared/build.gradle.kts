@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.PathSensitivity
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -90,4 +91,17 @@ kotlin {
 compose.resources {
     publicResClass = true
     packageOfResClass = "dev.kampr.shared.res"
+}
+
+// `SemanticsLayerTest` and `TokenLayerTest` read the *other* modules' sources off disk, which
+// Gradle cannot see — so the task was up to date, and skipped, on every build where only those
+// modules changed. Which is exactly the build where the guards have something to say: a raw tap
+// gesture added to the conversation shipped green locally and failed on CI, where nothing was
+// cached. Naming the directories they walk is what makes the local gate the same gate.
+tasks.named<Test>("jvmTest") {
+    inputs.files(
+        listOf("shared", "terminal", "conversation", "mosaic")
+            .map { rootProject.file("$it/src/commonMain") }
+            .filter { it.isDirectory },
+    ).withPropertyName("surfaceSources").withPathSensitivity(PathSensitivity.RELATIVE)
 }

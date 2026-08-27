@@ -30,12 +30,13 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.GlyphTarget
+import androidx.compose.ui.semantics.Role
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.announce
-import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.gestureAction
 import kotlin.math.max
 import kotlin.math.min
 
@@ -105,8 +106,7 @@ fun ImageViewer(
     Box(
         modifier
             .fillMaxSize()
-            .background(tokens.color.bg)
-            .named("$headline, pinch to zoom, double tap to fit"),
+            .background(tokens.color.bg),
     ) {
         Image(
             bitmap = image,
@@ -122,6 +122,16 @@ fun ImageViewer(
                     translationY = panY
                 }
                 .transformable(transform)
+                // The gesture and the action for it, side by side. A pinch and a double tap are
+                // reachable by exactly one kind of hand, and a `pointerInput` block never sees
+                // TalkBack's double tap — so the way back to a fitted picture has to exist in the
+                // semantics layer as well or a reader who zooms by accident is stuck at 8x.
+                .gestureAction(
+                    label = "$headline, pinch to zoom, double tap to fit",
+                    onClick = { reset() },
+                    role = Role.Image,
+                    clickLabel = "Fit to the screen",
+                )
                 .pointerInput(Unit) { detectTapGestures(onDoubleTap = { reset() }) },
             contentScale = ContentScale.Fit,
         )
