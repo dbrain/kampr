@@ -69,10 +69,16 @@ private object ZoomProbe : PaneSurfaces {
         Box(modifier.size(71.dp, 44.dp).named(ZOOM))
 }
 
-private fun tokens() = themeOf("soft").on(Ground.Dark).let { spec ->
-    val fonts = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
-    KamprTokens(spec, fonts, typography(fonts, spec.label, TypeScale.Phone))
-}
+// The fonts Kampr ships, not the machine's. `FontFamily.Default` and `.Monospace` resolve through
+// the system font manager, so this measured a header nobody has and measured a different one on
+// every machine: it passed on every developer's box and failed on a bare CI runner for five
+// releases running, over a real defect it could only see where the metrics were wide enough to
+// force a wrap. A harness that is not the app is not evidence either way (#191).
+//
+// What that defect was is now asserted directly, and against these same fonts, by
+// `SegmentedWidthTest` — a control that asks for a different width depending on which segment is
+// selected. This board stays as the other end of it: the header composed whole.
+private fun tokens() = tokensFor(themeOf("soft"), TypeScale.Phone, Ground.Dark)
 
 private class Board(
     val name: String,

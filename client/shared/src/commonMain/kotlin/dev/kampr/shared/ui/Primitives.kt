@@ -17,7 +17,10 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -231,9 +234,28 @@ fun Segmented(
                     .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                // Every segment reserves the width its label takes *selected*, whichever segment
+                // is. The selected one is W700 and the rest are W500, so without this the control
+                // measures wider whenever the longer label is the chosen one — "Conversation" set
+                // W700 is not the width it is set W500 — and a header that
+                // measures it against whatever width is left over rewraps on the selection alone.
+                // That is the report this control's own slot was supposed to have closed: the
+                // segment slides out from under the thumb that just tapped it. Measured under a
+                // bare font set, the portrait header dropped the switch to a second row and grew
+                // it from 195 dp to 371 dp on a change of view.
+                //
+                // Measured and never drawn — `drawWithContent` that does not call `drawContent`
+                // costs a text layout and no paint. A `Box` is as wide as its widest child, and
+                // this one is the widest this segment can ever be.
                 KText(
                     option,
-                    if (active) tokens.type.tab else tokens.type.tab.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.W500),
+                    tokens.type.tab,
+                    tokens.color.text,
+                    Modifier.clearAndSetSemantics {}.drawWithContent {},
+                )
+                KText(
+                    option,
+                    if (active) tokens.type.tab else tokens.type.tab.copy(fontWeight = FontWeight.W500),
                     if (active) tokens.color.text else tokens.color.dim,
                 )
             }
