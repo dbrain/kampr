@@ -94,11 +94,11 @@ class PasskeyRequestTest {
         assertTrue("assetlinks.json" in missing, missing)
     }
 
-    // Probe #170: the operator's node named this exact build, served the file as application/json
-    // over a real certificate, and every ceremony still failed — because the host resolves to
-    // 10.0.0.6 and Android decides RP-ID validity through Google's fetcher, not through the phone.
-    // The file check answers "nothing wrong here", and answering that to somebody whose passkey
-    // just failed is a diagnosis that is confidently wrong.
+    // The node's file names this exact build and the ceremony failed anyway. Answering "nothing
+    // wrong here" to somebody whose passkey just failed is a diagnosis that is confidently wrong,
+    // and so is naming only one of the two causes that are left. Both are outside the phone: the
+    // app's own half of the association, compiled into its manifest (#288), and Google's reach to
+    // the node, which probe #170 measured and which only `kampr doctor` can answer.
     @Test
     fun aFileThatIsRightIsNotReportedAsAShrug() {
         val told = passkeyRefusal(ASSET_LINKS, RELEASE, "kampr.example.net", RAW)
@@ -106,6 +106,10 @@ class PasskeyRequestTest {
         assertTrue(RAW in told, "the authenticator's own words are the one thing to search for: $told")
         assertTrue("public internet" in told, told)
         assertTrue("doctor" in told, told)
+        assertTrue(
+            "manifest" in told,
+            "naming only Google's reach sends the operator to a check that will say ok: $told",
+        )
     }
 
     // The order the three answers are tried in. A file that is wrong is still the likelier cause

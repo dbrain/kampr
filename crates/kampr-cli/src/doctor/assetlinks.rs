@@ -9,7 +9,12 @@ const PATH: &str = "/.well-known/assetlinks.json";
 const RELATION: &str = "delegate_permission/common.get_login_creds";
 const API: &str = "https://digitalassetlinks.googleapis.com/v1/statements:list";
 
-/// Whether the Android app can hold a passkey for this node.
+/// Whether **this node's half** of the Android association is right.
+///
+/// It is a half and not the whole. Credential Manager checks the agreement in both directions, and
+/// the app's direction is a `asset_statements` entry compiled into its APK naming the sites it may
+/// hold passkeys for (#288). No node can see that, and the published APK declares none — so a green
+/// here says the node is not what is wrong, and never that a passkey can be created.
 ///
 /// Credential Manager runs no ceremony for a native app until *Google's* Digital Asset Links
 /// validator has fetched this file, server-side and from the public internet, and found the app's
@@ -221,9 +226,9 @@ fn judge(rp_id: &str, wanted: &str, asked: &Asked, here: Option<&Local>) -> Chec
     Check::ok(
         "assetlinks",
         format!(
-            "Google reads {file} and finds {package} delegated to {} — the party Credential \
-             Manager asks agrees with this node's [android], so Kampr on Android can enrol a \
-             passkey here",
+            "Google reads {file} and finds {package} delegated to {} — this node's half of the \
+             association is right. The app's half is compiled into its APK, so whether a given \
+             build may enrol here is not something this node can see",
             certificates(published.len())
         ),
     )
@@ -375,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn the_party_that_decides_agreeing_with_this_node_is_the_only_green_there_is() {
+    fn google_agreeing_with_this_node_is_the_only_green_there_is() {
         let check = judge(RP, &served(), &release(), None);
         assert_eq!(check.status, Status::Ok, "{}", check.detail);
         assert!(
@@ -384,6 +389,24 @@ mod tests {
             check.detail
         );
         assert!(check.detail.contains("dev.kampr.app"), "{}", check.detail);
+    }
+
+    /// The green used to end "so Kampr on Android can enrol a passkey here", and that sentence was
+    /// false for every build of the app anyone has ever installed: the app's half of the
+    /// association is compiled into its APK and the published one declares none (#288). An
+    /// operator whose ceremony had just failed was sent here and told the node was fine — which it
+    /// was, and which was not what they asked.
+    #[test]
+    fn a_green_says_the_node_is_right_and_never_that_a_passkey_can_be_created() {
+        let detail = judge(RP, &served(), &release(), None).detail;
+        assert!(
+            !detail.contains("can enrol"),
+            "a check that cannot see the app must not promise what the app will do: {detail}"
+        );
+        assert!(
+            detail.contains("half"),
+            "and it has to say which half it answered: {detail}"
+        );
     }
 
     #[test]

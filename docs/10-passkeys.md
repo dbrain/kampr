@@ -102,13 +102,17 @@ Read that twice, because every awkward consequence follows from it.
 - **The phone never reads the file.** It asks Google. So "my phone can reach the node" is not the
   question being answered, and a node that serves the document perfectly to everything on the LAN is
   refused anyway.
-- **A hostname that resolves publicly to a private address does not work.** This is the operator's
-  own case, measured (#170): `kampr.oldug.com` serves the file with a 200, `application/json`, the
-  right package and a fingerprint matching the release keystore exactly, and the node reports
-  `tier 1, passkeys: true`. Google answers `ERROR_CODE_FETCH_ERROR`, because the public record points
-  at `10.0.0.6`. Credential Manager then refuses with `RP ID cannot be validated`, which tells the
-  owner nothing. **`security.passkeys` is necessary and not sufficient** — the party that actually
-  decides is one the node never asks.
+- **A hostname that resolves publicly to a private address does not work.** Measured (#170) on the
+  operator's own node while it was in that state: `kampr.oldug.com` served the file with a 200,
+  `application/json`, the right package and a fingerprint matching the release keystore exactly, and
+  the node reported `tier 1, passkeys: true`. Google answered `ERROR_CODE_FETCH_ERROR`, because the
+  public record pointed at `10.0.0.6`. Credential Manager then refuses with `RP ID cannot be
+  validated`, which tells the owner nothing. **`security.passkeys` is necessary and not sufficient**
+  — the party that actually decides is one the node never asks.
+
+  That node's public record has since been moved and Google validates it now (#287), and the app is
+  refused exactly as before. Fixing this was never going to be the fix, for the reason in the next
+  section.
 - **Tailscale, a VPN, split-horizon DNS and a LAN-only certificate all fail the same way**, for the
   same reason. They make the host reachable by you. The fetch is not by you.
 - **Exposing it briefly is not a strategy.** Google caches a `statements:list` verdict for its own
@@ -118,6 +122,50 @@ Read that twice, because every awkward consequence follows from it.
 - **A proxy that answers `/.well-known` itself will eat it** (#122). This is a separate failure with
   the same symptom, which is why `kampr doctor` fetches the file from this machine as well as asking
   Google: served here and unfetchable by Google is DNS, unserved in both places is the proxy.
+
+### The other direction, and why the app hides the button
+
+Everything above is the **site half** of Digital Asset Links: the node declaring which app may hold
+credentials for it. There is a second half, and it runs the other way.
+
+> [Credential Manager's prerequisites](https://developer.android.com/identity/credential-manager/prerequisites)
+> require the **app** to declare the association too — a `<meta-data android:name="asset_statements">`
+> entry in `AndroidManifest.xml` whose string resource lists the sites, one `include` per node.
+
+That is a **build-time constant**. It names hostnames when the APK is compiled, and it cannot be
+changed afterwards by configuration, by a setting, or by the node. So a single APK handed to
+strangers cannot carry it: every operator's node is on a different hostname and no build can
+enumerate them. This is the same constraint the manifest already records for Android app links,
+which is why the pairing QR is scanned with the camera rather than opened as a link.
+
+**The published APK therefore declares nothing, and the app hides its passkey control on any build
+that declares nothing** (`Passkeys.android.kt`). The alternative is a button whose ceremony can only
+end in Credential Manager's `RP ID cannot be validated` however correct the node is — which is what
+it did, and the refusal blamed the node's half and sent the operator to a `doctor` check that
+reported everything fine.
+
+Note what this means for the section above: the site half is **necessary and never sufficient** for
+a generically distributed build. A green `assetlinks` check in `kampr doctor` says the node's half
+is right and says nothing about the app's.
+
+#### Getting around it
+
+Two ways, and the first is the one to reach for.
+
+- **Use the browser.** A page's own origin is its RP ID, so `navigator.credentials` needs no asset
+  links in either direction, no per-domain build, and no fetch by Google — which also means it works
+  on a hostname that only resolves on your own network. Anyone on `https://<their node>` with a
+  certificate can enrol a passkey today and add the client to their home screen. The web client
+  ships in the node's own binary, so there is nothing to install. **This is the supported route, and
+  it gets the full credential** — origin-bound and non-bearer — which is more than the app could
+  offer even if the ceremony ran.
+- **Build the app for one node you own.** Put the hostname in `res/values/strings.xml`, uncomment it
+  and its `meta-data`, rebuild. The control returns and native passkeys work properly. `make
+  android-publish` already runs on your own machine with your own keystore, so this costs a line.
+  It buys nothing for anyone you hand the APK to.
+
+Neither has been driven end to end — see the note about `#116` above. If you get one working, add a
+probe row.
 
 ### Can the RP ID point somewhere else?
 
@@ -153,7 +201,8 @@ permanent commitment to one public path, not a one-off.
 per request. It carries `delegate_permission/common.get_login_creds` and nothing else — Kampr claims
 no URLs, so the app-link relation is deliberately absent. The package and fingerprints come from
 `[android]` in `config.toml`, which defaults to `dev.kampr.app` and the release keystore's
-certificate, so an operator running the published APK configures nothing. A source build signed with
+certificate, so an operator running the published APK configures nothing — though the published APK
+cannot use it either, for the reason above. A source build signed with
 your own keystore puts its own fingerprint there instead; blanking the section entirely makes the
 node serve no document at all, which is a decision rather than a fault and `doctor` warns rather than
 fails on it.

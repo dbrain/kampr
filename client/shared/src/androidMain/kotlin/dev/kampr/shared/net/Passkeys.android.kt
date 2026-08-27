@@ -22,10 +22,18 @@ import java.security.MessageDigest
 // (docs/07-android-release.md). What it signs into the client data is not an `https://` origin but
 // `android:apk-key-hash:…`, which is why the node allows that origin too.
 private class CredentialManagerPasskeys : Passkeys {
-    // Two things have to be true, and the Activity is the one that changes: without it there is
-    // nothing to raise the system sheet from, and a button that opens nothing is worse than none.
+    // Two things have to be true. There has to be an Activity to raise the system sheet from —
+    // a button that opens nothing is worse than none — and this build has to declare the app→site
+    // half of its Digital Asset Links.
+    //
+    // Credential Manager checks both directions, and only one of them is the node's. The node
+    // serves `.well-known/assetlinks.json` naming this package and this certificate; the app names
+    // the node's hostname, in its manifest, at build time. A hostname compiled into an APK is one
+    // an operator cannot hand to a stranger, so the shipped build declares none and the ceremony
+    // it would run could only ever end in Credential Manager's `RP ID cannot be validated`. The
+    // control is absent on such a build rather than present and doomed.
     override val available: Boolean
-        get() = KamprHost.activity != null
+        get() = KamprHost.activity?.let(::declaresAssetStatements) == true
 
     override val platform: String = "android"
 
@@ -81,6 +89,17 @@ private class CredentialManagerPasskeys : Passkeys {
         val UNREADABLE = PasskeyResult.Failed("This node's challenge was not one Android could read.")
     }
 }
+
+// Whether this build names any site at all. What it names is deliberately not read: which
+// hostnames a build claims is between that build and Google, and it is Google that decides. All
+// this answers is whether the app's half of the association exists, which is the half that decides
+// whether there is a ceremony worth starting.
+private fun declaresAssetStatements(activity: Activity): Boolean = runCatching {
+    val app = activity.packageManager.getApplicationInfo(activity.packageName, PackageManager.GET_META_DATA)
+    app.metaData?.containsKey(ASSET_STATEMENTS) == true
+}.getOrDefault(false)
+
+private const val ASSET_STATEMENTS = "asset_statements"
 
 // The same SHA-256 that goes in `assetlinks.json`, read off the certificate this build is actually
 // signed with rather than off a constant — a debug build and a build from source are each signed

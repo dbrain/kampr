@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+         The sites this build may hold passkeys for, read by Google rather than by the phone. One
+         entry per node, each an `include` pointing at that node's own asset links. Uncomment this
+         and its `meta-data` in AndroidManifest.xml together; neither is any use alone, and the
+         manifest carries the whole explanation.
+
+    <string name="asset_statements" translatable="false">
+        [{
+          \"include\": \"https://kampr.example.com/.well-known/assetlinks.json\"
+        }]
+    </string>
+    -->
+</resources>

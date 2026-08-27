@@ -60,21 +60,28 @@ fun assetLinkComplaint(document: String?, identity: AppIdentity?): String? {
 // Why the ceremony failed, in the order the phone can actually prove things.
 //
 // A file that is wrong is the cause the phone can read off the node, so it keeps precedence. What
-// is left over is the case probe #170 found: the file is right, served as JSON over a real
-// certificate, naming this exact build — and Android refuses anyway, because it never reads that
-// file itself. Google's Digital Asset Links service fetches it, from the public internet, and a
-// node whose name resolves to a private address is one it cannot reach.
+// is left over are two causes the app cannot see, and both are named because neither can be ruled
+// out from here (#288).
 //
-// The client does not test that, and must not: asking Google whether Google can see the operator's
-// node is the app phoning a third party about the operator's network. So this says what it knows —
-// the node's own half is right — names the half it cannot see, and keeps the authenticator's own
-// words so there is something to search for.
+// The first is the app's own half of the association: Credential Manager checks the agreement in
+// both directions, and the app's direction is a manifest entry fixed when its APK was compiled. A
+// build reaching this line declares *some* site — the control is hidden otherwise — but not
+// necessarily this one, and nothing at runtime can change which.
+//
+// The second is the one probe #170 measured: the node's file is right and Google, which fetches it
+// server-side from the public internet, cannot reach the host. The client does not test that and
+// must not — asking Google whether Google can see the operator's node is the app phoning a third
+// party about the operator's network. `kampr doctor` answers that half and only that half.
+//
+// The authenticator's own words are kept either way, so there is something to search for.
 fun passkeyRefusal(document: String?, identity: AppIdentity?, host: String, reason: String): String {
     if (identity == null) return reason
     assetLinkComplaint(document, identity)?.let { return it }
-    return "This node's own setup is right: it names this app and this build's certificate. " +
-        "Android does not read that file itself — Google's Digital Asset Links service fetches " +
-        "https://$host$ASSET_LINKS_PATH over the public internet, and a node that only resolves " +
-        "on your own network is one it cannot reach. Run `kampr doctor` there to find out whether " +
-        "that is what happened.\n\nAndroid said: $reason"
+    return "This node's own setup is right: it names this app and this build's certificate. Two " +
+        "things it cannot see decide the rest. This build lists the sites it may hold passkeys " +
+        "for in its own manifest, fixed when it was compiled, and $host has to be one of them. " +
+        "And Android never reads the node's file itself — Google's Digital Asset Links service " +
+        "fetches https://$host$ASSET_LINKS_PATH over the public internet, so a node that only " +
+        "resolves on your own network is one it cannot reach. `kampr doctor` there answers the " +
+        "second of those and not the first.\n\nAndroid said: $reason"
 }

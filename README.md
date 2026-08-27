@@ -352,10 +352,13 @@ unlock** — none of which are possible against a bare IP, because a WebAuthn RP
 registrable domain and HTTPS on an IP address is not enough. `kampr status` tells you which tier you
 are on and what is still locked.
 
-A passkey in the **Android app** needs one more thing that a browser does not: Google's servers must
-be able to fetch `/.well-known/assetlinks.json` from your hostname, over the public internet. A
-hostname that resolves publicly to a private address does not satisfy that however correct everything
-else is (#170), and there is no local configuration that substitutes.
+A passkey in the **Android app** needs two things a browser does not, and a published APK cannot
+carry one of them. The app has to name your hostname in its own manifest, compiled in when the APK
+was built — so a build handed to strangers can never have it, and Kampr hides its passkey control on
+a build that names nothing (#288). And Google's servers have to be able to fetch
+`/.well-known/assetlinks.json` from your hostname over the public internet, which a hostname
+resolving publicly to a private address does not satisfy however correct everything else is (#170).
+**A passkey in the browser needs neither**, which is the route to use.
 [`docs/10-passkeys.md`](docs/10-passkeys.md) is the whole story, including what you keep if you skip
 it — which is a supported configuration and what most nodes run as.
 

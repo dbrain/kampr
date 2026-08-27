@@ -18,21 +18,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-// The two things a phone can answer and a host cannot: whether there is an authenticator to ask,
-// and what this build is signed with. Both decide whether a passkey is offered at all.
+// The three things a phone can answer and a host cannot: whether there is an authenticator to
+// ask, whether this build declares the app half of its asset links, and what it is signed with.
+// All three decide whether a passkey is offered at all.
 class PasskeyAndScannerTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val node: String? = InstrumentationRegistry.getArguments().getString("kamprNode")
 
+    // An Activity is necessary and is not sufficient. Credential Manager checks the association
+    // in both directions, and the app's direction is a manifest entry fixed when the APK is
+    // compiled — so an APK that names no site has no ceremony that can end any way but
+    // `RP ID cannot be validated`, whatever the node serves and whatever Google agrees to.
+    // Read off the manifest as built rather than off the same reasoning twice.
     @Test
-    fun anAuthenticatorIsOnlyOfferedOnceThereIsSomethingToRaiseItFrom() {
+    fun aPasskeyControlOnlyAppearsOnABuildWhoseCeremonyCouldSucceed() {
         assertTrue(
             "with no Activity attached there is nothing for Credential Manager to draw on, so " +
                 "the passkey control must be absent rather than present and failing",
             !createPasskeys().available,
         )
+        val declares = context.packageManager
+            .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
+            .metaData?.containsKey("asset_statements") == true
         ActivityScenario.launch(MainActivity::class.java).use {
-            assertTrue("MainActivity attaches the host in onCreate", createPasskeys().available)
+            assertEquals(
+                "this build names " + (if (declares) "a site" else "no site") + ", so the passkey " +
+                    "control must be " + (if (declares) "offered" else "absent"),
+                declares,
+                createPasskeys().available,
+            )
         }
     }
 

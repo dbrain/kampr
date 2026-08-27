@@ -18,6 +18,28 @@
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Kampr">
+        <!--
+             The app half of Digital Asset Links, and the reason passkeys are a browser feature
+             here rather than an app one.
+
+             Credential Manager checks the association in both directions before it will run a
+             ceremony for a native app. The node serves the site half at
+             `.well-known/assetlinks.json`, naming this package and this signing certificate, and
+             `kampr doctor` proves Google reads it. The app half is this entry, and it names the
+             node's hostname when the APK is compiled.
+
+             A hostname baked into an APK is one an operator cannot hand to a stranger: every
+             Kampr node is on a different one. So the shipped build declares nothing, and
+             `Passkeys.android.kt` hides the passkey control on a build that does, because the
+             ceremony it would start can only end in `RP ID cannot be validated`. Passkeys in the
+             browser need none of this: a page's origin is its own RP ID, so anyone on
+             `https://<their node>` can enrol one today.
+
+             Building Kampr for one node you own: put its hostname in the string below, uncomment
+             both, rebuild. The control comes back and the ceremony runs. docs/10-passkeys.md.
+
+        <meta-data android:name="asset_statements" android:resource="@string/asset_statements" />
+        -->
         <!-- `keyboard` alongside `keyboardHidden` because the pane screen draws its key row from
              the pair (HardKeyboard.android.kt): without it, attaching a keyboard is a *recreate*,
              which loses the pane's scrollback position to answer a question about the bottom bar. -->
