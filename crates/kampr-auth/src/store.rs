@@ -163,10 +163,29 @@ impl Store {
         &self.pool
     }
 
+    /// A store for a test, and the schema has to outlive the connection that made it.
+    ///
+    /// `sqlite::memory:` is a database *inside its connection*: close that connection and the
+    /// tables go with it. A pool is free to close one — sqlx discards a connection whose task was
+    /// cancelled mid-query, which is exactly what dropping a peer link does — so the next acquire
+    /// opened a second, empty database and the query after it failed with `no such table`. Seen
+    /// once in forty runs of `a_peer_that_comes_back_is_online_again_with_no_help`, always on the
+    /// enrolment *after* a link was closed.
+    ///
+    /// A uniquely named shared-cache database is one database that every connection to that name
+    /// sees, and `min_connections(1)` keeps one of them open so it is never the last reference.
+    /// Unique per store, because a fixed name would be one database shared by every test in the
+    /// process.
     pub async fn open_memory() -> Result<Self> {
+        let name = format!("kampr-{}", hex::encode(secret::random_bytes(8)?));
+        let options = SqliteConnectOptions::from_str(&format!("sqlite:file:{name}?mode=memory&cache=shared"))
+            .expect("an in-memory url");
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .max_connections(4)
+            .min_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool })
