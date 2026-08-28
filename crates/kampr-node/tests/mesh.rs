@@ -693,10 +693,14 @@ async fn saw(socket: &mut Socket, marker: &str, seconds: u64) -> bool {
     false
 }
 
-/// The handshake binds a key to one node id, and nothing after it does. Two enrolled machines on
-/// one hub is the entire point of the mesh, so a second link claiming an id that is already live
-/// is one of them reaching for the other's terminals — the hub refuses it rather than letting the
-/// order they connected in decide who receives the watches and the keystrokes.
+/// The handshake binds a key to one node id, and the enrolment row is where that binding lives.
+/// Two enrolled machines on one hub is the entire point of the mesh, so a machine dialling in as
+/// its neighbour is one of them reaching for the other's terminals.
+///
+/// **Both orderings, and the impostor-first one is the whole point.** A hub that only refuses a
+/// *second* link claiming a live id lets the machine that is up take the id of the machine that is
+/// down — and then refuses the owner every time it comes home, which is a silent takeover behind a
+/// `warn!` nobody reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_peer_cannot_take_over_another_peers_node_id() {
     let Some(hub_session) = Session::start("claims").await else {
@@ -708,14 +712,13 @@ async fn a_peer_cannot_take_over_another_peers_node_id() {
     let mesh = hub.node.auth.store().mesh();
     let now = kampr_auth::now();
 
-    let dial = async |home: &Home, node_id: &str, name: &str| {
-        let code = mesh.invite(now, now + 600).await.expect("a join code");
+    let dial = async |home: &Home, node_id: &str, name: &str, join: Option<String>| {
         kampr_mesh::dial(
             &Hub {
                 url: hub.origin.clone(),
                 name: "hub".into(),
                 key: None,
-                join: Some(code),
+                join,
             },
             &home.identity(),
             &Presence {
@@ -727,13 +730,53 @@ async fn a_peer_cannot_take_over_another_peers_node_id() {
         )
         .await
     };
+    let invite = async || mesh.invite(now, now + 600).await.expect("a join code");
 
-    // The node that owns the id, holding its link open exactly as `kampr serve` would.
+    // Two machines, each joining as itself. This is the ordinary herd, and both are enrolled
+    // before either misbehaves.
     let laptop_home = Home::new();
-    let (_laptop_hub, _laptop_out, mut laptop_in) = dial(&laptop_home, "01JLAPTOP", "laptop")
-        .await
-        .expect("an enrolled node is served");
+    let impostor_home = Home::new();
     let laptop_key = laptop_home.identity().public_hex();
+    let impostor_key = impostor_home.identity().public_hex();
+    drop(
+        dial(&laptop_home, "01JLAPTOP", "laptop", Some(invite().await))
+            .await
+            .expect("the laptop joins"),
+    );
+    drop(
+        dial(
+            &impostor_home,
+            "01JIMPOSTOR",
+            "not the laptop",
+            Some(invite().await),
+        )
+        .await
+        .expect("the second machine joins"),
+    );
+    mesh_settles(&hub, 15, |peers| peers.links().is_empty()).await;
+
+    // The laptop is *down*, so no live link holds its id — which is exactly the moment a hostile
+    // neighbour reaches for it, and exactly the case a check against the live links cannot see.
+    assert!(
+        dial(&impostor_home, "01JLAPTOP", "not the laptop", None)
+            .await
+            .is_err(),
+        "an enrolled machine dialled in as a neighbour that was down, and the hub served it",
+    );
+    assert_eq!(
+        mesh.node(&impostor_key)
+            .await
+            .expect("the row")
+            .expect("an enrolled machine")
+            .node_id,
+        "01JIMPOSTOR",
+        "the enrolment row followed whatever the machine last claimed",
+    );
+
+    // And the node that owns the id is not locked out of its own herd by the attempt.
+    let (_laptop_hub, _laptop_out, mut laptop_in) = dial(&laptop_home, "01JLAPTOP", "laptop", None)
+        .await
+        .expect("the machine that owns the id was refused its own id");
     tokio::time::timeout(Duration::from_secs(10), async {
         while hub.node.peers.links().is_empty() {
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -742,20 +785,20 @@ async fn a_peer_cannot_take_over_another_peers_node_id() {
     .await
     .expect("the hub never served the laptop");
 
-    // A second enrolled machine, dialling in as the laptop. The handshake itself succeeds: its own
-    // key is enrolled here and it signed with it. What it may not have is the laptop's id.
-    let impostor_home = Home::new();
-    let (_impostor_hub, _impostor_out, mut impostor_in) = dial(&impostor_home, "01JLAPTOP", "not the laptop")
-        .await
-        .expect("the handshake is about the key, and this key is enrolled");
-    assert!(
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while impostor_in.recv().await.is_some() {}
-        })
-        .await
-        .is_ok(),
-        "the hub served two links for one node id",
-    );
+    // The other ordering: the same claim made while the laptop is live. Refused at the handshake
+    // now, and hung up on by `Peers` if it ever gets past one.
+    if let Ok((_impostor_hub, _impostor_out, mut impostor_in)) =
+        dial(&impostor_home, "01JLAPTOP", "not the laptop", None).await
+    {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while impostor_in.recv().await.is_some() {}
+            })
+            .await
+            .is_ok(),
+            "the hub served two links for one node id",
+        );
+    }
 
     let links = hub.node.peers.links();
     assert_eq!(links.len(), 1, "the impostor stayed in the herd");
@@ -984,7 +1027,7 @@ async fn revoke_elsewhere(home: &Home, needle: &str) {
     assert!(
         store
             .mesh()
-            .find(needle)
+            .resolve(needle)
             .await
             .expect("the row")
             .expect("a row")
@@ -1187,6 +1230,74 @@ async fn a_peer_may_not_keep_a_node_id_that_another_link_authenticates_as() {
         hub.node.peers.links().len(),
         2,
         "one of the two enrolled machines lost its link over the other's claim",
+    );
+
+    hub.stop();
+}
+
+/// The hub's own machine is a node in the same herd as its peers', and the hub is the only thing
+/// that may speak for it. A `herd` message naming the hub's own id is checked against nothing —
+/// the live links hold every *other* id, never this one — so it merges straight into the model
+/// beside the real entry, and a client keyed on node id keeps whichever arrived last. The
+/// operator's own machine is then renamed, marked offline, or given panes it does not have, by a
+/// peer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_may_not_speak_for_the_hubs_own_node() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let own = hub.node.node_id().to_string();
+    let mine = |herd: &kampr_node::herd::HerdModel| -> Vec<kampr_core::wire::NodeEntry> {
+        herd.nodes.iter().filter(|n| n.id == own).cloned().collect()
+    };
+    assert_eq!(
+        mine(&hub.node.herd()).len(),
+        1,
+        "the hub is one node in its own herd"
+    );
+
+    let impostor_home = Home::new();
+    let mut impostor = Scripted::join(&hub, &impostor_home, "01JIMPOSTOR", "impostor").await;
+    impostor
+        .advertise(
+            &[("01JIMPOSTOR", "impostor"), (&own, "not your machine")],
+            &["01JIMPOSTOR/w1:p1", &format!("{own}/w9:p9")],
+        )
+        .await;
+    // Its own entries land, so the claim about the hub was seen and dropped rather than not seen.
+    mesh_settles(&hub, 10, |peers| {
+        peers.herd().panes.iter().any(|p| p.id == "01JIMPOSTOR/w1:p1")
+    })
+    .await;
+    herd_becomes(&hub.node, 15, |herd| {
+        herd.panes.iter().any(|p| p.id == "01JIMPOSTOR/w1:p1")
+    })
+    .await;
+
+    assert!(
+        !hub.node.peers.herd().nodes.iter().any(|n| n.id == own),
+        "a peer's word about this hub's own node was kept",
+    );
+    let listed = mine(&hub.node.herd());
+    assert_eq!(
+        listed.len(),
+        1,
+        "the operator's own machine is in the herd twice: {listed:?}",
+    );
+    assert_eq!(
+        listed[0].kind, "local",
+        "and the entry that survived is the peer's"
+    );
+    assert_eq!(
+        listed[0].name, "front",
+        "a peer renamed the operator's own machine"
+    );
+    assert!(
+        !hub.node
+            .herd()
+            .panes
+            .iter()
+            .any(|p| p.id == format!("{own}/w9:p9")),
+        "a peer put a pane on the operator's own machine",
     );
 
     hub.stop();

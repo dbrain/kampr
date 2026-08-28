@@ -127,6 +127,8 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.has_conversation == b.has_conversation
         && a.watchers == b.watchers
         && a.detail == b.detail
+        && a.cmd == b.cmd
+        && a.argv == b.argv
 }
 
 #[cfg(test)]
@@ -223,6 +225,25 @@ mod tests {
         assert!(added.is_empty() && removed.is_empty());
         assert_eq!(changed, ["01J/w1:p1"]);
         assert!(after.diff(&after).is_none());
+    }
+
+    /// What a pane is *running* is now part of what it is called, and a client that was told once
+    /// would go on showing `kampr (cargo test)` long after the build finished. Nothing else in the
+    /// pane moves when a job starts — same workspace, same tab, same cwd, same geometry — so this
+    /// is the only thing that carries it.
+    #[test]
+    fn a_job_starting_and_finishing_is_a_change_like_any_other() {
+        let before = model(&[("w1:p1", 74)]);
+        let mut after = model(&[("w1:p1", 74)]);
+        after.panes[0].cmd = Some("cargo".into());
+        after.panes[0].argv = Some("cargo test".into());
+        let (added, changed, removed) = patch(&after.diff(&before).unwrap());
+        assert!(added.is_empty() && removed.is_empty());
+        assert_eq!(changed, ["01J/w1:p1"]);
+        assert!(after.diff(&after).is_none());
+
+        let (_, back, _) = patch(&before.diff(&after).unwrap());
+        assert_eq!(back, ["01J/w1:p1"], "and the job ending is a change too");
     }
 
     fn node(build: &str, update: Option<&str>) -> HerdModel {

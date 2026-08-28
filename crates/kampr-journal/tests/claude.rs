@@ -346,6 +346,11 @@ fn parallel_tool_calls_each_settle_onto_their_own_card() {
     let mut scratch = scratch_claude("parallel", &[calls, grep, read]);
     let turns = scratch.turns();
 
+    assert_eq!(
+        turns.iter().filter(|t| t.id == "p1").count(),
+        1,
+        "the turn both calls settled onto is delivered once, however many times it was marked"
+    );
     let turn = turns.iter().find(|t| t.id == "p1").expect("the calling turn");
     let cards: Vec<&Block> = turn
         .blocks

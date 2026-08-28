@@ -159,6 +159,27 @@ fn a_transcript_of_forty_megabytes_is_read_in_one_pass_rather_than_once_per_line
     assert!(took < BUDGET, "one poll of {at} bytes took {took:?}");
 }
 
+/// **`take_lines` drains whole lines, and a file with no newline in it has none.** The buffer grew
+/// to hold the whole file: a 204.8 MB single-line `.jsonl` measured 203 MB resident, 7.5 s and
+/// zero turns, and 800 MB did not finish in two minutes. Nothing was lost by refusing it — the
+/// fetch path already reads no further than `MAX_RECORD_BYTES` looking for the end of a record, so
+/// a record the tail buffered past that could never have been fetched back.
+#[test]
+fn a_record_too_long_to_be_fetched_is_skipped_rather_than_buffered_whole() {
+    let giant = said("a1", &"x".repeat(17 * 1024 * 1024));
+    let after = said("a2", "the poll goes on");
+    let mut scratch = scratch_claude_body("tail-giant", &format!("{giant}\n{after}\n"));
+
+    let turns = scratch.turns();
+
+    assert_eq!(
+        ids(&turns),
+        ["a2"],
+        "the record past the ceiling is skipped whole"
+    );
+    assert!(scratch.turns().is_empty(), "and nothing is read a second time");
+}
+
 /// The tail is a torn line until its newline arrives, however many polls that takes, and the
 /// bytes it is holding must not be read twice.
 #[test]

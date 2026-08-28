@@ -95,3 +95,56 @@ fn an_invite_from_a_hub_prints_the_join_line() {
     assert!(text.contains("kampr mesh join --hub"), "{text}");
     assert!(text.contains("--fingerprint"), "{text}");
 }
+
+const ONE: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const TWO: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+
+impl Cli {
+    /// A row in this node's own enrolment table, written the way a handshake writes one.
+    fn enrol(&self, pubkey: &str, node_id: &str, name: &str) {
+        let db = kampr_node::Config::state_db(&self.state);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(async {
+                kampr_auth::Store::open(&db)
+                    .await
+                    .expect("the state database")
+                    .mesh()
+                    .enrol(
+                        pubkey,
+                        node_id,
+                        name,
+                        kampr_auth::MeshRole::Peer,
+                        None,
+                        kampr_auth::now(),
+                    )
+                    .await
+                    .expect("the row");
+            });
+    }
+}
+
+/// A peer picks the name it enrols under, so a machine can take its neighbour's and two rows then
+/// answer to `laptop`. Cutting off whichever the table reached first cuts off the one the operator
+/// did not mean, and tells them it worked.
+#[test]
+fn a_name_two_nodes_answer_to_is_a_choice_the_operator_is_shown() {
+    let cli = Cli::new();
+    cli.init();
+    cli.enrol(ONE, "01JOWNER", "laptop");
+    cli.enrol(TWO, "01JIMPOSTOR", "laptop");
+
+    let out = cli.run(&["mesh", "revoke", "laptop"]);
+    assert!(!out.status.success(), "one of two was cut off:\n{}", stdout(&out));
+    let said = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(said.contains("01JOWNER"), "{said}");
+    assert!(said.contains("01JIMPOSTOR"), "{said}");
+
+    // The credential and the bound node id are never ambiguous.
+    let out = cli.run(&["mesh", "revoke", "01JOWNER"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = cli.run(&["mesh", "revoke", &kampr_auth::identity::fingerprint_of(TWO)]);
+    assert!(out.status.success(), "{}", stderr(&out));
+}

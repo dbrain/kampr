@@ -37,8 +37,17 @@ pub struct Tab {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct PaneReply {
+    pub pane: Pane,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Pane {
     pub pane_id: String,
+    /// Whatever source is currently winning herdr's per-source metadata table for this pane —
+    /// absent from `session.snapshot` and present on `pane.get` (probe #294).
+    #[serde(default)]
+    pub title: Option<String>,
     pub workspace_id: String,
     pub tab_id: String,
     pub cwd: Option<String>,
@@ -112,10 +121,16 @@ pub struct ProcessInfoReply {
 /// What herdr knows about the processes inside a pane. `foreground_processes` is the job the
 /// terminal is actually attached to — the harness itself, where one is running — and the pid it
 /// carries is the only handle a node gets on *which* session a pane is having.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProcessInfo {
     #[serde(default)]
     pub foreground_processes: Vec<ForegroundProcess>,
+    /// Equal to [`Self::shell_pid`] whenever the pane is at its prompt — and also whenever
+    /// ble.sh is running the job, because it keeps it in the shell's own group (probe #297).
+    #[serde(default)]
+    pub foreground_process_group_id: Option<u32>,
+    #[serde(default)]
+    pub shell_pid: Option<u32>,
 }
 
 impl ProcessInfo {
@@ -128,6 +143,35 @@ impl ProcessInfo {
     /// harness's start time exists to exclude, and it does so at the moment an agent has just
     /// been quit — which is the moment the operator noticed.
     ///
+    /// The foreground job, **or nothing at all**, which is the ordinary answer.
+    ///
+    /// Two separate reasons for nothing, and neither is a fault. A pane sitting at its prompt has
+    /// its shell in the foreground and no job to name. And a machine that sources ble.sh reports
+    /// the shell however busy the pane is, because ble.sh runs the job inside the shell's own
+    /// process group — which is every interactive shell on the operator's own machine (probe
+    /// #297). So this answers `None` far oftener than it answers, and every caller has to degrade
+    /// rather than render a blank.
+    ///
+    /// A pipeline names every member (`sleep 9 | cat` comes back as both, probe #297), so the
+    /// line is their lines joined the way a shell would have written it.
+    pub fn command(&self) -> Option<Command> {
+        if let (Some(group), Some(shell)) = (self.foreground_process_group_id, self.shell_pid)
+            && group == shell
+        {
+            return None;
+        }
+        let jobs: Vec<&ForegroundProcess> = self
+            .foreground_processes
+            .iter()
+            .filter(|p| !SHELLS.contains(&p.name.trim_start_matches('-')))
+            .collect();
+        let first = jobs.first()?;
+        Some(Command {
+            name: first.name.trim_start_matches('-').to_string(),
+            line: jobs.iter().map(|p| p.line()).collect::<Vec<_>>().join(" | "),
+        })
+    }
+
     /// A launcher counts, because `node …/cli.js` is the harness under another name.
     pub fn harness(&self, agent: &str) -> Option<u32> {
         self.foreground_processes
@@ -137,13 +181,41 @@ impl ProcessInfo {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ForegroundProcess {
     pub pid: u32,
     pub name: String,
     #[serde(default)]
     pub argv: Vec<String>,
+    /// Pre-joined by herdr, and the only form that survives an argument with a space in it
+    /// (probe #297).
+    #[serde(default)]
+    pub cmdline: Option<String>,
 }
+
+impl ForegroundProcess {
+    fn line(&self) -> String {
+        match self.cmdline.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            Some(line) => line.to_string(),
+            None if self.argv.is_empty() => self.name.clone(),
+            None => self.argv.join(" "),
+        }
+    }
+}
+
+/// The job a pane is running, as a name and as a whole command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command {
+    pub name: String,
+    pub line: String,
+}
+
+/// Shell names, which are never the answer to "what is this pane running".
+///
+/// A login shell arrives as `-bash`, so the leading dash is stripped before the comparison.
+const SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "fish", "dash", "ash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh",
+];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReadReply {

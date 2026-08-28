@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -125,6 +126,21 @@ pub struct RowDiff {
     pub cells: Vec<Cell>,
 }
 
+/// How many hyperlinks one pane's grid will hold.
+///
+/// The table is emptied only by [`Grid::clear`], which is a `full: true` frame — the first frame
+/// of an `observe` stream and no other (#53) — so on a stream of diffs it grows for the life of
+/// the pane, and every entry is serialised to every viewer. A 93x40 pane is 3 720 cells, so this
+/// is past a screenful of entirely distinct links and far past what real content emits; it is the
+/// same ceiling, for the same reason, that `wire::MAX_STYLES` puts on a pen table a connection can
+/// never evict from either.
+pub(crate) const MAX_LINKS: usize = 4096;
+
+/// How long a URI may be to be interned. Apache refuses a request line past 8 190 bytes and nginx
+/// past 8 KB, so nothing a browser will follow is longer, and the longest hyperlink this crate is
+/// driven with is 2 018 (`a_hyperlink_longer_than_vtes_osc_buffer_survives_whole`).
+pub(crate) const MAX_LINK_BYTES: usize = 8192;
+
 #[derive(Debug, Clone)]
 pub struct Grid {
     cols: u16,
@@ -132,6 +148,7 @@ pub struct Grid {
     cells: Vec<Cell>,
     dirty: Vec<bool>,
     pub links: Vec<String>,
+    link_ids: HashMap<String, u32>,
 }
 
 impl Grid {
@@ -143,6 +160,7 @@ impl Grid {
             cells: vec![Cell::default(); n],
             dirty: vec![true; rows as usize],
             links: Vec::new(),
+            link_ids: HashMap::new(),
         }
     }
 
@@ -194,6 +212,7 @@ impl Grid {
         self.cells.fill(Cell::default());
         self.dirty.fill(true);
         self.links.clear();
+        self.link_ids.clear();
     }
 
     /// Blanks both halves of any double-width glyph straddling the boundary to the left of `col`,
@@ -238,6 +257,11 @@ impl Grid {
     }
 
     pub fn scroll_up(&mut self) {
+        // A grid with no cells has no rows to rotate, and `rotate_left` off the end of one is a
+        // slice assertion rather than an overflow check — so it panics in release too.
+        if self.cells.is_empty() {
+            return;
+        }
         let w = self.cols as usize;
         self.cells.rotate_left(w);
         let last = self.cells.len() - w;
@@ -265,11 +289,18 @@ impl Grid {
         out
     }
 
-    pub fn intern_link(&mut self, uri: &str) -> u32 {
-        if let Some(i) = self.links.iter().position(|u| u == uri) {
-            return i as u32;
+    /// Nothing past a ceiling is truncated: half a URI points somewhere else, so a run that cannot
+    /// be interned renders as the text it is with no link on it at all.
+    pub fn intern_link(&mut self, uri: &str) -> Option<u32> {
+        if let Some(id) = self.link_ids.get(uri) {
+            return Some(*id);
         }
+        if uri.len() > MAX_LINK_BYTES || self.links.len() >= MAX_LINKS {
+            return None;
+        }
+        let id = self.links.len() as u32;
         self.links.push(uri.to_string());
-        (self.links.len() - 1) as u32
+        self.link_ids.insert(uri.to_string(), id);
+        Some(id)
     }
 }

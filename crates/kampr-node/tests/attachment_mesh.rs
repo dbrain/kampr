@@ -131,6 +131,8 @@ impl Fixture {
 struct Peer {
     node: Arc<Node>,
     pane: String,
+    device: String,
+    state: PathBuf,
     to_peer: mpsc::Sender<String>,
     from_peer: mpsc::Receiver<(Instant, String)>,
     session: tokio::task::JoinHandle<()>,
@@ -176,6 +178,7 @@ impl Peer {
             .await
             .expect("a device");
 
+        let device_id = device.id.clone();
         let (to_peer, from_hub) = mpsc::channel(256);
         let (to_hub, from_peer) = mpsc::channel(4096);
         let session = tokio::spawn(session::run_on(
@@ -192,6 +195,8 @@ impl Peer {
         Self {
             node,
             pane,
+            device: device_id,
+            state: state.path().to_path_buf(),
             to_peer,
             from_peer,
             session,
@@ -516,6 +521,50 @@ async fn a_hub_this_node_will_not_take_input_from_is_refused_a_path() {
     .await;
     let (_, body, _) = pull(&mut peer, 4).await;
     assert_eq!(body, fixture.bytes);
+    peer.stop();
+}
+
+/// A file id names any path on this machine, and the whole argument for serving one is that it is
+/// equivalent to typing into the terminal — so it has to be gated like typing, which means the
+/// device row is re-read *before* the read rather than up to two seconds after it. The operator
+/// who demotes a hub is in another process writing SQLite and tells this session nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_demoted_by_another_process_is_refused_a_path_on_the_socket_it_is_holding() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start(&fixture, Caller::Hub, UNTHROTTLED).await;
+    let scratch = tempfile::tempdir().expect("a directory");
+    let id = a_file_on_the_peer(scratch.path(), "plot.png", &fixture.bytes);
+
+    peer.until("hello").await;
+    peer.say(json!({
+        "t": "att.fetch", "rid": 1, "pane": peer.pane, "id": id, "window": ATT_WINDOW
+    }))
+    .await;
+    let (_, body, _) = pull(&mut peer, 1).await;
+    assert_eq!(body, fixture.bytes, "the full-role hub reads the file");
+
+    // `kampr` in another process, holding its own connection to the same file — the gesture an
+    // operator actually makes, and one nothing in this session is told about.
+    let elsewhere = kampr_auth::Store::open(&Config::state_db(&peer.state))
+        .await
+        .expect("a second connection to the same database");
+    assert!(
+        elsewhere
+            .set_role(&peer.device, Role::Readonly)
+            .await
+            .expect("the demotion"),
+        "nothing was demoted, so what follows would be measuring nothing",
+    );
+
+    peer.say(json!({
+        "t": "att.fetch", "rid": 2, "pane": peer.pane, "id": id, "window": ATT_WINDOW
+    }))
+    .await;
+    assert_eq!(
+        peer.until("att.error").await["code"],
+        "not_found",
+        "a demoted hub read a path off this machine on the socket it was already holding",
+    );
     peer.stop();
 }
 

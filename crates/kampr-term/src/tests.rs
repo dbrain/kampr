@@ -508,12 +508,34 @@ fn a_hostile_cursor_address_cannot_take_the_emulator_arithmetic_past_the_grid() 
 }
 
 /// A pane herdr reported before it had a size at all. Nothing may divide, subtract or index its
-/// way off a grid with no cells in it.
+/// way off a grid with no cells in it — and a grid has no cells in it whenever *either* dimension
+/// is zero, which is what this test drove only one of. An 80x0 grid held the same nothing and
+/// `scroll_up` rotated 80 cells of it: a slice assertion, so it panicked in release too.
 #[test]
 fn an_empty_grid_survives_being_driven() {
-    let mut t = Emulator::new(0, 0);
-    t.feed(b"\x1b[5B\x1b[5C\x1b[2Jhello\r\n\t\x1b[1;1H");
-    assert_eq!(t.grid().rows(), 0);
+    for (cols, rows) in [(0, 0), (80, 0), (0, 24)] {
+        let mut t = Emulator::new(cols, rows);
+        t.feed(b"\x1b[5B\x1b[5C\x1b[2Jhello\r\n\t\x1b[1;1H\n\n");
+        assert_eq!(t.grid().rows(), rows, "{cols}x{rows}");
+        assert!(t.take_dirty().iter().all(|d| d.cells.is_empty()), "{cols}x{rows}");
+    }
+}
+
+/// The widest grid there is, filled to its last cell. The cursor parks one column past the glyph
+/// it wrote, so at `u16::MAX` the margin test was comparing 65 536 against 65 535 through a
+/// `saturating_add` that had already clamped it — no wrap, a `col + width` that overflows, and a
+/// glyph dropped without one wherever overflow checks are off.
+#[test]
+fn a_glyph_at_the_last_column_of_the_widest_grid_wraps_rather_than_overflowing() {
+    let mut t = Emulator::new(u16::MAX, 2);
+    t.feed("x".repeat(u16::MAX as usize + 4).as_bytes());
+
+    assert_eq!(t.cursor(), (4, 1, true));
+    assert_eq!(
+        t.grid().row(1)[0].ch,
+        'x',
+        "the glyph past the margin is on the next row"
+    );
 }
 
 /// `CSI 4:3 m` is undercurl. Flattened, its subparameter reads as a top-level `3` and turns the
@@ -545,8 +567,225 @@ fn a_column_bound_is_never_under_what_the_emulator_actually_spends() {
         "\ta\tb",
         "",
     ];
-    for case in cases {
+    // The shapes the walk over clusters has to get right, which the list above does not reach: a
+    // cluster past the ceiling, one that grows into its second column with an SGR standing between
+    // it and the mark that buys it, and a payload the emulator never sees.
+    let hostile = [
+        format!("a{}", "\u{301}".repeat(200)),
+        format!("\u{1F468}{}", "\u{200D}\u{1F469}".repeat(20)),
+        "\u{2764}\x1b[0m\u{FE0F} widened across an SGR".to_string(),
+        format!("x\x1bP{}\x1b\\y", "q".repeat(64)),
+    ];
+    for case in cases.iter().copied().chain(hostile.iter().map(String::as_str)) {
         let bound = crate::column_bound(case);
+        let mut t = Emulator::new(bound.max(1), 1);
+        t.feed(case.as_bytes());
+        assert!(
+            t.cursor().0 <= bound,
+            "{case:?}: bound {bound}, emulator reached {}",
+            t.cursor().0
+        );
+    }
+}
+
+/// **A pane's content decides how much memory the node hands `Grid::new`.** `column_bound` sizes
+/// the grid a whole scrollback ring is laid out on, and charging a column per *code point* charges
+/// one for a mark the emulator spends nothing on: 80 columns of text wearing combining marks is
+/// 288 KB of one row and was bounded at 65 535 columns. A `Cell` is 40 bytes and the ring holds
+/// 20 000 rows, so that one row asked for 52 GB — `handle_alloc_error`, which aborts the process
+/// rather than unwinding anywhere a `catch_unwind` could see it.
+#[test]
+fn a_row_of_combining_marks_is_bounded_by_the_columns_the_emulator_can_spend() {
+    let mut row = String::new();
+    for _ in 0..80 {
+        row.push('a');
+        for _ in 0..1800 {
+            row.push('\u{301}');
+        }
+    }
+    let bound = crate::column_bound(&row);
+    let mut t = Emulator::new(bound.max(1), 1);
+    t.feed(row.as_bytes());
+
+    assert!(
+        t.cursor().0 <= bound,
+        "bound {bound}, emulator reached {}",
+        t.cursor().0
+    );
+    assert!(
+        bound <= 160,
+        "{} bytes of 80 columns bounded at {bound}",
+        row.len()
+    );
+}
+
+/// A DCS, SOS, PM or APC payload is swallowed whole by `vte` and never reaches `print`, so the
+/// emulator spends nothing on it — measured, cursor at column 0 for all four. `skip_sequence` knew
+/// only `ESC [` and `ESC ]`, so 76 KB of sixel counted as 76 000 printable columns.
+#[test]
+fn a_string_sequence_the_emulator_never_sees_costs_no_columns() {
+    for (name, intro) in [
+        ("DCS", "\x1bP"),
+        ("SOS", "\x1bX"),
+        ("PM", "\x1b^"),
+        ("APC", "\x1b_"),
+    ] {
+        for end in ["\x1b\\", "\x07"] {
+            let payload = format!("x{intro}q{}{end}y", "q".repeat(500));
+            let bound = crate::column_bound(&payload);
+            let mut t = Emulator::new(bound.max(1), 1);
+            t.feed(payload.as_bytes());
+            assert!(t.cursor().0 <= bound, "{name}: bound {bound}");
+            assert!(bound <= 8, "{name} terminated by {end:?}: bounded at {bound}");
+        }
+    }
+}
+
+/// **A cluster is rebuilt from scratch on every code point that joins it**, so an unbounded one is
+/// quadratic: 4 KB of marks on one cell measured 5.9 ms, 16 KB 89 ms, 64 KB 1.43 s and 128 KB
+/// 5.72 s — clean 4x per doubling, and all of it under the `Mutex<PaneState>` that `screen`,
+/// `attach` and lag recovery take. Past the cap a code point is put as if it opened a cluster of
+/// its own, which drops a mark exactly as one printed at column 0 is dropped.
+#[test]
+fn a_cluster_stops_growing_at_a_ceiling_no_real_content_reaches() {
+    let mut hostile = String::from("a");
+    for _ in 0..20_000 {
+        hostile.push('\u{301}');
+    }
+    let mut t = Emulator::new(80, 1);
+    t.feed(hostile.as_bytes());
+
+    let row = t.grid().row(0);
+    assert!(
+        row[0].marks().len() <= crate::perform::MAX_CLUSTER_BYTES,
+        "one cell wearing {} bytes of marks",
+        row[0].marks().len()
+    );
+    assert_eq!(
+        t.cursor().0,
+        1,
+        "a mark it cannot attach takes no column of its own"
+    );
+
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+    let mut t = Emulator::new(80, 1);
+    t.feed(family.as_bytes());
+    assert_eq!(
+        t.grid().row(0)[0].cluster(),
+        family,
+        "real content is nowhere near it"
+    );
+}
+
+/// **The link table is emptied only by `Grid::clear`** — a `full: true` frame, which is the first
+/// frame of a stream and no other (#53). On a stream of diffs it grows for the life of the pane,
+/// it was interned by a linear scan (5 000 URIs 18 ms, 20 000 227 ms, 80 000 5.2 s), and
+/// `registry.rs` serialises every new entry to every viewer.
+#[test]
+fn a_pane_cannot_mint_hyperlinks_without_end() {
+    let mut hostile = String::new();
+    for i in 0..6_000 {
+        hostile.push_str(&format!("\x1b]8;;https://herdr.dev/{i}\x1b\\x\x1b]8;;\x1b\\"));
+    }
+    let mut t = Emulator::new(80, 24);
+    t.feed(hostile.as_bytes());
+
+    assert_eq!(
+        t.grid().links.len(),
+        crate::grid::MAX_LINKS,
+        "a table of {}",
+        t.grid().links.len()
+    );
+    assert_eq!(
+        t.grid().links[0],
+        "https://herdr.dev/0",
+        "what was interned before the ceiling still points where it pointed"
+    );
+
+    t.feed(b"\x1b[1;1H\x1b]8;;https://herdr.dev/late\x1b\\z");
+    assert_eq!(
+        t.grid().row(0)[0].link,
+        None,
+        "and a run past it renders unlinked rather than under somebody else's URI"
+    );
+    assert_eq!(t.grid().row(0)[0].ch, 'z');
+}
+
+/// A URI is content too. Nothing is truncated: half a URI points somewhere else, so one past the
+/// ceiling renders as text with no link at all.
+#[test]
+fn a_uri_past_the_length_ceiling_is_refused_rather_than_cut_short() {
+    let uri = format!("https://herdr.dev/{}", "a".repeat(crate::grid::MAX_LINK_BYTES));
+    let mut t = Emulator::new(40, 1);
+    t.feed(format!("\x1b]8;;{uri}\x1b\\LINK").as_bytes());
+
+    assert!(t.grid().links.is_empty(), "nothing interned");
+    assert_eq!(t.grid().row(0)[0].link, None);
+    assert_eq!(t.grid().row_text(0), "LINK", "and the text still renders");
+}
+
+/// The contract of [`crate::column_bound`], driven over shapes a hand-written list does not reach:
+/// deterministic strings built from the code points that make a cluster behave unlike its parts,
+/// the sequences the emulator swallows whole, and the controls and erases that put a cell the walk
+/// has not charged for under the next mark. Two of those — a `HT` before an emoji modifier, and an
+/// erase under a cluster that had already bought its second column — were real holes this found.
+///
+/// Cursor addressing is deliberately absent: `CSI 5;40H` moves into whatever grid it is given, and
+/// the grid `lay_out` gives is the bound itself, so the emulator clamps rather than needing room.
+#[test]
+fn no_string_of_escapes_marks_and_glyphs_finds_a_column_the_bound_missed() {
+    let pool = [
+        "a",
+        "Z",
+        " ",
+        "\u{301}",
+        "\u{FE0F}",
+        "\u{FE0E}",
+        "\u{200D}",
+        "\u{20E3}",
+        "\u{1F468}",
+        "\u{1F469}",
+        "\u{2764}",
+        "\u{65E5}",
+        "\u{1F1EC}",
+        "\u{1F1E7}",
+        "\u{1100}",
+        "\u{1161}",
+        "\u{11A8}",
+        "\u{915}",
+        "\u{94D}",
+        "\u{937}",
+        "\u{BA4}",
+        "\u{BCD}",
+        "\u{600}",
+        "\u{0D4E}",
+        "\u{1F3FD}",
+        "\x1b[0m",
+        "\x1b[1;31m",
+        "\x1b[K",
+        "\x1b[1K",
+        "\x1b[2J",
+        "\x1bPqqq\x1b\\",
+        "\x1b_apc\x1b\\",
+        "\x1b]8;;https://x/\x1b\\",
+        "\t",
+        "\u{0}",
+        "\u{7}",
+        "\u{8}",
+    ];
+    let mut seed: u64 = 0x2545F4914F6CDD1D;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize
+    };
+    for _ in 0..2_000 {
+        let mut case = String::new();
+        for _ in 0..1 + next() % 12 {
+            case.push_str(pool[next() % pool.len()]);
+        }
+        let bound = crate::column_bound(&case);
         let mut t = Emulator::new(bound.max(1), 1);
         t.feed(case.as_bytes());
         assert!(

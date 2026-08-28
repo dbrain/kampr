@@ -43,6 +43,12 @@ pub struct PaneInfo {
     pub rows: u16,
     /// Rows of history *above* the viewport, and zero whenever reading them would be unsafe.
     pub scrollback_rows: u32,
+    /// The foreground job's process name, and its whole command line. **Legitimately absent most
+    /// of the time**: herdr answers with the shell whenever the pane is sitting at its prompt, and
+    /// on a machine that sources ble.sh it answers with the shell even while a job runs, because
+    /// the job never leaves the shell's process group (probe #297).
+    pub cmd: Option<String>,
+    pub argv: Option<String>,
     /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.

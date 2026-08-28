@@ -1,0 +1,30 @@
+[package]
+name = "kampr-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+icy_sixel.workspace = true
+image.workspace = true
+kampr-client = { path = "../kampr-client" }
+kampr-core = { path = "../kampr-core" }
+kampr-term = { path = "../kampr-term" }
+pulldown-cmark.workspace = true
+ratatui.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+kampr-mesh = { path = "../kampr-mesh" }
+kampr-node = { path = "../kampr-node" }
+tokio-tungstenite.workspace = true

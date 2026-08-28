@@ -124,6 +124,19 @@ pub fn router(node: Arc<Node>) -> Router {
 }
 
 pub async fn serve(node: Arc<Node>) -> Result<()> {
+    let served = std::pin::pin!(listen(node.clone()));
+    let outcome = tokio::select! {
+        outcome = served => outcome,
+        signal = interrupted() => {
+            tracing::info!(%signal, "shutting down");
+            Ok(())
+        }
+    };
+    node.restore_desks().await;
+    outcome
+}
+
+async fn listen(node: Arc<Node>) -> Result<()> {
     let addr = node.config.bind_addr().context("server.bind")?;
     let app = router(node.clone());
     if node.config.server.tls.enabled {
@@ -133,6 +146,28 @@ pub async fn serve(node: Arc<Node>) -> Result<()> {
         .await
         .with_context(|| format!("binding {addr}"))?;
     serve_on(listener, app).await
+}
+
+/// **Nothing is drained.** The signal is caught for the one thing that has to happen off this
+/// process — putting back an agents view this node set at somebody's desk, which nothing else
+/// knows about — and then the node goes, exactly as fast as it did when the signal killed it.
+async fn interrupted() -> &'static str {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(term) => term,
+            Err(_) => return std::future::pending().await,
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "SIGINT",
+            _ = term.recv() => "SIGTERM",
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "SIGINT"
+    }
 }
 
 pub async fn serve_on(listener: tokio::net::TcpListener, app: Router) -> Result<()> {

@@ -111,3 +111,18 @@ this ADR forbids is reshaping somebody's session *as a consequence of looking at
 - **Nothing about a better phone UI.** Zoom being awkward, a wrapped line being ugly, a user asking
   for it — none of these reopen the question, because none of them change what `control` costs
   the person at the desk. The reason to revisit is upstream capability, not local frustration.
+
+## What has since been measured
+
+**[#298](../03-probe-log.md) put a face on this invariant.** Every probe behind this ADR
+([#17](../03-probe-log.md)–[#21](../03-probe-log.md)) ran headless, and #21's refusal — *"already
+has an attached client"* — was read as herdr protecting a desk. It does not. `control` against a
+pane whose session has a desk TUI attached **neither refuses nor evicts**: it reshapes the PTY
+underneath a client that goes on drawing the old box, herdr's own layout rect never moves, and a
+69-column line came back whole from the API while appearing at the desk cropped at 49. No error is
+raised anywhere. #21 was about a second *controller of the same terminal stream*, never about a
+desk. **The cost this ADR refused to pay is larger than it was able to state in 2026-08.**
+
+**The terminal client fits itself instead**, which is the inverse and not an exception — see
+[ADR 0011](./0011-the-client-fits-itself-to-the-pane.md). It resizes the operator's own window,
+never a pane, and `terminal.resize` appears nowhere in `crates/kampr-tui`.

@@ -261,6 +261,11 @@ kampr mesh revoke laptop        # by name, node id, fingerprint or key
 The live link drops within seconds — a revocation has to bite on the connection that is already
 open, not at the next handshake. `kampr mesh forget` removes the row entirely.
 
+A key, a fingerprint and a node id name exactly one node. A **name** does not have to: a peer picks
+the name it enrols under, so two can answer to `laptop` — and rather than cut off whichever the
+table reached first, `revoke` prints both and cuts off neither. Name one by its fingerprint when it
+does.
+
 From the other side, a peer can cut the hub off too: the hub holds a device row on each peer
 (`mesh:…`, visible in that peer's device list), and revoking it refuses the hub even though its key
 is still enrolled.

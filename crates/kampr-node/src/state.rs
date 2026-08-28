@@ -74,7 +74,12 @@ impl Node {
     pub async fn start(config: Config, state_dir: &Path) -> Result<Arc<Self>> {
         let sessions = Sessions::open(&config);
         let auth = Arc::new(build_auth(&config, state_dir).await?);
-        let peers = Peers::new(PeersConfig::default());
+        // A hub is told its own node id so a peer cannot advertise the machine the operator is
+        // standing on.
+        let peers = Peers::new(PeersConfig {
+            own_node_id: Some(config.node_id.clone()),
+            ..PeersConfig::default()
+        });
 
         let (herd, _) = watch::channel(Arc::new(HerdModel::default()));
         let home = config.journal_home();
@@ -164,6 +169,17 @@ impl Node {
     /// herdr produce it.
     pub fn publish_herd(&self, model: HerdModel) {
         self.herd.send_replace(Arc::new(model));
+    }
+
+    /// Puts every desk's own agent order back, for a node that is on its way out.
+    ///
+    /// **`Drop` cannot do this** — the clear is a socket round trip per session — and nothing else
+    /// will: herdr will not say what view it is holding, so a sort this node set and did not clear
+    /// is a sidebar left wrong until somebody clears it by hand.
+    pub async fn restore_desks(&self) {
+        for session in self.sessions.all() {
+            session.provider.restore_desk().await;
+        }
     }
 
     /// Stops everything this node is running: the herd poller, session discovery and every
@@ -292,8 +308,24 @@ async fn refresh_herd(
         // and stamped with the link's measured round trip, so a pane two hops away *looks* two
         // hops away rather than quietly lagging.
         let remote = mesh.borrow_and_update().clone();
-        model.nodes.extend(remote.nodes.iter().cloned());
-        model.panes.extend(remote.panes.iter().cloned());
+        // A node this process answers for is never a peer's to describe: `HerdModel::diff` would
+        // emit both entries and a client keyed on node id keeps whichever came last, which is the
+        // remote one. `Peers::keep_own` drops the claim as it arrives and warns, and it is told one
+        // id — the configured one. This is the wider net: a node serving several herdr sessions
+        // answers for a node id per session, and that set is known here and changes while the
+        // process runs.
+        let local: HashSet<String> = model.nodes.iter().map(|node| node.id.clone()).collect();
+        let ours = |id: &str| local.contains(id.split('/').next().unwrap_or(id));
+        model
+            .nodes
+            .extend(remote.nodes.iter().filter(|n| !ours(&n.id)).cloned());
+        model.panes.extend(
+            remote
+                .panes
+                .iter()
+                .filter(|p| !ours(&p.node_id) && !ours(&p.id))
+                .cloned(),
+        );
         model.stamp(&previous);
         let model = Arc::new(model);
         previous = model.clone();

@@ -137,6 +137,20 @@ fn client() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(format!("kampr/{BUILD}"))
         .timeout(TIMEOUT)
+        // A redirect picks the next URL, and neither the config nor the first request constrains
+        // it: an intercepted or hostile hop answers 302 to plain http and the default policy
+        // follows it. The same hole `--proto-redir` closes in `install.sh`, in the one request
+        // this node makes to a host it did not choose.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() > 5 {
+                return attempt.error("too many redirects asking for the latest release");
+            }
+            let scheme = attempt.url().scheme().to_string();
+            match scheme.as_str() {
+                "https" => attempt.follow(),
+                other => attempt.error(format!("refusing a redirect to {other}")),
+            }
+        }))
         .build()?)
 }
 

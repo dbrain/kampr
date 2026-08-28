@@ -1,7 +1,7 @@
 use crate::grid::{Cell, CellAttrs, Color, Grid};
 use std::sync::Arc;
 use unicode_segmentation::GraphemeCursor;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use vte::{Params, ParamsIter, Perform};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -67,7 +67,10 @@ impl State {
         if width == 0 {
             return;
         }
-        if self.cursor.col.saturating_add(width) > self.grid.cols() {
+        // In u32 because the grid can be 65 535 columns wide — `column_bound` clamps there — and
+        // a `saturating_add` reads the pending-wrap column at exactly `u16::MAX` as still inside
+        // the margin, which places the next glyph at column 65 535: an add that overflows.
+        if self.cursor.col as u32 + width as u32 > self.grid.cols() as u32 {
             self.cursor.col = 0;
             self.newline();
         }
@@ -105,6 +108,9 @@ impl State {
             return false;
         };
         if cell.is_tail() || (c.is_ascii() && cell.marks.is_none() && cell.ch.is_ascii()) {
+            return false;
+        }
+        if cell.marks().len() >= MAX_CLUSTER_BYTES {
             return false;
         }
         let mut cluster = cell.cluster();
@@ -196,6 +202,17 @@ impl State {
     }
 }
 
+/// How many bytes of marks one cell will carry.
+///
+/// A cluster is rebuilt on every code point that joins it, so an unbounded one is quadratic: on
+/// this crate 4 KB of marks on a single cell took 5.9 ms, 16 KB 89 ms, 64 KB 1.43 s and 128 KB
+/// 5.72 s, all of it under the pane's mutex. Real content is nowhere near this — a four-person ZWJ
+/// family sequence is 25 bytes, a flag 8, the Devanagari and Bengali clusters of #225 under 10 —
+/// so this is five times the longest cluster measured anywhere and still a ceiling. Past it a code
+/// point is put as if it opened a cluster of its own, which is where a mark with no base already
+/// goes: nowhere.
+pub(crate) const MAX_CLUSTER_BYTES: usize = 128;
+
 /// Herdr 0.8.2 breaks cells exactly where UAX #29 breaks extended grapheme clusters — measured
 /// against where it wraps a string at the right margin of a 93-column pane (#225 — herdr's cell
 /// boundary is UAX #29). Devanagari `\u{915}\u{94D}\u{937}` wraps whole and the same shape in
@@ -212,40 +229,132 @@ fn is_boundary(cluster: &str, at: usize) -> bool {
 /// on: over-estimating costs cells, and under-estimating wraps a row and loses one off the top.
 /// A code point either opens a cluster, costing [`cluster_width`], or joins the one before it,
 /// costing at most the single column that cluster can grow into.
+///
+/// **Which is why it walks clusters and not code points.** Charging every code point a column
+/// charged one for each of the marks the emulator spends nothing on: 80 columns of text wearing
+/// combining marks bounded at 65 535, and the grid that sizes is `65535 * rows` cells of 40 bytes.
+/// The walk mirrors [`State::join`] — the same boundary rule and the same [`MAX_CLUSTER_BYTES`] —
+/// because the loop it is bounding is that one.
 pub fn column_bound(text: &str) -> u16 {
     let mut cols: usize = 0;
+    let mut cell = ClusterBound::default();
     let mut rest = text.chars();
     while let Some(c) = rest.next() {
         match c {
-            '\u{1b}' => skip_sequence(&mut rest),
-            '\t' => cols = (cols / 8 + 1) * 8,
-            c if c.is_control() => {}
-            c if is_regional(c) => cols += 2,
-            c => cols += c.width().unwrap_or(0).max(1),
+            '\u{1b}' => {
+                if skip_sequence(&mut rest) {
+                    cell.detach();
+                }
+            }
+            '\t' => {
+                cols = (cols / 8 + 1) * 8;
+                cell.detach();
+            }
+            c if c.is_control() => cell.detach(),
+            c => cols += cell.charge(c) as usize,
         }
     }
     cols.min(u16::MAX as usize) as u16
 }
 
-fn skip_sequence(rest: &mut std::str::Chars<'_>) {
+/// The cell [`column_bound`] is charging for, standing in for the one [`State::put`] would be
+/// writing. An SGR leaves it alone, exactly as an SGR leaves the cell the cursor is sitting after
+/// alone — a mark separated from its base by one still rides on that base and still buys it a
+/// second column — while anything that moves the cursor or erases under it detaches.
+#[derive(Default)]
+struct ClusterBound {
+    cluster: String,
+    marks: usize,
+    charged: u16,
+    detached: bool,
+}
+
+impl ClusterBound {
+    fn charge(&mut self, c: char) -> u16 {
+        // Two, because the cell under a moved cursor is unknown: this either opens one of its own,
+        // which is two columns at most, or joins one already there and grows it by one.
+        if self.detached {
+            self.detached = false;
+            self.cluster.clear();
+            self.cluster.push(c);
+            self.marks = 0;
+            self.charged = 2;
+            return 2;
+        }
+        if self.joins(c) {
+            self.cluster.push(c);
+            self.marks += c.len_utf8();
+            // A cluster only ever grows into its second column. A base that spent no column has no
+            // cell of its own, so what a mark after it joins is the cell before *that* one — which
+            // has the same one column to grow into, and is charged it here.
+            let growth = 2 - self.charged.max(1);
+            self.charged = 2;
+            return growth;
+        }
+        let width = cluster_width(c.encode_utf8(&mut [0u8; 4]));
+        // `put` drops a code point of no width, leaving the cell it could not join exactly as it
+        // was — including, past the ceiling, still full.
+        if width == 0 {
+            return 0;
+        }
+        self.cluster.clear();
+        self.cluster.push(c);
+        self.marks = 0;
+        self.charged = width;
+        width
+    }
+
+    /// The cursor moved, so a mark arriving next rides on a cell this walk has not charged for —
+    /// a blank one, which it can still grow into a second column, and which carries no marks of
+    /// its own however full the cell before the move was. Measured: `\u{2764}` `HT` `\u{1F3FD}`
+    /// spends nine columns and was bounded at eight.
+    fn detach(&mut self) {
+        self.detached = true;
+    }
+
+    fn joins(&mut self, c: char) -> bool {
+        if self.cluster.is_empty() || self.marks >= MAX_CLUSTER_BYTES {
+            return false;
+        }
+        if c.is_ascii() && self.marks == 0 && self.cluster.starts_with(|b: char| b.is_ascii()) {
+            return false;
+        }
+        let at = self.cluster.len();
+        self.cluster.push(c);
+        let joins = !is_boundary(&self.cluster, at);
+        self.cluster.truncate(at);
+        joins
+    }
+}
+
+/// Consumes one escape sequence, and says whether it can have moved the cursor or erased what it
+/// is sitting after — either of which puts a different cell under the mark that arrives next. The
+/// actions listed are the ones [`State::csi_dispatch`] implements that do either; an action added
+/// there and not here is a bound that reads a column short.
+fn skip_sequence(rest: &mut std::str::Chars<'_>) -> bool {
     match rest.next() {
         Some('[') => {
             for c in rest {
                 if ('\u{40}'..='\u{7e}').contains(&c) {
-                    return;
+                    return matches!(c, 'H' | 'f' | 'A' | 'B' | 'C' | 'D' | 'G' | 'd' | 'J' | 'K');
                 }
             }
+            false
         }
-        Some(']') => {
+        // OSC, and the four `vte` swallows whole without one `print` between them: DCS, SOS, PM
+        // and APC. A sixel image is tens of kilobytes of payload the emulator spends nothing on,
+        // and every byte of it was a column here.
+        Some(']' | 'P' | 'X' | '^' | '_') => {
             let mut after_escape = false;
             for c in rest {
                 if c == '\u{7}' || (after_escape && c == '\\') {
-                    return;
+                    break;
                 }
                 after_escape = c == '\u{1b}';
             }
+            false
         }
-        _ => {}
+        _ => false,
     }
 }
 
@@ -327,7 +436,7 @@ impl Perform for State {
             self.link = if uri.is_empty() {
                 None
             } else {
-                Some(self.grid.intern_link(&String::from_utf8_lossy(uri)))
+                self.grid.intern_link(&String::from_utf8_lossy(uri))
             };
         }
     }

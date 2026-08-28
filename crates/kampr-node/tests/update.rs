@@ -5,6 +5,7 @@
 //! that the answer rides beside `build` in the herd model. A test that asked the checker directly
 //! would agree with the checker and say nothing about what a phone is handed.
 
+use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use kampr_auth::Role;
 use kampr_node::{BUILD, Config, Node, http};
@@ -34,22 +35,49 @@ impl Drop for Github {
 
 impl Github {
     async fn serving(tag: &'static str) -> Self {
+        Self::start(tag, false).await
+    }
+
+    /// The answer is real, but it is one hop away and the hop leaves https.
+    async fn redirecting_off_https(tag: &'static str) -> Self {
+        Self::start(tag, true).await
+    }
+
+    async fn start(tag: &'static str, redirect: bool) -> Self {
         let asks = Arc::new(AtomicUsize::new(0));
-        let counter = asks.clone();
-        let app = axum::Router::new().route(
-            "/repos/{owner}/{repo}/releases/latest",
-            axum::routing::get(move || {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let base = format!("http://{}", listener.local_addr().expect("an address"));
+        // Only the route that actually answers counts, so a redirect that was not followed leaves
+        // the count at zero.
+        let answer = {
+            let counter = asks.clone();
+            move || {
                 let counter = counter.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
                     axum::Json(json!({ "tag_name": tag, "name": tag, "draft": false }))
                 }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("a port");
-        let base = format!("http://{}", listener.local_addr().expect("an address"));
+            }
+        };
+        let latest = base.clone();
+        let app = axum::Router::new()
+            .route("/moved", axum::routing::get(answer.clone()))
+            .route(
+                "/repos/{owner}/{repo}/releases/latest",
+                axum::routing::get(move || {
+                    let latest = latest.clone();
+                    let answer = answer.clone();
+                    async move {
+                        match redirect {
+                            true => axum::response::Redirect::temporary(&format!("{latest}/moved"))
+                                .into_response(),
+                            false => answer().await.into_response(),
+                        }
+                    }
+                }),
+            );
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
@@ -375,5 +403,32 @@ fn discovery_is_on_by_default_and_points_at_this_repository() {
     assert_eq!(
         config.update.latest_release_url(),
         "https://api.github.com/repos/dbrain/kampr/releases/latest"
+    );
+}
+
+/// A redirect chooses the next URL, and nothing about the request that provoked it constrains
+/// where it points — `--proto`, and a config validated to https, both govern the first hop only.
+/// The release check is one version string, but it is the one request this node makes to a host
+/// it did not choose, and a hop that leaves https must not be followed.
+#[tokio::test]
+async fn a_redirect_off_https_is_refused_rather_than_followed() {
+    let github = Github::redirecting_off_https("v99.9.9").await;
+    let harness = Harness::start(|config| config.update.api = github.base.clone()).await;
+
+    let cache = cached(&harness.state_dir()).await;
+    assert_eq!(
+        cache["ok"], false,
+        "the node followed a redirect off https and treated the answer as good: {cache}"
+    );
+    assert_eq!(
+        github.asked(),
+        0,
+        "the redirect was followed, so anything that can answer this node's release check can \
+         also choose the transport it is answered over"
+    );
+    let entry = harness.own_node().await;
+    assert!(
+        entry.as_object().expect("an object").get("update").is_none(),
+        "a release named over a redirect the node should not have taken reached the wire: {entry}"
     );
 }

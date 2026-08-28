@@ -19,8 +19,11 @@ use report::Local;
 #[derive(Debug, Parser)]
 #[command(name = "kampr", version, about = "Remote access to your herd")]
 struct Cli {
+    /// No subcommand opens this machine's herd, exactly as bare `herdr` opens a session.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+    #[command(flatten)]
+    dirs: Dirs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -47,6 +50,22 @@ enum Command {
         /// the old one stops working, so it is never implied by --force.
         #[arg(long)]
         new_identity: bool,
+    },
+    /// Save a herd on another machine, so a bare `kampr` opens it with no arguments
+    Connect {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// The node's URL, as its `kampr setup` printed it
+        url: String,
+        /// A pairing code from that node's `kampr setup`
+        #[arg(long)]
+        code: String,
+        /// What to call this herd locally. Defaults to the host in the URL
+        #[arg(long)]
+        name: Option<String>,
+        /// What that node calls this device. Defaults to `cli@<hostname>`
+        #[arg(long)]
+        device: Option<String>,
     },
     /// Run the node
     Serve {
@@ -167,7 +186,11 @@ enum ServiceAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    let Some(command) = cli.command else {
+        return open(&cli.dirs).await;
+    };
+    match command {
         Command::Init {
             dirs,
             name,
@@ -188,6 +211,19 @@ async fn main() -> Result<()> {
                 },
             )
             .await
+        }
+        Command::Connect {
+            dirs,
+            url,
+            code,
+            name,
+            device,
+        } => {
+            let paired =
+                kampr_client::pair(&dirs.config(), &url, &code, name.as_deref(), device.as_deref()).await?;
+            println!("paired with {} as {}", paired.origin, paired.device);
+            println!("`kampr` with no arguments now opens {}", paired.name);
+            Ok(())
         }
         Command::Serve { dirs } => serve(&dirs).await,
         Command::Setup { dirs } => setup::run(&dirs.config(), dirs.state_override()).await,
@@ -297,6 +333,22 @@ async fn main() -> Result<()> {
             }
         },
     }
+}
+
+/// `kampr` with no arguments: find this machine's herd and open it.
+///
+/// The resolution ladder is [`kampr_client::resolve`]'s and the refusal at the bottom of it
+/// prints how to pair rather than asking a question — a command that blocks on a prompt cannot be
+/// run from a script, and there is nothing here for a person to type that a flag could not carry.
+async fn open(dirs: &Dirs) -> Result<()> {
+    let session = match kampr_client::resolve(&dirs.config(), dirs.state_override()).await {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("kampr: {e}");
+            std::process::exit(1);
+        }
+    };
+    kampr_tui::run(session).await
 }
 
 async fn serve(dirs: &Dirs) -> Result<()> {

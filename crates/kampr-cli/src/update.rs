@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use kampr_node::{BUILD, Config};
+use kampr_node::{BUILD, Config, ConfigError};
 use std::path::Path;
 
 /// The installer, as it shipped in this binary.
@@ -18,9 +18,17 @@ pub struct Update {
 }
 
 pub async fn run(config_dir: &Path, state_override: Option<&Path>, args: Update) -> Result<()> {
-    // A node that has never been through `kampr init` can still update itself, so a missing
-    // config is defaults rather than a refusal.
-    let config = Config::load(config_dir).unwrap_or_else(|_| Config::bootstrap("kampr"));
+    let config = match Config::load(config_dir) {
+        Ok(config) => config,
+        // A node that has never been through `kampr init` can still update itself, so a missing
+        // config is defaults rather than a refusal.
+        Err(ConfigError::Missing(_)) => Config::bootstrap("kampr"),
+        // Anything else is a config that exists and says something. `[update] repo` decides both
+        // the release URL and the identity the signature is pinned to, so falling back to the
+        // defaults here would answer a config nobody can load by installing from somewhere the
+        // operator did not name.
+        Err(e) => bail!("{e}"),
+    };
     let state_dir = config.resolve_state_dir(state_override);
     match args.check {
         true => report(&config, &state_dir).await,

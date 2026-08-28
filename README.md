@@ -50,10 +50,12 @@ are all below, and all of them are optional.
 
 Two notes on the installer, since it is fetching a binary that will hold your shells. It writes the
 script to a file rather than piping into `sh` on purpose — a piped `curl` sends nothing into `sh`
-when the URL 404s and the pipeline still exits 0. And it verifies `SHA256SUMS` always but the cosign
-signature beside it only if you have [cosign](https://docs.sigstore.dev/cosign/installation)
-installed; without it the run prints `signature verified: skipped — cosign is not installed` and
-carries on, which is what most people will see.
+when the URL 404s and the pipeline still exits 0. And it needs
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) on the host: the checksums
+come from the same server as the tarball, so they say who *served* it and never who built it, and
+the signature is the only thing that answers the second question. Without a cosign the run refuses
+and prints how to get one. `KAMPR_ALLOW_UNVERIFIED=1` takes a checksum-only install anyway, for a
+binary you built yourself.
 
 ---
 
@@ -142,10 +144,12 @@ sh install.sh
 ```
 
 `KAMPR_PREFIX` chooses where it lands; the default is `~/.local/bin`. It picks the tarball for this
-OS and architecture, checks it against the release's `SHA256SUMS`, checks that against the cosign
-bundle beside it **if cosign is installed** and says `skipped` if it is not, and refuses rather than
+OS and architecture, checks it against the release's `SHA256SUMS`, and checks that against the
+cosign bundle beside it, pinned to this repository's release workflow. It refuses rather than
 half-succeeding: a checksum mismatch installs nothing, a release with no `SHA256SUMS` installs
-nothing, and a new binary that will not run on the host is put back (#156).
+nothing, a release with no signature installs nothing, a host with no `cosign` to check the
+signature with installs nothing, and a new binary that will not run on the host is put back
+(#156).
 
 Linux binaries are statically linked against musl, so there is no glibc floor and an old Raspberry Pi
 is fine. macOS needs 11.0 or newer.
@@ -404,10 +408,38 @@ installed the app.
 | `kampr recover` | Get back in when no paired device is left |
 | `kampr mesh invite / join / list / revoke / forget` | Join hosts into one herd |
 | `kampr service install / uninstall / status` | The user service that keeps the node running |
+| `kampr` | **No subcommand: open this machine's herd in the terminal.** Exactly as bare `herdr` opens a session |
+| `kampr connect <url> --code <code>` | Save a herd on another machine, so a bare `kampr` opens that one |
 | `kampr url` | Print the node's URL |
 | `kampr update [--check] [--version vX.Y.Z]` | Replace this binary with the latest release, verifying it first |
 
 Installed as a Herdr plugin, the same actions appear in Herdr's own workspace menu (`herdr-plugin.toml`).
+
+### The terminal client
+
+`kampr` with no arguments opens the herd in the terminal you typed it in — herdr's layout and
+herdr's keymap, over the mesh, across every node at once. It is the thing a herdr at the desk
+structurally cannot be: a herdr TUI attaches to exactly one server, and this one shows panes from
+several servers on several hosts in one window, with `⚑ blocked` one keystroke from the question an
+agent is waiting on.
+
+It finds a herd by itself, in this order: a node on this machine (it mints itself a device, named
+`cli@<hostname>`, listed by `kampr setup` and revocable like any other), then a herd saved by
+`kampr connect`, then it says how to pair and exits. It never prompts.
+
+The keymap is herdr's — `ctrl+b` prefix, `ctrl+b ctrl+b` for a literal, `ctrl+b [` for copy mode —
+and it is the **client's**, not the node's, for the reason herdr gives for `--remote`: local muscle
+memory beats remote config. `KAMPR_TUI_PREFIX=ctrl+a` moves it out of the way so `ctrl+b` reaches
+the pane's own program.
+
+An agent pane opens on its **conversation**, not its grid, with the markdown rendered as markdown
+and images inline where the terminal can draw them. `ctrl+b shift+V` switches to the live grid.
+
+A pane wider than your terminal is cropped and panned rather than reflowed, because Kampr never
+resizes a pane ([ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md)). It will ask *your
+terminal* to grow instead, where your terminal supports that — ghostty and kitty do not, konsole
+does ([#291](./docs/03-probe-log.md)) — and the status line always says which rung of that ladder
+it used and why.
 
 ### Staying current
 
@@ -435,8 +467,9 @@ command is running from, using the same download, the same SHA-256 check and the
 signature check as `install.sh` — it *is* `install.sh`, embedded in the binary — and restarts the
 service only when the installed unit names the binary it just replaced. It refuses rather than
 half-succeeding: a checksum mismatch installs nothing, a release with no `SHA256SUMS` installs
-nothing, `KAMPR_ALLOW_UNVERIFIED` in your shell is not inherited, and a new binary that will not
-run on the host is put back.
+nothing, a release whose signature cannot be checked installs nothing, `KAMPR_ALLOW_UNVERIFIED` and
+`KAMPR_BASE_URL` in your shell are not inherited — by `kampr update` or by `herdr plugin install`,
+which is the same installer — and a new binary that will not run on the host is put back.
 
 ```bash
 kampr update --check               # say what is available, install nothing

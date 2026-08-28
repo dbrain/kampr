@@ -83,8 +83,4 @@ fun Herd.gone(paneId: String): PaneGone? = when {
     else -> PaneGone.Node
 }
 
-fun paneTitle(pane: PaneInfo): String {
-    val left = pane.label ?: pane.workspace ?: pane.id.substringAfter('/')
-    val right = pane.agent ?: "bash"
-    return "$left · $right"
-}
+fun paneTitle(pane: PaneInfo): String = Naming.default.render(fieldsOf(pane))

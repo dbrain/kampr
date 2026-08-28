@@ -27,7 +27,10 @@ pub const MAX_BYTES: u64 = 8 * 1024 * 1024;
 /// How much of the transcript one fetch will read looking for the end of its record. The largest
 /// record measured is the 3 034 411-byte one above, and this is the ceiling the node already
 /// applies to the largest thing it will read off any socket (`MAX_MESH_MESSAGE_BYTES`).
-const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+///
+/// `FileJournal::take_lines` holds the same record to the same ceiling on the way in: one no fetch
+/// could reach the end of is not a record worth buffering whole.
+pub(crate) const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Which transcript a parser is reading, so the ids it mints can be resolved again. The path is
 /// relative to the adapter's root wherever it can be, so an id survives a root that moves.

@@ -169,11 +169,25 @@ that sets `authFailure` — that assertion lives only in the live test.
   refusal against a tampered checksum, and `verify-published` installs from the published URL after
   the release exists. Re-run by hand on the day of this amendment:
   `KAMPR_PREFIX=$PWD sh install.sh` against `v0.1.21` installed `kampr 0.1.21` and printed
-  `checksum verified: yes`. **Two residuals.** The cosign bundle is published but no machine here has
-  cosign, so every real installation to date printed `signature verified: skipped — cosign is not
-  installed` and proceeded — the signature is generated and never checked outside CI. And
+  `checksum verified: yes`. **Two residuals, one since closed.** The cosign bundle is published but no machine here
+  has cosign, so every real installation to date printed `signature verified: skipped — cosign is
+  not installed` and proceeded — the signature was generated and never checked outside CI. And
   `herdr plugin install` now has something to fetch and **still has not been driven end to end by
   anyone.**
+
+  **Amended 2026-08-28 — the cosign residual was a vulnerability, not an inconvenience, and it is
+  closed.** A security pass read the skip as what it was: the branch below it makes an *absent
+  bundle* fatal because "the checksums came from the same place as the tarball", and that reasoning
+  applies verbatim to an absent *verifier*. So every real installation recorded above was a
+  checksum-only install of a binary that can type into every terminal in the herd, defeated by
+  anyone who could serve the download. Missing cosign is now fatal on a non-own base, with
+  `KAMPR_ALLOW_UNVERIFIED=1` as the stated escape hatch and an error naming the install command for
+  the host's own platform. `packaging/fetch-binary.sh` was leaking `KAMPR_BASE_URL` and
+  `KAMPR_ALLOW_UNVERIFIED` into that script, so the guarantee `kampr update` tests for was false on
+  the plugin path — also closed. **The reason this line sat here for 21 releases is that no CI job
+  took the branch a real operator takes**: `smoke` runs against a `file://` base and
+  `verify-published` installs cosign first. `verify-published` now removes cosign from the runner
+  and asserts the published installer refuses.
 - **`min_herdr_version` is enforced by `kampr doctor` and nowhere else.** **STILL OPEN — execution.**
   `MIN_HERDR_VERSION` appears only in `crates/kampr-cli/src/doctor/herd.rs` (and a unit test there
   asserting `herdr-plugin.toml` declares the same floor). `kampr-node` never compares a version to

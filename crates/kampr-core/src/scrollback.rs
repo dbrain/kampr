@@ -7,6 +7,45 @@ use kampr_term::{Emulator, RowDiff, column_bound};
 /// most panes never approach it.
 pub const DEFAULT_MAX_ROWS: usize = 20_000;
 
+/// The other half of that bound, because a row has no length. A pane that writes one enormous line
+/// per row fills the ring with 20 000 of them, and rows of 144 KB — which a hostile pane produces
+/// at 80 columns, wearing marks — is 2.8 GB of `String` before anything is laid out on a grid.
+///
+/// Twice the ~4 MB a full ring of ordinary rows holds, so no pane that has genuinely produced this
+/// much loses a row to it, and the document it becomes still fits the 16 MiB a mesh peer will
+/// carry (`MAX_MESH_MESSAGE_BYTES`). It is the same ceiling the journal puts on one attachment.
+const MAX_RING_BYTES: usize = 8 * 1024 * 1024;
+
+/// The cells one document may be laid out on, which is the bound the other two do not give.
+///
+/// **Width and depth multiply.** `lay_out` sizes one grid by the widest row the ring holds, so a
+/// single row of 65 535 columns beside twenty thousand ordinary ones is 1.3 billion cells — 52 GB
+/// at 40 bytes each, in one allocation, which is `handle_alloc_error` and an abort rather than a
+/// panic anything upstream could catch. Neither a row cap nor a byte cap sees it: those twenty
+/// thousand rows are 200 KB.
+///
+/// A full 20 000-row ring of a 93-column pane is 1.9 M cells, so this is twice the deepest document
+/// a real pane produces and a 200-column pane still reaches full depth on it. Past it the ring
+/// trims from the top, which is what it already does for the other two bounds and what `capped`
+/// already tells the client about.
+const MAX_GRID_CELLS: usize = 4 * 1024 * 1024;
+
+/// A row and the columns it would be laid out on, measured once when the read that brought it in
+/// is parsed: [`ScrollbackRing::trim`] needs the widest row it is keeping to know how large a grid
+/// the document it holds would ask for, and [`lay_out`] needs the same number again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Row {
+    text: String,
+    cols: u16,
+}
+
+impl Row {
+    fn new(text: String) -> Self {
+        let cols = column_bound(&text);
+        Self { text, cols }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScrollbackDoc {
     /// Absolute index of the first delivered row, counted from the top of the node's ring.
@@ -46,7 +85,7 @@ pub enum Ingest {
 /// and the overlap is what lets the ring grow deeper than any one read.
 #[derive(Debug, Clone)]
 pub struct ScrollbackRing {
-    rows: Vec<String>,
+    rows: Vec<Row>,
     /// The width a wrap has actually proved, or nothing. An estimate must never sit here: the
     /// ring restarts when this moves, and the rect moves on every pane the width probe reaches.
     cols: Option<u16>,
@@ -164,7 +203,7 @@ impl ScrollbackRing {
     /// The newest read shares nothing with what we hold. Splicing them would fabricate adjacency
     /// between two unrelated stretches of history, so the old rows go and the ring says it is
     /// capped from here.
-    fn restart(&mut self, incoming: Vec<String>) -> usize {
+    fn restart(&mut self, incoming: Vec<Row>) -> usize {
         let dropped = self.rows.len();
         self.base += dropped as u32;
         self.rows = incoming;
@@ -173,11 +212,31 @@ impl ScrollbackRing {
         dropped
     }
 
+    /// How deep the ring can stay: rows, bytes, and the cells the two of them would be laid out
+    /// on together. Walked from the newest row back, because the newest is the one row that is
+    /// never dropped — it is what the pane is doing now, and a ring that answered a 9 MB row with
+    /// nothing would be a pane that had gone blank.
     fn trim(&mut self) {
-        if self.rows.len() <= self.max_rows {
+        let mut kept = 0usize;
+        let mut bytes = 0usize;
+        let mut cols = 0u16;
+        for row in self.rows.iter().rev() {
+            let widest = cols.max(row.cols);
+            let deeper = kept + 1;
+            let over = deeper > self.max_rows
+                || bytes + row.text.len() > MAX_RING_BYTES
+                || widest as usize * deeper > MAX_GRID_CELLS;
+            if kept > 0 && over {
+                break;
+            }
+            kept = deeper;
+            bytes += row.text.len();
+            cols = widest;
+        }
+        let excess = self.rows.len() - kept;
+        if excess == 0 {
             return;
         }
-        let excess = self.rows.len() - self.max_rows;
         self.rows.drain(..excess);
         self.base += excess as u32;
         self.capped = true;
@@ -189,14 +248,15 @@ impl ScrollbackRing {
 /// and `Grid::scroll_up` drops rows off the *top* — while `from_top`, `total_rows` and every row
 /// index still describe the original span. That is a silent discard of exactly the kind ADR 0004
 /// exists to make loud, and the label goes too narrow routinely (probe #68).
-fn lay_out(rows: &[String], base: u32) -> Vec<RowDiff> {
+fn lay_out(rows: &[Row], base: u32) -> Vec<RowDiff> {
     if rows.is_empty() {
         return Vec::new();
     }
-    let cols = rows.iter().map(|r| column_bound(r)).max().unwrap_or(1).max(1);
+    let cols = rows.iter().map(|r| r.cols).max().unwrap_or(1).max(1);
     let mut term = Emulator::new(cols, rows.len().min(u16::MAX as usize) as u16);
     // herdr separates rows with LF alone, which moves down without returning the carriage.
-    term.feed(rows.join("\r\n").as_bytes());
+    let joined: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    term.feed(joined.join("\r\n").as_bytes());
     let grid = term.grid();
     (0..grid.rows())
         .map(|r| RowDiff {
@@ -208,17 +268,17 @@ fn lay_out(rows: &[String], base: u32) -> Vec<RowDiff> {
 
 /// The rows of a read that are history: `recent` hands back the live viewport too, and that
 /// already travels as the grid.
-fn history_rows(raw: &RawScrollback) -> Vec<String> {
+fn history_rows(raw: &RawScrollback) -> Vec<Row> {
     let mut lines: Vec<&str> = raw.text.split('\n').collect();
     if lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
     let keep = lines.len().saturating_sub(raw.viewport_rows as usize);
-    lines[..keep].iter().map(|l| l.to_string()).collect()
+    lines[..keep].iter().map(|l| Row::new(l.to_string())).collect()
 }
 
 /// Longest suffix of `held` that is also a prefix of `incoming`.
-fn overlap(held: &[String], incoming: &[String]) -> usize {
+fn overlap(held: &[Row], incoming: &[Row]) -> usize {
     let max = held.len().min(incoming.len());
     (1..=max)
         .rev()

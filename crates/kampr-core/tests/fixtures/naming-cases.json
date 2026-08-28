@@ -1,0 +1,109 @@
+{
+  "_": [
+    "Neither side owns this file. `crates/kampr-core/tests/naming.rs` and",
+    "`client/shared/src/jvmTest/kotlin/dev/kampr/shared/NamingParityTest.kt` both render every case",
+    "below and both assert the same string, because a phone and a CLI that disagree about what a",
+    "pane is called are two clients, not one. `fields` is a `PaneEntry` as the wire carries it; a",
+    "key that is absent is absent on the wire."
+  ],
+  "the default template says which of six panes in a directory is the busy one": {
+    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "cmd": "cargo", "argv": "cargo test" },
+    "expect": "kampr (cargo test) · bash"
+  },
+  "a pane whose command ble.sh hid renders no empty parens": {
+    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr" },
+    "expect": "kampr · bash"
+  },
+  "an agent pane keeps the agent where the shell name would be": {
+    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "agent": "claude", "status": "blocked" },
+    "expect": "kampr · claude"
+  },
+  "a renamed pane beats its workspace": {
+    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "cwd": "/home/dbrain/dev/kampr" },
+    "expect": "build · bash"
+  },
+  "no workspace falls through to the directory's last segment": {
+    "template": "{label|workspace|cwd|pane}",
+    "fields": { "pane": "w3:p2", "cwd": "/home/dbrain/dev/kampr" },
+    "expect": "kampr"
+  },
+  "a trailing slash is not a segment": {
+    "template": "{cwd}",
+    "fields": { "pane": "w3:p2", "cwd": "/home/dbrain/dev/kampr/" },
+    "expect": "kampr"
+  },
+  "the root directory is its own name": {
+    "template": "{cwd}",
+    "fields": { "pane": "w3:p2", "cwd": "/" },
+    "expect": "/"
+  },
+  "a pane with nothing to say is still addressable": {
+    "template": "{label|workspace}[ ({argv})]",
+    "fields": { "pane": "w9:p1" },
+    "expect": "w9:p1"
+  },
+  "a whitespace field is an absent field": {
+    "template": "{label|workspace|pane}",
+    "fields": { "pane": "w3:p2", "label": "   " },
+    "expect": "w3:p2"
+  },
+  "an unknown status is the absence of one and takes its section with it": {
+    "template": "{workspace}[ · {status}]",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "status": "unknown" },
+    "expect": "kampr"
+  },
+  "a status that is known renders its own word": {
+    "template": "{workspace}[ · {status}]",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "status": "working" },
+    "expect": "kampr · working"
+  },
+  "a pipeline names every member the way the shell wrote it": {
+    "template": "{workspace}[ ({argv})]",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cmd": "sleep", "argv": "sleep 9 | cat" },
+    "expect": "kampr (sleep 9 | cat)"
+  },
+  "argv falls back to the bare command name": {
+    "template": "{workspace}[ ({argv|cmd})]",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cmd": "vim" },
+    "expect": "kampr (vim)"
+  },
+  "two sections drop independently": {
+    "template": "{pane}[ ({cmd})][ · {agent}]",
+    "fields": { "pane": "w3:p2", "agent": "codex" },
+    "expect": "w3:p2 · codex"
+  },
+  "a section with no token in it is prose and stays": {
+    "template": "{pane}[ — ]{tab|'1'}",
+    "fields": { "pane": "w3:p2" },
+    "expect": "w3:p2 — 1"
+  },
+  "a nested section needs only one of its own to survive": {
+    "template": "{pane}[ ({cmd}[ in {cwd}])]",
+    "fields": { "pane": "w3:p2", "cmd": "cargo", "cwd": "/home/dbrain/dev/kampr" },
+    "expect": "w3:p2 (cargo in kampr)"
+  },
+  "an inner section drops without taking its outer one": {
+    "template": "{pane}[ ({cmd}[ in {cwd}])]",
+    "fields": { "pane": "w3:p2", "cmd": "cargo" },
+    "expect": "w3:p2 (cargo)"
+  },
+  "doubled brackets and braces are the characters themselves": {
+    "template": "[[{pane}]] {{{tab|'x'}}}",
+    "fields": { "pane": "w3:p2" },
+    "expect": "[w3:p2] {x}"
+  },
+  "the whole name is trimmed rather than left ragged": {
+    "template": "  [{cmd} ]{pane}  ",
+    "fields": { "pane": "w3:p2" },
+    "expect": "w3:p2"
+  },
+  "a node-qualified id is shortened to the pane herdr knows": {
+    "template": "{pane}",
+    "fields": { "pane": "01JNODE/w3:p2" },
+    "expect": "w3:p2"
+  }
+}

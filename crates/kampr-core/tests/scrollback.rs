@@ -194,6 +194,50 @@ fn the_ring_is_bounded_and_says_so_when_it_trims() {
     assert_eq!(ring.render().total_rows, 4, "a depth, so the ring spans 6..10");
 }
 
+/// **The ring caps rows, and a row has no length.** A pane that writes one enormous line per row
+/// filled it with 20 000 of them, and 20 000 rows of 144 KB is 2.8 GB of `String` before a grid is
+/// built out of them at all — the ring's own row cap is no bound on a hostile pane's memory.
+#[test]
+fn a_pane_that_writes_enormous_rows_is_bounded_by_bytes_and_not_only_by_rows() {
+    let huge: Vec<String> = (0..10).map(|i| format!("{i:2}").repeat(512 * 1024)).collect();
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&raw(&refs(&huge), 80, 1, false));
+
+    assert!(
+        ring.len() <= 8,
+        "{} rows of a megabyte each are still held",
+        ring.len()
+    );
+    assert!(ring.capped(), "and the ring says history above it is gone");
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&raw(&[&"z".repeat(9 * 1024 * 1024), "viewport"], 80, 1, false));
+    assert_eq!(
+        ring.len(),
+        1,
+        "and a single row past the whole budget is still what the pane is doing now"
+    );
+}
+
+/// **Width and depth multiply, and only depth was bounded.** `lay_out` sizes one grid by the widest
+/// row in the ring, so a single row of 65 535 columns beside twenty thousand ordinary ones is 1.3
+/// billion cells — 52 GB at 40 bytes each — handed to the allocator in one piece. That is
+/// `handle_alloc_error` and an abort, and every poll rebuilds it.
+#[test]
+fn one_enormously_wide_row_cannot_take_the_whole_ring_down_with_it() {
+    let mut lines = numbered(1, 20_000);
+    lines.push("x".repeat(70_000));
+    lines.push("viewport".to_string());
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&raw(&refs(&lines), 80, 1, false));
+
+    assert!(
+        ring.len() <= 64,
+        "{} rows to be laid out beside a 65 535-column one",
+        ring.len()
+    );
+    assert!(ring.capped());
+}
+
 #[test]
 fn absolute_indices_survive_past_sixteen_bits() {
     let mut ring = ScrollbackRing::new(3);

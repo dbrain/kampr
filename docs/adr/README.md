@@ -78,3 +78,4 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0008](./0008-two-render-modes-not-a-glyph-atlas.md) | Two render modes, and never a hand-rolled glyph atlas | Accepted |
 | [0009](./0009-the-terminal-keeps-its-own-ground.md) | The terminal keeps its own dark ground, and only its 16 slots are themed | Accepted |
 | [0010](./0010-the-grid-is-described-not-read-out.md) | The terminal grid is described, and only the cursor line is spoken | Accepted |
+| [0011](./0011-the-client-fits-itself-to-the-pane.md) | The client fits itself to the pane, and asks before it touches a pane's mouse | Accepted |

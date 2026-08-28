@@ -16,9 +16,11 @@ use std::process::{Command, Output};
 
 /// A release on disk: the tarball the installer fetches and the checksums it verifies against.
 struct Release {
+    root: PathBuf,
     dir: PathBuf,
     asset: String,
-    /// A directory holding the `curl` that serves this release, to go on the front of `PATH`.
+    /// A directory holding the `curl` and `cosign` that serve this release, to go on the front of
+    /// `PATH`.
     shim: PathBuf,
 }
 
@@ -52,6 +54,7 @@ impl Release {
         assert!(tar.success(), "could not build {asset}");
 
         let release = Self {
+            root: root.to_path_buf(),
             dir,
             asset,
             shim: root.join("shim"),
@@ -63,14 +66,58 @@ impl Release {
     }
 
     /// Every release this project publishes is signed, and the installer refuses one from the
-    /// canonical base that is not. The bundle is never verified here — cosign is not on a test
-    /// runner — but its absence is fatal, so it has to be served.
+    /// canonical base that is not.
     fn write_bundle(&self) {
         std::fs::write(self.dir.join("SHA256SUMS.cosign.bundle"), "{}\n").expect("a bundle");
     }
 
     fn drop_bundle(&self) {
         std::fs::remove_file(self.dir.join("SHA256SUMS.cosign.bundle")).expect("a bundle");
+    }
+
+    /// The arguments the installer handed `cosign`, so a test can assert the identity it pinned
+    /// rather than only that something was run.
+    fn cosign_args(&self) -> String {
+        std::fs::read_to_string(self.dir.join("cosign.args")).unwrap_or_default()
+    }
+
+    /// A cosign that rejects what it is given — the shape of a tarball whose checksums were
+    /// re-signed by somebody who is not this repository's release workflow.
+    fn break_cosign(&self) {
+        std::fs::write(self.dir.join("cosign.rejects"), "").expect("a broken cosign");
+    }
+
+    /// A `PATH` that has everything this host has except `cosign` — which is the `PATH` almost
+    /// every operator installs from, because cosign ships on no distribution by default.
+    ///
+    /// Assembled rather than trimmed: the installer needs `sh`, `tar`, `sha256sum`, `mktemp`,
+    /// `awk` and more, so a hand-listed `PATH` here would be a list that rots. Symlinking what is
+    /// already reachable and dropping the one name under test cannot go stale.
+    fn path_without_cosign(&self) -> String {
+        let sealed = self.root.join("sealed-bin");
+        std::fs::create_dir_all(&sealed).expect("a sealed bin dir");
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let dirs = std::iter::once(self.shim.clone()).chain(std::env::split_paths(&inherited));
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.file_name() == "cosign" {
+                    continue;
+                }
+                let link = sealed.join(entry.file_name());
+                if link.symlink_metadata().is_ok() {
+                    continue;
+                }
+                let _ = std::os::unix::fs::symlink(entry.path(), link);
+            }
+        }
+        assert!(
+            !sealed.join("cosign").exists(),
+            "the sealed PATH still has a cosign on it"
+        );
+        sealed.display().to_string()
     }
 
     /// Stands in for `curl`, and refuses anything that is not the canonical release base — so a
@@ -88,6 +135,21 @@ impl Release {
 
     fn write_shim(&self) {
         std::fs::create_dir_all(&self.shim).expect("a shim dir");
+        let cosign = self.shim.join("cosign");
+        std::fs::write(
+            &cosign,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" > "{dir}/cosign.args"
+[ -f "{dir}/cosign.rejects" ] && exit 1
+exit 0
+"#,
+                dir = self.dir.display()
+            ),
+        )
+        .expect("a cosign shim");
+        chmod_x(&cosign);
+
         let curl = self.shim.join("curl");
         std::fs::write(
             &curl,
@@ -164,6 +226,10 @@ impl Installed {
     }
 
     fn run(&self, args: &[&str], release: Option<&Release>) -> Output {
+        self.run_on(args, release.map(Release::path).as_deref())
+    }
+
+    fn run_on(&self, args: &[&str], path: Option<&str>) -> Output {
         let mut command = Command::new(&self.binary);
         command
             .args(args)
@@ -177,8 +243,8 @@ impl Installed {
             .env("XDG_CONFIG_HOME", self.home.path().join("xdg"))
             .env_remove("KAMPR_ALLOW_UNVERIFIED")
             .env_remove("KAMPR_BASE_URL");
-        if let Some(release) = release {
-            command.env("PATH", release.path());
+        if let Some(path) = path {
+            command.env("PATH", path);
         }
         output(&mut command)
     }
@@ -227,6 +293,38 @@ fn text(out: &Output) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     )
+}
+
+/// A whole release of somebody else's: their tarball, and checksums that match it. Everything an
+/// attacker who can decide where a download comes from already has.
+fn release_of_their_own(root: &Path, asset: &str, body: &str) -> PathBuf {
+    let theirs = root.join("theirs");
+    let stage = theirs.join("stage");
+    std::fs::create_dir_all(&stage).expect("a stage dir");
+    let binary = stage.join("kampr");
+    std::fs::write(&binary, body).expect("their binary");
+    chmod_x(&binary);
+    let tar = Command::new("tar")
+        .args(["-czf"])
+        .arg(theirs.join(asset))
+        .arg("-C")
+        .arg(&stage)
+        .arg("kampr")
+        .status()
+        .expect("tar");
+    assert!(tar.success(), "could not build the attacker's release");
+    let digest = Command::new("sha256sum")
+        .arg(theirs.join(asset))
+        .output()
+        .expect("sha256sum");
+    let digest = String::from_utf8_lossy(&digest.stdout)
+        .split_whitespace()
+        .next()
+        .expect("a digest")
+        .to_string();
+    std::fs::write(theirs.join("SHA256SUMS"), format!("{digest}  {asset}\n")).expect("their SHA256SUMS");
+    std::fs::write(theirs.join("SHA256SUMS.cosign.bundle"), "{}\n").expect("their bundle");
+    theirs
 }
 
 const WORKS: &str = "#!/bin/sh\necho 'kampr 99.9.9'\n";
@@ -511,36 +609,7 @@ fn a_base_url_in_the_environment_cannot_choose_what_this_host_installs() {
     let installed = Installed::new();
     let genuine = Release::built(installed.home.path(), WORKS);
 
-    // A whole release of the attacker's own: their tarball, and checksums that match it.
-    let theirs = installed.home.path().join("theirs");
-    let stage = theirs.join("stage");
-    std::fs::create_dir_all(&stage).expect("a stage dir");
-    let binary = stage.join("kampr");
-    std::fs::write(&binary, TAMPERED).expect("a tampered binary");
-    chmod_x(&binary);
-    let tar = Command::new("tar")
-        .args(["-czf"])
-        .arg(theirs.join(&genuine.asset))
-        .arg("-C")
-        .arg(&stage)
-        .arg("kampr")
-        .status()
-        .expect("tar");
-    assert!(tar.success(), "could not build the attacker's release");
-    let digest = Command::new("sha256sum")
-        .arg(theirs.join(&genuine.asset))
-        .output()
-        .expect("sha256sum");
-    let digest = String::from_utf8_lossy(&digest.stdout)
-        .split_whitespace()
-        .next()
-        .expect("a digest")
-        .to_string();
-    std::fs::write(
-        theirs.join("SHA256SUMS"),
-        format!("{digest}  {}\n", genuine.asset),
-    )
-    .expect("their SHA256SUMS");
+    let theirs = release_of_their_own(installed.home.path(), &genuine.asset, TAMPERED);
 
     let mut command = Command::new(&installed.binary);
     command
@@ -593,4 +662,186 @@ fn a_release_from_the_canonical_base_with_no_signature_is_refused() {
         before,
         "the binary was replaced anyway:\n{said}"
     );
+}
+
+/// cosign ships on no distribution by default, so "cosign is not installed" is the branch nearly
+/// every real installation takes — `docs/06-audit.md` records that every install to date printed
+/// `signature verified: skipped` under `checksum verified: yes`.
+///
+/// That leaves a checksum-only install, and the checksums come from the same server as the
+/// tarball. It is the identical reasoning that already makes an *absent* bundle fatal one branch
+/// below, so a missing verifier and a missing signature have to agree: neither is a pass.
+#[test]
+fn a_host_with_no_cosign_refuses_the_install_and_says_how_to_get_one() {
+    let installed = Installed::new();
+    let release = Release::built(installed.home.path(), WORKS);
+    let before = installed.digest();
+
+    let out = installed.run_on(&["update"], Some(&release.path_without_cosign()));
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "a host with no way to check the signature installed anyway, and printed a checksum as \
+         though it proved something:\n{said}"
+    );
+    assert!(
+        !said.contains("signature verified: skipped — cosign is not installed"),
+        "the missing verifier was reported as a skipped step rather than a refusal:\n{said}"
+    );
+    assert_eq!(
+        installed.digest(),
+        before,
+        "the binary was replaced despite nothing having checked who built it:\n{said}"
+    );
+    // A fatal error that strands an operator mid-upgrade with no next step is its own defect.
+    assert!(
+        said.contains("cosign") && said.contains("https://"),
+        "the refusal did not tell the operator how to get a cosign:\n{said}"
+    );
+    assert!(
+        said.contains("KAMPR_ALLOW_UNVERIFIED"),
+        "the refusal did not name the escape hatch it is refusing on behalf of:\n{said}"
+    );
+}
+
+/// The other half of the same branch: a cosign that is present and says no must be as fatal as a
+/// cosign that is absent, and the installer must actually be running it — the arguments it was
+/// handed are asserted rather than assumed, because a verifier invoked with an unpinned identity
+/// accepts a keyless signature from any repository's workflow.
+#[test]
+fn a_signature_that_does_not_verify_installs_nothing() {
+    let installed = Installed::new();
+    let release = Release::built(installed.home.path(), WORKS);
+    release.break_cosign();
+    let before = installed.digest();
+
+    let out = installed.run(&["update"], Some(&release));
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "a signature that did not verify was installed anyway:\n{said}"
+    );
+    assert!(
+        said.contains("did not verify"),
+        "the refusal did not say what was wrong:\n{said}"
+    );
+    assert_eq!(installed.digest(), before);
+
+    let args = release.cosign_args();
+    assert!(
+        args.contains("--certificate-identity-regexp"),
+        "cosign was run without pinning an identity, so any GitHub workflow's keyless signature \
+         would satisfy it:\n{args}"
+    );
+    assert!(
+        args.contains("dbrain/kampr") && args.contains(r"release\.yml@refs/tags/"),
+        "the identity pin does not name this repository's release workflow:\n{args}"
+    );
+    assert!(
+        args.contains("https://token.actions.githubusercontent.com"),
+        "the issuer was not pinned:\n{args}"
+    );
+}
+
+/// `herdr plugin install` re-enters the same installer, and `kampr update` clears both bypass
+/// variables before it does the same thing — so a plugin path that inherits them makes the
+/// documented claim ("`KAMPR_ALLOW_UNVERIFIED` in your shell is not inherited") true of one entry
+/// point and false of the other. Anything that can leave a variable in an environment — a dotfile,
+/// a CI job, a plugin manifest — is then choosing what lands in the herd.
+#[test]
+fn the_plugin_install_path_does_not_inherit_the_bypasses() {
+    let home = tempfile::tempdir().expect("a home");
+    let genuine = Release::built(home.path(), WORKS);
+    let theirs = release_of_their_own(home.path(), &genuine.asset, TAMPERED);
+
+    let plugin = home.path().join("plugin");
+    std::fs::create_dir_all(&plugin).expect("a plugin root");
+    let packaging = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging");
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(&packaging)
+        .arg(plugin.join("packaging"))
+        .status()
+        .expect("cp");
+    assert!(copied.success(), "could not stage the packaging directory");
+    let fetch = plugin.join("packaging/fetch-binary.sh");
+
+    let mut command = Command::new("sh");
+    command
+        .arg(&fetch)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"))
+        .env("PATH", genuine.path())
+        .env("KAMPR_BASE_URL", format!("file://{}", theirs.display()));
+    let out = output(&mut command);
+    let said = text(&out);
+
+    let landed = plugin.join("bin/kampr");
+    assert!(
+        landed.exists(),
+        "the plugin path installed nothing at all:\n{said}"
+    );
+    let version = output(Command::new(&landed).arg("--version"));
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        "kampr 99.9.9",
+        "one environment variable redirected the plugin install and this herd now has a binary an \
+         attacker chose:\n{said}"
+    );
+
+    // And the checksum bypass, on a release with nothing to check against.
+    genuine.drop_sums();
+    genuine.drop_bundle();
+    std::fs::remove_dir_all(plugin.join("bin")).expect("a clean plugin root");
+    let mut command = Command::new("sh");
+    command
+        .arg(&fetch)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"))
+        .env("PATH", genuine.path())
+        .env("KAMPR_ALLOW_UNVERIFIED", "1");
+    let out = output(&mut command);
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "KAMPR_ALLOW_UNVERIFIED in the environment turned verification off for the plugin \
+         install path:\n{said}"
+    );
+    assert!(
+        !plugin.join("bin/kampr").exists(),
+        "an unverified binary landed in the plugin root:\n{said}"
+    );
+}
+
+/// `curl --proto '=https'` governs the protocol of the URL it is given and nothing about where a
+/// redirect takes it, and `wget --https-only` governs followed links and not the URL it is given.
+/// Between them neither tool refuses a plain-http base on its own, so the installer says it.
+#[test]
+fn the_installer_will_not_fetch_a_release_over_plain_http() {
+    let home = tempfile::tempdir().expect("a home");
+    let installer = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/install.sh");
+    let prefix = home.path().join("bin");
+    std::fs::create_dir_all(&prefix).expect("a prefix");
+
+    let mut command = Command::new("sh");
+    command
+        .arg(&installer)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"))
+        .env("KAMPR_PREFIX", &prefix)
+        .env("KAMPR_MODE", "plugin")
+        // Port 9 is discard: if the refusal is not made in the script, this hangs or connects to
+        // nothing rather than quietly reaching a real host.
+        .env("KAMPR_BASE_URL", "http://127.0.0.1:9/rel");
+    let out = output(&mut command);
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "the installer fetched a release over plain http:\n{said}"
+    );
+    assert!(
+        said.contains("https"),
+        "the refusal did not say the scheme was the problem:\n{said}"
+    );
+    assert!(!prefix.join("kampr").exists(), "something landed anyway:\n{said}");
 }

@@ -19,7 +19,8 @@
 #   KAMPR_MODE            plugin | update | standalone (default standalone)
 #                         plugin stops after installing; update also restarts the service but
 #                         drops the first-run epilogue, and is what `kampr update` runs
-#   KAMPR_ALLOW_UNVERIFIED=1  proceed without a checksum. Only for a local test build.
+#   KAMPR_ALLOW_UNVERIFIED=1  proceed without a checksum, or without a cosign to check the
+#                         signature with. Only for a local test build. `kampr update` clears it.
 set -eu
 
 PREFIX="${KAMPR_PREFIX:-$HOME/.local/bin}"
@@ -63,14 +64,19 @@ fetch() {
   url="$1"; out="$2"; optional="${3:-}"
   case "$url" in
     file://*) cp "${url#file://}" "$out" 2>/dev/null && return 0 ;;
-    *)
+    https://*)
+      # `--proto` governs the protocol of the URL curl is given and says nothing about where a
+      # redirect takes it, so a 302 to http is followed without `--proto-redir`. wget is the
+      # mirror image: `--https-only` governs the links it follows, not the URL on its command line.
       if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --proto '=https' --tlsv1.2 "$url" -o "$out" && return 0
+        curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$url" -o "$out" && return 0
       elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only -O "$out" "$url" && return 0
       else
         die "neither curl nor wget is available"
       fi ;;
+    *) die "refusing to fetch $url over anything but https.
+       A release comes from https, or from a file:// base you pointed this at yourself." ;;
   esac
   rm -f "$out"
   [ -n "$optional" ] && return 1
@@ -123,6 +129,24 @@ if fetch "${base}/SHA256SUMS" "$tmp/SHA256SUMS" optional; then
        Do not run this file. Report it at https://github.com/${REPO}/issues"
       fi
     else
+      # The reasoning one branch below applies verbatim: a checksum that came from the same place
+      # as the tarball proves nothing about who built it. Having no verifier and having no
+      # signature are the same fact about this download, so they get the same answer.
+      case "$os" in apple-darwin) goos=darwin ;; *) goos=linux ;; esac
+      case "$arch" in x86_64) goarch=amd64 ;; *) goarch=arm64 ;; esac
+      [ -n "$own_base" ] || [ "${KAMPR_ALLOW_UNVERIFIED:-}" = 1 ] || die "cosign is not installed, so the signature beside SHA256SUMS cannot be checked,
+       and nothing else here establishes who built this tarball — refusing to install.
+       The checksums that just matched came from wherever the tarball did.
+
+       Install cosign and run this again:
+         curl -fsSLo cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-${goos}-${goarch}
+         chmod +x cosign && sudo mv cosign /usr/local/bin/cosign
+       On macOS, 'brew install cosign'. Other ways, including package managers and a signed
+       installer: https://docs.sigstore.dev/cosign/system_config/installation/
+
+       Or set KAMPR_ALLOW_UNVERIFIED=1 to take a checksum-only install of a binary that will be
+       able to type into every terminal in your herd. 'kampr update' does not inherit that
+       variable, so the next upgrade will ask you again."
       signature_state="skipped — cosign is not installed (https://docs.sigstore.dev/cosign/installation)"
     fi
   else

@@ -36,6 +36,7 @@ In rough order of what an attacker actually wants:
 | **The node's identity key** | `node.key`, 0600, in a 0700 config dir | It *is* the node's mesh credential; holding it is being that node |
 | **The VAPID private key** | beside the database, 0600 in a 0700 dir | Signing pushes as this node to its subscribers |
 | **The audit log** | `audit.jsonl`, 0600 | Reads back what was answered, what was run, and what was refused; also the only forensic record |
+| **The CLI's own device token** | `client.toml`, 0600 in a 0700 config dir | A full-role token in the clear on the host, the same way an enrolled browser holds one |
 
 ---
 
@@ -171,8 +172,9 @@ un-gated; it is bounded by a 128-entry challenge cap and the auth limiter.
 
 Covered under [§2](#2-trust-boundaries). It can reach the TCP port, cannot open Herdr's socket, and
 needs a token it should not have. State and config directories are 0700; the database, both SQLite
-sidecars, the audit log and its rotated generation, and the node identity key are all 0600 — the WAL
-explicitly, because it holds pairing digests long before they are checkpointed into the main file.
+sidecars, the audit log and its rotated generation, the node identity key and the CLI's own
+`client.toml` are all 0600 — the WAL explicitly, because it holds pairing digests long before they
+are checkpointed into the main file.
 
 **Not chmod'ed:** `config.toml`, which relies on its 0700 parent. It holds no secrets today (node id,
 bind, origin, `trust_proxy`, paths to TLS material) and it would be better with an explicit mode.
@@ -198,20 +200,38 @@ important property here.
 
 **One enrolled peer may not impersonate another.** A herd on a shared hub is several machines that
 trust the hub and not each other, so the boundary that matters most here is the one between two
-peers. The handshake authenticates a *key* and binds it to the one node id that key dialled in
-with; everything a peer says afterwards is its own words about itself, and its `herd` message can
-name any node it likes. Three checks hold the boundary, and all three are on the hub:
+peers. The handshake authenticates a *key*; the node id it dials in with is its own word about
+itself, as is everything it says afterwards, and its `herd` message can name any node it likes.
+Four checks hold the boundary, and all four are on the hub:
 
+- **A node id belongs to the key that enrolled with it.** The enrolment row records what the
+  connection that spent the join code claimed; an ordinary reconnect writes nothing back to it, and
+  a `hello` whose `node_id` differs from that row — or collides with another enrolled node, or with
+  the hub's own — is refused `wrong_node` and audited as `mesh.refused`, so the attempt is on the
+  record rather than in a log line. This is the check the other three cannot substitute for,
+  because the one moment worth taking an id is while the machine that owns it is **down**: nothing
+  live holds it then, and a hub that believed the latest claim would hand the id over and refuse the
+  owner every reconnect afterwards, behind a `warn!` nobody reads.
 - A link whose authenticated node id is already held by a live link is **refused and closed**, so
   an enrolled machine cannot dial in as its neighbour and race for the traffic.
-- An advertised node or pane whose id belongs to a *different* live link is **dropped** as it
-  arrives, and a link that authenticates as an id takes it back from anything that had merely
-  claimed it. Connection order therefore decides nothing.
+- An advertised node or pane whose id belongs to a *different* live link, or to the hub's own
+  machine, is **dropped** as it arrives, and a link that authenticates as an id takes it back from
+  anything that had merely claimed it. Connection order therefore decides nothing. The hub's own id
+  is part of this check because nothing else covers it: the live links hold every id but that one,
+  so a peer advertising it used to be merged in beside the real entry, where a client keyed on node
+  id keeps whichever arrived last — the operator's own machine renamed, marked offline, or given
+  panes it does not have, by a peer.
 - A pane is routed by the **authenticated** node id first, and only then by what a peer advertised.
 
-Without them, an enrolled-but-hostile machine that connected first could advertise a victim's node
-id and be handed that victim's `watch`, `input` and `manage` traffic — one host reading and typing
-into another's terminals, through the hub that exists to join them.
+Without them, an enrolled-but-hostile machine could advertise a victim's node id and be handed that
+victim's `watch`, `input` and `manage` traffic — one host reading and typing into another's
+terminals, through the hub that exists to join them.
+
+**A name is not a credential, and revocation does not treat one as one.** A peer chooses the name
+it enrols under, so two rows can answer to `laptop`; `kampr mesh revoke` acts on a public key, a
+fingerprint or a node id exactly, and on a *name* only while exactly one node answers to it —
+otherwise it names the candidates and cuts nothing off. Revoking the wrong machine and reporting
+success is the failure that shape avoids.
 
 A revoked peer also loses the link it already holds: the hub re-reads the enrolment row on every
 keepalive tick, because `kampr mesh revoke` runs in a different process and only writes SQLite.
@@ -221,11 +241,20 @@ code is intercepted *and* the attacker answers at the URL before the operator's 
 fingerprint the operator is shown is the attacker's. Compare it out of band if the join crosses a
 network you do not control.
 
+**`--fingerprint` does not protect the join code.** It protects the *signature*: the pin is checked
+against the hub's challenge before this node signs anything, so a stranger answering at the hub's
+address collects no signature and the join fails loudly. But the code travels in `mesh.hello`, the
+first message on the socket, before any challenge can arrive — so by the time the fingerprint is
+compared, an impostor at that address is already holding a live single-use code. The message order
+is deliberate (it is what makes the peer's pin check precede its own signature) and is not changing;
+what covers the code is TLS. Join over `wss://`, and treat a `wrong_hub` refusal as a code to
+re-mint and an incident to look at, not as a typo.
+
 Exercised on one machine, not across two hosts. `crates/kampr-node/tests/mesh.rs` drives real nodes
 over a real socket into the hub's own `/mesh` endpoint — the handshake, the enrolment store on disk
-and the serve loop are the shipped ones — and covers all three checks above, both revocations (a
-second process writing SQLite, and a client of the hub spending a device token), and a peer that
-stops answering keepalives. What no test here has is a network: NAT, real latency and loss, TLS
+and the serve loop are the shipped ones — and covers all four checks above in **both connection
+orders**, both revocations (a second process writing SQLite, and a client of the hub spending a
+device token), and a peer that stops answering keepalives. What no test here has is a network: NAT, real latency and loss, TLS
 termination at a proxy, and clock skew between hosts remain designed-and-implemented rather than
 exercised.
 
@@ -298,9 +327,12 @@ the limiter.
 
 **Revocation and demotion bite mid-session.** A session captured its device at handshake and never
 looked again, so a revoked device kept writing until its socket happened to drop. It now re-reads the
-device row every two seconds *and* on a broadcast *and* synchronously before every `input`, `answer`
-and `manage`. Both mechanisms are needed: the control an operator actually uses runs in a different
-process and only writes SQLite, so a broadcast alone would not reach it. A revocation or an expiry
+device row every two seconds *and* on a broadcast *and* synchronously before every `input`, `answer`,
+`manage` and `att.fetch` — the last because the file-id form of an attachment reads an arbitrary path
+on the host, and the whole argument for serving one is that it is equivalent to typing, so it is
+gated like typing rather than left open until the next recheck. Both mechanisms are needed: the
+control an operator actually uses runs in a different process and only writes SQLite, so a broadcast
+alone would not reach it. A revocation or an expiry
 sends `error{revoked}` and closes.
 
 **Roles are enforced at the verb, not at the connection.** A `readonly` device keeps its stream and is
@@ -315,6 +347,35 @@ occasional refusal is never the one that goes unrecorded. `prefs` is *allowed* f
 bounding the write is the right control rather than gating the role — a full device could fill a disk
 just as easily. So prefs are bounded for everyone: the pane must exist, the blob is capped at 2 KiB,
 and a device keeps at most 256 panes' preferences, least-recently-updated evicted first.
+
+**The CLI mints itself a device, and that is not a bypass.** `kampr` with no subcommand opens this
+machine's herd, and the credential it uses is a device it enrolled for itself: `cli@<hostname>`, full
+role, listed by `kampr setup`, revoked like any other, and written to the audit log as
+`device.minted` at creation. **There is no code path here that authenticates without a token.** What
+the rung requires is *write* access to the node's own state database — and that is already a strictly
+larger permission than the token it produces, because anything that can write `kampr.db` can insert a
+device row and a token digest of its own choosing without going near this code. The database holds
+token *digests* rather than tokens, so the argument is not "the tokens were readable anyway"; it is
+that minting one needs exactly the access that forging one needs. The token itself is then held in
+the clear in `client.toml`, 0600 inside the 0700 config directory, exactly as an enrolled browser
+holds its own. **So the control that carries this is the 0700 state and config directory**
+([§3.5](#35-another-uid-on-the-same-host)) and nothing in this path. It reuses one device across runs
+rather than minting one per invocation, so the device list stays readable and a revocation is not
+undone by the next command — a revoked one is not re-presented, it is replaced by a fresh enrolment
+the operator can see, and the token carries the node's own Tier-0 term rather than never expiring —
+a plaintext bearer credential on every machine that runs `kampr` is exactly the asset the 30-day term
+exists to age out.
+
+**Reviewed.** A security pass over this rung (2026-08-28) verified the claim above against the code
+rather than the prose: `create_device` and `mint_token` are plain inserts into `devices` and
+`tokens`, `Store::open` needs write access, and `mint_token` stores `secret::digest(token)` — so
+read access yields digests and minting requires exactly the access forging requires. It also
+confirmed no code path here authenticates without a token, that the device is identifiable
+(`user_agent = "kampr-cli"`, named `cli@<hostname>`, listed by `kampr setup`), and that a revoked
+device is replaced rather than re-presented. Two things it changed: the token had no expiry at all,
+and the first draft of this section rested on a **false** premise — that state-directory *read*
+access already yielded every token — which is now stated as the write-access argument it always
+should have been.
 
 **Rate limiting** is a token bucket keyed on the peer, with pairing at burst 5 / one per 20 s and
 authentication at burst 20 / one per 2 s. Successful authentication forgets the bucket, or a device
@@ -338,8 +399,8 @@ close, revoke and role change; and `watch`, `unwatch`, `input`, `answer` and `ma
 recording the op, cwd, env, args and every other non-null field. JSONL injection through a device name
 or a pane label is genuinely impossible, because every field is serialised rather than formatted.
 
-It deliberately does **not** record typed text — `input` stores a byte count — nor pane output,
-scrollback or transcript content. `manage` records `env` verbatim, so any secret passed as a pane
+It deliberately does **not** record typed text — `input` stores a byte count, and the `keys` form a
+key count — nor pane output, scrollback or transcript content. `manage` records `env` verbatim, so any secret passed as a pane
 environment lands in the log; that is a considered trade in favour of knowing what ran, and it is
 worth knowing before you pass one.
 
@@ -503,6 +564,13 @@ The SQLite pool is four connections, which is the next bound behind both. `POST
 /auth/webauthn/authenticate/start` is unauthenticated, un-origin-checked, and parks ceremony state
 behind a 128-entry cap. None is a large lever; all are levers.
 
+**A hub's memory is bounded by what a peer sends, not by what it claims.** A relayed pane's shadow
+allocates from the geometry in a `grid.reset`, so a ~100 byte frame claiming `65535x65535` asked for
+159 GiB until the grid was clamped; and its style and hyperlink tables are appended to across
+messages and never evicted from, so a peer sending small, well-formed messages often enough grew
+either without limit. All three are ceilings on the hub side now, generous against every pane ever
+measured here and unreachable by anything speaking the protocol honestly.
+
 Live sockets and inbound message size are bounded too: `limits.sockets` client sessions at once,
 `limits.mesh_handshakes` handshakes, 1 MiB per message and per frame on `/ws`, and 16 MiB on
 `/mesh` — against tungstenite's 64 MiB/16 MiB defaults. The two differ because a mesh link is the
@@ -529,9 +597,11 @@ for one.
 ### 7.8 The install path grants RCE by construction
 
 Both installers fetch a binary that will run as you and hold your herd. They verify a `SHA256SUMS`
-manifest and, when the release publishes one and `cosign` is present, a keyless signature pinned to
-the release workflow's identity — with `KAMPR_ALLOW_UNVERIFIED=1` as an explicit escape hatch for a
-local build. That is the right shape. **It has never run against a real published release**, because
+manifest and a keyless signature over it, pinned to the release workflow's identity — with
+`KAMPR_ALLOW_UNVERIFIED=1` as an explicit escape hatch for a local build. A missing bundle, a
+signature that does not verify, and a host with no `cosign` to check it with are all fatal on any
+base but one the operator pointed the installer at themselves: the checksums travel with the
+tarball, so they establish who served it and never who built it. That is the right shape. **It has never run against a real published release**, because
 no tag has been pushed, so the workflow itself — cross-compilation, signing, publication — is
 unexercised. Treat the first release as unproven and check the signature by hand.
 
@@ -594,7 +664,8 @@ Kampr cannot do these for you.
 8. **Do not rely on the uid boundary once Kampr is installed**, unless you have given the port its
    own network namespace or a uid owner-match rule. [§2](#2-trust-boundaries).
 9. **Compare a mesh fingerprint out of band** if the join crosses a network you do not control, and
-   remember that joining a hub hands it your terminals.
+   **join over `wss://`** — `--fingerprint` protects this node's signature, not the join code, which
+   is already on the wire when the pin is checked. Joining a hub hands it your terminals.
    [§3.6](#36-a-compromised-hub-or-a-node-impersonating-a-peer).
 10. **Lock your phone.** [§3.2](#32-someone-holding-your-unlocked-phone) is not defended and Kampr has
    no plans to defend it.

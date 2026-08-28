@@ -271,6 +271,35 @@ fn a_shared_pane_carries_a_watcher_count_and_a_solitary_one_does_not() {
     assert_eq!(entry(7)["watchers"], 7);
 }
 
+/// A pane at its prompt has no job to name, and on a machine that sources ble.sh no pane ever
+/// does (probe #297). So absent has to be *absent*: a client that reads `cmd` decides whether to
+/// draw a section from whether the key is there, and `null` or `""` would draw an empty one on
+/// every pane of the operator's own machine.
+#[test]
+fn a_pane_with_no_foreground_job_omits_the_field_rather_than_sending_an_empty_one() {
+    let info = PaneInfo {
+        pane_id: "w3:p2".into(),
+        rows: 30,
+        ..PaneInfo::default()
+    };
+    let quiet = serde_json::to_value(PaneEntry::new("01J", &info, false)).unwrap();
+    assert!(quiet.get("cmd").is_none(), "{quiet}");
+    assert!(quiet.get("argv").is_none(), "{quiet}");
+
+    let busy = serde_json::to_value(PaneEntry::new(
+        "01J",
+        &PaneInfo {
+            cmd: Some("cargo".into()),
+            argv: Some("cargo test".into()),
+            ..info
+        },
+        false,
+    ))
+    .unwrap();
+    assert_eq!(busy["cmd"], "cargo");
+    assert_eq!(busy["argv"], "cargo test");
+}
+
 /// Probe #223: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The
 /// marks ride in `m`, positionally, which leaves `x` one code point per cell — the row's width is
 /// still `sum(codepoints(x) * w)` and a client that has never heard of `m` renders what it renders

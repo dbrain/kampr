@@ -9,6 +9,28 @@ pub const MESH_PROTOCOL: u32 = 1;
 /// valid for the one connection that produced both halves.
 const NONCE_BYTES: usize = 32;
 
+/// What a node id and a node name may be, in either direction.
+///
+/// Neither was bounded, and both cross this process into a database row, a log line and the CLI's
+/// own output. A node id has a second job: a global pane id is `<node_id>/<pane_id>`, so a `/` in
+/// one would make a pane id name a node that did not send it. A ulid is 26 characters and a
+/// multi-session node suffixes its own with `.<session>`, so 64 is room for both and nothing else.
+const MAX_NODE_ID: usize = 64;
+const MAX_NODE_NAME: usize = 64;
+
+fn valid_node_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_NODE_ID
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+fn valid_node_name(name: &str) -> bool {
+    let count = name.chars().count();
+    count > 0 && count <= MAX_NODE_NAME && !name.chars().any(char::is_control)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hello {
     pub protocol: u32,
@@ -189,6 +211,22 @@ pub async fn accept<O: Outgoing, I: Incoming>(
     if hex::decode(&hello.key).map(|k| k.len()) != Ok(32) {
         return refuse(link, "protocol", "a node key is 32 bytes of hex").await;
     }
+    if !valid_node_id(&hello.node_id) {
+        return refuse(
+            link,
+            "protocol",
+            "a node id is 1 to 64 characters of A-Z a-z 0-9 . _ -",
+        )
+        .await;
+    }
+    if !valid_node_name(&hello.node_name) {
+        return refuse(
+            link,
+            "protocol",
+            "a node name is 1 to 64 characters and holds no control characters",
+        )
+        .await;
+    }
 
     let my_nonce = nonce()?;
     link.send(&HubMsg::Challenge(Challenge {
@@ -219,34 +257,73 @@ pub async fn accept<O: Outgoing, I: Incoming>(
 
     let mesh = store.mesh();
     let known = mesh.node(&hello.key).await?;
-    let mut enrolled = false;
-    if !known.as_ref().is_some_and(MeshNode::active) {
-        let claimed = match hello.join.as_deref() {
-            Some(code) => mesh.claim_invite(code, now).await?,
-            None => false,
-        };
-        if !claimed {
-            let (code, reason) = match known {
-                Some(_) => ("revoked", "this node has been revoked from the herd"),
-                None => (
-                    "unenrolled",
-                    "this node is not enrolled here; ask the hub operator for a join code",
-                ),
-            };
-            return refuse(link, code, reason).await;
-        }
-        enrolled = true;
+    let enrolled_row = known.as_ref().filter(|node| node.active());
+
+    // Everything from here to the enrolment is about the node *id*, which is what a hub routes
+    // watches, keystrokes and manage traffic on and which nothing in the handshake proves: it is
+    // the peer's own word about itself, and it used to be believed and written back on every
+    // reconnect. So it is bound to the key at enrolment and refused after it. A hub that took the
+    // latest claim lets one enrolled machine dial in as a neighbour that is *down* — the case a
+    // check against the live links cannot see — and then refuses the owner every time it comes
+    // home. Checked before the join code is consulted, so a refusal here never burns one.
+    if hello.node_id == me.node_id {
+        return refuse(link, "wrong_node", "that node id is this hub's own").await;
     }
-    let node = mesh
-        .enrol(
-            &hello.key,
-            &hello.node_id,
-            &hello.node_name,
-            MeshRole::Peer,
-            None,
-            now,
+    if let Some(row) = enrolled_row
+        && row.node_id != hello.node_id
+    {
+        return refuse(
+            link,
+            "wrong_node",
+            &format!(
+                "this key is enrolled here as {}; a node that changes its id has to be revoked and \
+                 given a fresh join code",
+                row.node_id
+            ),
         )
-        .await?;
+        .await;
+    }
+    if mesh.node_id_taken(&hello.node_id, &hello.key).await?.is_some() {
+        return refuse(
+            link,
+            "wrong_node",
+            "another node is enrolled here under that node id",
+        )
+        .await;
+    }
+
+    let (node, enrolled) = match enrolled_row {
+        // A reconnect writes nothing but `last_seen_at`: the id and the name on the row are the
+        // ones the operator enrolled and saw, not the ones this connection claims.
+        Some(row) => (row.clone(), false),
+        None => {
+            let claimed = match hello.join.as_deref() {
+                Some(code) => mesh.claim_invite(code, now).await?,
+                None => false,
+            };
+            if !claimed {
+                let (code, reason) = match known {
+                    Some(_) => ("revoked", "this node has been revoked from the herd"),
+                    None => (
+                        "unenrolled",
+                        "this node is not enrolled here; ask the hub operator for a join code",
+                    ),
+                };
+                return refuse(link, code, reason).await;
+            }
+            let node = mesh
+                .enrol(
+                    &hello.key,
+                    &hello.node_id,
+                    &hello.node_name,
+                    MeshRole::Peer,
+                    None,
+                    now,
+                )
+                .await?;
+            (node, true)
+        }
+    };
     mesh.touch(&hello.key, now).await?;
 
     link.send(&HubMsg::Accepted {
@@ -314,6 +391,13 @@ async fn attempt<O: Outgoing, I: Incoming>(
             "the hub speaks mesh protocol {}, this node speaks {MESH_PROTOCOL}",
             challenge.protocol
         )));
+    }
+    // The same shapes the hub holds a peer to, held in the direction a peer is the one believing
+    // a stranger: what answers here names itself in this node's own enrolment row and log lines.
+    if !valid_node_id(&challenge.node_id) || !valid_node_name(&challenge.node_name) {
+        return Err(HandshakeError::Protocol(
+            "the node answering there named itself something a node cannot be called".into(),
+        ));
     }
     if let Some(expected) = expect
         && expected != challenge.key
@@ -488,6 +572,106 @@ mod tests {
         let (accepted, joined) = shake(&hub, &peer, &store, None, None).await;
         assert_eq!(accepted.unwrap_err().code(), "revoked");
         assert_eq!(joined.unwrap_err().code(), "revoked");
+    }
+
+    /// Everything after the signature is the peer's own words about itself, and the node id is the
+    /// one of them the hub routes on. It is bound to the key at enrolment and refused after it.
+    #[tokio::test]
+    async fn a_node_id_is_bound_to_the_key_that_enrolled_with_it() {
+        let (hub, peer, store) = (node("hub"), node("laptop"), store().await);
+        let code = store.mesh().invite(1, 10_000).await.unwrap();
+        shake(&hub, &peer, &store, Some(code), None).await.0.unwrap();
+
+        let mut renamed = node("laptop");
+        renamed.identity = peer.identity.clone();
+        renamed.me.node_id = "01Jelsewhere".into();
+        let (accepted, _) = shake(&hub, &renamed, &store, None, None).await;
+        assert_eq!(accepted.unwrap_err().code(), "wrong_node");
+        assert_eq!(
+            store
+                .mesh()
+                .node(&peer.identity.public_hex())
+                .await
+                .unwrap()
+                .unwrap()
+                .node_id,
+            peer.me.node_id,
+            "a reconnect rewrote the id the hub routes on",
+        );
+    }
+
+    #[tokio::test]
+    async fn one_enrolled_node_may_not_enrol_under_anothers_node_id() {
+        let (hub, laptop, store) = (node("hub"), node("laptop"), store().await);
+        let code = store.mesh().invite(1, 10_000).await.unwrap();
+        shake(&hub, &laptop, &store, Some(code), None).await.0.unwrap();
+
+        let mut impostor = node("impostor");
+        impostor.me.node_id = laptop.me.node_id.clone();
+        let code = store.mesh().invite(1, 10_000).await.unwrap();
+        let (accepted, joined) = shake(&hub, &impostor, &store, Some(code), None).await;
+        assert_eq!(accepted.unwrap_err().code(), "wrong_node");
+        assert_eq!(joined.unwrap_err().code(), "wrong_node");
+        assert!(
+            store
+                .mesh()
+                .node(&impostor.identity.public_hex())
+                .await
+                .unwrap()
+                .is_none(),
+            "the impostor was enrolled anyway",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_peer_may_not_dial_in_as_the_hub_itself() {
+        let (hub, mut peer, store) = (node("hub"), node("laptop"), store().await);
+        peer.me.node_id = hub.me.node_id.clone();
+        let code = store.mesh().invite(1, 10_000).await.unwrap();
+        let (accepted, _) = shake(&hub, &peer, &store, Some(code), None).await;
+        assert_eq!(accepted.unwrap_err().code(), "wrong_node");
+    }
+
+    #[tokio::test]
+    async fn a_node_id_and_a_name_are_bounded_and_checked_before_anything_is_signed() {
+        let (hub, store) = (node("hub"), store().await);
+        for (id, name) in [
+            ("01J".repeat(100), "laptop".to_string()),
+            ("01J/../w1:p1".to_string(), "laptop".to_string()),
+            (String::new(), "laptop".to_string()),
+            ("01JOK".to_string(), "l".repeat(500)),
+            ("01JOK".to_string(), "lap\ntop".to_string()),
+        ] {
+            let (mut a, mut b) = pair();
+            let hub_side = accept(&mut a, &hub.identity, &hub.me, &store, 1_000);
+            let claim = async {
+                b.send(&PeerMsg::Hello(Hello {
+                    protocol: MESH_PROTOCOL,
+                    node_id: id.clone(),
+                    node_name: name.clone(),
+                    build: "0.1.0".into(),
+                    key: "00".repeat(32),
+                    nonce: "00".repeat(32),
+                    join: None,
+                }))
+                .await
+                .unwrap();
+                b.recv::<HubMsg>().await.unwrap()
+            };
+            // Bounded, because a hub that took the claim seriously would go on to challenge it
+            // and then wait on a signature this test never sends.
+            let (accepted, verdict) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(hub_side, claim)
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{id:?}/{name:?} was challenged rather than refused"));
+            assert_eq!(
+                accepted.unwrap_err().code(),
+                "protocol",
+                "{id:?}/{name:?} was taken as a node",
+            );
+            assert!(matches!(verdict, HubMsg::Refused { .. }), "{id:?}/{name:?}");
+        }
     }
 
     #[tokio::test]

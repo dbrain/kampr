@@ -253,3 +253,29 @@ jobs:
           grep -q "checksum verified: yes" out.txt
           grep -q "signature verified: yes" out.txt
           "$HOME/.local/bin/kampr" --version
+
+      # The branch nearly every operator takes, on the real published release. cosign is on no
+      # distribution by default, and until this job hid it the whole matrix installed with a
+      # verifier present — which is how a checksum-only install came to be treated as a pass.
+      - name: a host with no cosign refuses the published release
+        env:
+          KAMPR_VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cosign_at="$(command -v cosign)"
+          sudo mv "$cosign_at" "$cosign_at.hidden"
+          set +e
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh" \
+            -o install.sh
+          KAMPR_PREFIX="$RUNNER_TEMP/nocosign" sh install.sh > nocosign.txt 2>&1
+          took_it=$?
+          set -e
+          sudo mv "$cosign_at.hidden" "$cosign_at"
+          if [ "$took_it" -eq 0 ]; then
+            echo "::error::install.sh installed a release nothing had checked the signature of"
+            cat nocosign.txt; exit 1
+          fi
+          # And it must leave the operator somewhere to go.
+          grep -q "cosign" nocosign.txt
+          grep -q "docs.sigstore.dev" nocosign.txt
+          [ ! -e "$RUNNER_TEMP/nocosign/kampr" ]

@@ -168,7 +168,7 @@ pub async fn revoke(config_dir: &Path, state: Option<&Path>, needle: &str) -> Re
             println!("A running node drops the link within seconds; a stopped one refuses it next time.");
             Ok(())
         }
-        None => bail!("no node in this herd matches {needle:?}"),
+        None => bail!("{}", unresolved(&local, needle).await?),
     }
 }
 
@@ -179,8 +179,30 @@ pub async fn leave(config_dir: &Path, state: Option<&Path>, needle: &str) -> Res
             println!("forgot {} ({})", node.name, node.fingerprint());
             Ok(())
         }
-        None => bail!("no node in this herd matches {needle:?}"),
+        None => bail!("{}", unresolved(&local, needle).await?),
     }
+}
+
+/// Why nothing was cut off. A name is the one thing two nodes can answer to — a peer picks the
+/// name it enrols under, so a machine can take its neighbour's — and naming both is the only
+/// honest answer: revoking whichever the table reached first would cut off the wrong machine and
+/// report success.
+async fn unresolved(local: &Local, needle: &str) -> Result<String> {
+    let candidates = local.auth.store().mesh().matching(needle).await?;
+    if candidates.len() < 2 {
+        return Ok(format!("no node in this herd matches {needle:?}"));
+    }
+    let mut message = format!("{needle:?} names {} nodes here:\n", candidates.len());
+    for node in candidates {
+        message.push_str(&format!(
+            "  {:<20} {:<20} {}\n",
+            node.name,
+            node.fingerprint(),
+            node.node_id
+        ));
+    }
+    message.push_str("Name one by its fingerprint or its node id.");
+    Ok(message)
 }
 
 /// A fingerprint an operator read off another screen, compared however they wrote it down.

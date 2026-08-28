@@ -85,15 +85,20 @@ check "an unlisted asset is refused" fail "does not list"
 
 # The plugin path is the same code with a different prefix, and this is the assertion that keeps
 # `herdr plugin install` honest: the binary must land where kamprctl.sh looks for it.
+#
+# Driven through install.sh rather than through fetch-binary.sh, because fetch-binary.sh now drops
+# KAMPR_BASE_URL on the way in and a file:// base cannot reach it. That it drops them is the thing
+# under test in `the_plugin_install_path_does_not_inherit_the_bypasses`, which has a curl on PATH
+# to answer for the canonical base and so can drive the real entry point offline.
 release
 rm -rf "$work/plugin"
-mkdir -p "$work/plugin"
-cp -R "$ROOT/packaging" "$work/plugin/packaging"
-if KAMPR_BASE_URL="file://$work/rel" sh "$work/plugin/packaging/fetch-binary.sh" > "$work/out" 2>&1 &&
+mkdir -p "$work/plugin/bin"
+if KAMPR_BASE_URL="file://$work/rel" KAMPR_PREFIX="$work/plugin/bin" KAMPR_MODE=plugin \
+     sh "$ROOT/packaging/install.sh" > "$work/out" 2>&1 &&
    [ -x "$work/plugin/bin/kampr" ] && ! grep -q "kampr init" "$work/out"; then
-  echo "ok   fetch-binary.sh lands the binary in the plugin root, without the standalone epilogue"
+  echo "ok   the plugin prefix gets the binary, without the standalone epilogue"
 else
-  echo "FAIL fetch-binary.sh"; sed 's/^/     | /' "$work/out"; fails=$((fails + 1))
+  echo "FAIL the plugin install path"; sed 's/^/     | /' "$work/out"; fails=$((fails + 1))
 fi
 
 if [ "$fails" -gt 0 ]; then

@@ -36,6 +36,9 @@ impl SessionNode {
             herdr.clone(),
             HerdrConfig {
                 binary: config.herdr.binary.clone(),
+                send_argv: config.naming.send_argv,
+                report_names: config.naming.reporting(),
+                desk_agents: config.naming.desk_agents(),
                 ..HerdrConfig::default()
             },
         ));

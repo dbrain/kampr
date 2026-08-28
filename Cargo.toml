@@ -21,13 +21,18 @@ axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 base64 = "0.23.1"
 clap = { version = "4.6.6", features = ["derive", "env"] }
+crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
 ed25519-dalek = { version = "3.0.0", default-features = false }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 hex = "0.4.3"
+icy_sixel = "0.6.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 mime_guess = "2.0.5"
 openssl-sys = { version = "0.9.117", features = ["vendored"] }
 qrcode = { version = "0.14.1", default-features = false }
+ratatui = { version = "0.30.2", features = ["crossterm_0_29"] }
 rust-embed = "8.12.0"
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -59,14 +64,17 @@ webauthn-rs = { version = "0.5.5", features = ["workaround-google-passkey-specif
 # the 0.13 `exp` validation fixes are not on any path Kampr takes.
 jwt-simple = { version = "0.12.17", default-features = false, features = ["pure-rust"] }
 
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset"] }
+# The WebSocket client every non-browser client of a node is built on: the mesh link a peer dials
+# out over, and `kampr-client`.
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
+
 # dev
 # `ring` rather than the default aws-lc, so the tree carries one crypto backend and it is
 # the one rustls is configured with.
 rcgen = { version = "0.14.9", default-features = false, features = ["ring", "pem"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset"] }
 tempfile = "3.27.0"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 
 # Release artefacts are downloaded, not built, so size and start-up cost more than build time.
 [profile.release]

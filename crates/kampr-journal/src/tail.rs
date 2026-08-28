@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::attach::Origin;
+use crate::attach::{MAX_RECORD_BYTES, Origin};
 use crate::error::JournalError;
 use crate::live::{self, ScreenReader};
 use crate::model::{Block, Page, Turn};
@@ -46,6 +46,8 @@ pub struct FileJournal {
     /// the end of the record being assembled, so it cannot answer where that record began.
     line_start: u64,
     partial: Vec<u8>,
+    /// A record longer than anything the fetch path will read is being discarded to its newline.
+    skipping: bool,
     parser: Box<dyn TranscriptParser>,
     screen: Option<ScreenReader>,
 }
@@ -57,6 +59,7 @@ impl FileJournal {
             offset: 0,
             line_start: 0,
             partial: Vec::new(),
+            skipping: false,
             parser,
             screen,
         }
@@ -84,6 +87,7 @@ impl FileJournal {
         self.offset = 0;
         self.line_start = 0;
         self.partial.clear();
+        self.skipping = false;
         self.parser.reset();
     }
 
@@ -92,6 +96,25 @@ impl FileJournal {
     /// per line, which is quadratic in the buffer and cost 16.8 s on a 40 MB transcript against
     /// 15.7 ms for this.
     fn take_lines(&mut self) {
+        // A line with no end to it is buffered whole, and nothing here caps what a pane's harness
+        // may write on one: a 204.8 MB single-line transcript held 203 MB resident to produce
+        // nothing at all. `MAX_RECORD_BYTES` is how far `attach::read_record` will read looking for
+        // the end of a record, so a record longer than this could never be fetched back either —
+        // it is discarded to its newline and the parse goes on from the next record.
+        if self.skipping {
+            match self.partial.iter().position(|b| *b == b'\n') {
+                Some(end) => {
+                    self.line_start += end as u64 + 1;
+                    self.partial.drain(..=end);
+                    self.skipping = false;
+                }
+                None => {
+                    self.line_start += self.partial.len() as u64;
+                    self.partial.clear();
+                    return;
+                }
+            }
+        }
         let mut whole = 0;
         for line in self.partial.split_inclusive(|b| *b == b'\n') {
             let Some(text) = line.strip_suffix(b"\n") else {
@@ -107,6 +130,11 @@ impl FileJournal {
             }
         }
         self.partial.drain(..whole);
+        if self.partial.len() as u64 > MAX_RECORD_BYTES {
+            self.line_start += self.partial.len() as u64;
+            self.partial.clear();
+            self.skipping = true;
+        }
     }
 }
 

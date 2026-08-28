@@ -114,6 +114,8 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "has_conversation": true,             // a transcript for this pane resolves on disk
                "watchers": 2,                        // ABSENT below 2 — see below
                "detail": "…",                        // ABSENT when it has a picture — see below
+               "cmd": "cargo",                       // the foreground job's name — ABSENT far more often than not
+               "argv": "cargo test",                 // its whole command line — OFF by default, see below
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -136,6 +138,44 @@ so a client marks them stale and keeps its cached grids.
 
 When a node comes back the node re-sends the whole `herd`, which is the same recovery the
 "sent after `hello` and on any reconnect" rule already describes.
+
+**`cmd` and `argv` are what a pane is *doing*, and their absence is the normal case.** `dir-name`
+stops identifying anything once six panes share a directory, so the node reads herdr's
+`pane.process_info` for every pane and puts the foreground job on the wire: `cmd` is the process
+name (`cargo`), `argv` the whole command line with its arguments (`cargo test`), and a pipeline is
+its members joined with ` | ` (`sleep 9 | cat`, probe #297). Both are omitted when there is no job,
+never sent as `null` or `""`.
+
+**`argv` is off unless an operator turns it on, and `cmd` is not.** A command line carries
+`mysql -phunter2`, `curl -H "Authorization: …"`, `ssh -o ProxyCommand=…` — and every paired device
+receives the herd model, **`readonly` included**, at `hello` and on every patch, with no `watch`
+involved. That is not the same disclosure as the screen a readonly device can already stream: the
+model arrives unasked, an alt-screen or cleared pane shows nothing while `argv` names the job for
+its whole life, and what a client holds is stored state rather than pixels. A device you
+half-trust with a screen is not one you meant to hand a password. So `argv` is absent unless
+`[naming] send_argv` says otherwise, and `cmd` — the process name, which is all the naming problem
+ever needed — is always sent.
+
+**This costs no client release.** The shared default template's `{argv|cmd}` group falls through to
+`cmd` when `argv` is absent, which is exactly what it already does under ble.sh below. A client
+that reads `argv` must simply treat it as absent by default, like every other optional field.
+
+There are two ordinary reasons for no job and neither is a fault. A pane sitting at its prompt is
+running its shell, which is not an answer to "what is this pane doing". And on a machine that
+sources **ble.sh** — every interactive shell on the operator's own — the job runs inside the
+shell's own process group, so herdr reports the shell however busy the pane is (probe #297). **A
+client must therefore treat `cmd` as legitimately missing most of the time**: render what is there
+and drop the section when there is nothing, rather than drawing an empty one. `kampr (cargo test)`
+becomes `kampr`, never `kampr ()`. That is what `kampr_core::naming`'s `[…]` construct exists for,
+and the same engine ships in `client/shared` so the CLI, the phone and the web agree on the name —
+`crates/kampr-core/tests/fixtures/naming-cases.json` is what holds the two implementations to each
+other.
+
+A name Kampr computes can also be written *into* herdr, where it draws on the pane's border at the
+desk (probe #294). That is a node-side setting (`naming.report_to_herdr`), **off by default**,
+because marking somebody's screen because a phone is looking at it is the side effect
+[ADR 0002](./adr/0002-kampr-never-resizes-a-pane.md) exists to refuse. Nothing about it appears on
+this wire.
 
 ### `styles` — append-only style table, per connection
 ```jsonc
@@ -1068,7 +1108,17 @@ Both keys bound in means a signature cannot be replayed at a third node; both no
 it cannot be replayed at the same one; the version bound in means a later protocol cannot be
 negotiated down to this one; and the role label means a signature made as a peer can never be
 presented as a hub's. Refusal codes: `unenrolled` · `revoked` · `bad_signature` · `bad_join_code` ·
-`wrong_hub` · `protocol`.
+`wrong_hub` · `wrong_node` · `protocol`.
+
+**A node id is bound to the key that enrolled with it.** `node_id` and `node_name` are the peer's
+own words about itself — the handshake authenticates a *key* and proves nothing about either — and
+the hub routes watches, keystrokes and manage traffic on the id. So the enrolment row records what
+the connection that spent the join code claimed, an ordinary reconnect writes neither back, and a
+`hello` is refused `wrong_node` when its `node_id` differs from the enrolled row's, when another
+enrolled node holds it, or when it is the hub's own. A node that changes its id has to be revoked
+and given a fresh code, exactly as one that regenerates its key does. Both fields are bounded and
+checked before the challenge: an id is 1–64 characters of `[A-Za-z0-9._-]` — never a `/`, which
+separates a node from its pane — and a name is 1–64 characters with no control characters.
 
 **Order matters and is deliberate.** The hub verifies the signature *before* it consults enrolment,
 so a stranger learns nothing about whether a key would have been accepted; and it signs only after
@@ -1094,6 +1144,14 @@ untrusted, Noise_IK under this same handshake is the upgrade, not a redesign.
   **pinned**; a different node answering at that address afterwards is refused with `wrong_hub`.
   With `--fingerprint` the pin is confirmed before this node signs anything; without it, it is
   trust on first sight and the CLI says so.
+- **What `--fingerprint` protects, and what it does not.** It protects this node's *signature*:
+  the pin is checked against `mesh.challenge` before `mesh.auth` is sent, so a stranger answering
+  at the hub's address never collects one. It does **not** protect the join code, which travels in
+  `mesh.hello` — the first message on the socket, sent before any challenge can arrive — so an
+  impostor answering at that address has harvested a live single-use code by the time the
+  fingerprint is compared. The message order is deliberate and is not changing: what covers the
+  code is TLS, so join over `wss://`, and treat a `wrong_hub` refusal as a code to re-mint rather
+  than as a typo.
 - `GET /api/mesh` lists peers and hubs with fingerprint, `online`, `rtt_ms` and build.
   `POST /api/mesh/{id}/revoke`, or `kampr mesh revoke`, cuts one off — and ends the link that is
   already open rather than waiting for the next handshake.

@@ -23,6 +23,7 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | Why is my build broken? | [`docs/09-toolchain.md`](./docs/09-toolchain.md) |
 | How do I ship it? | [`docs/07-android-release.md`](./docs/07-android-release.md) |
 | Why won't passkeys work on my host? | [`docs/10-passkeys.md`](./docs/10-passkeys.md) — the Android asset-links constraint is structural |
+| How does the terminal client work? | [`docs/11-cli-briefs.md`](./docs/11-cli-briefs.md) — the workstreams, and the probes that reshaped three of them |
 
 ## The rules
 
@@ -73,6 +74,8 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | `crates/kampr-term` | The `vte` emulator: bytes → cell grid, clustering, dirty rows |
 | `crates/kampr-core` | Providers, pane registry, stream supervision, width inference, the wire encoder |
 | `crates/kampr-node` | HTTP/websocket server, herd model, sessions, manage ops |
+| `crates/kampr-client` | The client half of the wire: dial, token, greeting, herd state, per-pane grids, reconnect. No TUI |
+| `crates/kampr-tui` | The terminal client: the chrome, the keymap, the grid, the fit ladder, manage, mouse, images, the conversation |
 | `crates/kampr-auth`, `-mesh`, `-push`, `-journal`, `-cli`, `-spike` | Pairing and tokens; hub/peer links; web push; agent transcripts; the `kampr` binary; the fidelity canary |
 | `client/shared` | Model, wire, theme, and the screens that are not a pane |
 | `client/terminal`, `client/conversation`, `client/mosaic` | The three pane surfaces |

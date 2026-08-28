@@ -1,8 +1,11 @@
+use crate::agent_view::{DeskAgents, View};
 use crate::backoff::Backoff;
+use crate::naming::Template;
 use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
+use crate::reporter::Reporter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use kampr_herdr::{Herdr, Observer, Snapshot, StreamEvent, Sub, rpc::Subscription};
+use kampr_herdr::{Command, Herdr, Observer, Snapshot, StreamEvent, Sub, rpc::Subscription};
 use kampr_journal::{Harness, PaneProcess};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -107,6 +110,30 @@ pub struct HerdrConfig {
     /// agent's conversation until something notices — so it is the one thing worth looking for
     /// oftener than herdr is worth asking.
     pub liveness: Duration,
+    /// The name this node writes back into herdr for every pane, or `None` to write none.
+    ///
+    /// **`None` is the default and the shipped state.** A title Kampr computes lands on the pane's
+    /// border for whoever is sitting at that desk (probe #294), and marking somebody's screen
+    /// because a phone is looking at it is the side effect ADR 0002 exists to refuse. An operator
+    /// turns it on per node.
+    pub report_names: Option<Template>,
+    /// The shape this node imposes on herdr's **own** agents sidebar, or `None` to leave the
+    /// desk's own order alone.
+    ///
+    /// **`None` is the default and the shipped state**, for the same reason `report_names` is:
+    /// the operator at that desk did not ask a phone to sort their agents. It also depends on
+    /// `report_names` — the sort is on a token Kampr reports, and with reporting off no such
+    /// token exists — so the two are decided together in the node's config rather than here.
+    pub desk_agents: Option<View>,
+    /// Whether a pane's **whole command line** goes on the wire beside its process name.
+    ///
+    /// **Off.** `cmd` is what the naming complaint needed — six panes in one directory told apart —
+    /// and `argv` is the part that carries `-phunter2` and `-H "Authorization: …"`. Every paired
+    /// device receives the herd model, `readonly` included, at `hello` and on every patch, with no
+    /// `watch` involved; and an alt-screen or cleared pane shows nothing on screen while `argv`
+    /// names the job for its whole life. So this is not the screen a readonly device could already
+    /// read, and it is not on unless an operator says so.
+    pub send_argv: bool,
 }
 
 impl Default for HerdrConfig {
@@ -120,6 +147,9 @@ impl Default for HerdrConfig {
             width_poll: Duration::from_secs(3),
             resubscribe_min: Duration::from_millis(500),
             liveness: Duration::from_millis(100),
+            report_names: None,
+            desk_agents: None,
+            send_argv: false,
         }
     }
 }
@@ -147,6 +177,12 @@ struct Inner {
     /// because finding one costs a socket round trip, and because a pane's *identity* has to be
     /// as stable as the pane while the process behind it lives.
     processes: Mutex<HashMap<String, Running>>,
+    /// The foreground job in each pane, agent or shell. Held rather than derived because it comes
+    /// from the same `pane.process_info` round trip the harness does, and because six panes in one
+    /// directory are otherwise indistinguishable.
+    commands: Mutex<HashMap<String, Command>>,
+    reporter: Reporter,
+    desk_agents: DeskAgents,
     /// Whether this herdr has ever answered `pane.process_info`, which is the difference between
     /// a pane nothing has looked into and a pane nothing *can* look into. See
     /// [`Inner::agent_harness`].
@@ -371,6 +407,9 @@ impl HerdrProvider {
             health: health_tx,
             widths: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
+            commands: Mutex::new(HashMap::new()),
+            reporter: Reporter::new(),
+            desk_agents: DeskAgents::new(),
             probed: AtomicBool::new(false),
             watching: watch::channel(0).0,
             stream_fault: Mutex::new(None),
@@ -395,6 +434,15 @@ impl HerdrProvider {
     /// The harness process behind a pane, as of the last refresh.
     pub fn agent_harness(&self, pane_id: &str) -> Harness {
         self.inner.agent_harness(pane_id)
+    }
+
+    /// Puts the desk's own agent order back, for a caller that is shutting this node down.
+    ///
+    /// **Not `Drop`.** Clearing is a socket round trip and `Drop` cannot wait on one; and the
+    /// clear is unscoped (it wipes whatever view is active, whoever set it), so it has to be a
+    /// deliberate call from a path that knows this node set one.
+    pub async fn restore_desk(&self) {
+        self.inner.desk_agents.restore(&self.inner.herdr).await;
     }
 
     pub fn health(&self) -> Health {
@@ -435,6 +483,17 @@ impl Inner {
             self.snapshot.send_replace(snapshot.clone());
             self.revision.send_modify(|r| *r += 1);
         }
+        if let Some(template) = &self.config.report_names {
+            let panes: Vec<PaneInfo> = snapshot
+                .panes
+                .iter()
+                .map(|p| pane_info(self, &snapshot, p))
+                .collect();
+            self.reporter.sweep(&self.herdr, template, &panes).await;
+        }
+        self.desk_agents
+            .sweep(&self.herdr, self.config.desk_agents.as_ref())
+            .await;
         Ok(snapshot)
     }
 
@@ -520,7 +579,11 @@ impl Inner {
     /// Returns whether anything moved, because a pane whose agent was restarted looks identical
     /// in the snapshot and is a different conversation.
     async fn refresh_processes(&self, snapshot: &Snapshot) -> bool {
-        let mut wanted = Vec::new();
+        // Which panes need their *harness* re-derived, which is not every pane and not every
+        // sweep: a pid that is still the same live process is still this pane's harness, and
+        // procfs answers that for free. The command below is a different question with a
+        // different answer every time a job starts, so it is read on every pass.
+        let mut wanted = HashMap::new();
         for pane in &snapshot.panes {
             let Some(agent) = pane.agent.as_deref() else {
                 continue;
@@ -528,27 +591,37 @@ impl Inner {
             let held = self.processes.lock().unwrap().get(&pane.pane_id).cloned();
             match held {
                 Some(running) if running.is_still(agent) => continue,
-                _ => wanted.push((pane.pane_id.clone(), agent.to_string())),
+                _ => {
+                    wanted.insert(pane.pane_id.clone(), agent.to_string());
+                }
             }
         }
 
         let mut found = Vec::new();
-        for (pane_id, agent) in wanted {
+        let mut commands = Vec::new();
+        for pane in &snapshot.panes {
+            let pane_id = pane.pane_id.clone();
             // An error is *not* an absent harness: one says nothing looked, the other says the
             // pane is empty, and the difference decides whether the working directory may be
-            // searched at all.
-            let running = match self.herdr.process_info(&pane_id).await {
+            // searched at all. The same holds for the command — an unanswered pane keeps the
+            // name it had rather than losing it to a socket that blinked.
+            match self.herdr.process_info(&pane_id).await {
                 Ok(info) => {
                     self.probed.store(true, Ordering::Relaxed);
-                    Some(Running::new(&agent, info.harness(&agent)))
+                    commands.push((pane_id.clone(), info.command()));
+                    if let Some(agent) = wanted.get(&pane_id) {
+                        found.push((pane_id, Some(Running::new(agent, info.harness(agent)))));
+                    }
                 }
                 Err(e) => {
                     debug!(pane = %pane_id, error = %e, "could not read the pane's processes");
-                    None
+                    if wanted.contains_key(&pane_id) {
+                        found.push((pane_id, None));
+                    }
                 }
-            };
-            found.push((pane_id, running));
+            }
         }
+        let commands_moved = self.record_commands(snapshot, commands);
 
         let agents: HashMap<&str, Option<&str>> = snapshot
             .panes
@@ -575,7 +648,32 @@ impl Inner {
             // pane the last one was quit in is identical in every field but the process.
             moved |= replaced.is_none_or(|old| old.harness != running.harness);
         }
+        moved || commands_moved
+    }
+
+    /// Returns whether any pane's command moved, because nothing else in herdr's snapshot says
+    /// so: a pane that started a build is identical in every field the fingerprint hashes, and a
+    /// herd that does not re-derive is a name that never changes.
+    fn record_commands(&self, snapshot: &Snapshot, read: Vec<(String, Option<Command>)>) -> bool {
+        let live: std::collections::HashSet<&str> =
+            snapshot.panes.iter().map(|p| p.pane_id.as_str()).collect();
+        let mut commands = self.commands.lock().unwrap();
+        let before = commands.len();
+        commands.retain(|pane_id, _| live.contains(pane_id.as_str()));
+        let mut moved = commands.len() != before;
+        for (pane_id, command) in read {
+            match command {
+                Some(command) => {
+                    moved |= commands.insert(pane_id, command.clone()).as_ref() != Some(&command)
+                }
+                None => moved |= commands.remove(&pane_id).is_some(),
+            }
+        }
         moved
+    }
+
+    fn command(&self, pane_id: &str) -> Option<Command> {
+        self.commands.lock().unwrap().get(pane_id).cloned()
     }
 
     /// Probe #68/#84: in a headless session the PTY does not follow the layout rect, so the rect
@@ -890,6 +988,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
     // the rect is only the fallback; a width nothing has proved is reported as unknown.
     let cols = inner.proven_cols(&pane.pane_id, rect as u16);
     let rows = pane.scroll.map_or(rect_rows, |s| s.viewport_rows as u32);
+    let command = inner.command(&pane.pane_id);
     let workspace = snapshot
         .workspaces
         .iter()
@@ -917,6 +1016,11 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
             pane.scroll.map_or(0, |s| s.max_offset_from_bottom as u32)
         } else {
             0
+        },
+        cmd: command.as_ref().map(|c| c.name.clone()),
+        argv: match inner.config.send_argv {
+            true => command.map(|c| c.line),
+            false => None,
         },
         detail: inner.stream_fault(),
     }

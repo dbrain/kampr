@@ -125,8 +125,29 @@ impl Mesh<'_> {
         Ok(row.get::<i64, _>("n") as u32)
     }
 
+    /// The active row holding `node_id` under some *other* key.
+    ///
+    /// A node id is what a hub routes watches, keystrokes and manage traffic on, and nothing in
+    /// the handshake proves one — so it is bound to the key that enrolled with it and no second
+    /// key may hold it. A **revoked** row does not hold its id: it has no link and cannot be
+    /// dialled back in without a fresh join code, and a machine reinstalled from scratch keeps
+    /// the node id in its config while its key is new.
+    pub async fn node_id_taken(&self, node_id: &str, except: &str) -> Result<Option<MeshNode>> {
+        let row =
+            sqlx::query("SELECT * FROM mesh_nodes WHERE node_id = ? AND pubkey != ? AND revoked_at IS NULL")
+                .bind(node_id)
+                .bind(except)
+                .fetch_optional(self.store.pool())
+                .await?;
+        Ok(row.map(node_from_row))
+    }
+
     /// Re-enrolling a key that is already known keeps its `created_at` and clears a revocation —
     /// which is what an operator asks for by handing out a fresh join code for it.
+    ///
+    /// **This is the only place a node id and a name are written.** An ordinary reconnect does not
+    /// come through here, so what a peer says about itself after it has joined changes nothing an
+    /// operator revokes by or a hub routes on.
     pub async fn enrol(
         &self,
         pubkey: &str,
@@ -170,10 +191,11 @@ impl Mesh<'_> {
         Ok(rows.into_iter().map(node_from_row).collect())
     }
 
-    /// Accepts a public key, a node id, a fingerprint or a name, because those are the four
-    /// things an operator has in front of them when they decide to cut a node off.
+    /// Accepts a public key, a fingerprint, a node id or a name, because those are the four
+    /// things an operator has in front of them when they decide to cut a node off — and acts only
+    /// on the one row that unambiguously answers to it. See [`Self::resolve`].
     pub async fn revoke(&self, needle: &str, now: i64) -> Result<Option<MeshNode>> {
-        let Some(node) = self.find(needle).await? else {
+        let Some(node) = self.resolve(needle).await? else {
             return Ok(None);
         };
         sqlx::query("UPDATE mesh_nodes SET revoked_at = ? WHERE pubkey = ? AND revoked_at IS NULL")
@@ -185,7 +207,7 @@ impl Mesh<'_> {
     }
 
     pub async fn forget(&self, needle: &str) -> Result<Option<MeshNode>> {
-        let Some(node) = self.find(needle).await? else {
+        let Some(node) = self.resolve(needle).await? else {
             return Ok(None);
         };
         sqlx::query("DELETE FROM mesh_nodes WHERE pubkey = ?")
@@ -195,14 +217,41 @@ impl Mesh<'_> {
         Ok(Some(node))
     }
 
-    pub async fn find(&self, needle: &str) -> Result<Option<MeshNode>> {
+    /// Every row a needle could mean, so an operator can be shown the choice they have to make.
+    pub async fn matching(&self, needle: &str) -> Result<Vec<MeshNode>> {
         let rows = sqlx::query("SELECT * FROM mesh_nodes")
             .fetch_all(self.store.pool())
             .await?;
         let needle = needle.trim();
-        Ok(rows.into_iter().map(node_from_row).find(|n| {
-            n.pubkey == needle || n.node_id == needle || n.name == needle || n.fingerprint() == needle
-        }))
+        Ok(rows
+            .into_iter()
+            .map(node_from_row)
+            .filter(|n| {
+                n.pubkey == needle || n.fingerprint() == needle || n.node_id == needle || n.name == needle
+            })
+            .collect())
+    }
+
+    /// The one row a destructive gesture may act on.
+    ///
+    /// The credential and the node id are unique and are matched exactly. A **name** is the one
+    /// needle two rows can answer to — a peer picks the name it enrols under, so a machine can
+    /// take its neighbour's — and it names a node only while exactly one answers to it. Taking
+    /// the first match in table order is how `kampr mesh revoke laptop` cuts off the laptop that
+    /// was not meant and reports success.
+    pub async fn resolve(&self, needle: &str) -> Result<Option<MeshNode>> {
+        let rows = self.matching(needle).await?;
+        let needle = needle.trim();
+        if let Some(node) = rows
+            .iter()
+            .find(|n| n.pubkey == needle || n.fingerprint() == needle || n.node_id == needle)
+        {
+            return Ok(Some(node.clone()));
+        }
+        match rows.len() {
+            1 => Ok(rows.into_iter().next()),
+            _ => Ok(None),
+        }
     }
 
     pub async fn touch(&self, pubkey: &str, now: i64) -> Result<()> {
@@ -318,9 +367,9 @@ mod tests {
             .await
             .unwrap();
         for needle in [KEY, "01JNODE", "laptop", &node.fingerprint()] {
-            assert_eq!(mesh.find(needle).await.unwrap().unwrap().pubkey, KEY);
+            assert_eq!(mesh.resolve(needle).await.unwrap().unwrap().pubkey, KEY);
         }
-        assert!(mesh.find(OTHER).await.unwrap().is_none());
+        assert!(mesh.resolve(OTHER).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -335,6 +384,60 @@ mod tests {
         assert!(!revoked.active());
         assert_eq!(revoked.revoked_at, Some(200));
         assert!(mesh.revoke("nobody", 200).await.unwrap().is_none());
+    }
+
+    /// A peer chooses the name it enrols under, so two rows answering to one name is something a
+    /// hostile machine can arrange. Picking one of them by table order revokes the wrong node and
+    /// tells the operator it worked.
+    #[tokio::test]
+    async fn a_name_two_nodes_answer_to_revokes_neither_of_them() {
+        let store = store().await;
+        let mesh = store.mesh();
+        mesh.enrol(KEY, "01JA", "laptop", MeshRole::Peer, None, 100)
+            .await
+            .unwrap();
+        let shadow = mesh
+            .enrol(OTHER, "01JB", "laptop", MeshRole::Peer, None, 100)
+            .await
+            .unwrap();
+
+        assert!(
+            mesh.revoke("laptop", 200).await.unwrap().is_none(),
+            "an ambiguous name revoked something anyway"
+        );
+        assert!(mesh.node(KEY).await.unwrap().unwrap().active());
+        assert!(mesh.node(OTHER).await.unwrap().unwrap().active());
+        assert_eq!(
+            mesh.matching("laptop").await.unwrap().len(),
+            2,
+            "and the operator can be told which two"
+        );
+
+        // The credential is never ambiguous, and neither is a bound node id.
+        assert_eq!(
+            mesh.revoke(&shadow.fingerprint(), 300)
+                .await
+                .unwrap()
+                .unwrap()
+                .pubkey,
+            OTHER
+        );
+        assert_eq!(mesh.revoke("01JA", 300).await.unwrap().unwrap().pubkey, KEY);
+    }
+
+    #[tokio::test]
+    async fn a_node_id_belongs_to_one_key() {
+        let store = store().await;
+        let mesh = store.mesh();
+        mesh.enrol(KEY, "01JA", "laptop", MeshRole::Peer, None, 100)
+            .await
+            .unwrap();
+        assert!(mesh.node_id_taken("01JA", OTHER).await.unwrap().is_some());
+        assert!(
+            mesh.node_id_taken("01JA", KEY).await.unwrap().is_none(),
+            "a node reconnecting is not a collision with itself"
+        );
+        assert!(mesh.node_id_taken("01JB", OTHER).await.unwrap().is_none());
     }
 
     #[tokio::test]

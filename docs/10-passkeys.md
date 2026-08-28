@@ -103,10 +103,10 @@ Read that twice, because every awkward consequence follows from it.
   question being answered, and a node that serves the document perfectly to everything on the LAN is
   refused anyway.
 - **A hostname that resolves publicly to a private address does not work.** Measured (#170) on the
-  operator's own node while it was in that state: `kampr.oldug.com` served the file with a 200,
+  operator's own node while it was in that state: the operator's own hostname served the file with a 200,
   `application/json`, the right package and a fingerprint matching the release keystore exactly, and
   the node reported `tier 1, passkeys: true`. Google answered `ERROR_CODE_FETCH_ERROR`, because the
-  public record pointed at `10.0.0.6`. Credential Manager then refuses with `RP ID cannot be
+  public record pointed at `a private address`. Credential Manager then refuses with `RP ID cannot be
   validated`, which tells the owner nothing. **`security.passkeys` is necessary and not sufficient**
   — the party that actually decides is one the node never asks.
 

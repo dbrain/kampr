@@ -36,6 +36,109 @@ pub struct Config {
     pub android: Android,
     #[serde(default)]
     pub update: Update,
+    #[serde(default)]
+    pub naming: Naming,
+}
+
+/// What a pane is called, and whether that name is written into herdr.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Naming {
+    /// The template every name is built from — `{token}` for a field, `{a|b|'x'}` for the first
+    /// of several that resolves, `[…]` for a section dropped whole when nothing in it did. The
+    /// tokens are `label`, `workspace`, `tab`, `cwd`, `pane`, `agent`, `status`, `cmd`, `argv`.
+    ///
+    /// Kampr's own clients render this same default themselves, from `kampr_core::naming`, so
+    /// **changing it here changes what herdr is told and not what a phone draws**.
+    pub template: String,
+    /// Whether this node writes the name it computed back into herdr.
+    ///
+    /// **Off, and it stays off until an operator says otherwise.** On, every pane's border at
+    /// that desk is re-drawn with Kampr's name for it (probe #294) — so a phone looking at a herd
+    /// changes what the person sitting in front of it sees, which is the side effect ADR 0002
+    /// exists to refuse. herdr keeps one record per source and the last writer wins, so turning
+    /// it off again leaves whatever wrote before Kampr did.
+    pub report_to_herdr: bool,
+    /// Whether a pane's **whole command line** goes on the wire beside its process name.
+    ///
+    /// **Off.** `{cmd}` is what the naming complaint asked for — six panes in one directory told
+    /// apart — and `{argv}` is the half that carries `-phunter2` and `-H "Authorization: …"`.
+    ///
+    /// Every paired device receives the herd model, **`readonly` included**, at `hello` and on
+    /// every patch, with no `watch` involved. That is not the same disclosure as the screen a
+    /// readonly device could already stream: an alt-screen or cleared pane shows nothing while
+    /// `argv` names the job for its whole life, and the model is stored client state rather than
+    /// pixels. A device you half-trust with a screen is not one you meant to hand credentials.
+    ///
+    /// Turning this on costs no client release: the default template's `{argv|cmd}` group falls
+    /// through to `cmd` when argv is absent, exactly as it already does under ble.sh (#297).
+    pub send_argv: bool,
+    /// Whether this node sorts **herdr's own agents sidebar** at that desk by the name it
+    /// computed.
+    ///
+    /// **Off, and it stays off until an operator says otherwise.** On, the person sitting at that
+    /// desk sees their agents sidebar re-ordered by Kampr's names for the panes, and the sort-mode
+    /// word in that section's header replaced by `kampr name` (probe #296). Nothing else about
+    /// their sidebar moves — their `rows` are theirs.
+    ///
+    /// **Needs `report_to_herdr`.** herdr will sort its sidebar on a token a source reported or on
+    /// one of two builtins, `agent` and `status`, and on nothing else — so with reporting off
+    /// there is no Kampr name to sort by, and this is refused with a message rather than silently
+    /// producing a sidebar sorted by a field nothing fills.
+    ///
+    /// It is put back on a clean shutdown, and there is no other way to put it back: herdr will
+    /// not say what view it is holding, so a sort that outlives this node outlives everything that
+    /// knows about it.
+    pub sort_desk_agents: bool,
+}
+
+impl Default for Naming {
+    fn default() -> Self {
+        Self {
+            template: kampr_core::naming::DEFAULT_TEMPLATE.to_string(),
+            report_to_herdr: false,
+            send_argv: false,
+            sort_desk_agents: false,
+        }
+    }
+}
+
+impl Naming {
+    /// A template that will not parse is an operator's typo, not a reason to serve no names: it
+    /// is said once, loudly, and the default is used.
+    pub fn template(&self) -> kampr_core::naming::Template {
+        match kampr_core::naming::Template::parse(&self.template) {
+            Ok(template) => template,
+            Err(e) => {
+                tracing::warn!(template = %self.template, "naming.template is not a template — {e}; using the default");
+                kampr_core::naming::Template::default()
+            }
+        }
+    }
+
+    pub fn reporting(&self) -> Option<kampr_core::naming::Template> {
+        self.report_to_herdr.then(|| self.template())
+    }
+
+    /// **Refuses rather than implies.** Turning `report_to_herdr` on for them would take a
+    /// setting that re-orders one sidebar and quietly make it re-draw every pane border at that
+    /// desk instead (probe #294) — a strictly larger mark on somebody else's screen than the one
+    /// they consented to, which is the thing ADR 0002 exists to refuse. One line of config is the
+    /// cheaper half of that trade.
+    pub fn desk_agents(&self) -> Option<kampr_core::agent_view::View> {
+        if !self.sort_desk_agents {
+            return None;
+        }
+        if !self.report_to_herdr {
+            tracing::warn!(
+                "naming.sort_desk_agents needs naming.report_to_herdr = true — herdr sorts its \
+                 agents sidebar on a token this node reported, and with reporting off there is no \
+                 such token. Leaving this desk's own order alone."
+            );
+            return None;
+        }
+        Some(kampr_core::agent_view::View::by_name())
+    }
 }
 
 /// The Android app this node will let hold a passkey for it.
@@ -98,6 +201,43 @@ impl Update {
         };
         format!("{api}/repos/{}/releases/latest", self.repo)
     }
+
+    /// `repo` reaches `install.sh` twice: as half of a download URL, and interpolated into the
+    /// `--certificate-identity-regexp` that pins the keyless signature to this project's release
+    /// workflow. A metacharacter in the second place does not point the installer somewhere else
+    /// — it widens what the installer will accept, and `repo = ".*"` accepts a signature from any
+    /// GitHub repository's `release.yml`. Pointing at a fork has to mean re-pinning the identity,
+    /// never quietly dropping it.
+    fn validate(&self) -> Result<(), String> {
+        let mut halves = self.repo.split('/');
+        let named = match (halves.next(), halves.next(), halves.next()) {
+            (Some(owner), Some(repo), None) => is_repo_name(owner) && is_repo_name(repo),
+            _ => false,
+        };
+        if !named {
+            return Err(format!(
+                "[update] repo = {:?} is not an owner/repo name. Each half must be letters, \
+                 digits, `.`, `_` or `-` — it is interpolated into the release URL and into the \
+                 identity that release's signature is pinned to",
+                self.repo
+            ));
+        }
+        if !self.api.is_empty() && !self.api.starts_with("https://") {
+            return Err(format!(
+                "[update] api = {:?} is not https. A mirror is still a host this node asks for a \
+                 version and follows redirects from; leave it empty for api.github.com",
+                self.api
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn is_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// The hub role, which is configuration rather than a build.
@@ -281,6 +421,8 @@ pub enum ConfigError {
     Io(PathBuf, std::io::Error),
     #[error("parsing {0}: {1}")]
     Parse(PathBuf, toml::de::Error),
+    #[error("{0}: {1}")]
+    Invalid(PathBuf, String),
     #[error("writing {0}: {1}")]
     Encode(PathBuf, toml::ser::Error),
 }
@@ -305,6 +447,7 @@ impl Config {
             push: Push::default(),
             android: Android::default(),
             update: Update::default(),
+            naming: Naming::default(),
         }
     }
 
@@ -330,7 +473,12 @@ impl Config {
             return Err(ConfigError::Missing(path));
         }
         let text = std::fs::read_to_string(&path).map_err(|e| ConfigError::Io(path.clone(), e))?;
-        toml::from_str(&text).map_err(|e| ConfigError::Parse(path, e))
+        let config: Self = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.clone(), e))?;
+        config
+            .update
+            .validate()
+            .map_err(|e| ConfigError::Invalid(path, e))?;
+        Ok(config)
     }
 
     pub fn save(&self, config_dir: &Path) -> Result<PathBuf, ConfigError> {
@@ -465,6 +613,36 @@ pub fn lan_address() -> Option<IpAddr> {
 mod tests {
     use super::*;
 
+    /// The two halves of writing into somebody else's herdr are separately consented to, and the
+    /// smaller one cannot turn the larger one on for them. Sorting a desk needs a token reported,
+    /// so with reporting off the honest answer is to say so and do nothing — never a sidebar
+    /// sorted by a field nothing fills.
+    #[test]
+    fn sorting_somebodys_desk_is_refused_rather_than_turning_reporting_on_for_them() {
+        let off = Naming::default();
+        assert!(!off.report_to_herdr, "the shipped default writes nothing");
+        assert!(!off.sort_desk_agents);
+        assert_eq!(off.desk_agents(), None);
+
+        let half = Naming {
+            sort_desk_agents: true,
+            ..Naming::default()
+        };
+        assert_eq!(
+            half.desk_agents(),
+            None,
+            "a sort with nothing to sort on is refused, not made to work by reporting uninvited"
+        );
+        assert_eq!(half.reporting(), None, "and reporting stays off");
+
+        let both = Naming {
+            sort_desk_agents: true,
+            report_to_herdr: true,
+            ..Naming::default()
+        };
+        assert_eq!(both.desk_agents(), Some(kampr_core::agent_view::View::by_name()));
+    }
+
     #[test]
     fn nothing_binds_off_loopback_without_being_asked_to() {
         assert!(
@@ -597,5 +775,56 @@ mod tests {
         c.server.bind = "127.0.0.1:9000".into();
         c.server.tls.enabled = true;
         assert_eq!(c.origin(), "https://127.0.0.1:9000");
+    }
+
+    fn round_trip(tweak: impl FnOnce(&mut Config)) -> Result<Config, ConfigError> {
+        let dir = tempfile::tempdir().expect("a dir");
+        let mut c = Config::bootstrap("x");
+        tweak(&mut c);
+        c.save(dir.path()).expect("a config");
+        Config::load(dir.path())
+    }
+
+    /// `repo` reaches `install.sh` twice: once as part of a URL, and once interpolated into the
+    /// `--certificate-identity-regexp` the keyless signature is pinned to. A metacharacter there
+    /// does not send the installer somewhere else — it *widens* what the installer accepts, and
+    /// `.*` accepts a signature from any GitHub repository's release workflow. An operator
+    /// pointing at a fork has to re-pin the identity, not lose it.
+    #[test]
+    fn an_update_repo_that_is_not_an_owner_and_a_repo_is_refused() {
+        for repo in [
+            ".*",
+            "[a-z]+/[a-z]+",
+            "dbrain/kampr|evil/kampr",
+            "dbrain/kampr/extra",
+            "../../etc",
+            "dbrain",
+            "",
+            "dbrain/",
+            "dbrain kampr/x",
+        ] {
+            let loaded = round_trip(|c| c.update.repo = repo.into());
+            assert!(
+                loaded.is_err(),
+                "[update] repo = {repo:?} loaded, and it is interpolated into an identity pin"
+            );
+        }
+        let fork = round_trip(|c| c.update.repo = "some-fork/kampr.rs".into());
+        assert!(fork.is_ok(), "an ordinary fork must still load: {fork:?}");
+    }
+
+    /// A mirror is still a host this node asks for a version and follows redirects from, and the
+    /// value goes into the URL verbatim.
+    #[test]
+    fn an_update_api_that_is_not_https_is_refused() {
+        for api in ["http://mirror.invalid", "mirror.invalid", "ftp://mirror.invalid"] {
+            let loaded = round_trip(|c| c.update.api = api.into());
+            assert!(loaded.is_err(), "[update] api = {api:?} loaded");
+        }
+        assert!(round_trip(|c| c.update.api = "https://mirror.invalid".into()).is_ok());
+        assert!(
+            round_trip(|c| c.update.api = String::new()).is_ok(),
+            "empty is api.github.com and has to stay the default"
+        );
     }
 }

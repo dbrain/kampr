@@ -37,7 +37,7 @@ pub async fn run(dirs_config: &Path, dirs_state: &Path, options: Init) -> Result
             println!("{}\n", force_summary(&path, old, options.new_identity));
             rewritten(old, &options)
         }
-        (None, _) => Config::bootstrap(&options.node_name.clone().unwrap_or_else(hostname)),
+        (None, _) => Config::bootstrap(&options.node_name.clone().unwrap_or_else(kampr_client::hostname)),
     };
     if let Some(name) = &options.node_name {
         config.node_name = name.clone();
@@ -149,15 +149,6 @@ fn force_summary(path: &Path, old: &Config, new_identity: bool) -> String {
             .into(),
     );
     lines.join("\n")
-}
-
-fn hostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "kampr".into())
 }
 
 #[cfg(test)]

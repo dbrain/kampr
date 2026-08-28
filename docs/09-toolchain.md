@@ -119,7 +119,7 @@ outside the app (probe #102).
 |---|---|
 | `zbar-tools` | decodes the pairing QR in `QrDecodeTest`. Absent, the test skips loudly; `KAMPR_QR_DECODE=1` turns that skip into a failure, which is what CI sets |
 | `cross` | aarch64 release builds |
-| `cosign` | verifies a release signature at install time; the installer says so rather than pretending when it is missing |
+| `cosign` | verifies a release signature at install time. **Required to install from a published release** — the installer refuses rather than falling back to the checksums, which came from the same server as the tarball |
 | `adb` | `make android-install`, `make android-test` |
 | `apksigner` / `keytool` | the asset-links test reads the **release certificate's** SHA-256 off the built APK (falling back to the keystore) and asserts the node would name it. Absent, the test skips loudly; `KAMPR_ANDROID_CERT=1` turns that skip into a failure |
 
@@ -189,8 +189,11 @@ consequences worth knowing:
   the release the operator already verified.
 - **The installer in the tree is the one in the binary**, so a change to `packaging/install.sh` is
   a change to what `kampr update` does, and `crates/kampr-cli/tests/update_cli.rs` exercises it
-  against a release built on disk and served over `file://`.
+  against a release built on disk, served by a `curl` and a `cosign` on `PATH` that answer only
+  for the canonical release base — so the URL the command asks for is asserted, not assumed.
 
-`cosign` is optional here for the same reason it is optional in `install.sh`: absent, the command
-says the signature was not checked rather than pretending it was. The checksum is not optional —
-`KAMPR_ALLOW_UNVERIFIED` is deliberately *not* inherited by the installer `kampr update` runs.
+`cosign` is required here for the same reason it is required in `install.sh`: absent, there is
+nothing left that says who built the tarball, and a checksum served beside it does not.
+`KAMPR_ALLOW_UNVERIFIED` and `KAMPR_BASE_URL` are deliberately *not* inherited — not by the
+installer `kampr update` runs, and not by `packaging/fetch-binary.sh` on the `herdr plugin install`
+path.

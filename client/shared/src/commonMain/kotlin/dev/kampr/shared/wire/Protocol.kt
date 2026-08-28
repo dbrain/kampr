@@ -120,6 +120,12 @@ data class PaneInfo(
     // can have exactly one of them working, which is a right herd and a blank grid for ever. Null
     // is the ordinary state; an empty pane is not a faulted one.
     val detail: String? = null,
+    // The foreground job: `cmd` is its process name, `argv` its whole command line, and a pipeline
+    // joins its members with ` | `. Absent far oftener than a schema reading suggests and never a
+    // fault — a pane at its prompt has no job, and on a machine that sources ble.sh herdr names the
+    // shell however busy the pane is (probe #297). `Naming`'s `[…]` is what drops the section.
+    val cmd: String? = null,
+    val argv: String? = null,
 )
 
 @Serializable

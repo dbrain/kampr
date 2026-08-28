@@ -201,6 +201,19 @@ pub struct PaneEntry {
     /// today. It clears itself, because the supervisor behind it retries for ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The foreground job in this pane: `cmd` is the process name, `argv` the whole command line
+    /// with its arguments, and a pipeline joins its members with ` | `.
+    ///
+    /// **Both are absent far more often than a schema reading suggests, and that is not a fault.**
+    /// A pane at its prompt is running its shell and has no job to name; and on a machine that
+    /// sources ble.sh — every interactive shell on the operator's own (probe #297) — the job runs
+    /// inside the shell's own process group, so herdr reports the shell however busy the pane is.
+    /// A client renders what it has and drops the section when it has nothing, which is what
+    /// [`crate::naming`]'s `[…]` exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argv: Option<String>,
 }
 
 impl PaneEntry {
@@ -223,6 +236,8 @@ impl PaneEntry {
             watchers: None,
             updated_at: None,
             detail: p.detail.clone(),
+            cmd: p.cmd.clone(),
+            argv: p.argv.clone(),
         }
     }
 

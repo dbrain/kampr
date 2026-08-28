@@ -1196,6 +1196,16 @@ async fn the_audit_records_what_was_read_and_what_actually_ran() {
     .await;
     until(&mut driving, "managed", 15).await;
 
+    // The `keys` form of `input` is herdr's key grammar, and probe #7 says that grammar includes
+    // single characters — so a client that types a password one key at a time types it, and the
+    // log is what an operator hands to somebody else during an investigation.
+    send(
+        &mut driving,
+        json!({ "t": "input", "pane": pane, "keys": ["h", "u", "n", "t", "e", "r", "2"] }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
     let text = std::fs::read_to_string(Config::audit_path(h._state.path())).unwrap();
     let entries: Vec<Value> = text
         .lines()
@@ -1222,6 +1232,18 @@ async fn the_audit_records_what_was_read_and_what_actually_ran() {
     assert_eq!(managed["detail"]["op"], "pane.split");
     assert_eq!(managed["detail"]["cwd"], "/tmp", "{managed}");
     assert_eq!(managed["detail"]["direction"], "right", "{managed}");
+
+    let typed = of("input");
+    assert_eq!(typed["pane"], pane.as_str());
+    assert_eq!(
+        typed["detail"],
+        json!({ "keys": 7 }),
+        "the log records how much was typed, never what: {typed}",
+    );
+    assert!(
+        !text.contains("hunter2"),
+        "typed text reached the audit log in the clear",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1583,6 +1605,87 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     let cleared = until_pane(&mut socket, "pending", &pane, 25).await;
     assert!(cleared["question"].is_null(), "{cleared}");
     assert!(cleared["options"].as_array().unwrap().is_empty());
+}
+
+/// The desk half of W9, against a real herdr: the name Kampr computes reaches herdr's own
+/// metadata table and comes back on `pane.get` as `title` (probe #294).
+///
+/// **The read-back is the assertion, not the ack.** `pane.report_metadata` answers `ok` to a
+/// report it silently dropped (probe #295), so a test that watched the call succeed would go green
+/// against a reporter that never landed a single name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_told_to_report_names_puts_one_on_the_pane_at_the_desk() {
+    let h = harness!("naming-on", |config: &mut Config| {
+        config.naming.report_to_herdr = true;
+    });
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    let mut title = Value::Null;
+    for _ in 0..60 {
+        title = h._session.call("pane.get", json!({ "pane_id": local })).await["pane"]["title"].clone();
+        if !title.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    // The workspace this harness creates is labelled `kampr`, and its pane sits at a shell with no
+    // job in it — so the command section drops and the name is what is left.
+    assert_eq!(title, "kampr · bash", "pane.get said {title}");
+
+    // The same name goes in as a *token*, which is the only field herdr will sort its agents
+    // sidebar on: the sortable builtins are `agent` and `status`, and `title` is not one of them.
+    let pane = h._session.call("pane.get", json!({ "pane_id": local })).await;
+    assert_eq!(
+        pane["pane"]["tokens"][kampr_core::reporter::TOKEN],
+        "kampr · bash",
+        "pane.get said {pane}"
+    );
+}
+
+/// The node half of the sidebar sort, end to end and through the config that gates it: two
+/// settings on, a real herdr, and the desk put back on the way out.
+///
+/// **The clear is the half nothing can assert here**, because herdr will not say what view it is
+/// holding — there is no `agent.view.get` and `agent.list` is untouched by the view (probe #296).
+/// What this proves is that the whole path reaches a real herdr without being refused; that the
+/// clear is *sent*, and sent exactly once and never by a node that set nothing, is
+/// `kampr-core`'s `reporting.rs`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_told_to_sort_a_desk_sorts_it_and_puts_it_back_on_the_way_out() {
+    let h = harness!("desk-sort", |config: &mut Config| {
+        config.naming.report_to_herdr = true;
+        config.naming.sort_desk_agents = true;
+    });
+    assert!(
+        h.node.config.naming.desk_agents().is_some(),
+        "both settings on is the only combination that sorts anything"
+    );
+    // Long enough for the sweep that sets the view; a refusal would be a `warn!` and nothing else,
+    // so the assertion that matters is the clear below going through on a herdr that took the set.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    h.node.restore_desks().await;
+
+    let again = h
+        ._session
+        .herdr()
+        .clear_agent_view()
+        .await
+        .expect("herdr answers a clear");
+    assert!(!again.active);
+}
+
+/// The same node with the setting left alone. Looking at somebody's herd writes nothing into it,
+/// which is ADR 0002's invariant and the whole reason the other test needs a flag.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_nobody_asked_leaves_the_desk_exactly_as_it_found_it() {
+    let h = harness!("naming-off");
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    // Long enough for several sweeps of a node that was going to report.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let got = h._session.call("pane.get", json!({ "pane_id": local })).await;
+    assert!(got["pane"]["title"].is_null(), "{got}");
 }
 
 /// A forged `X-Forwarded-For` must not hand an attacker a fresh rate-limit bucket per guess. The
@@ -5202,4 +5305,38 @@ async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
 
 async fn drain(socket: &mut Socket, quiet: Duration) {
     while recv(socket, quiet).await.is_some() {}
+}
+
+/// Every parameter in `agent.view.set` is a guess unless a real herdr accepts it, and this is the
+/// one call in the naming path with **no read-back at all** — there is no `agent.view.get`, and
+/// `agent.list` is untouched by the view (probe #296), so a schema that drifted would go on
+/// answering an error nothing looks at. The reply is the whole of what herdr will say back:
+/// `active`, the `source`, and the `label` that replaced the sort-mode word in its header.
+#[tokio::test(flavor = "multi_thread")]
+async fn herdr_accepts_the_agents_view_the_node_sets_and_gives_the_desk_back_on_clear() {
+    let Some(session) = Session::start("agentview").await else {
+        eprintln!("skipping: no herdr on PATH");
+        return;
+    };
+    let view = kampr_core::agent_view::View::by_name();
+    let set = session
+        .herdr()
+        .set_agent_view(&view.source, &view.token, view.order, &view.label)
+        .await
+        .unwrap_or_else(|e| panic!("herdr refused the view the node sets: {e}"));
+    assert_eq!(
+        set,
+        kampr_herdr::AgentView {
+            active: true,
+            source: Some(view.source.clone()),
+            label: Some(view.label.clone()),
+        }
+    );
+
+    let cleared = session
+        .herdr()
+        .clear_agent_view()
+        .await
+        .expect("herdr clears the view");
+    assert!(!cleared.active, "the desk has its own order back");
 }

@@ -1,0 +1,27 @@
+[package]
+name = "kampr-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+kampr-auth = { path = "../kampr-auth" }
+kampr-core = { path = "../kampr-core" }
+kampr-mesh = { path = "../kampr-mesh" }
+kampr-node = { path = "../kampr-node" }
+kampr-term = { path = "../kampr-term" }
+reqwest.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

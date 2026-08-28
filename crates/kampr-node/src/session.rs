@@ -492,7 +492,14 @@ impl Session {
         // Anything that types into a terminal re-reads the device first. The handshake snapshot
         // is a cache, and a revoked token or a demoted role has to bite between two frames rather
         // than at the next connection.
-        if matches!(tag.as_deref(), Some("manage" | "input" | "answer")) && !self.refresh().await {
+        // `att.fetch` is here because the file-id form reads any path on this machine, and the
+        // whole argument for serving one is that it is equivalent to typing — so it is gated like
+        // typing. An operator demoting a hub writes SQLite in another process and tells this
+        // session nothing, and a gate that waited for the next recheck is a two-second window on
+        // an arbitrary read.
+        if matches!(tag.as_deref(), Some("manage" | "input" | "answer" | "att.fetch"))
+            && !self.refresh().await
+        {
             return false;
         }
         // Unknown `t` values are ignored rather than refused — that is how a v1 client survives a
@@ -843,9 +850,12 @@ impl Session {
             (_, _, Some(keys)) => Input::Keys(keys),
             _ => unreachable!("exactly one was supplied"),
         };
+        // How much was typed, never what. `keys` is herdr's key grammar and probe #7 says that
+        // grammar includes single characters, so recording the names typed a password into the
+        // one file an operator hands to somebody else during an investigation.
         let detail = match &input {
             Input::Bytes(bytes) => json!({ "bytes": bytes.len() }),
-            Input::Keys(keys) => json!({ "keys": keys }),
+            Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
         if let Err(e) = session.registry.write(&local, input).await {

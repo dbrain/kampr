@@ -139,6 +139,13 @@ pub enum PeerState {
 pub struct PeersConfig {
     pub ping_interval: Duration,
     pub pane_fanout: usize,
+    /// The node id of the machine this hub is running on.
+    ///
+    /// A peer's `herd` is checked against the ids the *links* hold, and the hub's own is not one
+    /// of them — so without this a peer may advertise the operator's own machine and have it
+    /// merged in beside the real entry, where a client keyed on node id keeps whichever arrived
+    /// last. `None` is a `Peers` that is not a node's, and only tests have one.
+    pub own_node_id: Option<String>,
 }
 
 impl Default for PeersConfig {
@@ -146,6 +153,7 @@ impl Default for PeersConfig {
         Self {
             ping_interval: PING_INTERVAL,
             pane_fanout: PANE_FANOUT,
+            own_node_id: None,
         }
     }
 }
@@ -524,21 +532,24 @@ impl Peers {
         self.links().into_iter().find(|link| link.node_id == node_id)
     }
 
-    /// Drops everything a peer advertised that belongs to some *other* link's authenticated node.
-    /// A `herd` message is the peer's own words about itself and nothing verifies them, so it may
-    /// name any node it likes and only its own id is evidence.
+    /// Drops everything a peer advertised that belongs to some *other* link's authenticated node,
+    /// or to the machine this hub is running on. A `herd` message is the peer's own words about
+    /// itself and nothing verifies them, so it may name any node it likes and only its own id is
+    /// evidence.
     fn keep_own(&self, link: &Arc<PeerLink>, nodes: &mut Vec<NodeEntry>, panes: &mut Vec<PaneEntry>) {
         let claimed = |id: &str| {
-            self.links()
-                .iter()
-                .any(|other| !Arc::ptr_eq(other, link) && other.node_id == id)
+            self.config.own_node_id.as_deref() == Some(id)
+                || self
+                    .links()
+                    .iter()
+                    .any(|other| !Arc::ptr_eq(other, link) && other.node_id == id)
         };
         nodes.retain(|node| {
             let mine = !claimed(&node.id);
             if !mine {
                 warn!(
                     node = %link.node_id, name = %link.name, claimed = %node.id,
-                    "a peer advertised a node another link authenticated as; dropping it",
+                    "a peer advertised a node it does not answer for; dropping it",
                 );
             }
             mine

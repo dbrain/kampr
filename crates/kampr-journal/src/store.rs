@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::model::Turn;
 
@@ -9,7 +9,7 @@ use crate::model::Turn;
 pub struct TurnStore {
     turns: Vec<Turn>,
     index: HashMap<String, usize>,
-    changed: Vec<usize>,
+    changed: BTreeSet<usize>,
 }
 
 impl TurnStore {
@@ -32,10 +32,10 @@ impl TurnStore {
     }
 
     pub fn drain_changed(&mut self) -> Vec<Turn> {
-        let mut at = std::mem::take(&mut self.changed);
-        at.sort_unstable();
-        at.dedup();
-        at.into_iter().map(|i| self.turns[i].clone()).collect()
+        std::mem::take(&mut self.changed)
+            .into_iter()
+            .map(|i| self.turns[i].clone())
+            .collect()
     }
 
     pub fn turns(&self) -> &[Turn] {
@@ -46,9 +46,12 @@ impl TurnStore {
         self.index.get(id).copied()
     }
 
+    /// A set, and not a `Vec` scanned for the id already in it. The scan is over one entry per
+    /// turn the poll has seen, so the first poll of a transcript — which is every record in it —
+    /// was quadratic: 10 000 turns 22 ms, 40 000 221 ms, 160 000 **2.93 s**, against 118 ms for
+    /// the same 160 000 records revising a single turn. It runs on the blocking pool the
+    /// attachment route shares, once per watching socket.
     fn mark(&mut self, at: usize) {
-        if !self.changed.contains(&at) {
-            self.changed.push(at);
-        }
+        self.changed.insert(at);
     }
 }

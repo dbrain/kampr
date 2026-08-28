@@ -4,11 +4,39 @@ pub mod observe;
 pub mod rpc;
 
 pub use locate::{Found, Origin, Search};
-pub use model::{AgentStatus, Pane, ProcessInfo, Snapshot, SnapshotReply};
+pub use model::{AgentStatus, Command, Pane, ProcessInfo, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};
 pub use rpc::{Herdr, Sub};
 
 use anyhow::Result;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+impl SortOrder {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
+/// What herdr says it is holding after an `agent.view.*` call: whether a view is active, and the
+/// `source` and `label` it was set with. The sort is not in it.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct AgentView {
+    pub active: bool,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
 
 impl Herdr {
     pub async fn snapshot(&self) -> Result<Snapshot> {
@@ -26,6 +54,80 @@ impl Herdr {
             .call("pane.process_info", serde_json::json!({ "pane_id": pane_id }))
             .await?;
         Ok(r.process_info)
+    }
+
+    /// Reports a name Kampr computed for a pane into herdr's own metadata table.
+    ///
+    /// **`ok` here means well-formed, never applied** (probe #295). A `seq` older than the one
+    /// this source last sent is dropped silently and still answered `ok`, and the record is
+    /// per-source under last-writer-wins, so the only honest confirmation is [`Self::pane_title`]
+    /// read back afterwards.
+    pub async fn report_metadata(
+        &self,
+        pane_id: &str,
+        source: &str,
+        title: &str,
+        tokens: &BTreeMap<String, String>,
+        seq: u64,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                "pane.report_metadata",
+                serde_json::json!({
+                    "pane_id": pane_id,
+                    "source": source,
+                    "title": title,
+                    "tokens": tokens,
+                    "seq": seq,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Shapes herdr's **own** agents sidebar, at whoever's desk this session belongs to.
+    ///
+    /// Sortable fields are the tokens a source reported plus exactly two builtins, `agent` and
+    /// `status` — nothing else is accepted, and there is no builtin for `title`. So a sort on a
+    /// name Kampr computed only means anything once that name has been reported as a *token*,
+    /// which is [`Self::report_metadata`]'s job and is itself behind a setting.
+    ///
+    /// `label` replaces the sort-mode word in the sidebar's section header and herdr refuses one
+    /// that is empty or past 32 characters. The reply echoes `active`, `source` and `label` and
+    /// says **nothing about the sort**, and there is no `agent.view.get`: what was sorted on is
+    /// unreadable once sent.
+    pub async fn set_agent_view(
+        &self,
+        source: &str,
+        token: &str,
+        order: SortOrder,
+        label: &str,
+    ) -> Result<AgentView> {
+        self.call(
+            "agent.view.set",
+            serde_json::json!({
+                "source": source,
+                "sort": [{ "field": { "token": token }, "order": order.as_str() }],
+                "label": label,
+            }),
+        )
+        .await
+    }
+
+    /// Puts the desk's own agent order back.
+    ///
+    /// **This takes no source and is not scoped to one.** It clears whatever view is active,
+    /// whoever set it, so a caller that never set one must not call it.
+    pub async fn clear_agent_view(&self) -> Result<AgentView> {
+        self.call("agent.view.clear", serde_json::json!({})).await
+    }
+
+    /// The title herdr is *showing* for a pane — whoever's report is winning the field.
+    pub async fn pane_title(&self, pane_id: &str) -> Result<Option<String>> {
+        let r: model::PaneReply = self
+            .call("pane.get", serde_json::json!({ "pane_id": pane_id }))
+            .await?;
+        Ok(r.pane.title)
     }
 
     pub async fn send_text(&self, pane_id: &str, text: &str) -> Result<()> {

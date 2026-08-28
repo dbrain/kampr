@@ -1,0 +1,497 @@
+mod act;
+mod chrome;
+
+pub use chrome::{Chips, Layout, Placed};
+
+use crate::convo::Convo;
+use crate::image::Images;
+use crate::input::Router;
+use crate::manage::Manage;
+use crate::mouse::Mouse;
+use crate::render::fit::{self, Chrome, Need, Rung};
+use crate::sidebar;
+use crate::theme::Theme;
+use crossterm::event::KeyEvent;
+use kampr_client::{Client, Event, Managed};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+
+/// How long a note sits in the status line before the line goes back to saying what is true.
+const NOTE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    pub theme: Theme,
+    /// herdr chose the **local** keymap for `--remote` and gave the reason: local muscle memory
+    /// beats remote config, so this is `ctrl+b` and copies herdr's whole table (#289). The
+    /// escape hatch is to move it: a prefix kampr does not claim reaches the pane's own program
+    /// untouched, which is as close as a cell-grid client gets to running the node's keymap —
+    /// herdr's config is not on the wire and #296 measured that a client cannot read it back.
+    pub prefix: KeyEvent,
+    /// Whether rung 2 of the fit ladder may write `CSI 8;rows;cols t` at all.
+    pub resize: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            theme: crate::theme::PHOSPHOR,
+            prefix: crate::keymap::HERDR_PREFIX,
+            resize: true,
+        }
+    }
+}
+
+impl Options {
+    /// `KAMPR_TUI_SKIN=1` paints the pane's own 16 slots with kampr's Phosphor terminal skin
+    /// instead of passing them through as ordinary SGR; `KAMPR_TUI_RESIZE=0` turns rung 2 of the
+    /// fit ladder off; `KAMPR_TUI_PREFIX=ctrl+a` moves the prefix off `ctrl+b`.
+    pub fn from_env() -> Self {
+        let on = |name: &str, default: bool| {
+            std::env::var(name)
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(default)
+        };
+        Self {
+            theme: crate::theme::PHOSPHOR.skinned(on("KAMPR_TUI_SKIN", false)),
+            prefix: std::env::var("KAMPR_TUI_PREFIX")
+                .ok()
+                .and_then(|name| prefix_named(&name))
+                .unwrap_or(crate::keymap::HERDR_PREFIX),
+            resize: on("KAMPR_TUI_RESIZE", true),
+        }
+    }
+}
+
+fn prefix_named(name: &str) -> Option<KeyEvent> {
+    let (modifier, rest) = name.split_once('+')?;
+    let mut chars = rest.chars();
+    let ch = chars.next().filter(|_| chars.next().is_none())?;
+    let modifiers = match modifier {
+        "ctrl" => crossterm::event::KeyModifiers::CONTROL,
+        "alt" => crossterm::event::KeyModifiers::ALT,
+        _ => return None,
+    };
+    Some(KeyEvent::new(crossterm::event::KeyCode::Char(ch), modifiers))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Terminal,
+    Conversation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Panes,
+    Herd,
+}
+
+pub struct App {
+    pub(super) client: Arc<Client>,
+    pub options: Options,
+    pub router: Router,
+    pub manage: Manage,
+    pub mouse: Mouse,
+    pub images: Images,
+    pub convo: Convo,
+    pub layout: Layout,
+    focus: Option<String>,
+    last: Option<String>,
+    pans: HashMap<String, fit::Pan>,
+    scrolls: HashMap<String, u16>,
+    /// The ring, decoded once per `scrollback` message rather than once per frame. Text shaping
+    /// is the whole cost of a frame and an allocation per frame in the draw path is a
+    /// regression however much cleaner it reads.
+    rings: HashMap<String, Vec<Vec<kampr_term::Cell>>>,
+    views: HashMap<String, View>,
+    sidebar_open: bool,
+    pick: usize,
+    screen: Screen,
+    zoomed: bool,
+    /// Kampr's own mosaic, when the operator has assembled one: independent `observe` streams
+    /// that may come from different sessions on different hosts. Empty means the focused pane's
+    /// tab, which is the herdr-shaped default.
+    pinned: Vec<String>,
+    split: u16,
+    rung: Option<Rung>,
+    fitted: Option<(Need, (u16, u16))>,
+    note: String,
+    noted: std::time::Instant,
+    /// A **detected** URL, waiting for the operator to say so. Pane output is
+    /// attacker-influenceable, so nothing here is navigated on a click.
+    offered: Option<String>,
+    watching: HashSet<String>,
+    /// A drawn image is not in the buffer — its cells are `Skip` — so ratatui's diff has nothing
+    /// to repaint them from and the pixels outlive the view. Tearing one down asks for a wipe.
+    wipe: bool,
+    /// Every `manage` ack, carried back from the task that awaited it. A successful op produces
+    /// no frame the surface can otherwise see, so its notice would age out instead of resolving.
+    acked: UnboundedSender<Managed>,
+    acks: UnboundedReceiver<Managed>,
+    keybinds: bool,
+    quit: bool,
+}
+
+impl App {
+    pub fn new(client: Arc<Client>, options: Options, images: Images) -> Self {
+        let (acked, acks) = unbounded_channel();
+        Self {
+            client,
+            options,
+            router: Router::with_prefix(options.prefix),
+            manage: Manage::new(),
+            mouse: Mouse::new(),
+            images,
+            convo: Convo::new(),
+            layout: Layout::default(),
+            focus: None,
+            last: None,
+            pans: HashMap::new(),
+            scrolls: HashMap::new(),
+            rings: HashMap::new(),
+            views: HashMap::new(),
+            sidebar_open: true,
+            pick: 1,
+            screen: Screen::Panes,
+            zoomed: false,
+            pinned: Vec::new(),
+            split: 50,
+            rung: None,
+            fitted: None,
+            note: String::new(),
+            noted: std::time::Instant::now(),
+            offered: None,
+            watching: HashSet::new(),
+            wipe: false,
+            acked,
+            acks,
+            keybinds: false,
+            quit: false,
+        }
+    }
+
+    pub fn quitting(&self) -> bool {
+        self.quit
+    }
+
+    /// Everything the node said, routed to the surface that owns it.
+    ///
+    /// **`caps` is asked for on every greeting**, because the agent kinds and the named sessions
+    /// arrive only in its answer and a menu that never got one hides those rows for the wrong
+    /// reason. **`Disconnected` reaches the conversation**, because `pending` is published on a
+    /// blocked-state edge: the node's first attempt at a pane that is still blocked carries
+    /// nothing, so a question kept across a reconnect is answered into a pane with nothing
+    /// matching to answer it.
+    pub fn absorb(&mut self, event: &Event) {
+        match event {
+            Event::Prefs { greeting: true } => {
+                self.adopt_prefs();
+                self.refocus();
+                self.sync_watches();
+            }
+            Event::Herd => {
+                self.refocus();
+                self.sync_watches();
+            }
+            Event::Connected(_) => {
+                let node = self.client.state().node_name().to_string();
+                self.note(format!("connected to {node}"));
+                self.client.request_caps();
+            }
+            Event::Disconnected { reason } => {
+                self.note(reason.clone());
+                self.convo.absorb(event);
+            }
+            // Not a second greeting: only the write affordances move, and they are gated on the
+            // live role rather than on the one the greeting carried. A modal collecting an op a
+            // demoted device can no longer send is closed rather than left to be refused.
+            Event::Role(role) => {
+                if !role.writes() {
+                    self.manage.close();
+                }
+                self.note(format!("this device is now {}", role.as_str()));
+            }
+            Event::Error(failure) => {
+                self.note(failure.message.clone());
+                self.manage.observe(event);
+            }
+            Event::Managed(_) | Event::Caps(_) => self.manage.observe(event),
+            Event::Scrollback { pane, .. } => self.absorb_ring(pane),
+            Event::Convo(_) | Event::ConvoTurn { .. } | Event::Pending(_) => self.convo.absorb(event),
+            _ => {}
+        }
+    }
+
+    /// Whether the terminal has to be wiped before the next frame.
+    pub fn wiping(&mut self) -> bool {
+        std::mem::take(&mut self.wipe)
+    }
+
+    /// The pixels of a drawn image are not in the buffer, so a view that stops drawing one has to
+    /// take them down itself.
+    fn teardown(&mut self) {
+        if self.images.drawn() == 0 {
+            return;
+        }
+        self.images.clear();
+        self.wipe = true;
+    }
+
+    pub fn rung(&self) -> Option<&Rung> {
+        self.rung.as_ref()
+    }
+
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.note = text.into();
+        self.noted = std::time::Instant::now();
+    }
+
+    /// The terminal changed shape, so whatever the ladder decided was decided about a window
+    /// that is no longer there.
+    pub fn rethink_fit(&mut self) {
+        self.fitted = None;
+    }
+
+    pub fn clicked(&mut self, click: crate::mouse::Click) {
+        use crate::mouse::Click;
+        match click {
+            Click::None => {}
+            Click::Focus(pane) => {
+                self.focus(pane);
+                self.open(Screen::Panes);
+            }
+            Click::Tab(tab) => self.open_tab(&tab),
+            Click::OpenHerd => self.open(Screen::Herd),
+            Click::Answer { pane, key } => {
+                self.client.answer(&pane, &key);
+            }
+            Click::Save { pane, id } => self.save(&pane, &id),
+            Click::Passthrough { pane, text } => {
+                self.client.input(&pane, &text);
+            }
+        }
+    }
+
+    fn open(&mut self, screen: Screen) {
+        if self.screen == screen {
+            return;
+        }
+        self.teardown();
+        self.screen = screen;
+    }
+
+    /// The bytes of an attachment this terminal will not draw, written where the operator can
+    /// find them. Only a picture that has actually landed has anything to write.
+    fn save(&mut self, pane: &str, id: &str) {
+        let Some(name) = self
+            .images
+            .offer(pane, id)
+            .filter(|offer| offer.ready)
+            .map(|offer| offer.name.unwrap_or(id).to_string())
+        else {
+            self.note("nothing has landed for that attachment");
+            return;
+        };
+        let to = downloads().join(sanitise(&name));
+        match self.images.save(pane, id, &to) {
+            Ok(()) => self.note(format!("saved {}", to.display())),
+            Err(e) => self.note(format!("could not save it · {e}")),
+        }
+    }
+
+    pub fn focused(&self) -> Option<&str> {
+        self.focus.as_deref()
+    }
+
+    pub fn pinned(&self) -> &[String] {
+        &self.pinned
+    }
+
+    fn writes(&self) -> bool {
+        self.client.state().role.writes()
+    }
+
+    /// The per-pane view choice lives in `prefs`, so it follows the operator between machines.
+    /// A pane with none opens on the conversation when it has one (ADR 0005) and on the terminal
+    /// otherwise.
+    pub fn adopt_prefs(&mut self) {
+        let stored: Vec<(String, String)> = {
+            let state = self.client.state();
+            state
+                .prefs
+                .iter()
+                .filter_map(|(pane, blob)| Some((pane.clone(), blob.get("view")?.as_str()?.to_string())))
+                .collect()
+        };
+        for (pane, view) in stored {
+            let view = match view.as_str() {
+                "conversation" => View::Conversation,
+                _ => View::Terminal,
+            };
+            self.views.insert(pane, view);
+        }
+        let armed: Vec<String> = {
+            let state = self.client.state();
+            state
+                .prefs
+                .iter()
+                .filter(|(_, blob)| blob.get("mouse").and_then(|m| m.as_bool()) == Some(true))
+                .map(|(pane, _)| pane.clone())
+                .collect()
+        };
+        for pane in armed {
+            self.mouse.set_passthrough(&pane, true);
+        }
+    }
+
+    pub fn view(&self, pane: &str) -> View {
+        match self.views.get(pane) {
+            Some(view) => *view,
+            None if self.convo.has(pane) => View::Conversation,
+            None => View::Terminal,
+        }
+    }
+
+    /// The panes on screen: every pane of the focused pane's tab, which is kampr's own mosaic —
+    /// a client-side arrangement of independent `observe` streams, not `manage`'s `pane.split`.
+    pub fn mosaic(&self) -> Vec<String> {
+        let Some(focus) = self.focus.clone() else {
+            return Vec::new();
+        };
+        if self.zoomed {
+            return vec![focus];
+        }
+        if !self.pinned.is_empty() {
+            return self.pinned.clone();
+        }
+        let state = self.client.state();
+        let Some(entry) = state.herd.pane(&focus) else {
+            return vec![focus];
+        };
+        let tab = entry.tab_id.clone();
+        match tab {
+            Some(tab) => state
+                .herd
+                .panes
+                .iter()
+                .filter(|p| p.tab_id.as_deref() == Some(tab.as_str()))
+                .map(|p| p.id.clone())
+                .collect(),
+            None => vec![focus],
+        }
+    }
+
+    pub fn refocus(&mut self) {
+        let alive = self
+            .focus
+            .as_ref()
+            .is_some_and(|id| self.client.state().herd.pane(id).is_some());
+        if alive {
+            return;
+        }
+        let pick = {
+            let state = self.client.state();
+            sidebar::triage(&state.herd)
+                .first()
+                .map(|p| p.id.clone())
+                .or_else(|| state.herd.panes.first().map(|p| p.id.clone()))
+        };
+        if let Some(pick) = pick {
+            self.focus(pick);
+        }
+    }
+
+    fn focus(&mut self, pane: String) {
+        if self.focus.as_deref() == Some(pane.as_str()) {
+            return;
+        }
+        self.teardown();
+        self.last = self.focus.take();
+        self.focus = Some(pane);
+        self.zoomed = false;
+    }
+
+    /// A watch is stated once and re-issued by the client on every reconnection, so this only
+    /// has to say what has changed.
+    pub fn sync_watches(&mut self) {
+        let want: HashSet<String> = self.mosaic().into_iter().collect();
+        let caps = self.client.state().caps();
+        for pane in want.difference(&self.watching) {
+            self.client.watch(pane, caps.scrollback, caps.conversation);
+        }
+        for pane in self.watching.difference(&want) {
+            self.client.unwatch(pane);
+        }
+        self.watching = want;
+    }
+
+    /// The fit ladder, climbed once per pane geometry and terminal size rather than per frame:
+    /// rung 2 writes to the terminal, and writing it every tick would be a resize storm.
+    pub fn fit(&mut self, display: &mut dyn fit::Display, need: Need, chrome: Chrome) {
+        let Some(size) = display.cells() else { return };
+        if self.fitted == Some((need, size)) {
+            return;
+        }
+        self.fitted = Some((need, size));
+        self.rung = Some(fit::climb(display, need, chrome, self.options.resize));
+    }
+}
+
+/// Only what a terminal client has any business handing to a desktop opener. A harness declares
+/// an OSC 8 URI, but so can anything else writing to that PTY, and `xdg-open` will happily give
+/// an unknown scheme to whatever claims it.
+pub fn navigable(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
+}
+
+/// **The gate lives here rather than at the call sites, because a call site forgot it.**
+///
+/// There were two ways in — a click, which checked the scheme, and `prefix o`, which did not — and
+/// the unchecked one was the one the status line advertised. A pane declares its own OSC 8 URIs
+/// and pane output is attacker-influenceable, so `file:///tmp/x.desktop` reached `xdg-open` on the
+/// operator's own desktop for one keystroke the interface had just asked for. That is the
+/// two-paths-one-gated shape #233 is named for, and the answer is one path.
+pub fn open_url(url: &str) -> bool {
+    if !navigable(url) {
+        return false;
+    }
+    let opener = match cfg!(target_os = "macos") {
+        true => "open",
+        false => "xdg-open",
+    };
+    std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+fn downloads() -> std::path::PathBuf {
+    std::env::var_os("XDG_DOWNLOAD_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("Downloads")))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// The name rides on a transcript a harness wrote, so it names a file in one directory and never
+/// a path.
+fn sanitise(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(
+            |c| match c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                true => c,
+                false => '_',
+            },
+        )
+        .collect();
+    match cleaned.trim_matches('.').is_empty() {
+        true => "attachment".to_string(),
+        false => cleaned,
+    }
+}

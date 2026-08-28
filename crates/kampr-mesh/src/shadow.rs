@@ -4,6 +4,48 @@ use kampr_core::wire::{Cursor, RowRuns, Run, Style, Styles};
 use kampr_term::{Cell, RowDiff};
 use std::sync::Arc;
 
+/// The widest grid this process will allocate for, whatever a far end claims.
+///
+/// `grid.reset` carries geometry as two `u16`s, and a shadow that believes them turns a ~100 byte
+/// frame claiming `65535x65535` into a **159 GiB** allocation — an OOM, not an error. No message
+/// ceiling bounds it, because the allocation is derived from the claim rather than from the bytes.
+/// `StyleTable::absorb` already refuses the same shape for the same reason; the grid did not.
+///
+/// The numbers are generous against every pane ever measured here: the widest was 292 columns
+/// (#265) and a headless PTY is 93 (#68), so 4096 columns is an order of magnitude of headroom and
+/// the cell budget is ~36x the largest real grid. A far end that wants more than this is not a
+/// terminal.
+pub const MAX_COLS: u16 = 4096;
+pub const MAX_ROWS: u16 = 4096;
+pub const MAX_GRID_CELLS: usize = 1 << 20;
+
+/// Pens and hyperlinks one link may make this process hold, **per pane**.
+///
+/// Both tables are appended to across messages and nothing ever evicts from either, so neither is
+/// bounded by the message ceiling: a far end that sends a small `styles` or a small `grid.patch`
+/// often enough grows them without limit. The clamp above bounds one claim; these bound a habit.
+///
+/// Neither number can be reached by anything speaking this protocol honestly, because each is the
+/// ceiling the *sending* side already holds itself to: `kampr-core`'s `Encoder::MAX_STYLES` stops
+/// minting pens at 4096 per connection and degrades to the nearest it already sent, and
+/// `kampr-term`'s own `MAX_LINKS` stops interning at 4096 *distinct* URIs — past a screenful of
+/// entirely distinct hyperlinks on a 93x40 pane. A far end past either is not one of ours.
+pub const MAX_STYLES: usize = 4096;
+pub const MAX_LINKS: usize = 4096;
+
+/// Rows lose before columns do: a width is what every stored row was wrapped at, so cropping it
+/// makes the rows lie, while cropping the row count only shows less of a screen that is already
+/// clipped to a viewport.
+fn budget(cols: u16, rows: u16) -> (u16, u16) {
+    let cols = cols.min(MAX_COLS);
+    let rows = rows.min(MAX_ROWS);
+    if cols == 0 {
+        return (cols, rows);
+    }
+    let affordable = (MAX_GRID_CELLS / cols as usize).min(u16::MAX as usize) as u16;
+    (cols, rows.min(affordable))
+}
+
 /// A link's style table, rebuilt from the `styles` messages the far end sends.
 ///
 /// Ids are only promised to be stable for the life of a connection, so this is per link and is
@@ -35,6 +77,9 @@ impl StyleTable {
     #[must_use]
     pub fn absorb(&mut self, message: &Styles) -> bool {
         if message.from as usize > self.entries.len() {
+            return false;
+        }
+        if message.from as usize + message.styles.len() > MAX_STYLES {
             return false;
         }
         self.entries
@@ -109,6 +154,27 @@ impl Shadow {
         (self.cols, self.rows)
     }
 
+    /// The grid itself, borrowed. A renderer draws from this every frame, and [`Self::full`]
+    /// clones the whole thing — which is right for re-serving a joining watcher and wrong for a
+    /// draw path where text shaping is already the entire cost of a frame (#58–#62).
+    pub fn rows(&self) -> &[Vec<Cell>] {
+        &self.grid
+    }
+
+    /// The pane's link table, which a run's `l` indexes into. Borrowed for the same reason
+    /// [`Self::rows`] is.
+    pub fn links(&self) -> &[String] {
+        &self.links
+    }
+
+    pub fn link(&self, id: u32) -> Option<&str> {
+        self.links.get(id as usize).map(String::as_str)
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
+    }
+
     pub fn reset(
         &mut self,
         cols: u16,
@@ -118,11 +184,13 @@ impl Shadow {
         links: Vec<String>,
         styles: &StyleTable,
     ) -> PaneUpdate {
+        let (cols, rows) = budget(cols, rows);
         self.cols = cols;
         self.rows = rows;
         self.grid = vec![vec![Cell::default(); cols as usize]; rows as usize];
         self.cursor = cursor;
         self.links = links;
+        self.links.truncate(MAX_LINKS);
         self.ready = true;
         for row in rows_data {
             self.write(row, styles);
@@ -141,7 +209,11 @@ impl Shadow {
             return None;
         }
         self.cursor = cursor;
+        // Truncated rather than refused: a link id past the table resolves to no URI, which costs
+        // an OSC 8 target its Open strip, and closing a peer's whole link over a hyperlink would
+        // cost every pane on it.
         self.links.extend(new_links.iter().cloned());
+        self.links.truncate(MAX_LINKS);
         let changed: Vec<RowDiff> = rows
             .iter()
             .filter_map(|row| {

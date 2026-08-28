@@ -95,6 +95,7 @@ fn peers_ticking(ping_interval: Duration) -> Arc<Peers> {
     Peers::new(PeersConfig {
         ping_interval,
         pane_fanout: 8,
+        ..PeersConfig::default()
     })
 }
 
