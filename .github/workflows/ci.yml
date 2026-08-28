@@ -89,7 +89,10 @@ jobs:
           set -euo pipefail
           env -u GRADLE_HOME ./gradlew -I gradle/tests-must-run.init.gradle.kts \
             check :webApp:stageNodeBundle :androidApp:assembleDebug 2>&1 | tee check.log
-          if grep -E '^> Task :[^ ]+[Tt]est FROM-CACHE$' check.log; then
+          # A closed set of test-*execution* task names, not a `Test` suffix: `compileAndroidHostTest`,
+          # `javaPreCompileDebugUnitTest` and `lintAnalyzeDebugAndroidTest` all end in `Test`, are
+          # compilation and lint rather than execution, and are honestly cacheable.
+          if grep -E '^> Task :[^ ]*:(jvmTest|wasmJsTest|wasmJsBrowserTest|testAndroidHostTest|test) FROM-CACHE$' check.log; then
             echo "::error::a test task was served from the build cache — this job proved nothing"
             exit 1
           fi
