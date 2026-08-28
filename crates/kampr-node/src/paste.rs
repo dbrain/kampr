@@ -19,6 +19,16 @@ const LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 /// loop, and 8 MiB a time fills a disk long before anything is a day old. The oldest go first.
 const KEEP: usize = 64;
 
+/// What the node types into the pane once the bytes are written.
+///
+/// **The trailing space is the whole of it, and it is load-bearing.** The path used to be typed
+/// bare, so it abutted whatever the operator typed next — `/…/shot-1.pngwhat is this` — and the
+/// harness was handed one word. Nothing can fix the leading side from here: the node does not know
+/// what is already on the pane's line.
+pub fn typed(path: &Path) -> String {
+    format!("{} ", path.display())
+}
+
 #[derive(Debug)]
 pub enum PasteError {
     TooLarge(u64),
@@ -166,6 +176,14 @@ fn extension(body: &[u8]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pasted_path_is_typed_with_room_after_it_for_what_the_operator_says_next() {
+        assert_eq!(
+            typed(Path::new("/var/kampr/pastes/shot-1.png")),
+            "/var/kampr/pastes/shot-1.png ",
+        );
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kampr-paste-{tag}-{}", std::process::id()));

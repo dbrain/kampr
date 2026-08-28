@@ -295,39 +295,49 @@ async fn a_pane_stopped_while_its_pump_is_mid_frame_pushes_nothing_more() {
             })
         };
 
-        let stopped = Arc::new(AtomicBool::new(false));
-        let strays = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        // Only to keep the queue moving while the pump streams; what it takes off is not evidence
+        // either way, so it reads and discards.
+        let draining = Arc::new(AtomicBool::new(true));
         let reader = {
-            let (outbox, stopped, strays) = (outbox.clone(), stopped.clone(), strays.clone());
+            let (outbox, draining) = (outbox.clone(), draining.clone());
             tokio::spawn(async move {
-                while let Ok(Some(frame)) =
-                    tokio::time::timeout(Duration::from_millis(200), outbox.next()).await
-                {
-                    if stopped.load(Ordering::Acquire) && frame.pane.as_deref() == Some(PANE) {
-                        strays.lock().unwrap().push(frame.json);
+                while draining.load(Ordering::Relaxed) {
+                    if let Ok(None) = tokio::time::timeout(Duration::from_millis(20), outbox.next()).await {
+                        break;
                     }
                 }
             })
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
 
+        // The reader is retired *before* the stop. A frame it has already taken off the queue is
+        // in its hand when the stop lands, so a flag it reads after the dequeue calls that frame
+        // a stray — the test failing rather than the pane leaking.
+        draining.store(false, Ordering::Relaxed);
+        let _ = reader.await;
+
         // Exactly what unwatching this pane does.
         pump.abort();
         outbox.stop_pane(PANE);
-        stopped.store(true, Ordering::Release);
 
         tokio::time::sleep(Duration::from_millis(60)).await;
         feeding.store(false, Ordering::Relaxed);
         let _ = feeder.await;
         outbox.close();
-        let _ = reader.await;
 
-        let strays = strays.lock().unwrap();
+        // `stop_pane` emptied the queue of this pane under the same lock `push` takes, so anything
+        // for it still to come out was pushed after the stop.
+        let mut strays = Vec::new();
+        while let Some(frame) = outbox.next().await {
+            if frame.pane.as_deref() == Some(PANE) {
+                strays.push(frame.json);
+            }
+        }
         assert!(
             strays.is_empty(),
             "attempt {attempt}: {} frame(s) escaped the stop: {:#?}",
             strays.len(),
-            *strays
+            strays
         );
     }
 }

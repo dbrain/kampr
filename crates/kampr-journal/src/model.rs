@@ -80,12 +80,28 @@ pub enum Block {
     },
 }
 
+/// What a turn is, where that is not the same question as who filed it.
+///
+/// **Additive, and deliberately not a `Role`.** A harness files its compaction summary under a
+/// `user` record and nothing but `isCompactSummary` separates it from a prompt (#259) — so `role`
+/// keeps meaning what it has always meant, and a client that has never heard of this field renders
+/// exactly the turn it rendered before rather than a value it has to guess at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TurnKind {
+    /// The harness's own summary of the conversation it then dropped. Nobody spoke it and nobody
+    /// typed it, and it is the one turn worth keeping and not worth a screenful.
+    Compact,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Turn {
     pub id: String,
     pub role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TurnKind>,
     pub blocks: Vec<Block>,
 }
 
@@ -114,6 +130,7 @@ impl Turn {
             id: id.into(),
             role,
             at,
+            kind: None,
             blocks: Vec::new(),
         }
     }

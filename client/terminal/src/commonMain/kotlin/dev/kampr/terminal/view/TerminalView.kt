@@ -663,9 +663,19 @@ fun TerminalView(
                         io.send(ClientMsg.Manage(ManageOp.PaneSize(pane.id, mode = SizeMode.Release)))
                     }
                 },
+                // The same two numbers the grid is painted between, handed to the sheet as its
+                // box. Standing it off the key row alone left it free to grow up under the pane
+                // header, which is where a third of it went; and `chromeBottom` rather than the
+                // key row is what also holds it off a pending bar and off the gesture handle on a
+                // layout that has no key row.
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = with(density) { session.keyRowHeight.toDp() }),
+                    .absolutePadding(
+                        left = safe.left,
+                        right = safe.right,
+                        top = chromeTop,
+                        bottom = with(density) { chromeBottom.toDp() },
+                    ),
             )
         }
     }

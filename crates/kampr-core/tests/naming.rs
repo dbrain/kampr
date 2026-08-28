@@ -1,4 +1,4 @@
-use kampr_core::naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
+use kampr_core::naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError, home_relative};
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::PaneEntry;
 use serde_json::{Value, json};
@@ -58,6 +58,15 @@ fn every_shipped_case_renders_the_string_the_fixture_pins() {
         if name == "_" {
             continue;
         }
+        if let Some(path) = case.get("home_relative").and_then(Value::as_str) {
+            assert_eq!(
+                home_relative(path),
+                case["expect"].as_str().expect("an expectation"),
+                "{name}"
+            );
+            ran += 1;
+            continue;
+        }
         let template = Template::parse(case["template"].as_str().expect("a template")).expect(name);
         let (entry, title) = titled(&case["fields"]);
         assert_eq!(
@@ -74,15 +83,12 @@ fn every_shipped_case_renders_the_string_the_fixture_pins() {
 }
 
 #[test]
-fn a_command_ble_sh_hid_degrades_to_the_workspace_rather_than_to_empty_parens() {
+fn a_command_ble_sh_hid_degrades_to_the_shell_rather_than_naming_a_job_that_is_not_there() {
     let template = Template::default();
     let mut entry = entry(&json!({ "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr" }));
     entry.cmd = Some("cargo".into());
     entry.argv = Some("cargo test".into());
-    assert_eq!(
-        template.render(&Fields::from_entry(&entry)),
-        "kampr (cargo test) · bash"
-    );
+    assert_eq!(template.render(&Fields::from_entry(&entry)), "kampr · cargo test");
     entry.cmd = None;
     entry.argv = None;
     assert_eq!(template.render(&Fields::from_entry(&entry)), "kampr · bash");
@@ -101,7 +107,7 @@ fn the_default_template_is_the_one_the_fixture_and_the_clients_use() {
     // here cannot land without the Kotlin one moving with it.
     assert_eq!(
         DEFAULT_TEMPLATE,
-        "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}"
+        "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}"
     );
     assert_eq!(Template::default(), Template::parse(DEFAULT_TEMPLATE).unwrap());
 }

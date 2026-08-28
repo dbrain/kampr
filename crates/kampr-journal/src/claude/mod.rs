@@ -10,13 +10,14 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
+use crate::composer::{Caret, Composed, ComposerReader};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
-use crate::facet::Facets;
+use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
-use crate::model::{Attachment, Block, Role, ToolState, Turn};
+use crate::model::{Attachment, Block, Role, ToolState, Turn, TurnKind};
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
@@ -185,8 +186,16 @@ impl JournalAdapter for ClaudeAdapter {
         Some(live)
     }
 
+    fn composer(&self) -> Option<ComposerReader> {
+        Some(composer)
+    }
+
     fn facets(&self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
         facet::collect(transcript, marker)
+    }
+
+    fn fold(&self) -> Option<Box<dyn FacetFold>> {
+        Some(Box::new(facet::Fold::default()))
     }
 
     fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -271,6 +280,13 @@ impl ClaudeParser {
 
         let id = record.uuid.unwrap_or_else(|| format!("c{seq}"));
         let mut turn = Turn::new(id.clone(), role, record.timestamp);
+        // `/compact` files the harness's summary as a user record and leaves this flag as the only
+        // thing separating it from a prompt (#259). Dropping it would take the operator's own
+        // history away; leaving it unmarked is what put it in their voice.
+        turn.kind = record
+            .is_compact_summary
+            .unwrap_or(false)
+            .then_some(TurnKind::Compact);
         let mut atts = atts.into_iter();
 
         match content {
@@ -406,8 +422,16 @@ const LAYOUT: Layout = Layout {
     prompt: '❯',
     result: '⎿',
     indent: 2,
+    input: 2,
     reject: is_tool_card,
 };
+
+/// **`ctrl+u` is the wrong key here and looks like the right one.** Measured against a 200-column
+/// entry wrapped over three rows, one `ctrl+u` took a single *visual row* and left the rest, and
+/// so did `ctrl+a ctrl+k`; eight of them cleared it, which is a number that only holds for that
+/// length. `ctrl+c` took the whole buffer in one send and left the harness running. On agy the
+/// same key arms an exit instead, which is why this is per-harness and not a constant.
+const CLEAR: &str = "\u{3}";
 
 /// `Write(notes.md)`, `Bash(herdr pane list)`, `Read(…)`. Prose does not open with a bare
 /// identifier and an opening bracket, and a card is already in the transcript under its own turn.
@@ -423,4 +447,8 @@ fn is_tool_card(head: &str) -> bool {
 
 pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     crate::live::read(screen, &LAYOUT)
+}
+
+pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
+    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
 }

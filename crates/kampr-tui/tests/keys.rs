@@ -135,6 +135,22 @@ fn the_bind_table_is_herdrs_own() {
     }
 }
 
+/// The handful Kampr claims for itself, and the one thing that must stay true of each: it takes a
+/// key #289's table leaves alone. `shift+h` is the herd view and plain `h` is still herdr's own
+/// focus-left, which is the pair a careless `shifted` would have collapsed.
+#[test]
+fn the_binds_kampr_adds_take_keys_herdr_leaves_alone() {
+    use Action::*;
+    let mut router = Router::default();
+    router.key(ctrl('b'));
+    assert_eq!(router.key(ch('H')), Outcome::Do(HerdView));
+    router.key(ctrl('b'));
+    assert_eq!(
+        router.key(ch('h')),
+        Outcome::Do(FocusPane(kampr_tui::keymap::Dir::Left))
+    );
+}
+
 #[test]
 fn a_key_that_is_not_a_binding_after_the_prefix_goes_to_the_pane() {
     let mut router = Router::default();

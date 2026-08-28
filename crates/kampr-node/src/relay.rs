@@ -45,13 +45,18 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
     }
     loop {
         let Some(event) = watcher.recv().await else {
-            // The link went away under a live watcher. Say so on the pane rather than going
-            // quiet: a client that is told nothing shows a frozen grid forever.
-            wire.error(
-                ErrorCode::NodeOffline,
-                "the node serving this pane left the herd",
-                Some(&global),
-            );
+            // Say so on the pane rather than going quiet: a client that is told nothing shows a
+            // frozen grid forever. The two ways a relayed stream ends are opposite facts and must
+            // not read alike — the peer went away, or this hub refused to hold a transcript for a
+            // client that had stopped draining it.
+            let (code, detail) = match watcher.overrun() {
+                true => (
+                    ErrorCode::StreamUnavailable,
+                    "this client fell too far behind this pane for the hub to catch it up",
+                ),
+                false => (ErrorCode::NodeOffline, "the node serving this pane left the herd"),
+            };
+            wire.error(code, detail, Some(&global));
             return;
         };
         if matches!(event, RemoteEvent::Update(_)) && wire.outbox().congested() {

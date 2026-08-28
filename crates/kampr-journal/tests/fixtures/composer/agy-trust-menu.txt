@@ -1,0 +1,14 @@
+caret 93 12
+Accessing workspace:
+
+/tmp/kampr-composer-0x0QBu
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                       Gemini 3.7 Flash · high

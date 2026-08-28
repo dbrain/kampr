@@ -2,6 +2,7 @@ use crate::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider};
 use crate::scrollback::{Ingest, ScrollbackDoc, ScrollbackRing};
 use crate::wire::Cursor;
 use anyhow::Result;
+use kampr_journal::Caret;
 use kampr_term::{Emulator, RowDiff};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -291,19 +292,28 @@ impl PaneRegistry {
         }
     }
 
-    /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed.
+    /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed,
+    /// and the caret that goes with it.
     ///
     /// The emulator only exists while somebody is streaming the pane, so this is `None` for an
     /// unwatched pane and never opens anything to answer. It is the same grid the client is
     /// looking at — no `pane.read`, no socket call, no second emulation.
-    pub fn screen(&self, pane_id: &str) -> Option<Vec<String>> {
+    ///
+    /// The caret comes back **under the same lock as the rows**, because the two are only worth
+    /// anything together: it is what tells an empty composer from one the harness has painted its
+    /// own hint into, and a caret read a moment after the grid describes a screen that has moved.
+    pub fn screen(&self, pane_id: &str) -> Option<Screen> {
         let entry = self.lookup(pane_id)?;
         let state = entry.state.lock().unwrap();
         if !state.ready {
             return None;
         }
+        let (col, row, _) = state.term.cursor();
         let grid = state.term.grid();
-        Some((0..grid.rows()).map(|r| grid.row_text(r)).collect())
+        Some(Screen {
+            rows: (0..grid.rows()).map(|r| grid.row_text(r)).collect(),
+            caret: Caret { col, row },
+        })
     }
 
     /// What cadence the pane's history poller has settled on, and the row rate it measured.
@@ -511,6 +521,12 @@ impl Watcher {
             Err(RecvError::Closed) => Err(WatchError::Closed),
         }
     }
+}
+
+/// One look at a pane's screen: the grid and the caret on it, taken together.
+pub struct Screen {
+    pub rows: Vec<String>,
+    pub caret: Caret,
 }
 
 fn cursor_of(state: &PaneState) -> Cursor {

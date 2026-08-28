@@ -1,0 +1,41 @@
+caret 41 36
+
+ ▐▛███▛█   Claude Code v2.1.250
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    /tmp/kampr-composer-17JNR6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ push the branch when the tests go green
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with C…
+  ⏵⏵ auto mode on (shift+tab to cycle)                                                  /rc

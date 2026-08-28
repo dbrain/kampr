@@ -1,3 +1,4 @@
+use crate::fanout::{Delivery, Fanout, Subscriber};
 use crate::handshake::Accepted;
 use crate::shadow::{History, Shadow, StyleTable};
 use crate::transport::{Incoming, Outgoing};
@@ -12,11 +13,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
 /// Per-pane fan-out depth on the hub. Overflowing it costs a client one `grid.reset` out of the
-/// hub's own shadow — never a stall, and never a round trip to the peer.
+/// hub's own shadow — never a stall, and never a round trip to the peer. Only grid frames are
+/// spent that way; see [`crate::fanout`].
 const PANE_FANOUT: usize = 64;
 
 /// Requests the hub may have outstanding towards one peer. These are `watch`, `input` and
@@ -496,7 +498,9 @@ impl Peers {
             "grid.reset" => link.grid_reset(&message),
             "grid.patch" => link.grid_patch(&message),
             "scrollback" => link.scrollback(&message),
-            "pending" | "convo" | "convo.turn" => link.passthrough(&message),
+            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" => {
+                link.passthrough(&message)
+            }
             "error" => link.error(&message),
             "managed" => link.managed(message),
             "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),
@@ -857,13 +861,12 @@ impl PeerLink {
             }
             return Ok(watcher);
         }
-        let (tx, _) = broadcast::channel(fanout);
         let remote = Arc::new(RemotePane {
             pane: pane.to_string(),
             conversation: AtomicBool::new(conversation),
             shadow: Mutex::new(Shadow::default()),
             history: Mutex::new(History::default()),
-            tx,
+            fanout: Fanout::new(fanout),
             requests: self.requests.clone(),
         });
         panes.insert(pane.to_string(), Arc::downgrade(&remote));
@@ -1147,13 +1150,13 @@ struct RemotePane {
     conversation: AtomicBool,
     shadow: Mutex<Shadow>,
     history: Mutex<History>,
-    tx: broadcast::Sender<RemoteEvent>,
+    fanout: Fanout,
     requests: mpsc::Sender<String>,
 }
 
 impl RemotePane {
     fn emit(&self, event: RemoteEvent) {
-        let _ = self.tx.send(event);
+        self.fanout.send(event);
     }
 
     fn fail(&self, code: &str, message: &str) {
@@ -1181,7 +1184,7 @@ impl Drop for RemotePane {
 #[derive(Debug)]
 pub struct RemoteWatcher {
     pane: Arc<RemotePane>,
-    rx: broadcast::Receiver<RemoteEvent>,
+    subscriber: Arc<Subscriber>,
     initial: Vec<RemoteEvent>,
     ready: bool,
     sent_history: u32,
@@ -1192,7 +1195,7 @@ impl RemoteWatcher {
         // Subscribing under the shadow lock is what stops the grid a joiner is handed and the
         // stream that follows it from interleaving.
         let shadow = pane.shadow.lock().unwrap();
-        let rx = pane.tx.subscribe();
+        let subscriber = pane.fanout.subscribe();
         let ready = shadow.is_ready();
         let mut initial = Vec::new();
         if ready {
@@ -1207,7 +1210,7 @@ impl RemoteWatcher {
         drop(history);
         Self {
             pane,
-            rx,
+            subscriber,
             initial,
             ready,
             sent_history,
@@ -1228,23 +1231,30 @@ impl RemoteWatcher {
         self.sent_history
     }
 
+    /// Why [`Self::recv`] ended: this hub could not hold what this watcher was not reading, rather
+    /// than the pane's node going away. The two are the same silence to a client and mean opposite
+    /// things to whoever has to fix it.
+    pub fn overrun(&self) -> bool {
+        self.subscriber.overrun()
+    }
+
     /// A watcher that falls behind is caught up from the hub's shadow — one full grid, out of
-    /// memory, with no round trip to the peer.
+    /// memory, with no round trip to the peer. Only its *grid* frames were spent to get there.
     pub async fn recv(&mut self) -> Option<RemoteEvent> {
         loop {
-            match self.rx.recv().await {
-                Ok(event) => {
+            match self.subscriber.recv().await {
+                Delivery::Event(event) => {
                     self.ready |= matches!(&event, RemoteEvent::Update(u) if u.is_reset());
                     return Some(event);
                 }
-                Err(broadcast::error::RecvError::Lagged(dropped)) => {
+                Delivery::Resync(dropped) => {
                     debug!(pane = %self.pane.pane, dropped, "hub fan-out lagged; resetting from the shadow");
                     let shadow = self.pane.shadow.lock().unwrap();
                     if shadow.is_ready() {
                         return Some(RemoteEvent::Update(shadow.full()));
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => return None,
+                Delivery::Ended => return None,
             }
         }
     }

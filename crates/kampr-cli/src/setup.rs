@@ -105,6 +105,14 @@ async fn pair(local: &Local, role: Role) -> Result<()> {
         "  valid  {} minutes",
         local.auth.policy().pairing_ttl.as_secs() / 60
     );
+    println!();
+    // The QR and the URL are aimed at a phone, and for a long time they were the only two ways in
+    // this screen named — so an operator sitting at another terminal had no way to find out that
+    // `kampr connect` exists. `ResolveError::NoHerd` says it, and is on a path nobody with a node
+    // running ever reaches.
+    println!("  From a phone or a browser, open that URL and type the code.");
+    println!("  From another terminal:");
+    println!("    kampr connect {url} --code {}", pairing.code);
     pairing::arm(local, &pairing).await
 }
 

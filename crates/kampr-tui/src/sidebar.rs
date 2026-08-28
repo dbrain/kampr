@@ -1,5 +1,6 @@
 use crate::theme::Theme;
 use kampr_client::Herd;
+use kampr_core::naming::{Fields, Template};
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::PaneEntry;
 use ratatui::buffer::Buffer;
@@ -28,9 +29,8 @@ pub enum Row {
         pane: String,
     },
     Pane {
-        title: String,
+        name: String,
         status: AgentStatus,
-        agent: Option<String>,
         pane: String,
     },
     Blank,
@@ -69,17 +69,19 @@ fn clock(entry: &PaneEntry) -> Option<&str> {
     entry.updated_at.as_deref().and_then(|at| at.get(11..16))
 }
 
-fn title(entry: &PaneEntry) -> String {
-    entry
-        .label
-        .clone()
-        .or_else(|| entry.workspace.clone())
-        .unwrap_or_else(|| {
-            entry
-                .id
-                .split_once('/')
-                .map_or(entry.id.clone(), |(_, p)| p.into())
-        })
+/// **The shared engine, not a fourth spelling of it.** This file used to fall back to the pane's
+/// `tab`, which herdr numbers 1, 2, 3 — so every row in the sidebar was called `1` while the same
+/// pane was named properly in the app. `kampr_core::naming` is what the node and the Compose
+/// client already render, and the point of it being in `kampr-core` is that all three agree.
+///
+/// Parsed once and not per pane per frame: [`spaces`] and [`agents`] are rebuilt on every draw, so
+/// a `Template::default()` here would re-scan the template string a few hundred times a second for
+/// an answer that cannot change.
+pub fn name(entry: &PaneEntry) -> String {
+    static DEFAULT: std::sync::OnceLock<Template> = std::sync::OnceLock::new();
+    DEFAULT
+        .get_or_init(Template::default)
+        .render(&Fields::from_entry(entry))
 }
 
 /// **Sorted by priority, not grouped**: blocked and working at the top, done and idle below.
@@ -127,19 +129,18 @@ pub fn spaces(herd: &Herd) -> Vec<Row> {
         }
         let mut workspace = None;
         for pane in &group.panes {
-            let name = pane.workspace.clone().unwrap_or_else(|| "—".into());
-            if workspace.as_deref() != Some(name.as_str()) {
+            let space = pane.workspace.clone().unwrap_or_else(|| "—".into());
+            if workspace.as_deref() != Some(space.as_str()) {
                 rows.push(Row::Workspace {
                     subtitle: pane.cwd.as_deref().map(short).map(str::to_string),
-                    name: name.clone(),
+                    name: space.clone(),
                     pane: pane.id.clone(),
                 });
-                workspace = Some(name);
+                workspace = Some(space);
             }
             rows.push(Row::Pane {
-                title: pane.tab.clone().unwrap_or_else(|| title(pane)),
+                name: name(pane),
                 status: pane.agent_status,
-                agent: pane.agent.clone(),
                 pane: pane.id.clone(),
             });
         }
@@ -156,9 +157,8 @@ pub fn agents(herd: &Herd, questions: impl Fn(&str) -> Option<String>) -> Vec<Ro
     let mut rows = vec![Row::Header("agents", "priority".into())];
     for pane in items {
         rows.push(Row::Pane {
-            title: title(pane),
+            name: name(pane),
             status: pane.agent_status,
-            agent: pane.agent.clone(),
             pane: pane.id.clone(),
         });
         if let Some(question) = questions(&pane.id) {
@@ -171,7 +171,12 @@ pub fn agents(herd: &Herd, questions: impl Fn(&str) -> Option<String>) -> Vec<Ro
 pub struct Sidebar<'a> {
     pub rows: &'a [Row],
     pub theme: &'a Theme,
+    /// Where the navigator's cursor is, while it is open.
     pub selected: Option<usize>,
+    /// Where the operator actually is. **Two different questions**, and the sidebar used to answer
+    /// only the first — so outside the navigator nothing on it said which pane the frame was
+    /// showing.
+    pub focused: Option<&'a str>,
     pub top: usize,
 }
 
@@ -186,7 +191,8 @@ impl Widget for Sidebar<'_> {
             .take(area.height as usize)
             .map(|(i, row)| {
                 let picked = self.selected == Some(i);
-                line(row, t, picked, area.width)
+                let here = row.pane().is_some() && row.pane() == self.focused;
+                line(row, t, picked, here, area.width)
             })
             .collect();
         Paragraph::new(lines)
@@ -195,7 +201,27 @@ impl Widget for Sidebar<'_> {
     }
 }
 
-fn line<'a>(row: &'a Row, t: &Theme, picked: bool, width: u16) -> Line<'a> {
+/// Cut in the middle, never at the end. A sidebar 30 columns wide cuts something on most rows, and
+/// the tail is the half that tells `kampr · cargo test -p kampr-tui` from `-p kampr-core`.
+fn elide(text: &str, width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    if width <= 1 {
+        return chars.into_iter().take(width).collect();
+    }
+    let keep = width - 1;
+    let head = keep.div_ceil(2);
+    let tail = keep - head;
+    chars[..head]
+        .iter()
+        .chain(['…'].iter())
+        .chain(chars[chars.len() - tail..].iter())
+        .collect()
+}
+
+fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Line<'a> {
     let pick = |style: Style| match picked {
         true => style.bg(t.accent_soft).add_modifier(Modifier::BOLD),
         false => style,
@@ -238,18 +264,21 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, width: u16) -> Line<'a> {
             ])
         }
         Row::Absence(text) => Line::from(Span::styled(
-            format!("     {text}"),
+            format!("     {}", elide(text, width.saturating_sub(5) as usize)),
             Style::default()
                 .fg(t.mute)
                 .bg(t.bar)
                 .add_modifier(Modifier::ITALIC),
         )),
         Row::Workspace { name, subtitle, .. } => {
+            let room = width.saturating_sub(5) as usize;
+            let sub = subtitle.as_deref().unwrap_or_default();
+            let split = room.saturating_sub(sub.chars().count() + 2);
             let mut spans = vec![Span::styled(
-                format!("   ▸ {name}"),
+                format!("   ▸ {}", elide(name, split)),
                 pick(Style::default().fg(t.text).bg(t.bar)),
             )];
-            if let Some(sub) = subtitle {
+            if !sub.is_empty() {
                 spans.push(Span::styled(
                     format!("  {sub}"),
                     Style::default().fg(t.mute).bg(t.bar),
@@ -257,21 +286,28 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, width: u16) -> Line<'a> {
             }
             Line::from(spans)
         }
-        Row::Pane {
-            title, status, agent, ..
-        } => {
-            let mark = Style::default().fg(t.status(*status)).bg(t.bar);
-            let mut spans = vec![
-                Span::styled(format!("   {} ", glyph(*status)), mark),
-                Span::styled(title.clone(), pick(Style::default().fg(t.dim).bg(t.bar))),
-            ];
-            if let Some(agent) = agent {
-                spans.push(Span::styled(
-                    format!(" · {agent}"),
-                    Style::default().fg(t.mute).bg(t.bar),
-                ));
-            }
-            Line::from(spans)
+        Row::Pane { name, status, .. } => {
+            let body = match here {
+                true => Style::default()
+                    .fg(t.accent_hi)
+                    .bg(t.bar)
+                    .add_modifier(Modifier::BOLD),
+                false => Style::default().fg(t.dim).bg(t.bar),
+            };
+            Line::from(vec![
+                Span::styled(
+                    match here {
+                        true => " ▌ ",
+                        false => "   ",
+                    },
+                    Style::default().fg(t.accent).bg(t.bar),
+                ),
+                Span::styled(
+                    format!("{} ", glyph(*status)),
+                    Style::default().fg(t.status(*status)).bg(t.bar),
+                ),
+                Span::styled(elide(name, width.saturating_sub(5) as usize), pick(body)),
+            ])
         }
         Row::Blank => Line::from(Span::styled(" ", Style::default().bg(t.bar))),
     }

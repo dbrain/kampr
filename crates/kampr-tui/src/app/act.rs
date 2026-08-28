@@ -15,8 +15,10 @@ use kampr_term::Cell;
 impl App {
     pub fn key(&mut self, key: KeyEvent) {
         self.settle_manage();
+        // **The panel keeps the keyboard while it is open.** Any key used to dismiss it, so it
+        // could not be paged through even once it had more than a screen in it.
         if self.keybinds {
-            self.keybinds = false;
+            self.help_key(key);
             return;
         }
         // The modal has the keyboard while it is open, and it has it **first**: a digit typed
@@ -38,17 +40,51 @@ impl App {
         {
             return;
         }
+        let before = self.router.mode();
         match self.router.key(key) {
             Outcome::Nothing => {}
             Outcome::Redrew => {}
             Outcome::Do(action) => self.act(action),
             Outcome::ToPane(text) => self.send(&text),
         }
-        self.screen = match self.router.mode() {
-            Mode::Navigate => Screen::Herd,
-            _ if self.screen == Screen::Herd && !self.router.modal() => Screen::Panes,
-            _ => self.screen,
-        };
+        if before != Mode::Navigate && self.router.mode() == Mode::Navigate {
+            self.show_what_is_being_navigated();
+        }
+    }
+
+    /// **The navigator has to have something to navigate.** It used to force the herd screen for
+    /// as long as it was open, and that screen is always drawn; walking the sidebar instead means
+    /// it can be opened against one that is hidden — `prefix b` — or one the terminal is too
+    /// narrow to draw at all, and then the cursor moves and the arrows are swallowed with nothing
+    /// on screen to show for it.
+    ///
+    /// The last frame's rects are what say whether the sidebar was drawable, because the width
+    /// test belongs to the draw and the keyboard does not know the terminal's size. **A frame that
+    /// has not happened yet is not a frame that drew no sidebar** — `status` is zero-sized only
+    /// before the first draw, and reading the two the same way sent every fresh client to the herd.
+    fn show_what_is_being_navigated(&mut self) {
+        self.sidebar_open = true;
+        let drawn = self.layout.status.height > 0;
+        if drawn && self.layout.sidebar.width == 0 {
+            self.open(Screen::Herd);
+        }
+    }
+
+    fn help_key(&mut self, key: KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Up => self.scroll_help(-1),
+            KeyCode::Down => self.scroll_help(1),
+            KeyCode::PageUp => self.scroll_help(-10),
+            KeyCode::PageDown => self.scroll_help(10),
+            KeyCode::Home => self.scroll_help(i32::MIN / 2),
+            KeyCode::End => self.scroll_help(i32::MAX / 2),
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('?') => {
+                self.keybinds = false;
+                self.help_top = 0;
+            }
+            _ => {}
+        }
     }
 
     /// The conversation surface gets the keyboard before the pane does, and the pending strip
@@ -145,7 +181,16 @@ impl App {
             Detach => self.quit = true,
             Keybinds => self.keybinds = true,
             ToggleSidebar => self.sidebar_open = !self.sidebar_open,
-            ZoomPane => self.zoomed = !self.zoomed,
+            HerdView => self.open(match self.screen {
+                Screen::Herd => Screen::Panes,
+                Screen::Panes => Screen::Herd,
+            }),
+            // Zoom narrows the mosaic to one pane and widens it back to the tab's, so it moves
+            // the subscription the same way a focus does.
+            ZoomPane => {
+                self.zoomed = !self.zoomed;
+                self.sync_watches();
+            }
             LastPane => {
                 if let Some(last) = self.last.clone() {
                     self.focus(last);
@@ -184,6 +229,7 @@ impl App {
             PinPane => self.pin(),
             ClearMosaic => {
                 self.pinned.clear();
+                self.sync_watches();
                 self.note("the mosaic is this tab's panes again");
             }
             SwitchWorkspace(n) => {
@@ -480,7 +526,6 @@ impl App {
         }
         self.zoomed = false;
         self.focus(pane);
-        self.sync_watches();
         self.note(format!("{} panes side by side", self.pinned.len()));
     }
 

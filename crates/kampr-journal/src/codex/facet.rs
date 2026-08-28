@@ -3,8 +3,9 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::facet::{Compaction, Facets, Mode, Timing};
-use crate::scan::records;
+use crate::facet::{Compaction, FacetFold, Facets, Mode, Timing};
+use crate::marker::SessionMarker;
+use crate::scan::{Appended, Cursor};
 
 use super::message_turn;
 use super::record::{Payload, Record};
@@ -13,38 +14,73 @@ use super::record::{Payload, Record};
 /// facets and none of the other two: there is no session title — the 2700 `payload.name` hits
 /// across this machine's rollouts are tool-call names — and no queue of any kind.
 pub fn collect(transcript: &Path) -> Facets {
-    let mut facets = Facets::default();
-    let mut mode = Mode::default();
-    let mut turn: Option<String> = None;
+    Fold::default().facets(transcript, None)
+}
 
-    for (seq, line) in records(transcript).enumerate() {
-        let Ok(record) = serde_json::from_str::<Record>(&line) else {
-            continue;
+/// The same fold, kept between reads. `seq` is what makes it resumable rather than merely
+/// restartable: a timing names the turn the parser minted from a record's *position* in the file,
+/// so the count has to go on from where the last read left it.
+#[derive(Default)]
+pub struct Fold {
+    cursor: Cursor,
+    seq: usize,
+    accumulated: Facets,
+    mode: Mode,
+    turn: Option<String>,
+}
+
+impl FacetFold for Fold {
+    fn facets(&mut self, transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        let mut appended = Appended::open(transcript, self.cursor);
+        if appended.restarted() {
+            *self = Self::default();
+        }
+        for line in appended.by_ref() {
+            self.push(&line);
+        }
+        self.cursor = appended.cursor();
+
+        Facets {
+            mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
+            ..self.accumulated.clone()
+        }
+    }
+}
+
+impl Fold {
+    fn push(&mut self, line: &str) {
+        let seq = self.seq;
+        self.seq += 1;
+        let Ok(record) = serde_json::from_str::<Record>(line) else {
+            return;
         };
         match record.kind.as_str() {
             "response_item" => {
                 if produces_turn(record.payload) {
-                    turn = Some(format!("x{seq}"));
+                    self.turn = Some(format!("x{seq}"));
                 }
             }
             "turn_context" => {
                 if let Ok(context) = serde_json::from_value::<TurnContext>(record.payload) {
-                    mode.mode = context.collaboration_mode.and_then(|c| c.mode).or(mode.mode);
-                    mode.permission = context.approval_policy.or(mode.permission);
+                    self.mode.mode = context
+                        .collaboration_mode
+                        .and_then(|c| c.mode)
+                        .or(self.mode.mode.take());
+                    self.mode.permission = context.approval_policy.or(self.mode.permission.take());
                 }
             }
             "event_msg" => {
                 let Ok(event) = serde_json::from_value::<Event>(record.payload) else {
-                    continue;
+                    return;
                 };
                 match event.kind.as_str() {
-                    "task_complete" => facets.timings.extend(timing(&turn, &event)),
+                    "task_complete" => self.accumulated.timings.extend(timing(&self.turn, &event)),
                     // The whole payload is `{"type":"context_compacted"}`, and the `compacted`
                     // record beside it carries `replacement_history` and no counts — so a Codex
                     // compaction can say *here* and nothing else. Counting the history's entries
                     // would put a number on the wire the harness never wrote, and the client
                     // cannot tell one of those from a measurement.
-                    "context_compacted" => facets.compactions.push(Compaction {
+                    "context_compacted" => self.accumulated.compactions.push(Compaction {
                         at: record.timestamp,
                         ..Compaction::default()
                     }),
@@ -54,9 +90,6 @@ pub fn collect(transcript: &Path) -> Facets {
             _ => {}
         }
     }
-
-    facets.mode = (mode != Mode::default()).then_some(mode);
-    facets
 }
 
 /// **The turn a timing closes is the last one the parser produced before it, not the `turn_id`

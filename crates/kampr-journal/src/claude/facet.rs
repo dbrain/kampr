@@ -3,8 +3,9 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::facet::{Compaction, Facets, Mode, Queued, Timing, Titles};
+use crate::facet::{Compaction, FacetFold, Facets, Mode, Queued, Timing, Titles};
 use crate::marker::SessionMarker;
+use crate::scan::{Appended, Cursor};
 use crate::sub;
 
 /// A title a person typed, filed beside the session's own directory rather than in the transcript.
@@ -13,41 +14,69 @@ const MANUAL: &str = "custom-title.json";
 /// Every record kind below is measured, with counts, in probe #312. Nothing here is inferred from
 /// a name.
 pub fn collect(transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
-    let mut facets = Facets::default();
-    let mut titles = Titles::default();
-    let mut queue: Vec<Queued> = Vec::new();
-    let mut mode = Mode::default();
+    Fold::default().facets(transcript, marker)
+}
 
+/// The same fold, kept between reads: the accumulated state and the byte it has reached, so a
+/// second look costs the records appended since the first rather than the whole transcript.
+#[derive(Default)]
+pub struct Fold {
+    cursor: Cursor,
+    accumulated: Facets,
+    titles: Titles,
+    queue: Vec<Queued>,
+    mode: Mode,
+}
+
+impl FacetFold for Fold {
+    fn facets(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
+        let mut appended = Appended::open(transcript, self.cursor);
+        if appended.restarted() {
+            *self = Self::default();
+        }
+        for line in appended.by_ref() {
+            self.push(&line);
+        }
+        self.cursor = appended.cursor();
+
+        let mut titles = self.titles.clone();
+        // The file beside the session is what the operator typed most recently, and the marker is
+        // the live copy of a name the transcript only records as of its last write.
+        titles.manual = manual_title(transcript).or(titles.manual);
+        titles.named = marker.and_then(|m| m.name.clone()).or(titles.named);
+        Facets {
+            title: titles.resolve(),
+            queued: self.queue.clone(),
+            mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
+            ..self.accumulated.clone()
+        }
+    }
+}
+
+impl Fold {
     // Every one of these is rewritten as the session moves — 1165 `ai-title` records over the
     // twelve transcripts of one project here — so the last of each is the one it has now.
-    for line in crate::scan::records(transcript) {
-        let Ok(record) = serde_json::from_str::<FacetRecord>(&line) else {
-            continue;
+    fn push(&mut self, line: &str) {
+        let Ok(record) = serde_json::from_str::<FacetRecord>(line) else {
+            return;
         };
         match record.kind.as_str() {
-            "ai-title" => titles.generated = record.ai_title.or(titles.generated),
-            "agent-name" => titles.named = record.agent_name.or(titles.named),
-            "custom-title" => titles.manual = record.custom_title.or(titles.manual),
-            "queue-operation" => queued(&mut queue, &record),
-            "permission-mode" => mode.permission = record.permission_mode.or(mode.permission),
-            "mode" => mode.mode = record.mode.or(mode.mode),
+            "ai-title" => self.titles.generated = record.ai_title.or(self.titles.generated.take()),
+            "agent-name" => self.titles.named = record.agent_name.or(self.titles.named.take()),
+            "custom-title" => self.titles.manual = record.custom_title.or(self.titles.manual.take()),
+            "queue-operation" => queued(&mut self.queue, &record),
+            "permission-mode" => {
+                self.mode.permission = record.permission_mode.or(self.mode.permission.take())
+            }
+            "mode" => self.mode.mode = record.mode.or(self.mode.mode.take()),
             "system" => match record.subtype.as_deref() {
-                Some("turn_duration") => facets.timings.extend(timing(&record)),
-                Some("compact_boundary") => facets.compactions.extend(compaction(&record)),
+                Some("turn_duration") => self.accumulated.timings.extend(timing(&record)),
+                Some("compact_boundary") => self.accumulated.compactions.extend(compaction(&record)),
                 _ => {}
             },
             _ => {}
         }
     }
-
-    // The file beside the session is what the operator typed most recently, and the marker is the
-    // live copy of a name the transcript only records as of its last write.
-    titles.manual = manual_title(transcript).or(titles.manual);
-    titles.named = marker.and_then(|m| m.name.clone()).or(titles.named);
-    facets.title = titles.resolve();
-    facets.queued = queue;
-    facets.mode = (mode != Mode::default()).then_some(mode);
-    facets
 }
 
 fn manual_title(transcript: &Path) -> Option<String> {

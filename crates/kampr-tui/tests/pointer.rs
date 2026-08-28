@@ -192,14 +192,22 @@ fn a_drag_over_an_armed_pane_reports_once_per_cell_and_the_release_closes_it() {
     );
 }
 
+/// **An unarmed pane is not an inert one.** The wheel used to resolve through the same
+/// passthrough gate as a click, so on a client where nothing had been armed — which is every
+/// client until the operator asks — it did nothing whatever. Arming decides what the pane's own
+/// *program* sees; kampr's surfaces scroll either way, and the pane still hears nothing.
 #[test]
-fn the_wheel_over_an_armed_pane_reports_and_over_an_unarmed_one_does_not() {
+fn the_wheel_scrolls_kamprs_own_surface_until_a_pane_is_armed_to_hear_it() {
     let layout = one_pane(Rect::new(0, 0, 20, 10));
     let mut mouse = Mouse::new();
     arrived(&mut mouse, &layout, Role::Full);
     assert_eq!(
         mouse.hit(at(MouseEventKind::ScrollUp, 5, 4), &layout, Role::Full),
-        Click::None
+        Click::Wheel {
+            pane: Some("01JNODE/w1:p1".into()),
+            up: true
+        },
+        "kampr scrolls it and the pane hears nothing"
     );
     mouse.set_passthrough("01JNODE/w1:p1", true);
     assert_eq!(
@@ -927,5 +935,89 @@ async fn a_blocked_agents_option_chip_answers_it_and_the_herd_view_opens_a_pane(
     assert!(
         screen.contains("Do you want to make this"),
         "clicking a row leaves the herd view for that pane:\n{screen}"
+    );
+}
+
+fn wheel(app: &mut App, client: &Arc<Client>, up: bool, x: u16, y: u16) {
+    let kind = match up {
+        true => MouseEventKind::ScrollUp,
+        false => MouseEventKind::ScrollDown,
+    };
+    let role = client.state().role;
+    let click = app.mouse.hit(at(kind, x, y), &app.layout, role);
+    app.clicked(click);
+}
+
+/// The end of the same defect: `Click::Wheel` reaching the app has to move something. A pane's
+/// ring and the sidebar are two surfaces and the pointer is what says which — a mosaic has more
+/// than one pane on screen and the wheel is the one gesture that picks without also claiming.
+#[tokio::test]
+async fn the_wheel_moves_the_ring_under_the_pointer_and_the_sidebar_under_it() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    // Enough panes that the sidebar is taller than its box. With one pane it is not, `sidebar_view`
+    // clamps the scroll to zero, and an assertion about scrolling it can never fail.
+    let many: Vec<Value> = (1..=24)
+        .map(|n| pane(&format!("01JNODE/w1:p{n}"), &format!("t{n}")))
+        .collect();
+    conn.greet(json!(many), json!({}));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = App::new(client.clone(), Options::default(), Images::default());
+    app.adopt_prefs();
+    app.refocus();
+    conn.send(json!({
+        "t": "grid.reset", "pane": "01JNODE/w1:p1", "cols": 12, "rows": 4,
+        "rows_data": [{ "row": 0, "runs": [{ "s": 0, "x": "live" }] }],
+        "cursor": { "col": 0, "row": 0, "visible": true }, "links": []
+    }));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    conn.send(json!({
+        "t": "scrollback", "pane": "01JNODE/w1:p1", "from_top": 0, "total_rows": 40,
+        "complete": true, "capped": false,
+        "rows": (0..40).map(|n| json!({ "row": n, "runs": [{ "s": 0, "x": format!("old {n}") }] }))
+            .collect::<Vec<_>>()
+    }));
+    let ring = until(&mut events, |e| match e {
+        Event::Scrollback { pane, doc } => Some(Event::Scrollback { pane, doc }),
+        _ => None,
+    })
+    .await;
+    app.absorb(&ring);
+    let _ = conn.heard().await;
+
+    let before = painted(&mut app, 100, 20);
+    assert!(
+        !before.contains("back"),
+        "the view opens on the live grid:\n{before}"
+    );
+
+    let body = app.layout.panes[0].rect;
+    wheel(&mut app, &client, true, body.x + 4, body.y + 3);
+    let scrolled = painted(&mut app, 100, 20);
+    assert!(
+        scrolled.contains("\u{2191} 3 back"),
+        "one notch of the wheel moved the ring, and the status line says how far:\n{scrolled}"
+    );
+    assert!(
+        inputs(&conn.heard().await).is_empty(),
+        "and the pane, which nobody armed, heard none of it"
+    );
+
+    let sidebar = app.layout.sidebar;
+    assert!(
+        scrolled.contains(" spaces"),
+        "the sidebar opens at its own top:\n{scrolled}"
+    );
+    wheel(&mut app, &client, false, sidebar.x + 2, sidebar.y + 4);
+    let moved = painted(&mut app, 100, 20);
+    assert!(
+        !moved.contains(" spaces"),
+        "the wheel over the sidebar moved the sidebar:\n{moved}"
+    );
+    assert!(
+        moved.contains("\u{2191} 3 back"),
+        "and it is its own surface, so the pane's ring stayed where it was:\n{moved}"
     );
 }

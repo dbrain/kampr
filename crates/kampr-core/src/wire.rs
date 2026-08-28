@@ -421,6 +421,28 @@ pub enum ServerMsg {
         pane: String,
         facets: kampr_journal::Facets,
     },
+    /// The line the operator has half-typed at the pane's own keyboard and not yet sent.
+    ///
+    /// **`input` appends to whatever is already on that line**, which is herdr's `pane.send_text`
+    /// doing exactly what it says — so a sentence started at the desk and a reply sent from a
+    /// phone submit as one run-on line, and nothing on the phone showed the first half. This is
+    /// that half, published so it can be seen before it is added to.
+    ///
+    /// **Not the live turn.** That one lifts the message the *harness* is painting; this one lifts
+    /// what a *person* left in the box, and the two are read off different halves of the screen.
+    ///
+    /// `text` is null when the composer is empty, which is how the strip is taken down — the same
+    /// shape `pending` uses for a question that has been answered. `clear` is the keystroke
+    /// measured to empty this harness's composer, and is **absent where nobody has measured one**:
+    /// a client offers the takeover only for a harness that carries it, and never guesses a key.
+    /// Sent when the line moves and not on a tick, so a composer nobody is typing into is free.
+    #[serde(rename = "convo.composer")]
+    ConvoComposer {
+        pane: String,
+        text: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        clear: Option<String>,
+    },
     #[serde(rename = "error")]
     Error {
         code: ErrorCode,

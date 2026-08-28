@@ -13,6 +13,8 @@ pub struct Record {
     pub is_sidechain: Option<bool>,
     #[serde(rename = "isMeta")]
     pub is_meta: Option<bool>,
+    #[serde(rename = "isCompactSummary")]
+    pub is_compact_summary: Option<bool>,
     pub message: Option<Message>,
     #[serde(rename = "toolUseResult")]
     pub tool_use_result: Option<Value>,

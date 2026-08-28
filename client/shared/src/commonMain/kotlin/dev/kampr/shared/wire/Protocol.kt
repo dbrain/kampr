@@ -176,13 +176,38 @@ sealed interface Block {
     data class Unknown(val kind: String) : Block
 }
 
+// `kind` is what a turn is where that is not the same question as who filed it: `compact` is the
+// harness's own summary of the conversation it dropped, filed under a `user` record with nothing
+// but a flag to separate it from a prompt (#259). Additive and open — an unrecognised kind is a
+// turn like any other, which is why it is not a third `role`.
 @Serializable
 data class Turn(
     val id: String,
     val role: String = "assistant",
     val at: String? = null,
     val blocks: List<Block> = emptyList(),
+    val kind: String? = null,
 )
+
+// What the harness wrote down about the session, normalised across the three Kampr serves.
+//
+// **Every field is optional and only the ones something draws are modelled here.** The node fills
+// a facet only where a harness has been *measured* to carry an equivalent, so one with nothing to
+// say sends `{}`; and unknown fields are ignored by the wire's own rule, so reading a further
+// facet later costs nothing but adding it here.
+@Serializable
+data class Facets(val queued: List<Queued> = emptyList())
+
+// A prompt the operator has sent that the harness has not started on yet, and the enqueue stamp
+// where it recorded one.
+//
+// The node folds this from the harness's own queue records rather than guessing at it — four
+// operations, not the two an enqueue/remove pair suggests, because an ordinary delivery leaves a
+// `dequeue` carrying no content at all and the head has to be taken by position (#320). So it is
+// what the *harness* is waiting on and not what this client happens to have typed: a prompt sent
+// from the desk, or from another phone, is in here too.
+@Serializable
+data class Queued(val text: String, val at: String? = null)
 
 // `served` is whether this node reaches that session as a node of its own — a session can be
 // running and unserved, and a pane on one will never appear in the herd. True by default: a node
@@ -266,6 +291,29 @@ sealed interface ServerMsg {
     // subagent's transcript grows while it runs, so what a reader opened keeps arriving instead of
     // going stale until they close and re-open it.
     data class ConvoTurn(val pane: String, val turns: List<Turn>, val sub: String? = null) : ServerMsg
+
+    // What the harness wrote down about the *session* rather than about any one turn.
+    //
+    // **The newest one is the whole of it**, replacing whatever is held rather than merging into
+    // it: the node folds the queue on the transcript's tail and republishes when it moves, and a
+    // merge would leave a prompt the harness has already taken up standing for ever — which is
+    // the defect the node's own fold was written to avoid (#320).
+    data class ConvoFacets(val pane: String, val facets: Facets) : ServerMsg
+
+    // The line the operator has half-typed at the pane's own keyboard and has not sent.
+    //
+    // **`input` appends to it.** Herdr's `pane.send_text` adds to whatever is already on the line,
+    // so a sentence begun at the desk and a reply sent from here submit as one run-on line — and
+    // until this frame existed nothing here had ever shown the first half of it.
+    //
+    // Not the live turn: that one is the message the *harness* is painting, this one is what a
+    // *person* left in the box. `text == null` is an empty composer and takes the strip down, the
+    // same shape `pending` uses for a question that has been answered.
+    //
+    // `clear` is the keystroke the node measured to empty *this harness's* composer, and the three
+    // do not agree on it — so it is carried rather than looked up here, and a harness that sends
+    // none is one whose takeover is not offered at all rather than guessed at.
+    data class ConvoComposer(val pane: String, val text: String?, val clear: String?) : ServerMsg
 
     // question == null clears the prompt; there is no separate "resolved" message.
     data class Pending(

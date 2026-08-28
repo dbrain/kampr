@@ -17,6 +17,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+static SESSIONS_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 struct Session {
     name: String,
     socket: PathBuf,
@@ -25,7 +27,11 @@ struct Session {
 impl Session {
     async fn start(tag: &str) -> Option<Self> {
         which("herdr")?;
-        let name = format!("kampr-it-{tag}-{}", std::process::id());
+        // The tag does not make this unique — two tests already pass `identity` — and two tests in
+        // this binary run at once. Sharing a name is sharing one herdr server, and the first of
+        // them to finish stops it in `Drop`, out from under whichever is still using it.
+        let seq = SESSIONS_STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("kampr-it-{tag}-{}-{seq}", std::process::id());
         assert_ne!(name, "default");
         let socket = herdr_home().join("sessions").join(&name).join("herdr.sock");
         std::process::Command::new("herdr")
@@ -498,6 +504,28 @@ async fn until_pane(socket: &mut Socket, tag: &str, pane: &str, seconds: u64) ->
     panic!("never saw {tag} for {pane}; saw {seen:?}");
 }
 
+/// A rebuild the caller did not cause reaches the client as a `herd.patch` too — a title
+/// settling, a cwd arriving — and that patch carries no `added`. Waiting for the tag alone takes
+/// whichever came first and reads `added.panes` off a patch that never had one.
+async fn until_panes_added(socket: &mut Socket, seconds: u64) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "herd.patch"
+            && message["added"]["panes"]
+                .as_array()
+                .is_some_and(|panes| !panes.is_empty())
+        {
+            return message;
+        }
+        seen.push(message["t"].as_str().unwrap_or("?").to_string());
+    }
+    panic!("no herd.patch added a pane; saw {seen:?}");
+}
+
 async fn send(socket: &mut Socket, value: Value) {
     socket
         .send(tungstenite::Message::text(value.to_string()))
@@ -637,8 +665,7 @@ async fn manage_ops_reshape_the_herd_and_come_back_as_a_patch() {
     assert_eq!(ack["ok"], true, "{ack}");
     assert!(ack["id"].as_str().unwrap().contains(":p"), "{ack}");
 
-    let patch = until(&mut socket, "herd.patch", 20).await;
-    assert!(!patch["added"]["panes"].as_array().unwrap().is_empty(), "{patch}");
+    until_panes_added(&mut socket, 20).await;
     assert!(h.node.herd().panes.len() > before);
 
     send(
@@ -2740,6 +2767,99 @@ async fn a_watched_agent_pane_streams_its_conversation() {
     assert_eq!(older_turns.len(), 7, "the remainder of the transcript: {older}");
     assert_eq!(older["more"], false);
     assert_eq!(older_turns.first().unwrap()["id"], "u0");
+}
+
+/// The reported defect, end to end: a prompt sent from a phone while the agent is working is in
+/// the transcript the moment the harness queues it and on the pane's screen the whole time, and
+/// the conversation showed nothing until the agent got round to taking it — because `convo.facets`
+/// was collected once, when the transcript was opened, and never again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompt_queued_while_the_agent_is_working_reaches_the_client_before_the_agent_takes_it() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = "/tmp";
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join("9f1c0b2e-0000-4000-8000-000000000043.jsonl");
+
+    let home_path = home.path().display().to_string();
+    let h = harness!("facets", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "working" }),
+        )
+        .await;
+    let (body, _) = claude_transcript(cwd, 2);
+    std::fs::write(&transcript, &body).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    until_pane(&mut socket, "convo", &pane, 25).await;
+    let opening = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    assert_eq!(
+        opening["facets"],
+        json!({}),
+        "nothing is queued yet, and a harness with nothing to say says nothing: {opening}"
+    );
+
+    // The operator sends a prompt from a phone mid-turn. The harness records the enqueue and will
+    // not touch it again until it takes it.
+    let queued = json!({
+        "type": "queue-operation", "operation": "enqueue",
+        "timestamp": "2026-08-28T02:10:59.658Z", "content": "and copy the config across"
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{queued}\n").as_bytes()).unwrap();
+    drop(file);
+
+    let moved = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    assert_eq!(
+        moved["facets"]["queued"][0]["text"], "and copy the config across",
+        "the prompt is waiting on the pane and the client was never told: {moved}"
+    );
+    assert_eq!(moved["facets"]["queued"][0]["at"], "2026-08-28T02:10:59.658Z");
+
+    // And the harness takes it. `dequeue` carries a null `content` (#320), so the fold has to take
+    // the head by position — a client left holding the prompt would draw one nobody is waiting on.
+    let taken = json!({ "type": "queue-operation", "operation": "dequeue", "content": null });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{taken}\n").as_bytes()).unwrap();
+    drop(file);
+
+    let emptied = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    assert_eq!(
+        emptied["facets"],
+        json!({}),
+        "the queue emptying is a change like any other: {emptied}"
+    );
 }
 
 /// `convo.load` used to answer `unsupported`. It is implemented now, so a pane with no transcript
@@ -5572,4 +5692,94 @@ async fn what_the_pump_compares_holds_still_while_the_agent_works() {
             "what the pump compares moved on its own, which re-pages the conversation"
         );
     }
+}
+
+/// The reported surprise, end to end: `input` is herdr's `pane.send_text` and it **appends** to
+/// whatever is already on the pane's line, so a sentence begun at the desk and a reply sent from a
+/// phone submit as one run-on line — and nothing on the phone ever showed the first half. The desk
+/// line is that first half, lifted off the same grid the client is already streaming.
+///
+/// The pane runs a shell rather than a real Claude, and paints Claude's own composer into it with
+/// a `printf` that leaves no newline: the caret then rests past the marker exactly as it does in
+/// the captures under `kampr-journal/tests/fixtures/composer`, which is the thing being read.
+#[tokio::test(flavor = "multi_thread")]
+async fn what_the_operator_left_in_the_panes_own_composer_reaches_the_phone_before_it_is_added_to() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join("9f1c0b2e-0000-4000-8000-000000000044.jsonl");
+
+    let home_path = home.path().display().to_string();
+    let h = harness!("desk", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    let (body, _) = claude_transcript("/tmp", 2);
+    std::fs::write(&transcript, &body).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    until_pane(&mut socket, "convo", &pane, 25).await;
+
+    // U+276F, then the non-breaking space Claude 2.1.250 separates its composer with, then the
+    // half-sentence — written as raw bytes because `pane.send_text` carries them intact (#9), and
+    // with no newline after them so the caret rests past the marker the way a person's would. The
+    // `sleep` is what keeps it there: a shell that returns paints its own prompt onto the same
+    // row, and the row would then no longer be the one the operator left.
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local,
+                "text": "clear; printf '\u{276f}\u{a0}push the branch when'; sleep 60\n" }),
+        )
+        .await;
+
+    let seen = until_pane(&mut socket, "convo.composer", &pane, 25).await;
+    assert_eq!(
+        seen["text"], "push the branch when",
+        "the half-sentence at the desk did not reach the phone: {seen}",
+    );
+    assert_eq!(
+        seen["clear"], "\u{3}",
+        "the keystroke measured to clear Claude's composer did not ride with it: {seen}",
+    );
+
+    // And it comes down again when the desk empties the box, or nothing on the phone would ever
+    // stop claiming a line that is no longer there.
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "\u{3}" }))
+        .await;
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "clear\n" }))
+        .await;
+    let gone = until_pane(&mut socket, "convo.composer", &pane, 25).await;
+    assert!(
+        gone["text"].is_null(),
+        "an emptied composer left the strip standing: {gone}",
+    );
 }

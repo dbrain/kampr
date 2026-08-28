@@ -86,6 +86,15 @@ object Wire {
                 turns = obj.decodeList<Turn>("turns").ifEmpty { listOfNotNull(obj.decode<Turn>("turn")) },
                 sub = obj.str("sub"),
             )
+            "convo.composer" -> ServerMsg.ConvoComposer(
+                pane = obj.str("pane") ?: return null,
+                text = obj.str("text"),
+                clear = obj.str("clear"),
+            )
+            "convo.facets" -> ServerMsg.ConvoFacets(
+                pane = obj.str("pane") ?: return null,
+                facets = obj.decode<Facets>("facets") ?: Facets(),
+            )
             "pending" -> ServerMsg.Pending(
                 pane = obj.str("pane") ?: return null,
                 question = obj.str("question")?.takeIf { it.isNotBlank() },

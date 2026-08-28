@@ -208,6 +208,8 @@ class KamprStore {
                 }
             }
             is ServerMsg.ConvoTurn -> pane(msg.pane).applyConvoTurn(msg)
+            is ServerMsg.ConvoFacets -> pane(msg.pane).applyFacets(msg)
+            is ServerMsg.ConvoComposer -> pane(msg.pane).applyComposer(msg)
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes
             is ServerMsg.Failure -> {

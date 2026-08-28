@@ -48,6 +48,13 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    without being told (#298). Small screens are still handled by rendering: zoom, pan, and the
    conversation view.
 
+   This is about **geometry**, and about *viewing* having no side effects. A write the operator
+   deliberately presses is a different thing: `convo.composer`'s takeover empties the pane's own
+   composer, behind a control, with the words moved into the reply box first and the keystroke
+   measured per harness — the shape [ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)
+   set. What the rule forbids is a write that happens *because somebody looked* — on a view switch,
+   a reconnect, a fit or a layout — and that is not weakened by having one more deliberate path.
+
 4. **Bug fixes and logic changes are TDD**, at integration level where one exists. `live.rs` drives a
    real herdr end to end and is usually the honest level.
 

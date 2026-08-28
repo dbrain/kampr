@@ -357,7 +357,7 @@ async fn a_pane_running_a_job_carries_it_and_a_pane_at_its_prompt_carries_nothin
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&hidden)),
         "kampr · bash",
-        "and the name degrades rather than rendering empty parens"
+        "and the name degrades to the shell rather than naming a job that is not there"
     );
 }
 
@@ -370,8 +370,9 @@ async fn a_pane_running_a_job_carries_it_and_a_pane_at_its_prompt_carries_nothin
 /// nothing on screen while `argv` names the job for its whole life. So the full line is off by
 /// default and `cmd` — the process name, which is all the naming complaint ever needed — is not.
 ///
-/// The default template is `{argv|cmd}`, so this costs no client release and no template change:
-/// the group falls through to `cmd` exactly as it already does under ble.sh (#297).
+/// The default template names the job with `{argv|cmd|agent|'bash'}`, so this costs no client
+/// release and no template change: the slot falls through to `cmd` exactly as it already falls
+/// through to the agent under ble.sh (#297).
 #[tokio::test]
 async fn the_whole_command_line_is_not_handed_to_every_device_that_pairs() {
     let fake = FakeHerdr::start();
@@ -390,7 +391,7 @@ async fn the_whole_command_line_is_not_handed_to_every_device_that_pairs() {
     );
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
-        "kampr (mysql) · bash",
+        "kampr · mysql",
         "the name still says what the pane is doing"
     );
 
@@ -483,7 +484,7 @@ async fn the_name_kampr_computes_reaches_the_pane_border_at_the_desk() {
         },
     );
     only_pane(&provider).await;
-    assert_eq!(fake.showing("w1:p1").as_deref(), Some("kampr (cargo) · bash"));
+    assert_eq!(fake.showing("w1:p1").as_deref(), Some("kampr · cargo"));
 
     // A name that has not moved is not re-sent: herdr is a shared table and every write is a
     // chance to stamp on somebody else's record.
@@ -495,7 +496,7 @@ async fn the_name_kampr_computes_reaches_the_pane_border_at_the_desk() {
     only_pane(&provider).await;
     assert_eq!(
         fake.showing("w1:p1").as_deref(),
-        Some("kampr (vim) · bash"),
+        Some("kampr · vim"),
         "the process name, because the arguments are off by default"
     );
 }
@@ -585,7 +586,7 @@ async fn the_name_reaches_herdr_as_the_token_a_sidebar_can_be_sorted_on() {
     only_pane(&provider).await;
     assert_eq!(
         fake.token("w1:p1", kampr_core::reporter::TOKEN).as_deref(),
-        Some("kampr (cargo) · bash")
+        Some("kampr · cargo")
     );
 }
 
@@ -830,13 +831,13 @@ async fn a_job_ble_sh_hides_from_herdr_is_still_what_the_sidebar_says_the_pane_i
     assert_eq!(pane.argv.as_deref(), Some("sleep 300"));
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
-        "kampr (sleep 300) · bash",
+        "kampr · sleep 300",
     );
 }
 
 /// **The failure to guard is staleness, not absence.** A child that has exited stays in its
 /// parent's `children` file until it is reaped, so a walk that trusts the file names a job that is
-/// gone — the sidebar saying `kampr (sleep 300)` for a pane sitting at its prompt. Naming nothing
+/// gone — the sidebar saying `kampr · sleep 300` for a pane sitting at its prompt. Naming nothing
 /// is the honest answer and the template already renders it.
 #[tokio::test]
 async fn a_job_that_has_already_exited_is_not_named_as_though_it_were_still_running() {
@@ -868,13 +869,17 @@ async fn a_job_that_has_already_exited_is_not_named_as_though_it_were_still_runn
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
         "kampr · bash",
-        "and the empty-parens group the template exists to avoid stays avoided"
+        "and the pane falls back to the shell rather than keeping a name that has expired"
     );
 }
 
-/// A pane genuinely sitting at its prompt has to go on reporting nothing. The `[…]` group in the
-/// naming template exists so `kampr ()` is never rendered, and a walk that named the shell itself
-/// as the job would defeat it on every idle pane on the machine.
+/// A pane genuinely sitting at its prompt has to go on reporting nothing.
+///
+/// **The shell here is `zsh` and that is the whole design of the fixture.** The decision is made on
+/// pids — `foreground_process_group_id == shell_pid` is what says there is no job (#297) — so the
+/// name is free, and naming it `bash` would make a walk that reported the shell as its own job
+/// render `kampr · bash`, which is byte-identical to the right answer under the default template.
+/// Any shell but the one the template falls back to keeps the rendered name discriminating.
 #[tokio::test]
 async fn a_pane_sitting_at_its_prompt_still_names_no_job_at_all() {
     if !procfs_readable() {
@@ -892,7 +897,7 @@ async fn a_pane_sitting_at_its_prompt_still_names_no_job_at_all() {
         "shell_pid": idle.id(),
         "foreground_process_group_id": idle.id(),
         "foreground_processes": [
-            { "pid": idle.id(), "name": "bash", "argv": ["bash"], "cmdline": "bash" },
+            { "pid": idle.id(), "name": "zsh", "argv": ["zsh"], "cmdline": "zsh" },
         ],
     }));
     let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
@@ -902,6 +907,7 @@ async fn a_pane_sitting_at_its_prompt_still_names_no_job_at_all() {
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
         "kampr · bash",
+        "the fall-back literal, and never the shell the walk was looking at",
     );
     kill(idle.id());
     let _ = { idle }.wait();

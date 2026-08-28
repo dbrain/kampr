@@ -36,6 +36,10 @@ pub struct Layout {
     pub result: char,
     /// Columns a wrapped continuation line is indented by.
     pub indent: usize,
+    /// The column the operator's own text starts at on the composer row — the marker and the one
+    /// separator cell behind it. Measured at 2 on all three harnesses; it is what a caret resting
+    /// on an empty composer is compared against, so it is a measurement and not an arithmetic.
+    pub input: usize,
     /// Whether a head line is the harness rather than the answer — a spinner, a tool card.
     pub reject: fn(&str) -> bool,
 }

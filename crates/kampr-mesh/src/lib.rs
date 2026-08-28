@@ -11,6 +11,7 @@
 //! and the per-connection backpressure rule therefore applies at both hops by construction.
 
 pub mod dial;
+mod fanout;
 pub mod handshake;
 pub mod peers;
 pub mod shadow;

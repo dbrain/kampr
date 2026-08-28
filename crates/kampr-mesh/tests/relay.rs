@@ -709,6 +709,173 @@ async fn a_second_viewer_asking_for_the_conversation_is_sent_one() {
     );
 }
 
+/// **Only a grid frame is droppable at this hop.** A watcher that overruns the hub's per-pane
+/// fan-out is caught up with one full grid out of the shadow, and that repairs a grid completely —
+/// but a `convo.turn` caught in the same overrun has nowhere to come back from. The node that owns
+/// the pane recorded it as delivered the moment it handed it to the hub, and its own record of that
+/// is what stops it ever being sent again, so a client is left with a current screen and a
+/// conversation missing a contiguous window of turns. It is the rule `kampr_node::outbox` keeps one
+/// hop later and `kampr_node::relay` the hop after that, and it was not kept here.
+#[tokio::test]
+async fn a_watcher_that_overruns_the_fan_out_loses_grid_frames_and_never_a_turn() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut watcher = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peer.request_but_ping().await;
+    peer.send(reset("01JA/w1:p1", "first")).await;
+
+    // Nothing reads the watcher while this crosses, and the fan-out here is eight deep: the turn
+    // is buried under forty frames on either side of it.
+    for n in 0..40 {
+        peer.send(patch("01JA/w1:p1", 1, &format!("a{n}"))).await;
+    }
+    peer.send(json!({
+        "t": "convo.turn", "pane": "01JA/w1:p1",
+        "turns": [{ "id": "549c13ed", "role": "agent", "blocks": [{ "b": "md", "text": "done" }] }],
+    }))
+    .await;
+    for n in 0..40 {
+        peer.send(patch("01JA/w1:p1", 1, &format!("b{n}"))).await;
+    }
+    // One task reads this link in message order, so a herd the hub has published is proof that
+    // everything sent before it has already reached the fan-out.
+    peer.send(herd("01JA", &["w1:p1", "w1:p2"])).await;
+    settle(&peers, |h| h.panes.len() == 2).await;
+
+    let mut turns = 0;
+    let mut updates = 0;
+    let mut screen = String::new();
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(250), watcher.recv()).await {
+        match event {
+            RemoteEvent::Passthrough(message) if message["t"] == "convo.turn" => turns += 1,
+            RemoteEvent::Update(update) => {
+                updates += 1;
+                if let Some(row) = update.rows().iter().find(|row| row.row == 1) {
+                    screen = row
+                        .cells
+                        .iter()
+                        .map(|c| c.ch)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(turns, 1, "the turn the peer will never send again was dropped");
+    assert_eq!(screen, "b39", "the grid was not brought up to date");
+    assert!(
+        updates <= 16,
+        "the fan-out stopped coalescing grid frames and delivered {updates} of them",
+    );
+}
+
+/// The floor beneath that rule. A frame that may not be dropped is a frame the hub has to hold, so
+/// a watcher that reads nothing at all is ended rather than buffered — the same answer
+/// `kampr_node::outbox` gives a client that will not drain what it cannot drop, and the reason
+/// raising the fan-out's depth is a bigger window rather than a fix.
+#[tokio::test]
+async fn a_watcher_that_reads_nothing_at_all_ends_rather_than_growing_the_hub() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut watcher = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peer.request_but_ping().await;
+    for n in 0..200 {
+        peer.send(json!({
+            "t": "convo.turn", "pane": "01JA/w1:p1",
+            "turns": [{ "id": format!("turn-{n}"), "role": "agent", "blocks": [] }],
+        }))
+        .await;
+    }
+    peer.send(herd("01JA", &["w1:p1", "w1:p2"])).await;
+    settle(&peers, |h| h.panes.len() == 2).await;
+
+    let mut held = 0;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), watcher.recv()).await {
+            Ok(Some(_)) => held += 1,
+            Ok(None) => break,
+            Err(_) => panic!("the hub held {held} undroppable events and was still waiting for more"),
+        }
+    }
+    assert!(held <= 8 * 4 + 1, "the hub held {held} events for one watcher");
+    assert!(
+        watcher.overrun(),
+        "the stream ended without saying it was this hub that could not keep up",
+    );
+}
+
+/// `convo.facets` is a `node -> client` message like `pending`, `convo` and `convo.turn`, and the
+/// relay's list of what it passes through did not name it: a pane on a peer said nothing at all
+/// about its session where the same pane on the hub does.
+#[tokio::test]
+async fn a_peers_convo_facets_crosses_the_mesh_like_every_other_conversation_frame() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut watcher = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peer.request_but_ping().await;
+    peer.send(json!({
+        "t": "convo.facets", "pane": "01JA/w1:p1",
+        "facets": { "title": { "text": "the width inference rewrite", "source": "manual" } },
+    }))
+    .await;
+
+    let relayed = tokio::time::timeout(Duration::from_secs(2), watcher.recv())
+        .await
+        .expect("the hub swallowed a frame a local pane would have sent")
+        .expect("the watcher closed");
+    let RemoteEvent::Passthrough(message) = relayed else {
+        panic!("a peer's facets reached the client as {relayed:?}");
+    };
+    assert_eq!(message["t"], "convo.facets");
+    assert_eq!(message["facets"]["title"]["text"], "the width inference rewrite");
+}
+
+/// The same omission `convo.facets` was fixed for, one message later: a desk line is a
+/// `node -> client` conversation frame like the rest, and a pane on a peer that did not name it in
+/// the passthrough list would show a phone nothing of what was typed at that machine's own
+/// keyboard — while the identical pane on the hub showed it.
+#[tokio::test]
+async fn a_peers_desk_line_crosses_the_mesh_like_every_other_conversation_frame() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut watcher = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peer.request_but_ping().await;
+    peer.send(json!({
+        "t": "convo.composer", "pane": "01JA/w1:p1",
+        "text": "push the branch when the tests go green", "clear": "\u{3}",
+    }))
+    .await;
+
+    let relayed = tokio::time::timeout(Duration::from_secs(2), watcher.recv())
+        .await
+        .expect("the hub swallowed a frame a local pane would have sent")
+        .expect("the watcher closed");
+    let RemoteEvent::Passthrough(message) = relayed else {
+        panic!("a peer's desk line reached the client as {relayed:?}");
+    };
+    assert_eq!(message["t"], "convo.composer");
+    assert_eq!(message["text"], "push the branch when the tests go green");
+    assert_eq!(message["clear"], "\u{3}");
+}
+
 /// `styles.from` is a `u32` straight off the peer's frame, and the table was resized to it. Forty
 /// bytes of JSON — well under any size ceiling — asked the hub for four billion entries, and the
 /// hub is the front node the whole herd is reached through.

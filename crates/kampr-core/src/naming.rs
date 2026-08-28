@@ -5,15 +5,17 @@
 //! `crates/kampr-core/tests/fixtures/naming-cases.json` is what holds the two to it.
 //!
 //! Two shapes and no more. `{a|b|'x'}` takes the first of its choices that resolves to something,
-//! and `[…]` is dropped whole when nothing inside it did — which is the entire reason the syntax
-//! exists, because `{cmd}` is blank on every pane of a machine that sources ble.sh (probe #297)
-//! and `kampr ()` is worse than `kampr`.
+//! and `[…]` is dropped whole when nothing inside it did. The default no longer needs the group —
+//! its second slot falls through to the agent and then to a literal — but an operator template and
+//! the reporting template still do, because `{cmd}` is blank on every pane of a machine that
+//! sources ble.sh (probe #297) and `kampr ()` is worse than `kampr`.
 
 use crate::provider::AgentStatus;
 use crate::wire::PaneEntry;
+use std::borrow::Cow;
 use std::fmt;
 
-pub const DEFAULT_TEMPLATE: &str = "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}";
+pub const DEFAULT_TEMPLATE: &str = "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
@@ -178,6 +180,26 @@ impl<'a> Fields<'a> {
 
 fn short_id(id: &str) -> &str {
     id.split_once('/').map_or(id, |(_, rest)| rest)
+}
+
+/// A guess, and it has to be: the wire carries no `$HOME` for the node a pane is on and a client
+/// has no way to learn one, so the two conventional prefixes are all there is to match on. A home
+/// somewhere else is left alone rather than mangled.
+pub fn home_relative(path: &str) -> Cow<'_, str> {
+    for prefix in ["/home/", "/Users/"] {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        let user = rest.find('/').unwrap_or(rest.len());
+        if user == 0 {
+            continue;
+        }
+        return match &rest[user..] {
+            "" => Cow::Borrowed("~"),
+            tail => Cow::Owned(format!("~{tail}")),
+        };
+    }
+    Cow::Borrowed(path)
 }
 
 fn basename(path: &str) -> &str {

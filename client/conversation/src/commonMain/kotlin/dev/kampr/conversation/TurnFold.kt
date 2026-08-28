@@ -25,9 +25,24 @@ import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.util.relativeTime
 import dev.kampr.shared.wire.Turn
 
+// The one `turn.kind` the wire carries: the harness's own summary of the conversation it dropped,
+// which `/compact` files under a **user** record with nothing but a flag to separate it from a
+// prompt (#259).
+const val COMPACT = "compact"
+
+fun isSummary(turn: Turn): Boolean = turn.kind == COMPACT
+
 // Folded by key, in the same set the tool runs and the tool cards toggle through, so what the
 // reader put away stays away across every tick of the transcript under it.
 fun foldKey(turn: Turn): String? = if (foldable(turn)) "fold:${turn.id}" else null
+
+// Whether a turn is put away *now*, which is not the same as whether the reader has touched it.
+// The toggle set holds departures from the default, and a summary is the one turn whose default is
+// shut — so one set and one key serve both without a second piece of state to keep in step.
+fun turnFolded(turn: Turn, expanded: List<String>): Boolean {
+    val key = foldKey(turn) ?: return false
+    return (key in expanded) != isSummary(turn)
+}
 
 // A header is a row of chrome carrying a 36 dp target, so it has to buy more than it costs, which
 // is the same test the tool runs get. A turn of nothing but calls is the run's business and wears
@@ -40,7 +55,9 @@ fun foldKey(turn: Turn): String? = if (foldable(turn)) "fold:${turn.id}" else nu
 // full-width card whoever wrote it, and a pasted stack trace is a reply — so the size test decides
 // for both speakers.
 fun foldable(turn: Turn): Boolean {
-    if (turn.id == LIVE_TURN_ID) return false
+    if (turn.id == LIVE_TURN_ID || isQueued(turn)) return false
+    // A summary is drawn shut, so its chevron is the only way back to it whatever it is made of.
+    if (isSummary(turn)) return true
     val pieces = groupBlocks(turn.blocks)
     if (pieces.isEmpty() || pieces.all { it is Piece.Call }) return false
     return pieces.size > 1 || turnText(turn).count { it == '\n' } >= 2
@@ -80,10 +97,16 @@ fun replySpan(from: String?, to: String?, nowMillis: Double): String? {
 
 private val DECORATION = Regex("^(#{1,6}|>+|[-*+]|\\d+\\.)\\s+")
 
+// What a summary's header says of itself. Its own first line cannot: every compaction opens with
+// the same sentence the harness writes every time — "This session is being continued from a
+// previous conversation…" — so a gist taken from the text names the boilerplate rather than this
+// summary, on every one of them, identically.
+const val SUMMARY_GIST = "the conversation before this, summarised"
+
 // One line of prose for a folded turn to show of itself. Markdown's own punctuation is stripped
 // rather than rendered: a row reading "## Corrections and event" is the syntax, not the message.
 fun turnGist(turn: Turn): String =
-    turnText(turn)
+    if (isSummary(turn)) SUMMARY_GIST else turnText(turn)
         .lineSequence()
         .map { it.trim() }
         .firstOrNull { it.isNotEmpty() }

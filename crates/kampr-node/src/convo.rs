@@ -4,8 +4,8 @@ use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_core::{HerdrProvider, PaneRegistry};
 use kampr_journal::{
-    Change, Harness, Journal, JournalError, Registry as Journals, Role, SessionKind, SessionMarker,
-    SessionRef, Turn, Watch,
+    Change, Composed, ComposerFeed, ComposerReader, FacetFeed, Facets, Harness, Journal, JournalError,
+    Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, Turn, Watch,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -250,6 +250,9 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut misses = 0u32;
     let mut live = Watch::default();
     let mut was_working = false;
+    let mut facets: Option<FacetFeed> = None;
+    let mut desk = ComposerFeed::default();
+    let mut composer: Option<ComposerReader> = None;
 
     loop {
         let now = pane_of(&herd, &global, &identity, &local);
@@ -279,6 +282,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             release(&journal, &held);
             due = true;
             misses = 0;
+            composer = journals.composer(now.agent.as_deref());
         }
 
         // A pane starting a turn is about to have a transcript whether or not it had one before,
@@ -319,23 +323,18 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         _ => return,
                     }
                     *held.lock().unwrap() = showing(&journal);
-                    // Off the executor and only here: collecting these reads the whole transcript
-                    // (154 ms for 29.4 MB), which is a cost a conversation opening can carry and a
-                    // poll cannot. A harness with nothing to say sends `{}` and the client draws
-                    // nothing, so there is no case worth suppressing.
-                    let facets = {
-                        let journals = journals.clone();
-                        let agent = now.agent.clone();
-                        let marker = describe(&local);
-                        tokio::task::spawn_blocking(move || {
-                            journals.facets(agent.as_deref(), &path, marker.as_ref())
-                        })
+                    // Off the executor: the fold's first read is the whole transcript (154 ms
+                    // for 29.4 MB), which is a cost a conversation opening can carry and a poll
+                    // cannot. The fold is kept, so every read after this one costs the records
+                    // the transcript has grown by. A harness with nothing to say sends `{}` and
+                    // the client draws nothing, so there is no case worth suppressing here.
+                    facets = Some(journals.fold(now.agent.as_deref()));
+                    let opening = refold(&mut facets, &path, describe(&local))
                         .await
-                        .unwrap_or_default()
-                    };
+                        .unwrap_or_default();
                     if !wire.send(&ServerMsg::ConvoFacets {
                         pane: global.clone(),
-                        facets,
+                        facets: opening,
                     }) {
                         return;
                     }
@@ -376,14 +375,42 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         due = true;
                     }
                 }
+                // What the harness wrote down beside the turns moves while the turns do: a prompt
+                // the operator queues mid-turn is a record like any other, and it is one the
+                // client cannot see any other way until the harness gets round to it. The fold
+                // reads what the transcript has grown by, and answers `None` when nothing it
+                // carries has moved — a `convo.facets` every 400 ms per pane would be a frame for
+                // nothing.
+                if let Some(path) = opened.clone()
+                    && let Some(moved) = refold(&mut facets, &path, describe(&local)).await
+                    && !wire.send(&ServerMsg::ConvoFacets { pane: global.clone(), facets: moved })
+                {
+                    return;
+                }
+                // What the operator has left in the pane's own composer. Read off the grid the
+                // client is already streaming, so it costs a walk of the rows and no I/O at all;
+                // published only when it moves, so a composer nobody is typing into is free. On
+                // this tick rather than the live preview's, because a half-typed line is most
+                // interesting when the pane is *idle* and the preview only runs while it works.
+                if opened.is_some()
+                    && !wire.outbox().congested()
+                    && let Some(moved) = desk.moved(desk_line(&panes, &local, composer))
+                    && !wire.send(&ServerMsg::ConvoComposer {
+                        pane: global.clone(),
+                        text: moved.as_ref().map(|c| c.text.clone()),
+                        clear: moved.and_then(|c| c.clear).map(str::to_string),
+                    })
+                {
+                    return;
+                }
             }
             // A preview is the one thing on this socket that can be dropped without loss: the
             // record behind it is still coming, and a client that is already behind does not want
             // a fifth revision of a message it has not drawn yet.
             _ = live_poll.tick(), if working && opened.is_some() && !wire.outbox().congested() => {
                 let change = match panes.screen(&local) {
-                    Some(rows) => {
-                        let borrowed: Vec<&str> = rows.iter().map(String::as_str).collect();
+                    Some(screen) => {
+                        let borrowed: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
                         let seen = journal.lock().unwrap().as_ref().and_then(|j| j.preview(&borrowed));
                         live.observe(seen)
                     }
@@ -444,6 +471,19 @@ fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(),
         true => Ok(()),
         false => Err(()),
     }
+}
+
+/// What the pane's composer holds now, for a harness whose composer has been measured.
+///
+/// The keystroke that clears it rides back with the text rather than being looked up by the
+/// client, because it is a per-harness *measurement* and the node is where measurements live — a
+/// phone already installed cannot be corrected when a harness changes its mind about what empties
+/// a box, and the three harnesses served here do not agree on it in the first place.
+fn desk_line(panes: &PaneRegistry, local: &str, reader: Option<ComposerReader>) -> Option<Composed> {
+    let reader = reader?;
+    let screen = panes.screen(local)?;
+    let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+    reader(&rows, screen.caret)
 }
 
 fn status_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> AgentStatus {
@@ -558,6 +598,34 @@ async fn drain_sub(followed: &Followed) -> Option<(String, Vec<Turn>)> {
     })
     .await;
     read.ok().flatten()
+}
+
+/// Whatever the transcript has grown by, folded onto the facets already collected off it, and
+/// `None` when none of them moved.
+///
+/// **Off the executor like the tail beside it**, and for a stronger reason than the tail has: the
+/// read is normally the handful of records since the last tick, but the fold resets and reads the
+/// file whole whenever the transcript it is on shrinks under it — and it opens and stats a file
+/// either way, which is not work a tokio worker should be holding.
+///
+/// A fold whose blocking task did not come back is dropped rather than replaced with a fresh one
+/// that would silently re-send everything: the next resolve builds one, and until then this pane
+/// publishes no facets rather than the wrong ones.
+async fn refold(
+    feed: &mut Option<FacetFeed>,
+    transcript: &Path,
+    marker: Option<SessionMarker>,
+) -> Option<Facets> {
+    let mut held = feed.take()?;
+    let transcript = transcript.to_path_buf();
+    let (held, moved) = tokio::task::spawn_blocking(move || {
+        let moved = held.moved(&transcript, marker.as_ref());
+        (held, moved)
+    })
+    .await
+    .ok()?;
+    *feed = Some(held);
+    moved
 }
 
 /// **Off the executor**, because the lock it takes is the one `convo.load` also wants and the

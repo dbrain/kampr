@@ -78,7 +78,7 @@ fun PinnedBlockBar(
             }
         }
         is TranscriptRow.Ask -> {
-            val skin = speakerSkin(Speaker.You, agent)
+            val skin = speakerSkin(speakerOf(row.turn), agent)
             val gist = turnGist(row.turn)
             val held = headerLabel(skin, turnStamp(row.turn.at, now), gist, groupBlocks(row.turn.blocks).size)
             PinnedBar(modifier, onCollapse, "Put away the message you are inside, $held") {

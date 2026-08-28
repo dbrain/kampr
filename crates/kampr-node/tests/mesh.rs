@@ -21,6 +21,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+static SESSIONS_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 struct Session {
     socket: PathBuf,
 }
@@ -28,7 +30,12 @@ struct Session {
 impl Session {
     async fn start(tag: &str) -> Option<Self> {
         which("herdr")?;
-        let name = format!("kampr-mesh-{tag}-{}", std::process::id());
+        // The tag does not make this unique: `sessions!` serves more than one test, and two tests
+        // in this binary run at once. Sharing a name is sharing one herdr server — the second
+        // `herdr server` finds the socket already there and returns it — and then the first test
+        // to finish stops it in `Drop`, out from under whichever is still asserting on its panes.
+        let seq = SESSIONS_STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("kampr-mesh-{tag}-{}-{seq}", std::process::id());
         assert_ne!(name, "default");
         let socket = herdr_home().join("sessions").join(&name).join("herdr.sock");
         std::process::Command::new("herdr")

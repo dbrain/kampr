@@ -36,6 +36,18 @@ pub enum Click {
         pane: String,
         text: String,
     },
+    /// The wheel over something kampr draws rather than something a pane does. `None` is the
+    /// sidebar; a pane is its own scrollback or its own transcript, whichever it is showing.
+    ///
+    /// **Not gated on passthrough.** The wheel used to resolve through `driving`, which is armed
+    /// per pane and off by default (#292/#297), so on a client where nothing had been armed —
+    /// which is every client, until the operator asks — scrolling the wheel did nothing at all.
+    /// Arming a pane is about what the *pane's program* sees; kampr's own surfaces scroll either
+    /// way.
+    Wheel {
+        pane: Option<String>,
+        up: bool,
+    },
 }
 
 /// Surface coordinates, `(col, row)`, of the two ends the operator dragged between.
@@ -91,8 +103,8 @@ impl Mouse {
             }
             MouseEventKind::Drag(MouseButton::Left) => self.extend(at, layout, role),
             MouseEventKind::Up(MouseButton::Left) => self.release(at, layout, role),
-            MouseEventKind::ScrollUp => self.wheel(at, 64, layout, role),
-            MouseEventKind::ScrollDown => self.wheel(at, 65, layout, role),
+            MouseEventKind::ScrollUp => self.wheel(at, true, layout, role),
+            MouseEventKind::ScrollDown => self.wheel(at, false, layout, role),
             _ => Click::None,
         }
     }
@@ -212,13 +224,25 @@ impl Mouse {
         }
     }
 
-    fn wheel(&mut self, at: (u16, u16), button: u8, layout: &Layout, role: Role) -> Click {
-        let Some((pane, cell)) = self.driving(at, layout, role) else {
-            return Click::None;
-        };
-        Click::Passthrough {
-            pane,
-            text: sgr(button, cell, true),
+    fn wheel(&mut self, at: (u16, u16), up: bool, layout: &Layout, role: Role) -> Click {
+        if let Some((pane, cell)) = self.driving(at, layout, role) {
+            let button = if up { 64 } else { 65 };
+            return Click::Passthrough {
+                pane,
+                text: sgr(button, cell, true),
+            };
+        }
+        // The pointer names the pane, not the focus: a mosaic has more than one on screen and the
+        // wheel is the one gesture that says which without also claiming it.
+        if let Some(placed) = layout.panes.iter().find(|p| inside(p.rect, at)) {
+            return Click::Wheel {
+                pane: Some(placed.pane.clone()),
+                up,
+            };
+        }
+        match inside(layout.sidebar, at) {
+            true => Click::Wheel { pane: None, up },
+            false => Click::None,
         }
     }
 

@@ -9,12 +9,30 @@ import dev.kampr.shared.wire.PaneInfo
 // `NamingParityTest` is what reads it from this side.
 //
 // Two shapes and no more. `{a|b|'x'}` takes the first of its choices that resolves to something,
-// and `[…]` is dropped whole when nothing inside it did — which exists because `{cmd}` is blank on
-// every pane of a machine that sources ble.sh (probe #297) and `kampr ()` is worse than `kampr`.
+// and `[…]` is dropped whole when nothing inside it did. The default no longer needs the group —
+// its second slot falls through to the agent and then to a literal — but an operator template and
+// the reporting template still do, because `{cmd}` is blank on every pane of a machine that
+// sources ble.sh (probe #297) and `kampr ()` is worse than `kampr`.
 object Naming {
-    const val DEFAULT_TEMPLATE = "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}"
+    const val DEFAULT_TEMPLATE = "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}"
 
     val default: Template by lazy { Template.parse(DEFAULT_TEMPLATE) }
+}
+
+// A guess, and it has to be: the wire carries no `$HOME` for the node a pane is on and a client
+// has no way to learn one, so the two conventional prefixes are all there is to match on. A home
+// somewhere else is left alone rather than mangled. `crates/kampr-core/src/naming.rs` is the twin.
+fun homeRelative(path: String): String {
+    for (prefix in listOf("/home/", "/Users/")) {
+        if (!path.startsWith(prefix)) continue
+        val rest = path.substring(prefix.length)
+        val slash = rest.indexOf('/')
+        val user = if (slash < 0) rest.length else slash
+        if (user == 0) continue
+        val tail = rest.substring(user)
+        return if (tail.isEmpty()) "~" else "~$tail"
+    }
+    return path
 }
 
 class TemplateException(message: String) : IllegalArgumentException(message)

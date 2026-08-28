@@ -22,11 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.TriageItem
+import dev.kampr.shared.model.homeRelative
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.statusOf
@@ -36,6 +38,11 @@ import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.util.relativeTime
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
+
+// The tail is the half that carries the identity: it tells `~/dev/kampr-wt2` from `~/dev/kampr`
+// and `cargo test -p kampr-tui` from `-p kampr-core`, and an end-ellipsis eats exactly that. Pane
+// names and paths lose their middle instead; everything else keeps the default.
+private val ELIDE_MIDDLE = TextOverflow.MiddleEllipsis
 
 @Composable
 fun statusColor(status: AgentStatus): Color {
@@ -328,8 +335,9 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                     paneTitle(pane),
                     if (quiet) tokens.type.cardTitleQuiet else tokens.type.cardTitle,
                     if (quiet) tokens.color.dim else tokens.color.text,
+                    overflow = ELIDE_MIDDLE,
                 )
-                KText(pane.cwd ?: "", tokens.type.meta, tokens.color.mute)
+                KText(homeRelative(pane.cwd ?: ""), tokens.type.meta, tokens.color.mute, overflow = ELIDE_MIDDLE)
             }
             WatchersTag(othersWatching(pane))
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -368,8 +376,9 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
                 paneTitle(pane),
                 if (quiet) tokens.type.cardTitleQuiet else tokens.type.cardTitle,
                 if (quiet) tokens.color.dim else tokens.color.text,
+                overflow = ELIDE_MIDDLE,
             )
-            KText(pane.cwd ?: "", tokens.type.meta, tokens.color.mute)
+            KText(homeRelative(pane.cwd ?: ""), tokens.type.meta, tokens.color.mute, overflow = ELIDE_MIDDLE)
         }
         WatchersTag(othersWatching(pane))
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
@@ -502,7 +511,7 @@ fun BlockedNotice(
             }
         }
         if (compact) {
-            KText(paneTitle(pane), tokens.type.bodyStrong, tokens.color.text)
+            KText(paneTitle(pane), tokens.type.bodyStrong, tokens.color.text, overflow = ELIDE_MIDDLE)
             KText(question ?: "Waiting for an answer", tokens.type.captionSmall, tokens.color.dim)
         } else {
             Row(
@@ -511,7 +520,7 @@ fun BlockedNotice(
             ) {
                 Badge(40.dp, 19.dp, KamprIcons.blockedAgent, tokens.color.blocked)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    KText(paneTitle(pane), tokens.type.paneTitle, tokens.color.text)
+                    KText(paneTitle(pane), tokens.type.paneTitle, tokens.color.text, overflow = ELIDE_MIDDLE)
                     KText(question ?: "Waiting for an answer", tokens.type.caption, tokens.color.dim)
                 }
             }

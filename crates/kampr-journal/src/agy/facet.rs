@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use crate::facet::{Compaction, Facets};
-use crate::scan::records;
+use crate::facet::{Compaction, FacetFold, Facets};
+use crate::marker::SessionMarker;
+use crate::scan::{Appended, Cursor};
 
 use super::record::Record;
 
@@ -15,17 +16,40 @@ use super::record::Record;
 /// duration the harness recorded, and a facet filled from a field that merely reads like one
 /// cannot be told apart from a real one once it is on the wire.
 pub fn collect(transcript: &Path) -> Facets {
-    let mut facets = Facets::default();
-    for line in records(transcript) {
-        let Ok(record) = serde_json::from_str::<Record>(&line) else {
-            continue;
+    Fold::default().facets(transcript, None)
+}
+
+/// The same fold, kept between reads.
+#[derive(Default)]
+pub struct Fold {
+    cursor: Cursor,
+    accumulated: Facets,
+}
+
+impl FacetFold for Fold {
+    fn facets(&mut self, transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        let mut appended = Appended::open(transcript, self.cursor);
+        if appended.restarted() {
+            *self = Self::default();
+        }
+        for line in appended.by_ref() {
+            self.push(&line);
+        }
+        self.cursor = appended.cursor();
+        self.accumulated.clone()
+    }
+}
+
+impl Fold {
+    fn push(&mut self, line: &str) {
+        let Ok(record) = serde_json::from_str::<Record>(line) else {
+            return;
         };
         if (record.source.as_deref(), record.kind.as_deref()) == (Some("SYSTEM"), Some("CHECKPOINT")) {
-            facets.compactions.push(Compaction {
+            self.accumulated.compactions.push(Compaction {
                 at: record.created_at,
                 ..Compaction::default()
             });
         }
     }
-    facets
 }

@@ -197,9 +197,24 @@ pub enum Event {
         doc: ScrollbackDoc,
     },
     Convo(ConvoPage),
+    /// What a harness wrote down about the *session* rather than about a turn. Sent when a
+    /// conversation opens and again whenever it moves, and the newest one **replaces** what is
+    /// held rather than merging into it.
+    ConvoFacets {
+        pane: String,
+        facets: kampr_journal::Facets,
+    },
     ConvoTurn {
         pane: String,
         turns: Vec<Value>,
+    },
+    /// The line the operator has half-typed at the pane's own keyboard and not yet sent. `text` is
+    /// `None` when the composer is empty, and `clear` is the keystroke measured to empty it —
+    /// absent for a harness nobody has measured one for.
+    ConvoComposer {
+        pane: String,
+        text: Option<String>,
+        clear: Option<String>,
     },
     Pending(Pending),
     /// The answer to a `caps` request: the agent kinds this node knows and the sessions it has.

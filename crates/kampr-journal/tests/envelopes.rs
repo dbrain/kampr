@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use kampr_journal::{Block, FileJournal, Journal, Role};
+use kampr_journal::{Block, FileJournal, Journal, Role, TurnKind};
 
 // A background agent finishing writes a `user` record nobody typed (#286). It reached the phone as
 // "You: <task-notification>…", and because the client starts a new exchange at every user turn it
@@ -98,5 +98,49 @@ fn a_codex_transcript_does_not_open_on_the_harness_describing_the_machine() {
                 "The hub trusts a peer's own node list.".to_string()
             ),
         ]
+    );
+}
+
+// `/compact` writes the harness's own summary back into the transcript as a **user** record —
+// same `type`, same `message.role`, nothing but `isCompactSummary` to tell it apart (#259) — so
+// the wire called it the operator's and the conversation view put a summary nobody wrote in their
+// voice. The record is kept, because the operator asked to keep seeing it; what it is called is
+// the fix.
+const COMPACTED: &str = r#"{"type":"user","uuid":"u-1","timestamp":"2026-08-27T01:17:30.000Z","message":{"role":"user","content":[{"type":"text","text":"carry on where you left off"}]}}
+{"parentUuid":"u-1","isSidechain":false,"type":"user","isVisibleInTranscriptOnly":true,"isCompactSummary":true,"uuid":"u-2","timestamp":"2026-08-27T01:17:40.243Z","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent:\n\n   The operator asked for the width inference to be looked at again."}}
+{"type":"assistant","uuid":"a-1","timestamp":"2026-08-27T01:17:44.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Picking the width inference back up."}]}}
+"#;
+
+#[test]
+fn a_compaction_summary_is_named_as_one_rather_than_left_in_the_operators_voice() {
+    let scratch = scratch_dir("envelope-compact");
+    let path = scratch.join("session.jsonl");
+    std::fs::write(&path, COMPACTED).unwrap();
+
+    let mut journal = FileJournal::new(path, claude_parser(), Some(kampr_journal::claude::live));
+    let turns = journal.poll().unwrap();
+
+    let kinds: Vec<Option<TurnKind>> = turns.iter().map(|t| t.kind).collect();
+    assert_eq!(
+        kinds,
+        [None, Some(TurnKind::Compact), None],
+        "only the record carrying isCompactSummary is a summary"
+    );
+    assert!(
+        turns[1].blocks.iter().any(|b| matches!(
+            b,
+            Block::Md { text, .. } if text.contains("ran out of context")
+        )),
+        "the summary is kept — the operator wants to see it, they want it not to be theirs"
+    );
+    assert_eq!(
+        serde_json::to_value(&turns[1]).unwrap()["kind"],
+        "compact",
+        "the wire says what it is in a field of its own; `role` is untouched, so an installed \
+         client reads exactly the turn it read before"
+    );
+    assert!(
+        serde_json::to_value(&turns[0]).unwrap().get("kind").is_none(),
+        "an ordinary turn carries no kind at all"
     );
 }

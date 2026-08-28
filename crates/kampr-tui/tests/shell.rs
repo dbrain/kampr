@@ -10,6 +10,8 @@ use kampr_client::{Client, Event, Policy, Session, Via};
 use kampr_core::Backoff;
 use kampr_tui::app::{App, Options};
 use kampr_tui::image::Images;
+use kampr_tui::mouse::Click;
+use kampr_tui::sidebar;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
@@ -21,9 +23,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 
 const BEAT: Duration = Duration::from_secs(2);
+/// Long enough for a frame the client wrote to reach the scripted node over a loopback socket,
+/// and the window a "nothing was sent" assertion waits out.
+const SETTLE: Duration = Duration::from_millis(250);
 
 struct Conn {
     to_client: mpsc::UnboundedSender<Message>,
+    from_client: mpsc::UnboundedReceiver<Value>,
 }
 
 impl Conn {
@@ -31,6 +37,17 @@ impl Conn {
         self.to_client
             .send(Message::text(frame.to_string()))
             .expect("the scripted node still has a client");
+    }
+
+    /// Everything the client wrote in the window a loopback socket needs, so "nothing was sent"
+    /// is an assertion about frames rather than about timing.
+    async fn heard(&mut self) -> Vec<Value> {
+        let mut frames = Vec::new();
+        let deadline = tokio::time::Instant::now() + SETTLE;
+        while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, self.from_client.recv()).await {
+            frames.push(frame);
+        }
+        frames
     }
 
     fn greet(&self, nodes: Value, panes: Value, role: &str) {
@@ -74,7 +91,14 @@ impl Fake {
                     let Ok(socket) = accepted else { return };
                     let (mut sink, mut source) = socket.split();
                     let (to_client, mut outbox) = mpsc::unbounded_channel::<Message>();
-                    if conns.send(Conn { to_client }).is_err() {
+                    let (heard, from_client) = mpsc::unbounded_channel::<Value>();
+                    if conns
+                        .send(Conn {
+                            to_client,
+                            from_client,
+                        })
+                        .is_err()
+                    {
                         return;
                     }
                     tokio::spawn(async move {
@@ -84,7 +108,14 @@ impl Fake {
                             }
                         }
                     });
-                    while let Some(Ok(_)) = source.next().await {}
+                    while let Some(Ok(message)) = source.next().await {
+                        if let Message::Text(text) = message
+                            && let Ok(frame) = serde_json::from_str::<Value>(&text)
+                            && heard.send(frame).is_err()
+                        {
+                            return;
+                        }
+                    }
                 });
             }
         });
@@ -376,7 +407,7 @@ async fn resize_mode_moves_kamprs_own_split_and_never_the_pane() {
             .lines()
             .nth(1)
             .expect("a border row")
-            .rfind("\u{250c} herdr \u{2500}")
+            .rfind("\u{250c} herdr \u{b7} bash ")
             .expect("a second pane")
     };
     let before = border(&even);
@@ -422,7 +453,7 @@ async fn the_herd_view_is_one_binding_away_and_puts_blocked_first() {
     let mut app = app(&client);
 
     app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
-    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT));
     let screen = painted(&mut app, 120, 20);
 
     let flagged = screen
@@ -438,8 +469,275 @@ async fn the_herd_view_is_one_binding_away_and_puts_blocked_first() {
         "the blocked agent on the other host sorts to the top:\n{screen}"
     );
     assert!(screen.contains("workbox"), "{screen}");
+}
+
+/// **The navigator moves the sidebar cursor and leaves the frame alone.** It used to force the
+/// herd screen for as long as it was open, so `^b w` read as "open a different screen" — and the
+/// one surface it was actually navigating was the one it covered up.
+#[tokio::test]
+async fn the_navigator_walks_the_sidebar_and_leaves_the_panes_on_screen() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", Some("claude"), "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    let screen = painted(&mut app, 120, 20);
+
     assert!(
-        screen.contains("NAVIGATE"),
-        "the modal footer is drawn:\n{screen}"
+        screen.contains("NAVIGATE the sidebar"),
+        "the modal footer says what is being navigated:\n{screen}"
+    );
+    assert!(
+        screen.contains('\u{250c}'),
+        "the pane the operator was reading is still drawn:\n{screen}"
+    );
+}
+
+/// The pane helper puts everything in one tab; this one names its own, because the mosaic is a
+/// tab's panes and a second tab is what makes focusing change what is watched.
+fn tabbed(id: &str, tab: &str, agent: Option<&str>, status: &str) -> Value {
+    json!({
+        "id": id, "node_id": "01JNODE",
+        "workspace_id": "01JNODE/w1", "tab_id": format!("01JNODE/w1:{tab}"),
+        "workspace": "herdr", "tab": tab, "cwd": "/home/dbrain/dev/kampr",
+        "agent": agent, "agent_status": status, "rows": 4, "cols": 12
+    })
+}
+
+fn watched(frames: &[Value]) -> Vec<String> {
+    frames
+        .iter()
+        .filter(|f| f["t"] == json!("watch"))
+        .filter_map(|f| f["pane"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// **A focus is a subscription change and nothing else was saying so.**
+///
+/// `mosaic()` is the focused pane's tab, so focusing a pane in another tab changes what this
+/// client is watching — but the only things that re-stated the watches were the greeting and a
+/// `herd` frame. An agent pane hid it: its `agent_status` churns, the node patches the herd, and
+/// the watches are restated within a second. A shell sitting at its prompt produces no herd
+/// traffic at all, so it stayed on "waiting for the first frame" for ever — the same pane the
+/// operator had just asked for.
+#[tokio::test]
+async fn a_pane_the_operator_focused_is_watched_without_waiting_for_a_herd_frame() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([
+            tabbed("01JNODE/w1:p1", "t1", Some("claude"), "working"),
+            tabbed("01JNODE/w1:p2", "t2", None, "unknown")
+        ]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+
+    let mut app = App::new(client.clone(), Options::default(), Images::default());
+    app.absorb(&Event::Prefs { greeting: true });
+    let opening = watched(&conn.heard().await);
+    assert_eq!(
+        opening,
+        vec!["01JNODE/w1:p1".to_string()],
+        "the greeting watches the pane it opened on"
+    );
+
+    app.clicked(Click::Focus("01JNODE/w1:p2".into()));
+    let frames = conn.heard().await;
+    assert_eq!(
+        watched(&frames),
+        vec!["01JNODE/w1:p2".to_string()],
+        "the shell the operator just opened is subscribed to, with no herd frame to prompt it: \
+         {frames:?}"
+    );
+}
+
+/// **Two different questions, and the sidebar used to answer only one.** The cursor mark belongs
+/// to the navigator and is drawn only while it is open, so outside it nothing said which of the
+/// rows was the pane the frame was showing.
+#[tokio::test]
+async fn the_sidebar_says_which_pane_the_frame_is_showing() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([
+            tabbed("01JNODE/w1:p1", "t1", Some("claude"), "idle"),
+            tabbed("01JNODE/w1:p2", "t2", None, "unknown")
+        ]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = App::new(client.clone(), Options::default(), Images::default());
+    app.absorb(&Event::Prefs { greeting: true });
+
+    let marked = |screen: &str| -> Vec<String> {
+        screen
+            .lines()
+            .filter(|l| l.contains('\u{258c}'))
+            .map(|l| l[..sidebar::WIDTH as usize].trim().to_string())
+            .collect()
+    };
+
+    // A pane sits in `spaces` and, when it has an agent, in `agents` too — so the mark is on
+    // every row that names it rather than on one row.
+    let opened = marked(&painted(&mut app, 120, 20));
+    assert!(
+        !opened.is_empty() && opened.iter().all(|row| row.contains("claude")),
+        "the marked rows are the agent pane the client opened on: {opened:?}"
+    );
+
+    app.clicked(Click::Focus("01JNODE/w1:p2".into()));
+    let moved = marked(&painted(&mut app, 120, 20));
+    assert!(
+        !moved.is_empty() && moved.iter().all(|row| !row.contains("claude")),
+        "the mark follows the focus rather than staying where it was: {moved:?}"
+    );
+}
+
+/// The panel is the one screen a person opens when they do not know what this client is, and on a
+/// terminal shorter than it the tail used to be cut with no way to reach it.
+#[tokio::test]
+async fn the_help_panel_reaches_its_last_row_on_a_terminal_too_short_to_hold_it() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", Some("claude"), "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    let opened = painted(&mut app, 100, 20);
+    assert!(
+        opened.contains("the prefix is ctrl+b"),
+        "the two facts every row assumes are said once, at the top:\n{opened}"
+    );
+    assert!(
+        opened.contains("walk the sidebar"),
+        "the first section is the one a newcomer needs:\n{opened}"
+    );
+    assert!(
+        !opened.contains("kampr connect"),
+        "this terminal cannot hold the whole panel, which is the point of the test:\n{opened}"
+    );
+
+    // Any key at all used to dismiss it, so it could not be paged even once it had pages.
+    app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    let bottom = painted(&mut app, 100, 20);
+    assert!(
+        bottom.contains("kampr connect"),
+        "and the tail is reachable, which is where the answer to \"how do I pair\" lives:\n{bottom}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !painted(&mut app, 100, 20).contains("the prefix is ctrl+b"),
+        "esc closes it"
+    );
+}
+
+/// A pane's directory is most of what says which pane it is, and the status line is the only
+/// surface wide enough to hold one. `~` because the node's own `$HOME` is not on the wire.
+#[tokio::test]
+async fn the_status_line_says_where_the_pane_is_without_spelling_out_a_home_directory() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", Some("claude"), "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let screen = painted(&mut app, 120, 20);
+    assert!(screen.contains("~/dev/kampr"), "{screen}");
+    assert!(
+        !screen.contains("/home/dbrain"),
+        "the home directory is the half a reader already knows:\n{screen}"
+    );
+}
+
+/// **The navigator has to have something to navigate.** It used to force the herd screen for as
+/// long as it was open, which was always drawn; moving it onto the sidebar meant it could be
+/// entered against a sidebar that is hidden — `^b b` — or one too narrow to draw, and then the
+/// cursor moved and the arrows were swallowed with nothing on screen to show for it.
+#[tokio::test]
+async fn the_navigator_brings_the_sidebar_back_rather_than_walking_one_nobody_can_see() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", Some("claude"), "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+    let hidden = painted(&mut app, 120, 20);
+    assert!(!hidden.contains("spaces"), "the sidebar is away:\n{hidden}");
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    let opened = painted(&mut app, 120, 20);
+    assert!(
+        opened.contains("spaces"),
+        "asking to walk the sidebar brings it back:\n{opened}"
+    );
+}
+
+/// A terminal too narrow for a sidebar drops it however the operator set the toggle
+/// (`chrome.rs`'s `area.width > sidebar::WIDTH * 2`), so there the navigator has to fall back to
+/// the one list that is always drawn.
+#[tokio::test]
+async fn a_terminal_too_narrow_for_a_sidebar_navigates_the_herd_instead() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", Some("claude"), "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    painted(&mut app, 50, 20);
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    let screen = painted(&mut app, 50, 20);
+    assert!(screen.contains("NAVIGATE"), "the mode is open:\n{screen}");
+    // The herd view is a table; the panes screen draws a bordered box. The status line names the
+    // pane on either, so the border is what tells them apart.
+    assert!(
+        !screen.contains('\u{250c}'),
+        "and it fell back to the herd, which is drawn at any width:\n{screen}"
     );
 }

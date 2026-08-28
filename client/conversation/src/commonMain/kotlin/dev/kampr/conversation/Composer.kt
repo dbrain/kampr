@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
@@ -85,6 +86,10 @@ fun Composer(
     modifier: Modifier = Modifier,
     onAttach: (() -> Unit)? = null,
     handover: Handover = Handover.Idle,
+    draft: String = "",
+    onDraft: (String) -> Unit = {},
+    desk: DeskLine? = null,
+    onTakeOver: (DeskLine) -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
@@ -92,7 +97,11 @@ fun Composer(
     // the thing the gesture handle landed on and the send button the thing a rotated navigation bar
     // covered. Zero on a portrait phone, where the tabs below already hold the edge.
     val safe = LocalSafeArea.current
-    var value by remember { mutableStateOf(TextFieldValue()) }
+    // **Seeded from the pane, not owned here.** A `remember` of its own died with the composable,
+    // and switching to the terminal view is exactly what takes this out of the composition — so a
+    // half-written reply was lost to a glance at the pane it was about. The caret goes to the end,
+    // which is where somebody returning to their own sentence wants it.
+    var value by remember { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
     // A fixed radius and not `pill`, which is 999 dp and therefore always half the height of
     // whatever it is put on. That reads as a chip on one line of reply and as an oval by four,
     // which is the shape this box spends most of its life in. The send button beside it keeps the
@@ -105,6 +114,7 @@ fun Composer(
         if (!ready) return
         onSend(value.text.trimEnd())
         value = TextFieldValue()
+        onDraft("")
     }
 
     // Written rather than passed through, because the field does not agree with itself about it:
@@ -113,6 +123,7 @@ fun Composer(
     fun newline() {
         val at = value.selection
         value = TextFieldValue(value.text.replaceRange(at.min, at.max, "\n"), TextRange(at.min + 1))
+        onDraft(value.text)
     }
 
     // Return sends, and a modifier with it writes the second line — which is what every agent CLI
@@ -137,7 +148,21 @@ fun Composer(
         return true
     }
 
+    // **The takeover is a press and nothing else.** Switching to this view, opening the pane or
+    // reconnecting must never move a character on the far machine: looking at a pane has no side
+    // effects, and a write that empties somebody's half-written sentence is the last thing to make
+    // an exception of. What it does is *move* the line rather than destroy it — the words land in
+    // this box before the pane is asked to let go of them — so the worst a mistimed press can cost
+    // is a paste back, and the pane's own harness has an undo for it besides.
+    fun takeOver(line: DeskLine) {
+        val merged = line.text + value.text
+        value = TextFieldValue(merged, TextRange(merged.length))
+        onDraft(merged)
+        onTakeOver(line)
+    }
+
     Column(modifier.fillMaxWidth().background(tokens.color.bar).edgeTop().readingOrder(1f)) {
+        DeskStrip(desk, agent, enabled, { desk?.let(::takeOver) })
         HandoverLine(handover, agent)
         Row(
             Modifier
@@ -180,7 +205,10 @@ fun Composer(
                 }
                 BasicTextField(
                     value = value,
-                    onValueChange = { value = it },
+                    onValueChange = {
+                        value = it
+                        onDraft(it.text)
+                    },
                     enabled = enabled,
                     modifier = Modifier
                         .fillMaxWidth()

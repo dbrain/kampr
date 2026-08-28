@@ -45,6 +45,10 @@ pub enum Action {
     EditScrollback,
     ZoomPane,
     ToggleSidebar,
+    /// The triage screen a desk cannot draw: every node, every workspace, every pane, blocked
+    /// first. #289's table binds no `prefix+shift+h`, so this is one of the handful Kampr claims
+    /// for itself rather than a departure from herdr's keymap.
+    HerdView,
     FocusPane(Dir),
     CyclePaneNext,
     CyclePanePrevious,
@@ -165,6 +169,8 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(CloseTab)
     } else if shifted(key, 'p') {
         Bind::Do(RenamePane)
+    } else if shifted(key, 'h') {
+        Bind::Do(HerdView)
     } else if shifted(key, 'v') {
         Bind::Do(ToggleView)
     } else if plain(key, '?') {
@@ -326,13 +332,13 @@ pub fn lookup(mode: Mode, key: KeyEvent) -> Option<Bind> {
 pub fn footer(mode: Mode) -> Option<&'static str> {
     match mode {
         Mode::Pane => None,
-        Mode::Prefix => Some("PREFIX  esc cancel · ctrl+b send prefix · w workspace nav · ? keybinds"),
+        Mode::Prefix => Some("PREFIX  esc cancel · ctrl+b send prefix · w sidebar · shift+h herd · ? help"),
         Mode::Copy => Some(
             "COPY  h/j/k/l w/b/e { } move · / ? search · n/N repeat · v/space select · y/enter copy · q/esc exit",
         ),
         Mode::Resize => Some("RESIZE  h/l width · j/k height · esc done · kampr's own split, never the pane"),
-        Mode::Navigate => {
-            Some("NAVIGATE  esc back · up/down list · h/j/k/l focus · tab cycle · enter open · 1-9 workspace")
-        }
+        Mode::Navigate => Some(
+            "NAVIGATE the sidebar  esc back · up/down row · enter open · space beside · tab cycle · 1-9 workspace",
+        ),
     }
 }

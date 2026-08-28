@@ -97,7 +97,10 @@ fun ConversationView(
 
     // A live preview is withdrawn by arriving again with no blocks, so an empty turn is a turn
     // that is no longer there.
-    val turns = remember(pane.revision) { pane.turns.filter { it.isVisible() } }
+    //
+    // The queue goes on the end, after every record: the harness has not started on any of it yet,
+    // so it is the newest thing anybody has said to this pane.
+    val turns = remember(pane.revision) { pane.turns.filter { it.isVisible() } + queuedTurns(pane.facets) }
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var focus by remember { mutableStateOf(0) }
@@ -399,6 +402,8 @@ fun ConversationView(
                 agent = info?.agent,
                 enabled = !io.readOnly,
                 onSend = { text -> replyMessages(pane.id, text).forEach(io::send) },
+                draft = pane.draft,
+                onDraft = { pane.draft = it },
                 onAttach = if (io.readOnly || !filePickAvailable) null else {
                     {
                         scope.launch {
@@ -408,6 +413,12 @@ fun ConversationView(
                     }
                 },
                 handover = handover,
+                desk = pane.desk,
+                // The keystroke is the node's measurement and arrives with the line, so nothing
+                // here decides what empties a box on a machine it has never seen. It goes as
+                // ordinary `input`, which is the path a device that may not type is already
+                // refused on.
+                onTakeOver = { line -> line.clear?.let { io.send(ClientMsg.InputText(pane.id, it)) } },
             )
         })
     }

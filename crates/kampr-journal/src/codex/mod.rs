@@ -9,10 +9,11 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
+use crate::composer::{Caret, Composed, ComposerReader};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
-use crate::facet::Facets;
+use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
@@ -123,8 +124,16 @@ impl JournalAdapter for CodexAdapter {
         facet::collect(transcript)
     }
 
+    fn fold(&self) -> Option<Box<dyn FacetFold>> {
+        Some(Box::new(facet::Fold::default()))
+    }
+
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
+    }
+
+    fn composer(&self) -> Option<ComposerReader> {
+        Some(composer)
     }
 
     fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -323,8 +332,14 @@ const LAYOUT: Layout = Layout {
     prompt: '›',
     result: '└',
     indent: 2,
+    input: 2,
     reject: is_status,
 };
+
+/// One `ctrl+u` takes the whole buffer, wrapped or not — measured against a 200-column entry over
+/// three rows. `ctrl+c` clears it too, and is not used: it is the key that quits two of the three
+/// harnesses this crate serves, and there is nothing to win by spending it here.
+const CLEAR: &str = "\u{15}";
 
 fn is_status(head: &str) -> bool {
     head.starts_with("Working (")
@@ -332,4 +347,8 @@ fn is_status(head: &str) -> bool {
 
 pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     crate::live::read(screen, &LAYOUT)
+}
+
+pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
+    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
 }

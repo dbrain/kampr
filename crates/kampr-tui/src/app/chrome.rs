@@ -89,13 +89,12 @@ impl App {
             layout.sidebar = left;
             let rows = self.rows();
             let selected = matches!(self.router.mode(), Mode::Navigate).then_some(self.pick);
-            let top = selected
-                .map(|s| s.saturating_sub(left.height.saturating_sub(2) as usize))
-                .unwrap_or(0);
+            let top = self.sidebar_view(rows.len(), left.height as usize, selected);
             Sidebar {
                 rows: &rows,
                 theme: &t,
                 selected,
+                focused: self.focused(),
                 top,
             }
             .render(left, frame.buffer_mut());
@@ -444,6 +443,12 @@ impl App {
                 if let Some(agent) = &entry.agent {
                     parts.push(agent.clone());
                 }
+                // The status line is the one surface wide enough for a whole path, and a pane's
+                // directory is most of what says which pane it is. `~` because the node's own
+                // `$HOME` is not on the wire and never will be — see `naming::home_relative`.
+                if let Some(cwd) = &entry.cwd {
+                    parts.push(kampr_core::naming::home_relative(cwd).into_owned());
+                }
                 // Never derive geometry. The herd entry omits `cols` until something has
                 // measured it; `grid.reset` always carries the measurement, so the shadow is
                 // the second place a width can honestly come from — and the rect is neither.
@@ -519,10 +524,10 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             ),
             None => {
-                let mut hints = vec!["^b w herd", "^b [ copy", "^b b sidebar", "^b q detach"];
+                let mut hints = vec!["^b ? help", "^b w sidebar", "^b ⇧h herd", "^b q detach"];
                 if self.writes() && self.client.state().caps().manage {
-                    hints.insert(1, "^b c new");
-                    hints.insert(2, "^b , rename");
+                    hints.insert(3, "^b c new");
+                    hints.insert(4, "^b , rename");
                 }
                 Span::styled(
                     format!(" {}", hints.join("  ")),
@@ -535,19 +540,50 @@ impl App {
             .render(area, frame.buffer_mut());
     }
 
-    fn draw_keybinds(&self, frame: &mut Frame, area: Rect) {
+    /// **Sized to the terminal and scrollable.** It used to be `rows + 2` clamped to the screen
+    /// with no way to move it, so on a short terminal the tail was cut and unreachable — which is
+    /// the half a first-time reader most needs.
+    fn draw_keybinds(&mut self, frame: &mut Frame, area: Rect) {
         let t = self.options.theme;
-        let lines: Vec<Line> = crate::keybinds()
-            .iter()
-            .map(|(bind, what)| {
-                Line::from(vec![
-                    Span::styled(format!(" {bind:<16}"), Style::default().fg(t.accent)),
+        let manage = self.writes() && self.client.state().caps().manage;
+        let mut lines: Vec<Line> = Vec::new();
+        for section in crate::help(manage) {
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(
+                format!(" {} ", section.title),
+                Style::default()
+                    .fg(t.on_accent)
+                    .bg(t.accent)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for (bind, what) in section.rows {
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {bind:<28}"), Style::default().fg(t.accent)),
                     Span::styled((*what).to_string(), Style::default().fg(t.text)),
-                ])
-            })
-            .collect();
-        let height = (lines.len() as u16 + 2).min(area.height);
-        let width = 52.min(area.width);
+                ]));
+            }
+        }
+        // Wide enough for the longest row this table holds — a 28-column bind beside a
+        // 57-column description — and capped at the terminal, which then clips rather than wraps.
+        let width = 90.min(area.width);
+        let height = area.height.min(lines.len() as u16 + 4);
+        let body = height.saturating_sub(4) as usize;
+        let top = self.help_top.min(lines.len().saturating_sub(body));
+        self.help_top = top;
+        let more = top + body < lines.len();
+        let foot = match (top > 0, more) {
+            (_, true) => " up/down · pgup/pgdn more · esc closes ",
+            (true, false) => " up/down back · esc closes ",
+            (false, false) => " esc closes ",
+        };
+        let shown: Vec<Line> = std::iter::once(Line::from(Span::styled(
+            format!(" {}", crate::HELP_HEAD),
+            Style::default().fg(t.mute),
+        )))
+        .chain(lines.into_iter().skip(top).take(body))
+        .collect();
         let popup = Rect {
             x: area.x + (area.width - width) / 2,
             y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -555,12 +591,16 @@ impl App {
             height,
         };
         Clear.render(popup, frame.buffer_mut());
-        Paragraph::new(lines)
+        Paragraph::new(shown)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(t.accent))
-                    .title(" keybinds "),
+                    .title(Span::styled(
+                        " kampr ",
+                        Style::default().fg(t.accent_hi).add_modifier(Modifier::BOLD),
+                    ))
+                    .title_bottom(Span::styled(foot, Style::default().fg(t.mute))),
             )
             .style(Style::default().bg(t.surface))
             .render(popup, frame.buffer_mut());
@@ -568,15 +608,7 @@ impl App {
 }
 
 fn label(entry: &PaneEntry) -> String {
-    let left = entry
-        .label
-        .clone()
-        .or_else(|| entry.workspace.clone())
-        .unwrap_or_else(|| entry.id.clone());
-    match &entry.agent {
-        Some(agent) => format!("{left} · {agent}"),
-        None => left,
-    }
+    sidebar::name(entry)
 }
 
 fn herd_line<'a>(pane: &PaneEntry, herd: &kampr_client::Herd, t: &Theme, flag: bool) -> Line<'a> {

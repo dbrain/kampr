@@ -478,6 +478,18 @@ async fn a_herd_rebuilt_while_the_greeting_is_still_being_written_still_reaches_
         .await
         .expect("a device");
 
+    // The node's own rebuild publishes to this channel too, and for a node with no herdr every
+    // model it builds is empty. One landing between the publishes below and the session's read
+    // hands the client an empty greeting with no patch behind it — the failure this test reports,
+    // arrived at from the opposite direction. Stopping the background tasks leaves the herd below
+    // the only one; the drain absorbs a rebuild already in flight when `shutdown` aborts it.
+    h.node.shutdown();
+    let mut settling = h.node.subscribe_herd();
+    while tokio::time::timeout(Duration::from_millis(200), settling.changed())
+        .await
+        .is_ok()
+    {}
+
     h.node.publish_herd(herd_of(&["w1:p1"]));
     let (node_side, client_side) = kampr_mesh::transport::pair();
     let (out, incoming) = node_side.split();
@@ -573,6 +585,10 @@ async fn a_node_that_cannot_read_its_devices_does_not_say_nobody_is_enrolled() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flood_of_wrong_pairing_codes_leaves_the_node_still_answering_everything_else() {
     let h = Harness::start(|c| c.server.trust_proxy = true).await;
+    let quiet = std::time::Instant::now();
+    let (ok, _) = request(&h.origin, "GET", "/healthz", &[], None).await;
+    assert!(ok.contains("200"), "the node answers before the flood: {ok}");
+    let idle = quiet.elapsed();
     let body = json!({ "code": "ZZZZ-ZZZZ", "device_name": "flood" }).to_string();
     let flood: Vec<_> = (0..256)
         .map(|n| {
@@ -597,9 +613,17 @@ async fn a_flood_of_wrong_pairing_codes_leaves_the_node_still_answering_everythi
     let took = at.elapsed();
 
     assert!(status.contains("200"), "the health check itself: {status}");
+    // **Against this machine's own idle answer, not against a stopwatch.** A flat bound here is an
+    // assertion about the hardware: it held on a quiet desk and failed roughly one run in forty
+    // under load, where the whole process is descheduled and every timing moves together. A wedged
+    // runtime is not a slow one — it is every worker parked in a key derivation, which is orders of
+    // magnitude rather than a multiple — so the ratio catches the defect and the machine cannot.
+    // Floored so a sub-millisecond baseline cannot make the bound tighter than the flat one was.
+    let bound = (idle * 20).max(Duration::from_millis(500));
     assert!(
-        took < Duration::from_millis(500),
-        "a stranger's wrong pairing codes wedged the runtime: /healthz took {took:?}"
+        took < bound,
+        "a stranger's wrong pairing codes wedged the runtime: /healthz took {took:?} \
+         against an idle {idle:?}, so the bound was {bound:?}"
     );
     let answers: Vec<String> = futures_util::future::join_all(flood)
         .await

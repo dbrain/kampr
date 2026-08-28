@@ -10,6 +10,7 @@ anyhow.workspace = true
 futures-util.workspace = true
 kampr-auth = { path = "../kampr-auth" }
 kampr-core = { path = "../kampr-core" }
+kampr-journal = { path = "../kampr-journal" }
 kampr-mesh = { path = "../kampr-mesh" }
 kampr-node = { path = "../kampr-node" }
 kampr-term = { path = "../kampr-term" }

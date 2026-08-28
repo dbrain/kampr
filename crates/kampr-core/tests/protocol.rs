@@ -4,6 +4,7 @@ use kampr_core::wire::{
     ServerMsg,
 };
 use kampr_journal::{Attachment, Block, Page, Role as Role_, ToolState, Turn};
+use serde_json::Value;
 
 #[test]
 fn hello_matches_the_documented_shape() {
@@ -157,6 +158,7 @@ fn convo_matches_the_shape_the_client_decodes() {
             id: "t_812".into(),
             role: Role_::Assistant,
             at: Some("2026-08-20T13:41:55Z".into()),
+            kind: None,
             blocks: vec![
                 Block::Md {
                     text: "Six, and they are…".into(),
@@ -264,6 +266,7 @@ fn a_revised_turn_travels_as_convo_turn() {
             id: "t_812".into(),
             role: Role_::Assistant,
             at: None,
+            kind: None,
             blocks: vec![Block::Tool {
                 name: "Bash".into(),
                 summary: None,
@@ -416,4 +419,42 @@ fn a_launched_conversations_turns_say_which_conversation_they_are() {
     .unwrap();
     assert_eq!(v["t"], "convo.turn");
     assert_eq!(v["sub"], "aGFuZGxl");
+}
+
+/// **`text: null` is how the strip comes down**, and it has to be *sent* rather than omitted: a
+/// client that only ever hears about a composer with something in it goes on drawing the last line
+/// it was told about long after the operator emptied the box. `clear` is the opposite — omitted
+/// where nobody has measured a keystroke, so that a client can tell "no takeover here" from "the
+/// takeover is this key" instead of guessing one.
+#[test]
+fn a_desk_line_clears_with_a_null_text_and_omits_a_clear_nobody_measured() {
+    let typed = serde_json::to_value(ServerMsg::ConvoComposer {
+        pane: "01J/w3:p2".into(),
+        text: Some("push the branch when".into()),
+        clear: Some("\u{3}".into()),
+    })
+    .unwrap();
+    assert_eq!(typed["t"], "convo.composer");
+    assert_eq!(typed["pane"], "01J/w3:p2");
+    assert_eq!(typed["text"], "push the branch when");
+    assert_eq!(typed["clear"], "\u{3}");
+
+    let emptied = serde_json::to_value(ServerMsg::ConvoComposer {
+        pane: "01J/w3:p2".into(),
+        text: None,
+        clear: None,
+    })
+    .unwrap();
+    // `Value["text"]` answers null for a key that is not there at all, so the presence is what is
+    // asserted: an omitted `text` and a null one read the same through the index and are opposite
+    // instructions to a client.
+    assert_eq!(
+        emptied.get("text"),
+        Some(&Value::Null),
+        "an emptied composer must say so, not go quiet",
+    );
+    assert!(
+        emptied.get("clear").is_none(),
+        "an unmeasured clearing key is absent, and absent is not the same as null",
+    );
 }

@@ -13,6 +13,16 @@ fun bashTurn(id: String, command: String, state: String, lines: Int?): Turn = Tu
 fun proseTurn(id: String, text: String, role: String = "assistant"): Turn =
     Turn(id, role, null, listOf(Block.Md(text)))
 
+// What `/compact` writes back into a transcript: a user record nobody typed, carrying the
+// harness's own summary of everything it then dropped (#259).
+fun summaryTurn(id: String, text: String = COMPACTED_TEXT): Turn =
+    Turn(id, "user", null, listOf(Block.Md(text)), kind = COMPACT)
+
+const val COMPACTED_TEXT =
+    "This session is being continued from a previous conversation that ran out of context. " +
+        "The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+        "1. Primary Request and Intent:\n\n   The operator asked for the width inference again."
+
 // The report's own shape: a wall of `Bash` cards with one sentence of prose in the middle of it,
 // which is what makes it two runs rather than one. One run hides a failure and the other hides a
 // call still in flight, because those are the two things a collapsed row must say out loud.

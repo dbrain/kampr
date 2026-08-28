@@ -5,27 +5,43 @@
     "below and both assert the same string, because a phone and a CLI that disagree about what a",
     "pane is called are two clients, not one. `fields` is a `PaneEntry` as the wire carries it,",
     "plus `title` — the session's own, which the harness writes and the wire does not carry yet; a",
-    "key that is absent is absent."
+    "key that is absent is absent. A case with `home_relative` instead of `template` pins the path",
+    "shortener rather than the renderer, and both sides run those too."
   ],
   "the default template says which of six panes in a directory is the busy one": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "cmd": "cargo", "argv": "cargo test" },
-    "expect": "kampr (cargo test) · bash"
+    "expect": "kampr · cargo test"
   },
-  "a pane whose command ble.sh hid renders no empty parens": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+  "a shell running a build is named after the build rather than after the shell": {
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "cmd": "cargo", "argv": "cargo test -p kampr-core" },
+    "expect": "kampr · cargo test -p kampr-core"
+  },
+  "a pane with neither a job nor an agent falls all the way through to the shell": {
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr" },
     "expect": "kampr · bash"
   },
   "an agent pane keeps the agent where the shell name would be": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "agent": "claude", "status": "blocked" },
     "expect": "kampr · claude"
   },
+  "an agent whose job is the harness itself is said once": {
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kob-f4", "agent": "claude", "cmd": "claude", "argv": "claude", "status": "working" },
+    "expect": "kampr · claude"
+  },
   "a renamed pane beats its workspace": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "cwd": "/home/dbrain/dev/kampr" },
     "expect": "build · bash"
+  },
+  "a renamed pane still says what it is running": {
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "cwd": "/home/dbrain/dev/kampr", "cmd": "cargo", "argv": "cargo test" },
+    "expect": "build · cargo test"
   },
   "no workspace falls through to the directory's last segment": {
     "template": "{label|workspace|cwd|pane}",
@@ -103,19 +119,19 @@
     "expect": "w3:p2"
   },
   "a conversation title names a pane herdr was never asked to label": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "title": "the width inference rewrite", "agent": "claude" },
-    "expect": "the width inference rewrite \u00b7 claude"
+    "expect": "the width inference rewrite · claude"
   },
   "a name the operator set by hand still beats the title the session made up": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "title": "the width inference rewrite", "agent": "claude" },
-    "expect": "build \u00b7 claude"
+    "expect": "build · claude"
   },
   "a session with no title of its own falls through exactly as it did before": {
-    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "agent": "claude" },
-    "expect": "kampr \u00b7 claude"
+    "expect": "kampr · claude"
   },
   "a whitespace title is an absent title": {
     "template": "{title|workspace|pane}",
@@ -126,5 +142,41 @@
     "template": "{pane}",
     "fields": { "pane": "01JNODE/w3:p2" },
     "expect": "w3:p2"
+  },
+  "a linux home directory is written the way a person writes it": {
+    "home_relative": "/home/dbrain/dev/kampr",
+    "expect": "~/dev/kampr"
+  },
+  "a mac home directory is the other convention and the only other one": {
+    "home_relative": "/Users/dbrain/dev/kampr",
+    "expect": "~/dev/kampr"
+  },
+  "the home directory itself is a tilde and nothing else": {
+    "home_relative": "/home/dbrain",
+    "expect": "~"
+  },
+  "a trailing slash survives the substitution it did not cause": {
+    "home_relative": "/home/dbrain/",
+    "expect": "~/"
+  },
+  "a path outside a home directory is returned untouched": {
+    "home_relative": "/var/log/herdr",
+    "expect": "/var/log/herdr"
+  },
+  "the directory the homes live in is not somebody's home": {
+    "home_relative": "/home",
+    "expect": "/home"
+  },
+  "no user segment is no substitution": {
+    "home_relative": "/home/",
+    "expect": "/home/"
+  },
+  "a prefix that merely starts the same way is not the prefix": {
+    "home_relative": "/homer/dbrain/dev",
+    "expect": "/homer/dbrain/dev"
+  },
+  "a path that is already relative to a home is left as it is": {
+    "home_relative": "~/dev/kampr",
+    "expect": "~/dev/kampr"
   }
 }

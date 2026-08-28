@@ -21,7 +21,7 @@ pub use backoff::Backoff;
 pub use herdr_provider::{HerdrConfig, HerdrProvider};
 pub use naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
 pub use provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
-pub use registry::{PaneRegistry, PaneUpdate, Watcher};
+pub use registry::{PaneRegistry, PaneUpdate, Screen, Watcher};
 pub use reporter::{Reported, Reporter};
 pub use scrollback::ScrollbackDoc;
 pub use wire::{ClientMsg, Encoder, ServerMsg};

@@ -255,47 +255,124 @@ fn b64(bytes: &[u8]) -> String {
     out
 }
 
-/// What `prefix+?` draws. Every row is a bind this build actually routes.
-pub fn keybinds() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("ctrl+b ctrl+b", "send a literal ctrl+b"),
-        ("prefix ?", "this list"),
-        ("prefix q", "detach"),
-        ("prefix s", "settings"),
-        ("prefix shift+r", "reload config"),
-        ("prefix o", "open the link a click offered"),
-        ("prefix w / g", "herd navigator (modal)"),
-        ("prefix shift+n", "new workspace"),
-        ("prefix shift+g", "new worktree"),
-        ("prefix shift+w", "rename workspace"),
-        ("prefix shift+d", "close workspace"),
-        ("prefix c", "new tab"),
-        ("prefix , / shift+t", "rename tab"),
-        ("prefix p / n", "previous / next tab"),
-        ("prefix 1..9", "switch tab"),
-        ("prefix shift+x", "close tab"),
-        ("prefix v / -", "split vertical / horizontal"),
-        ("prefix x", "close pane"),
-        ("prefix shift+p", "rename pane"),
-        ("prefix e", "edit scrollback"),
-        ("prefix z", "zoom this pane in the mosaic"),
-        ("prefix [", "copy mode (modal)"),
-        ("prefix r", "resize mode (modal, kampr's own split)"),
-        ("prefix b", "toggle the sidebar"),
-        ("prefix h/j/k/l", "focus a pane"),
-        ("prefix tab", "cycle panes"),
-        ("prefix space", "last pane"),
-        ("prefix left/right", "pan the grid"),
-        ("prefix up/down", "scroll back through the ring"),
-        ("prefix pgup/pgdn", "scroll a screen at a time"),
-        ("prefix home/end", "pan to the row's edges"),
-        ("prefix 0", "reset the pan"),
-        ("prefix shift+v", "terminal / conversation"),
-        ("prefix m", "mouse passthrough for this pane"),
-        ("prefix shift+m", "drop the mosaic back to this tab"),
-        (
-            "navigate space",
-            "put that pane beside this one — any node, any host",
-        ),
-    ]
+/// One block of [`help`]. `manage` marks a section whose binds a read-only device, or a node that
+/// does not claim the capability, cannot use — absent rather than disabled, the same rule the
+/// footer follows.
+pub struct Section {
+    pub title: &'static str,
+    pub rows: &'static [(&'static str, &'static str)],
+    pub manage: bool,
 }
+
+/// What `prefix+?` draws.
+///
+/// **Every row here is a bind this build actually routes**, apart from the last section, which is
+/// labelled as commands rather than keys. It is grouped rather than flat because the flat version
+/// was thirty rows of `prefix w / g · herd navigator (modal)` — true, and no use at all to somebody
+/// who does not yet know that is how you walk the sidebar.
+pub fn help(manage: bool) -> impl Iterator<Item = &'static Section> {
+    SECTIONS.iter().filter(move |section| manage || !section.manage)
+}
+
+static SECTIONS: &[Section] = &[
+    Section {
+        title: "getting around",
+        manage: false,
+        rows: &[
+            (
+                "prefix w / g",
+                "walk the sidebar — up/down, enter opens, esc leaves",
+            ),
+            (
+                "prefix shift+h",
+                "the herd: every node, every pane, blocked first",
+            ),
+            ("prefix b", "show or hide the sidebar"),
+            ("prefix tab", "cycle the panes on screen"),
+            ("prefix space", "back to the last pane"),
+            ("prefix h/j/k/l", "focus a pane"),
+            ("prefix p / n", "previous / next tab"),
+            ("prefix 1..9", "switch to a tab by number"),
+            ("prefix q", "detach"),
+        ],
+    },
+    Section {
+        title: "reading a pane",
+        manage: false,
+        rows: &[
+            ("prefix up/down", "scroll back through the ring"),
+            ("prefix pgup/pgdn", "scroll a screen at a time"),
+            ("prefix left/right", "pan a grid wider than the window"),
+            ("prefix home/end", "pan to the row's edges"),
+            ("prefix 0", "reset the pan and the scroll"),
+            ("prefix z", "zoom this pane to fill the mosaic"),
+            ("prefix shift+v", "terminal ⇄ conversation"),
+            ("wheel", "scrolls whatever is under the pointer"),
+        ],
+    },
+    Section {
+        title: "two panes at once — any node, any host",
+        manage: false,
+        rows: &[
+            ("in the sidebar: space", "put that pane beside this one"),
+            ("prefix shift+m", "drop the mosaic back to this tab"),
+            ("prefix r", "resize mode — kampr's own split, never the pane"),
+        ],
+    },
+    Section {
+        title: "copying, and links",
+        manage: false,
+        rows: &[
+            ("prefix [", "copy mode"),
+            ("drag", "select; the copy is the logical text, not the grid"),
+            ("prefix o", "open the link a click offered"),
+            ("prefix m", "let this pane have the mouse (off by default)"),
+        ],
+    },
+    Section {
+        title: "changing the herd",
+        manage: true,
+        rows: &[
+            ("prefix c", "new tab"),
+            ("prefix , / shift+t", "rename tab"),
+            ("prefix v / -", "split vertical / horizontal"),
+            ("prefix x", "close pane"),
+            ("prefix shift+p", "rename pane"),
+            ("prefix shift+x", "close tab"),
+            ("prefix shift+n", "new workspace"),
+            ("prefix shift+g", "new worktree"),
+            ("prefix shift+w", "rename workspace"),
+            ("prefix shift+d", "close workspace"),
+        ],
+    },
+    Section {
+        title: "the modal keymaps — no prefix while they are open",
+        manage: false,
+        rows: &[
+            ("copy", "h/j/k/l w/b/e { } move · / ? search · v select · y copy"),
+            ("resize", "h/l width · j/k height · esc done"),
+            (
+                "sidebar",
+                "up/down row · enter open · space beside · 1-9 workspace",
+            ),
+        ],
+    },
+    Section {
+        title: "commands, not keys",
+        manage: false,
+        rows: &[
+            ("kampr setup", "pair a device with this machine's herd"),
+            (
+                "kampr connect URL --code C",
+                "open another machine's herd from here",
+            ),
+            (
+                "kampr doctor",
+                "check everything that has to be true, and say what is not",
+            ),
+        ],
+    },
+];
+
+/// The two facts every row above assumes, said once.
+pub const HELP_HEAD: &str = "the prefix is ctrl+b · ctrl+b ctrl+b sends a literal one";

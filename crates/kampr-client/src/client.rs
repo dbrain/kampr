@@ -401,6 +401,8 @@ impl Inner {
             "scrollback" => self.scrollback(&message),
             "convo" => self.convo(message),
             "convo.turn" => self.convo_turn(&message),
+            "convo.facets" => self.convo_facets(&message),
+            "convo.composer" => self.convo_composer(&message),
             "pending" => self.pending(message),
             "caps" => self.node_caps(message),
             "managed" => self.managed(message),
@@ -610,6 +612,30 @@ impl Inner {
         self.emit(Event::ConvoTurn {
             pane: pane.to_string(),
             turns: decode(message.get("turns")),
+        });
+    }
+
+    fn convo_facets(&self, message: &Value) {
+        let Some(pane) = message["pane"].as_str() else {
+            return;
+        };
+        let Ok(facets) = serde_json::from_value(message["facets"].clone()) else {
+            return;
+        };
+        self.emit(Event::ConvoFacets {
+            pane: pane.to_string(),
+            facets,
+        });
+    }
+
+    fn convo_composer(&self, message: &Value) {
+        let Some(pane) = message["pane"].as_str() else {
+            return;
+        };
+        self.emit(Event::ConvoComposer {
+            pane: pane.to_string(),
+            text: message["text"].as_str().map(str::to_string),
+            clear: message["clear"].as_str().map(str::to_string),
         });
     }
 

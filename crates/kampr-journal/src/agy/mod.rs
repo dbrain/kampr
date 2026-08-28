@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
+use crate::composer::{Caret, Composed, ComposerReader};
 use crate::error::JournalError;
-use crate::facet::Facets;
+use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Block, Role, ToolState, Turn};
@@ -98,8 +99,16 @@ impl JournalAdapter for AgyAdapter {
         facet::collect(transcript)
     }
 
+    fn fold(&self) -> Option<Box<dyn FacetFold>> {
+        Some(Box::new(facet::Fold::default()))
+    }
+
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
+    }
+
+    fn composer(&self) -> Option<ComposerReader> {
+        Some(composer)
     }
 }
 
@@ -243,8 +252,14 @@ const LAYOUT: Layout = Layout {
     prompt: '>',
     result: '└',
     indent: 2,
+    input: 2,
     reject: is_not_a_thought,
 };
+
+/// One `ctrl+u` takes the whole buffer, wrapped or not. **`ctrl+c` must not be sent to this
+/// harness**: measured against the same wrapped entry it cleared nothing and painted `press
+/// ctrl+c again to exit`, so a second one anywhere near it ends the session.
+const CLEAR: &str = "\u{15}";
 
 /// **Not exercised by any capture, and deliberately kept.** Every `▸` line in every frame
 /// captured off `agy` 1.1.18 reads `Thought for …` — asserted over the whole corpus in
@@ -267,4 +282,8 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     }
     let text = block.text.splitn(3, '\n').nth(2)?.trim().to_string();
     (!text.is_empty()).then_some(LiveBlock { text, clipped: false })
+}
+
+pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
+    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
 }

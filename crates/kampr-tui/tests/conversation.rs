@@ -60,6 +60,21 @@ fn revision(pane: &str, turns: Value) -> Event {
     }
 }
 
+fn desk(pane: &str, text: Option<&str>) -> Event {
+    Event::ConvoComposer {
+        pane: pane.to_string(),
+        text: text.map(str::to_string),
+        clear: Some("\u{3}".into()),
+    }
+}
+
+fn facets(pane: &str, queued: Value) -> Event {
+    Event::ConvoFacets {
+        pane: pane.to_string(),
+        facets: serde_json::from_value(json!({ "queued": queued })).expect("facets"),
+    }
+}
+
 fn pending(pane: &str, question: Option<&str>, options: Value) -> Event {
     Event::Pending(
         serde_json::from_value(json!({
@@ -413,6 +428,86 @@ fn a_live_turn_is_marked_rather_than_drawn_as_a_recorded_one() {
         screen.matches("still writing").count(),
         1,
         "and only the live turn wears it:\n{screen}"
+    );
+}
+
+// ---- the compaction summary ----------------------------------------------------------------
+
+const SUMMARY: &str = "This session is being continued from a previous conversation that ran out \
+                       of context.\nThe width inference was the subject.\nThe rect is not the PTY.";
+
+fn summary_turn(id: &str) -> Value {
+    let mut turn = turn(id, "user", None, md(SUMMARY));
+    turn["kind"] = json!("compact");
+    turn
+}
+
+fn compacted() -> Convo {
+    let mut convo = Convo::new();
+    convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([
+            turn("t_1", "user", None, md("carry on where you left off")),
+            summary_turn("t_2"),
+            turn("t_3", "assistant", None, md("Picking it back up.")),
+        ]),
+    ));
+    convo
+}
+
+// The harness files its own summary under a **user** record (#259), so the transcript said the
+// operator wrote three paragraphs they never typed. It is still theirs to read — it is drawn shut,
+// under its own name, and it opens.
+#[test]
+fn a_compaction_summary_is_drawn_shut_and_under_its_own_name_rather_than_the_operators() {
+    let mut convo = compacted();
+    let screen = screen(&mut convo, 60, 24);
+
+    assert!(screen.contains("compacted"), "the summary is named:\n{screen}");
+    assert!(
+        !screen.contains("ran out of context"),
+        "and it is shut, not spelled out:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches("  you").count(),
+        1,
+        "the one thing the operator actually typed is the only turn in their voice:\n{screen}"
+    );
+    assert!(
+        screen.contains("carry on where you left off") && screen.contains("Picking it back up."),
+        "and the turns either side of it are untouched:\n{screen}"
+    );
+}
+
+// The transcript has no other control on it, so the two keys it takes are taken *only* where there
+// is a summary to move — anywhere else they are the agent's own, and a key this surface swallows
+// never reaches the PTY.
+#[test]
+fn an_arrow_opens_a_summary_and_is_handed_back_where_there_is_none_to_open() {
+    let right = || KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+    let left = || KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+
+    let mut convo = compacted();
+    assert!(convo.key(PANE, right()), "the summary is shut, so this opens it");
+    let opened = screen(&mut convo, 60, 24);
+    assert!(opened.contains("ran out of context"), "{opened}");
+    assert!(
+        !convo.key(PANE, right()),
+        "and a second one has nothing left to open, so the agent gets it"
+    );
+
+    assert!(convo.key(PANE, left()), "and it puts it away again");
+    let shut = screen(&mut convo, 60, 24);
+    assert!(!shut.contains("ran out of context"), "{shut}");
+    assert!(!convo.key(PANE, left()), "with nothing left to shut");
+
+    let mut plain = three_turns();
+    assert!(
+        !plain.key(PANE, right()) && !plain.key(PANE, left()),
+        "a transcript that was never compacted keeps its arrow keys for the agent"
     );
 }
 
@@ -1181,5 +1276,81 @@ async fn a_path_in_a_tool_call_is_offered_to_a_writer_and_never_to_a_readonly_de
     assert!(
         !reading.contains("[/tmp/hero-mock.png]"),
         "and it moves with the live role:\n{reading}"
+    );
+}
+
+/// **What is waiting is the harness's own record, not a guess.** A prompt sent while the agent is
+/// working is queued rather than answered, and the transcript gains a `queue-operation` long
+/// before it gains a turn — so a conversation that draws only turns shows nothing at all until the
+/// agent gets round to it, while the terminal beside it has shown the prompt the whole time.
+#[test]
+fn a_prompt_the_harness_has_queued_is_drawn_as_waiting_rather_than_not_at_all() {
+    let mut convo = Convo::new();
+    convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn("t1", "assistant", None, md("the answer before it"))]),
+    ));
+    convo.absorb(&facets(
+        PANE,
+        json!([{ "text": "and now do the other half", "at": "2026-08-28T21:04:00Z" }]),
+    ));
+
+    let screen = screen(&mut convo, 60, 20);
+    assert!(
+        screen.contains("and now do the other half"),
+        "the queued prompt is on the conversation before any record arrives:\n{screen}"
+    );
+    assert!(
+        screen.contains("queued"),
+        "and it is named as waiting rather than drawn as a recorded turn:\n{screen}"
+    );
+    assert!(
+        !screen.contains("  you"),
+        "the queue is the pane's, so a prompt in it may not be this operator's:\n{screen}"
+    );
+}
+
+/// The queue is republished whole whenever it moves, so the newest one replaces what is held —
+/// a prompt the agent has taken leaves rather than lingering.
+#[test]
+fn a_prompt_the_agent_has_taken_leaves_the_queue_rather_than_standing_in_it() {
+    let mut convo = Convo::new();
+    convo.absorb(&page(PANE, true, None, false, json!([])));
+    convo.absorb(&facets(PANE, json!([{ "text": "first" }, { "text": "second" }])));
+    assert!(screen(&mut convo, 60, 20).contains("first"));
+
+    convo.absorb(&facets(PANE, json!([{ "text": "second" }])));
+    let screen = screen(&mut convo, 60, 20);
+    assert!(!screen.contains("first"), "{screen}");
+    assert!(screen.contains("second"), "{screen}");
+}
+
+/// **The pane's own half-typed line, which the terminal client was being sent and dropping.**
+///
+/// `input` is `pane.send_text` and appends to whatever is already on the line, so a reply sent from
+/// here joins onto it. The node measures and publishes that line; a client that ignores the frame
+/// leaves the operator to find out by sending.
+#[test]
+fn what_the_operator_left_at_the_desk_is_shown_before_a_reply_joins_onto_it() {
+    let mut convo = Convo::new();
+    convo.absorb(&page(PANE, true, None, false, json!([])));
+    convo.absorb(&desk(PANE, Some("half a sentence")));
+
+    let shown = screen(&mut convo, 60, 20);
+    assert!(
+        shown.contains("half a sentence"),
+        "the line waiting at the pane is on screen:\n{shown}"
+    );
+
+    // Empty is `text: null` rather than an absent frame, and it is what takes the strip down —
+    // the same rule `pending` follows, because there is no resolved event for either.
+    convo.absorb(&desk(PANE, None));
+    let cleared = screen(&mut convo, 60, 20);
+    assert!(
+        !cleared.contains("half a sentence"),
+        "and it comes down when the pane's line is emptied:\n{cleared}"
     );
 }

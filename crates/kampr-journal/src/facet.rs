@@ -1,4 +1,8 @@
-use serde::Serialize;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::marker::SessionMarker;
 
 /// What a harness wrote down beside the conversation that is about the *session* rather than about
 /// a turn, normalised across the three.
@@ -8,7 +12,8 @@ use serde::Serialize;
 /// happens to write is a promise the other two have to keep. So every facet is optional, absent by
 /// default, and filled only where a harness has been *measured* to carry an equivalent — a harness
 /// with nothing to say says nothing, and a client draws nothing for what it does not get.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Facets {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<Title>,
@@ -22,7 +27,7 @@ pub struct Facets {
     pub compactions: Vec<Compaction>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TitleSource {
     /// A person typed it.
@@ -31,7 +36,7 @@ pub enum TitleSource {
     Generated,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Title {
     pub text: String,
     pub source: TitleSource,
@@ -70,11 +75,11 @@ impl Titles {
 
 /// How long one turn took, named by the turn it closes rather than by an ordinal — so a client can
 /// hang it off a turn it already holds, and nothing has to infer a duration from two timestamps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timing {
     pub turn: String,
     pub duration_ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<u32>,
 }
 
@@ -82,17 +87,18 @@ pub struct Timing {
 ///
 /// Only the outstanding ones: a harness records the enqueue and the removal both, and a prompt the
 /// turn has already absorbed is not something anybody is still waiting on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Queued {
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
 }
 
 /// Open strings on purpose: `plan` and `bypassPermissions` are Claude's vocabulary, another
 /// harness will have its own, and a client renders the word it is given rather than matching an
 /// enum it would have to be reinstalled to extend.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Mode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -100,7 +106,8 @@ pub struct Mode {
     pub permission: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Compaction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
@@ -112,4 +119,41 @@ pub struct Compaction {
     pub post_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped_tokens: Option<u64>,
+}
+
+/// A harness's facet collector, kept between reads so a poll costs the records the transcript has
+/// grown by rather than the whole file.
+pub trait FacetFold: Send {
+    fn facets(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets;
+}
+
+/// A [`FacetFold`] and what was last published off it.
+///
+/// **The comparison is the point.** A conversation is followed every 400 ms and a queued prompt
+/// moves once in a while, so a `convo.facets` per tick per pane would be a frame for nothing —
+/// the client is sent one only when the fold has actually moved.
+pub struct FacetFeed {
+    fold: Box<dyn FacetFold>,
+    last: Facets,
+}
+
+impl FacetFeed {
+    pub fn new(fold: Box<dyn FacetFold>) -> Self {
+        Self {
+            fold,
+            last: Facets::default(),
+        }
+    }
+
+    /// The facets as they are now, or `None` when nothing has moved since the last call. The first
+    /// call answers `None` for a harness with nothing to say, which is the same message as the
+    /// `{}` it would otherwise have sent.
+    pub fn moved(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Option<Facets> {
+        let next = self.fold.facets(transcript, marker);
+        if next == self.last {
+            return None;
+        }
+        self.last = next.clone();
+        Some(next)
+    }
 }

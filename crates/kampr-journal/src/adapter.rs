@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::attach::{Fetched, Origin};
+use crate::composer::ComposerReader;
 use crate::error::JournalError;
-use crate::facet::Facets;
+use crate::facet::{FacetFeed, FacetFold, Facets};
 use crate::live::ScreenReader;
 use crate::marker::SessionMarker;
 use crate::process::{Harness, PaneProcess};
@@ -106,11 +107,32 @@ pub trait JournalAdapter: Send + Sync {
         Facets::default()
     }
 
+    /// The same collection, resumable: a fold that keeps its accumulator and the byte it has
+    /// reached, so a second look costs the records the transcript has grown by.
+    ///
+    /// `None` — the default — is a harness whose collector can only be read whole. It is not a
+    /// harness whose facets are frozen: [`Registry::fold`] wraps it in one that re-reads the file,
+    /// which is correct and costs exactly what [`Self::facets`] costs every time it is asked.
+    fn fold(&self) -> Option<Box<dyn FacetFold>> {
+        None
+    }
+
     /// Reads an in-progress message off this harness's visible screen, for the harnesses whose
     /// screen somebody has actually probed. `None` — the default — means a pane running this
     /// harness serves its transcript and nothing more, which is what every harness did before
     /// live turns existed.
     fn screen(&self) -> Option<ScreenReader> {
+        None
+    }
+
+    /// Reads what the operator has typed at the desk and not sent, for the harnesses whose
+    /// composer somebody has actually probed. `None` — the default — is a harness that publishes
+    /// no desk line at all, and a client that draws nothing for it.
+    ///
+    /// Separate from [`Self::screen`] and deliberately so: that one lifts the message the harness
+    /// is painting, this one lifts the half-sentence a person left in the box, and conflating
+    /// them would put one in the other's place on any harness where only one has been measured.
+    fn composer(&self) -> Option<ComposerReader> {
         None
     }
 
@@ -179,19 +201,23 @@ impl Registry {
             .find_map(|adapter| adapter.marker(pipeline))
     }
 
-    /// What the harness the pane is running wrote down about this session, and nothing from any
-    /// other adapter: a pane with no harness, or one whose harness is not registered here, has no
-    /// facets rather than somebody else's.
-    pub fn facets(
-        &self,
-        pane_agent: Option<&str>,
-        transcript: &Path,
-        marker: Option<&SessionMarker>,
-    ) -> Facets {
-        pane_agent
-            .and_then(|agent| self.adapters.get(agent))
-            .map(|adapter| adapter.facets(transcript, marker))
-            .unwrap_or_default()
+    /// What the harness the pane is running wrote down about this session, folded so that asking
+    /// again costs the records the transcript has grown by — the pump asks for as long as a client
+    /// is watching the pane.
+    ///
+    /// Nothing from any other adapter: a pane with no harness, or one whose harness is not
+    /// registered here, gets a fold that reads nothing rather than somebody else's facets.
+    pub fn fold(&self, pane_agent: Option<&str>) -> FacetFeed {
+        let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
+            return FacetFeed::new(Box::new(Nothing));
+        };
+        FacetFeed::new(adapter.fold().unwrap_or_else(|| Box::new(Whole(adapter.clone()))))
+    }
+
+    /// How to read the composer of a pane running `pane_agent`, for the harnesses whose composer
+    /// has been measured. A harness nobody has probed publishes no desk line at all.
+    pub fn composer(&self, pane_agent: Option<&str>) -> Option<ComposerReader> {
+        pane_agent.and_then(|agent| self.adapters.get(agent))?.composer()
     }
 
     /// The conversation a `sub` handle names, proved to be one the pane asking may see.
@@ -285,5 +311,22 @@ impl Registry {
             Some(Err(JournalError::NotFound(_))) | None => Ok(None),
             Some(Err(e)) => Err(e),
         }
+    }
+}
+
+/// The fold of a harness that has no resumable one: the whole file, every time it is asked.
+struct Whole(Arc<dyn JournalAdapter>);
+
+impl FacetFold for Whole {
+    fn facets(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
+        self.0.facets(transcript, marker)
+    }
+}
+
+struct Nothing;
+
+impl FacetFold for Nothing {
+    fn facets(&mut self, _transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        Facets::default()
     }
 }

@@ -995,7 +995,7 @@ impl Session {
             Some(pane),
             Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
         );
-        self.input(pane, Some(path.display().to_string()), None, None)
+        self.input(pane, Some(crate::paste::typed(&path)), None, None)
             .await;
     }
 

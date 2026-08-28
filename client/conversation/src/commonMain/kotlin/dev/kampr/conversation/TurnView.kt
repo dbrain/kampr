@@ -105,7 +105,7 @@ fun TurnView(
     // reason a run of tool calls does: a hit the counter promises and the screen hides is worse
     // than a screen that is too long.
     val fold = foldKey(turn)
-    val folded = fold != null && fold in expanded && !turnMatches(turn, query)
+    val folded = turnFolded(turn, expanded) && !turnMatches(turn, query)
     val skin = speakerSkin(speakerOf(turn), agent)
 
     // Nested inside an expanded run, the run's own card is already the frame — a second one around

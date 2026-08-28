@@ -435,6 +435,15 @@ apart and two things break if it tries: the reader is told they said something t
 view that groups an exchange between one prompt and the next cuts an answer in half wherever a
 notification landed in the middle of it.
 
+`kind` is optional and absent on an ordinary turn. Its one value today is `compact`: the harness's
+own summary of the conversation it then dropped, which `/compact` writes back into the transcript
+as a **user** record with nothing but an `isCompactSummary` flag to separate it from a prompt
+([#259](./03-probe-log.md)). It is *not* a third `role` — an installed client that has never heard
+of the field must go on reading the turn exactly as it read it before, and a `role` it cannot
+recognise is not something it can render. A client that does read the field names the summary as
+one instead of as the operator, and draws it **shut by default** with a header that opens it: it is
+worth keeping and it is not worth a screenful.
+
 `at` is the harness's own stamp, copied through. It is optional, and where it is present it is
 **RFC 3339 with an explicit zone** — every adapter in tree writes UTC and says so with a `Z`
 ([#285](./03-probe-log.md)), which is what lets a client draw it as a time of day in the reader's
@@ -822,10 +831,15 @@ node -> client  { "t": "convo.facets", "pane": "01J/w1:p1", "facets": {
 } }
 ```
 
-What the harness wrote down about the **session** rather than about any one turn. Sent unasked,
-**once, when a conversation opens** — collecting it is a whole-transcript read (154 ms for 29.4 MB
-measured), which a conversation opening can afford and a poll cannot, and none of it changes at the
-follow rate.
+What the harness wrote down about the **session** rather than about any one turn. Sent unasked when
+a conversation opens, and **again whenever any of it changes** — the newest one replaces what the
+client holds, whole. A client that reads only the first still sees what it saw before.
+
+The first collection is a whole-transcript read (154 ms for 29.4 MB measured), which a conversation
+opening can afford and a poll cannot; the fold is then kept and fed only the records the transcript
+has grown by, so a follow tick costs the tail. It is re-sent only when the facets *moved*: a prompt
+queued mid-turn is on the wire within a follow tick, and an unchanged session is not a frame per
+tick per pane.
 
 **Every field is optional and the whole object may be `{}`.** Kampr serves three harnesses and the
 wire is additive for ever, so nothing here is named after the record one harness happens to write:
@@ -837,6 +851,45 @@ nothing for what it does not get.
 `title.source` is `manual` or `generated`, and it is the whole point of carrying the source at all:
 a name a person typed outranks one a harness made up, however good. `timings[].turn` is a turn id
 the client already holds, so a duration hangs off the turn it belongs to.
+
+### `convo.composer`
+```jsonc
+node -> client  { "t": "convo.composer", "pane": "01J/w1:p1",
+                  "text": "push the branch when", "clear": "\u0003" }
+```
+
+The line the operator has **half-typed at the pane's own keyboard** and not yet sent.
+
+**Why it exists: `input` appends to it.** `input` is herdr's `pane.send_text`, which adds to
+whatever is already on the pane's line — so a sentence begun at the desk and a reply sent from a
+phone submit as one run-on line, and nothing on the phone had ever shown the first half. That is
+not always wrong; it was always invisible.
+
+**It is not the live turn.** The live turn is the message the *harness* is painting, lifted off the
+screen above the composer; this is what a *person* left in the box. Both come off the same grid and
+neither is the other.
+
+**`text: null` is how the strip comes down**, and it is sent rather than omitted — the same shape
+`pending` uses for a question that has been answered. A client that only ever hears about a
+composer with something in it goes on claiming a line the desk emptied long ago.
+
+`clear` is the keystroke measured to empty **that harness's** composer, and it is **absent where
+nobody has measured one**. It is carried rather than looked up by the client for two reasons: it is
+a measurement, and the node is where measurements live — a phone already installed cannot be
+corrected when a harness changes its mind; and the three harnesses **do not agree**. `ctrl+u` empties
+Codex's and agy's whole buffer and takes a single *visual row* of Claude's wrapped one; `ctrl+c`
+empties Claude's and Codex's and arms an **exit** on agy. A client must send back exactly what it
+was given, as ordinary `input` — which is already refused with `not_writer` on a device that may
+not type — and must offer no takeover at all where `clear` is absent. A guessed key deletes part of
+somebody's sentence or quits their agent.
+
+Published **when the line moves**, on the conversation's own follow tick and only for a client that
+asked for the conversation, so a composer nobody is typing into is not a frame. It is read off the
+grid the client is already streaming: no `pane.read`, no socket call, no second emulation.
+
+**A harness whose composer has not been probed publishes nothing**, which is the same conversation
+this protocol described before desk lines existed. Today that is `claude`, `codex` and `agy`; every
+other agent kind serves its transcript and nothing more.
 
 ### `convo.sub`
 ```jsonc
@@ -1309,8 +1362,12 @@ The shadow is what makes the backpressure rule hold at this hop without a second
 - **Hub → client.** Same rule, same code, and the reset is served **from the shadow** — so a purge
   costs no round trip to the peer at all, and a second client joining a peer pane renders
   immediately from memory.
-- **Hub fan-out.** A client that overruns the hub's per-pane channel is caught up with one
-  `grid.reset` from the shadow rather than a queue it can never drain.
+- **Hub fan-out.** A client that overruns the hub's per-pane channel has *its own* queued grid
+  frames dropped and rejoins at one `grid.reset` from the shadow. Everything else stays queued in
+  order: a `convo.turn` dropped here is gone for good, because the pane's own node recorded it as
+  delivered when it handed it to the hub. A client that is not draining the frames it cannot drop
+  has that pane's stream ended with `stream_unavailable` rather than held without limit — the depth
+  is a window, not a promise, and raising it would only widen it.
 
 Nothing at either hop may purge a `scrollback`: history is append-only, keyed on absolute row
 index, and no later reset repairs a hole in it. `pending` is likewise a fact about the pane rather

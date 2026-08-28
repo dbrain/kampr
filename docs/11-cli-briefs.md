@@ -138,7 +138,7 @@ branch as the dim subtitle herdr already puts there.
  agents           grouped    │
  ◐ herdr                     │ comingclean/herdr:1 · claude · 93×40 · ⇱ 120→93
    working · claude          │
- ⚑ web-dashboard             │ ^b w herd  ^b c new  ^b , rename  ^b q detach
+ ⚑ web-dashboard             │ ^b ? help  ^b w sidebar  ^b ⇧h herd  ^b q detach
    blocked · claude          │
 ```
 

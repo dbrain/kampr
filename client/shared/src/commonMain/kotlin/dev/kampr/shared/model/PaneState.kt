@@ -7,10 +7,17 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.Cursor
+import dev.kampr.shared.wire.Facets
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
+
+// What the pane's own composer holds, and the keystroke measured to empty it. `clear` is null for
+// a harness nobody has measured one for, which is a takeover that is not offered rather than one
+// that guesses a key — and the wrong key is worse than none: `ctrl+u` takes a single visual row of
+// Claude's wrapped buffer, and `ctrl+c` arms an exit on agy.
+data class DeskLine(val text: String, val clear: String?)
 
 class ScrollbackStore {
     private val rows = LinkedHashMap<Int, RowDiff>()
@@ -178,6 +185,15 @@ class PaneState(val id: String, val styles: StyleTable) {
         private set
     var pending by mutableStateOf<ServerMsg.Pending?>(null)
         internal set
+    // A reply half written and not yet sent. It belongs to the pane rather than to the composer,
+    // which leaves the composition every time the operator looks at the terminal.
+    //
+    // **Kept across a dropped socket, unlike `pending`.** A question is dropped because answering
+    // a stale one puts a key into a pane with nothing matching to take it; a draft is the
+    // operator's own sentence, and losing it to a blink of the network is the complaint this
+    // exists to answer.
+    var draft by mutableStateOf("")
+
     var convoCursor by mutableStateOf<String?>(null)
         private set
     var convoMore by mutableStateOf(false)
@@ -283,6 +299,35 @@ class PaneState(val id: String, val styles: StyleTable) {
     fun sub(handle: String): SubConversation = subs.getOrPut(handle) { SubConversation(handle) }
 
     fun subOrNull(handle: String): SubConversation? = subs[handle]
+
+    // What the harness has recorded about the session, replaced wholesale by every frame that
+    // carries it. See [`ServerMsg.ConvoFacets`]: the node republishes when the queue moves, so the
+    // newest frame *is* the queue and merging one in would leave a delivered prompt standing.
+    //
+    // Kept across a dropped socket, unlike `pending`. The queue is a description of the pane and
+    // not a question waiting on this client's answer, so a stale one is dated rather than wrong —
+    // the same rule the turns are held under — and re-opening the conversation republishes it.
+    var facets by mutableStateOf(Facets())
+        private set
+
+    fun applyFacets(msg: ServerMsg.ConvoFacets) {
+        facets = msg.facets
+        revision++
+    }
+
+    // What is sitting in the pane's own composer, and the key measured to take it out. Null is an
+    // empty box: the node publishes `text: null` when the desk empties it, and holding the last
+    // line instead would leave the strip claiming a sentence that is no longer there.
+    //
+    // Kept across a dropped socket for the same reason `facets` is — it describes the pane rather
+    // than asking this client anything, so a stale one is dated and not wrong.
+    var desk by mutableStateOf<DeskLine?>(null)
+        private set
+
+    fun applyComposer(msg: ServerMsg.ConvoComposer) {
+        desk = msg.text?.let { DeskLine(it, msg.clear) }
+        revision++
+    }
 
     fun applyConvoTurn(msg: ServerMsg.ConvoTurn) {
         // **A launched conversation's turns are never the pane's own.** Appending them here would

@@ -1,0 +1,18 @@
+caret 6 14
+╭───────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.150.1)                │
+│                                           │
+│ model:     gpt-5.6-sol   /model to change │
+│ directory: /tmp/kampr-composer-17JNR6     │
+╰───────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+• You have 1 usage limit reset available. Run /usage to use one.
+
+
+› push the branch when the tests go green and then and tell me what the release notes should
+  say and tell me what the release notes should say and tell me what the release notes should
+  say
+
+  gpt-5.6-sol default · /tmp/kampr-composer-17JNR6

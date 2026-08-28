@@ -58,6 +58,36 @@ class TurnFoldTest {
         assertNull(turnStamp("whenever", NOW))
     }
 
+    // The harness's summary of the conversation it dropped is filed as a user record and rendered
+    // as one, so the operator was shown three paragraphs in their own voice that they never typed
+    // (#259). It is the one turn that starts shut, and the toggle set is a set of *departures*
+    // from the default — so the same key that puts an answer away is the one that opens this.
+    @Test
+    fun aCompactionSummaryIsNotTheOperatorAndStartsShut() {
+        val summary = summaryTurn("u-7")
+        val answer = proseTurn("a-7", "First.\n\nSecond.\n\nThird.")
+
+        assertEquals(Speaker.Summary, speakerOf(summary))
+        assertEquals(Speaker.You, speakerOf(proseTurn("u-8", "run the tests", role = "user")))
+
+        val key = assertNotNull(foldKey(summary), "a summary that cannot be opened is a summary lost")
+        assertTrue(turnFolded(summary, emptyList()), "a summary nobody has touched is shut")
+        assertTrue(!turnFolded(summary, listOf(key)), "and the toggle opens it")
+        assertTrue(!turnFolded(answer, emptyList()), "while an answer nobody has touched is open")
+        assertTrue(turnFolded(answer, listOf(requireNotNull(foldKey(answer)))), "and the toggle shuts it")
+    }
+
+    // Every compaction summary opens with the same sentence the harness writes every time, so the
+    // first line of one names the boilerplate rather than this summary. A shut turn's one line has
+    // to say what it is.
+    @Test
+    fun aShutSummaryNamesItselfRatherThanTheHarnessesOpeningSentence() {
+        val gist = turnGist(summaryTurn("u-7"))
+        assertTrue(!gist.startsWith("This session is being continued"), "the gist was the boilerplate: $gist")
+        assertTrue(gist.isNotEmpty(), "a shut turn with nothing on its header is a blank row")
+        assertEquals(gist, turnGist(summaryTurn("u-8", "Summary:\n- something else entirely")))
+    }
+
     // What a folded turn says about itself, and it is a line of prose rather than a line of
     // markdown: a row reading "## Corrections and event" is the syntax, not the message.
     @Test

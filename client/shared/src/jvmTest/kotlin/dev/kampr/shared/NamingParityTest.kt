@@ -4,6 +4,7 @@ import dev.kampr.shared.model.Naming
 import dev.kampr.shared.model.Template
 import dev.kampr.shared.model.TemplateException
 import dev.kampr.shared.model.fieldsOf
+import dev.kampr.shared.model.homeRelative
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Wire
@@ -64,12 +65,14 @@ class NamingParityTest {
     fun `every shipped case renders the string the fixture pins`() {
         assertTrue(cases.size > 10, "the fixture is meant to carry the cases, and it carried ${cases.size}")
         for ((name, case) in cases) {
+            val expect = case["expect"]!!.jsonPrimitive.content
+            val path = (case["home_relative"] as? JsonPrimitive)?.contentOrNull
+            if (path != null) {
+                assertEquals(expect, homeRelative(path), name)
+                continue
+            }
             val template = Template.parse(case["template"]!!.jsonPrimitive.content)
-            assertEquals(
-                case["expect"]!!.jsonPrimitive.content,
-                template.render(fields(case["fields"]!!.jsonObject)),
-                name,
-            )
+            assertEquals(expect, template.render(fields(case["fields"]!!.jsonObject)), name)
         }
     }
 
@@ -78,13 +81,13 @@ class NamingParityTest {
     @Test
     fun `the default template is the one the fixture pins`() {
         assertEquals(
-            "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+            "{label|title|workspace|cwd|pane} · {argv|cmd|agent|'bash'}",
             Naming.DEFAULT_TEMPLATE,
         )
     }
 
     @Test
-    fun `a pane whose command ble sh hid is named without empty parens`() {
+    fun `a pane whose command ble sh hid is named after its shell rather than after a job`() {
         val busy = PaneInfo(
             id = "01JNODE/w3:p2",
             nodeId = "01JNODE",
@@ -93,7 +96,7 @@ class NamingParityTest {
             cmd = "cargo",
             argv = "cargo test",
         )
-        assertEquals("kampr (cargo test) · bash", paneTitle(busy))
+        assertEquals("kampr · cargo test", paneTitle(busy))
         assertEquals("kampr · bash", paneTitle(busy.copy(cmd = null, argv = null)))
     }
 

@@ -20,6 +20,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 /// How long a note sits in the status line before the line goes back to saying what is true.
 const NOTE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Rows one notch of the wheel moves. Three is what a terminal's own scrollback does, and the
+/// wheel is aiming at the same surface here.
+const WHEEL: u16 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub theme: Theme,
@@ -107,6 +111,9 @@ pub struct App {
     rings: HashMap<String, Vec<Vec<kampr_term::Cell>>>,
     views: HashMap<String, View>,
     sidebar_open: bool,
+    /// The operator's own scroll of the sidebar, which the navigator's cursor clamps rather than
+    /// owns — a list taller than its box is unreachable otherwise, and it routinely is.
+    sidebar_top: usize,
     pick: usize,
     screen: Screen,
     zoomed: bool,
@@ -131,6 +138,7 @@ pub struct App {
     acked: UnboundedSender<Managed>,
     acks: UnboundedReceiver<Managed>,
     keybinds: bool,
+    help_top: usize,
     quit: bool,
 }
 
@@ -153,6 +161,7 @@ impl App {
             rings: HashMap::new(),
             views: HashMap::new(),
             sidebar_open: true,
+            sidebar_top: 0,
             pick: 1,
             screen: Screen::Panes,
             zoomed: false,
@@ -168,6 +177,7 @@ impl App {
             acked,
             acks,
             keybinds: false,
+            help_top: 0,
             quit: false,
         }
     }
@@ -219,7 +229,11 @@ impl App {
             }
             Event::Managed(_) | Event::Caps(_) => self.manage.observe(event),
             Event::Scrollback { pane, .. } => self.absorb_ring(pane),
-            Event::Convo(_) | Event::ConvoTurn { .. } | Event::Pending(_) => self.convo.absorb(event),
+            Event::Convo(_)
+            | Event::ConvoTurn { .. }
+            | Event::ConvoFacets { .. }
+            | Event::ConvoComposer { .. }
+            | Event::Pending(_) => self.convo.absorb(event),
             _ => {}
         }
     }
@@ -271,7 +285,50 @@ impl App {
             Click::Passthrough { pane, text } => {
                 self.client.input(&pane, &text);
             }
+            Click::Wheel { pane, up } => self.wheel(pane, up),
         }
+    }
+
+    /// The wheel over kampr's own surfaces. Whichever of the two a pane is showing moves; the
+    /// other one does not, which is the same rule the keyboard already follows.
+    fn wheel(&mut self, pane: Option<String>, up: bool) {
+        let Some(pane) = pane else {
+            self.sidebar_top = match up {
+                true => self.sidebar_top.saturating_sub(WHEEL as usize),
+                false => self.sidebar_top.saturating_add(WHEEL as usize),
+            };
+            return;
+        };
+        if self.view(&pane) == View::Conversation
+            && self.convo.has(&pane)
+            && self.convo.wheel(&pane, up, WHEEL as usize)
+        {
+            self.teardown();
+            return;
+        }
+        let at = self.scrolls.entry(pane).or_default();
+        *at = match up {
+            true => at.saturating_add(WHEEL),
+            false => at.saturating_sub(WHEEL),
+        };
+    }
+
+    /// Clamped by the draw, which is the only place that knows how tall the panel came out.
+    pub(super) fn scroll_help(&mut self, by: i32) {
+        self.help_top = self.help_top.saturating_add_signed(by as isize);
+    }
+
+    /// The first sidebar row on screen: the operator's own scroll, clamped to the list and then to
+    /// wherever the navigator's cursor is, so walking off the bottom of the box brings the box.
+    pub(super) fn sidebar_view(&mut self, rows: usize, height: usize, selected: Option<usize>) -> usize {
+        let last = rows.saturating_sub(height);
+        let mut top = self.sidebar_top.min(last);
+        if let Some(pick) = selected.filter(|pick| *pick < rows) {
+            top = top.min(pick);
+            top = top.max((pick + 1).saturating_sub(height));
+        }
+        self.sidebar_top = top;
+        top
     }
 
     fn open(&mut self, screen: Screen) {
@@ -403,14 +460,22 @@ impl App {
         }
     }
 
+    /// **A focus is a subscription change**, because [`Self::mosaic`] is the focused pane's tab.
+    /// Nothing else was saying so: only the greeting and a `herd` frame restated the watches, and
+    /// an agent pane hid it by churning its status until one arrived. A shell at its prompt makes
+    /// no herd traffic at all and sat on "waiting for the first frame" for ever.
+    ///
+    /// Unconditional, including on the pane that is already focused, so a caller that moved the
+    /// mosaic some other way — pinning a second pane beside this one — is covered by focusing into
+    /// it rather than by remembering to say so twice.
     fn focus(&mut self, pane: String) {
-        if self.focus.as_deref() == Some(pane.as_str()) {
-            return;
+        if self.focus.as_deref() != Some(pane.as_str()) {
+            self.teardown();
+            self.last = self.focus.take();
+            self.focus = Some(pane);
+            self.zoomed = false;
         }
-        self.teardown();
-        self.last = self.focus.take();
-        self.focus = Some(pane);
-        self.zoomed = false;
+        self.sync_watches();
     }
 
     /// A watch is stated once and re-issued by the client on every reconnection, so this only

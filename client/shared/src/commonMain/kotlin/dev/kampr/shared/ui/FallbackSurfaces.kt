@@ -41,7 +41,10 @@ object FallbackSurfaces : PaneSurfaces {
                 KText("${pane.turns.size} turns", tokens.type.meta, tokens.color.mute)
             }
             for (turn in pane.turns) {
-                if (turn.role == "user") {
+                // A compaction summary is written as a `user` record by the harness and is not the
+                // operator speaking. This surface has no fold to put it behind, so the least it can
+                // do is not put it in their bubble.
+                if (turn.role == "user" && turn.kind != "compact") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                         Surface(
                             Modifier.widthIn(max = 460.dp),

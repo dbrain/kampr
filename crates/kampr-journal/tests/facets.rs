@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use common::*;
 use kampr_journal::{
-    AgyAdapter, ClaudeAdapter, CodexAdapter, Facets, JournalAdapter, Registry, SessionMarker, TitleSource,
-    TranscriptRoot,
+    AgyAdapter, ClaudeAdapter, CodexAdapter, FacetFeed, Facets, JournalAdapter, Registry, SessionMarker,
+    TitleSource, TranscriptRoot,
 };
 
 fn claude() -> ClaudeAdapter {
@@ -226,21 +226,23 @@ fn a_registry_asks_the_adapter_the_pane_is_running_and_nobody_else() {
     let transcript = facets_transcript(FACETS_TITLED);
     assert_eq!(
         registry
-            .facets(Some("claude"), &transcript, None)
+            .fold(Some("claude"))
+            .moved(&transcript, None)
+            .expect("facets")
             .title
             .expect("a title")
             .text,
         "the width inference rewrite"
     );
     assert_eq!(
-        registry.facets(Some("codex"), &transcript, None),
-        Facets::default(),
+        registry.fold(Some("codex")).moved(&transcript, None),
+        None,
         "the codex adapter reads codex records, and a claude transcript holds none"
     );
-    assert_eq!(registry.facets(None, &transcript, None), Facets::default());
+    assert_eq!(registry.fold(None).moved(&transcript, None), None);
     assert_eq!(
-        registry.facets(Some("agy"), &transcript, None),
-        Facets::default(),
+        registry.fold(Some("agy")).moved(&transcript, None),
+        None,
         "an agent with no adapter registered is not an error, it is a session with no facets"
     );
 }
@@ -265,5 +267,273 @@ fn a_transcript_that_is_not_there_is_a_session_with_no_facets() {
     assert_eq!(
         claude().facets(&facets_root().join("projects/-home-u-facets/nothing.jsonl"), None),
         Facets::default()
+    );
+}
+
+fn enqueue(text: &str, at: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "queue-operation", "operation": "enqueue", "timestamp": at, "content": text
+    })
+}
+
+fn prompt(text: &str) -> serde_json::Value {
+    serde_json::json!({ "type": "user", "uuid": text, "message": { "content": text } })
+}
+
+fn append(transcript: &std::path::Path, body: &str) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(transcript)
+        .expect("a transcript to append to");
+    file.write_all(body.as_bytes()).expect("appended");
+}
+
+fn queued_texts(facets: &Facets) -> Vec<&str> {
+    facets.queued.iter().map(|q| q.text.as_str()).collect()
+}
+
+fn feed(scratch: &Scratch) -> FacetFeed {
+    scratch.journals.fold(Some("claude"))
+}
+
+/// The reported defect: a prompt sent from a phone while the agent is working shows up in the
+/// pane immediately and in the conversation not at all, because the facets were collected once
+/// when the transcript was opened and never again.
+#[test]
+fn a_prompt_queued_after_the_facets_were_collected_is_folded_onto_them_rather_than_missed() {
+    let scratch = scratch_claude("queued-late", &[prompt("go and read the log")]);
+    let mut feed = feed(&scratch);
+
+    assert_eq!(
+        feed.moved(&scratch.transcript, None),
+        None,
+        "a session with nothing queued and nothing titled has nothing to say"
+    );
+
+    append(
+        &scratch.transcript,
+        &lines(&[enqueue("and copy the config across", "2026-08-28T02:10:59.658Z")]),
+    );
+
+    let moved = feed
+        .moved(&scratch.transcript, None)
+        .expect("the queued prompt reaches the client while it is still waiting");
+    assert_eq!(queued_texts(&moved), ["and copy the config across"]);
+    assert_eq!(moved.queued[0].at.as_deref(), Some("2026-08-28T02:10:59.658Z"));
+
+    append(
+        &scratch.transcript,
+        &lines(&[serde_json::json!({
+            "type": "queue-operation", "operation": "dequeue", "content": null
+        })]),
+    );
+    assert_eq!(
+        queued_texts(
+            &feed
+                .moved(&scratch.transcript, None)
+                .expect("the queue emptying moved it")
+        ),
+        Vec::<&str>::new(),
+        "the harness taking the prompt is a change like any other"
+    );
+}
+
+#[test]
+fn facets_that_have_not_moved_are_not_published_a_second_time() {
+    let scratch = scratch_claude(
+        "unmoved",
+        &[
+            serde_json::json!({ "type": "ai-title", "aiTitle": "the width inference rewrite" }),
+            prompt("first"),
+        ],
+    );
+    let mut feed = feed(&scratch);
+
+    assert!(
+        feed.moved(&scratch.transcript, None).is_some(),
+        "the title is new"
+    );
+    assert_eq!(
+        feed.moved(&scratch.transcript, None),
+        None,
+        "the same transcript, unchanged, is not a second frame"
+    );
+
+    append(&scratch.transcript, &lines(&[prompt("second")]));
+    assert_eq!(
+        feed.moved(&scratch.transcript, None),
+        None,
+        "a turn is not a facet: the conversation grew and none of these five moved"
+    );
+}
+
+/// #259: `/clear` opens a new transcript, and a pane resolves onto it under the same path shape.
+/// A fold that kept its accumulator would show the finished session's queue on the fresh one.
+#[test]
+fn a_transcript_replaced_under_the_fold_is_read_from_the_start_rather_than_folded_onto() {
+    let scratch = scratch_claude(
+        "cleared",
+        &[
+            serde_json::json!({ "type": "ai-title", "aiTitle": "the session that was cleared" }),
+            enqueue("still waiting when it was cleared", "2026-08-28T02:10:59.658Z"),
+            prompt("a turn that made the file long"),
+        ],
+    );
+    let mut feed = feed(&scratch);
+    assert_eq!(
+        queued_texts(&feed.moved(&scratch.transcript, None).expect("facets")),
+        ["still waiting when it was cleared"]
+    );
+
+    std::fs::write(
+        &scratch.transcript,
+        lines(&[serde_json::json!({ "type": "ai-title", "aiTitle": "after the clear" })]),
+    )
+    .expect("the transcript replaced");
+
+    let moved = feed
+        .moved(&scratch.transcript, None)
+        .expect("a shorter file moved it");
+    assert_eq!(moved.title.as_ref().expect("a title").text, "after the clear");
+    assert_eq!(
+        queued_texts(&moved),
+        Vec::<&str>::new(),
+        "the queue belonged to the session that was cleared"
+    );
+}
+
+/// A transcript is appended to while it is read, so the last record of a poll is regularly half
+/// written. Folding half of it and its remainder as a record of its own is how a queued prompt
+/// arrives twice — or, once the halves parse as nothing, never at all.
+#[test]
+fn a_record_still_being_written_is_folded_once_it_is_whole_and_never_twice() {
+    let scratch = scratch_claude("torn", &[prompt("go and read the log")]);
+    let mut feed = feed(&scratch);
+    feed.moved(&scratch.transcript, None);
+
+    let record = enqueue("and copy the config across", "2026-08-28T02:10:59.658Z").to_string();
+    let (head, tail) = record.split_at(record.len() / 2);
+    append(&scratch.transcript, head);
+    assert_eq!(
+        feed.moved(&scratch.transcript, None),
+        None,
+        "half a record is not a record"
+    );
+
+    append(&scratch.transcript, &format!("{tail}\n"));
+    assert_eq!(
+        queued_texts(&feed.moved(&scratch.transcript, None).expect("the whole record")),
+        ["and copy the config across"]
+    );
+    assert_eq!(
+        feed.moved(&scratch.transcript, None),
+        None,
+        "and it is not folded a second time when the newline arrives"
+    );
+}
+
+/// The resumable fold is every harness's, not Claude's: a `Fold` that restarted its record count
+/// on the second read would name Codex's timings after the wrong turns, and one that lost its
+/// accumulator would drop everything the first read collected.
+#[test]
+fn reading_a_transcript_in_two_parts_says_exactly_what_reading_it_whole_says() {
+    let dir = scratch_dir("resumed");
+    let harnesses: [(&str, Box<dyn JournalAdapter>, PathBuf); 3] = [
+        ("claude", Box::new(claude()), facets_transcript(FACETS_TITLED)),
+        (
+            "codex",
+            Box::new(CodexAdapter::new(
+                TranscriptRoot::new(harness_facets_root("codex")).expect("a root"),
+            )),
+            codex_facets_transcript(),
+        ),
+        (
+            "agy",
+            Box::new(AgyAdapter::new(
+                TranscriptRoot::new(harness_facets_root("agy")).expect("a root"),
+            )),
+            agy_facets_transcript(),
+        ),
+    ];
+
+    for (agent, adapter, fixture) in harnesses {
+        let body = std::fs::read_to_string(&fixture).expect("a fixture");
+        let records: Vec<&str> = body.lines().collect();
+        let path = dir.join(format!("{agent}.jsonl"));
+        let head: String = records[..records.len() / 2]
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect();
+
+        std::fs::write(&path, &head).expect("the first half");
+        let mut fold = adapter.fold().expect("a resumable fold");
+        fold.facets(&path, None);
+        std::fs::write(&path, &body).expect("the rest");
+
+        assert_eq!(
+            fold.facets(&path, None),
+            adapter.facets(&path, None),
+            "{agent} read in two parts is not what {agent} read whole"
+        );
+    }
+}
+
+/// A harness whose collector cannot be resumed. It leaves `fold` alone, and the registry has to
+/// answer with one that re-reads the transcript rather than one that freezes its facets at
+/// whatever the conversation opened with.
+struct Unresumable(ClaudeAdapter);
+
+impl JournalAdapter for Unresumable {
+    fn agent(&self) -> &str {
+        "unresumable"
+    }
+
+    fn root(&self) -> &TranscriptRoot {
+        self.0.root()
+    }
+
+    fn locate(&self, session: &kampr_journal::SessionRef) -> Result<PathBuf, kampr_journal::JournalError> {
+        self.0.locate(session)
+    }
+
+    fn locate_by_cwd(
+        &self,
+        cwd: &std::path::Path,
+        since: Option<std::time::SystemTime>,
+    ) -> Result<PathBuf, kampr_journal::JournalError> {
+        self.0.locate_by_cwd(cwd, since)
+    }
+
+    fn parser(&self) -> Box<dyn kampr_journal::TranscriptParser> {
+        self.0.parser()
+    }
+
+    fn facets(&self, transcript: &std::path::Path, marker: Option<&SessionMarker>) -> Facets {
+        self.0.facets(transcript, marker)
+    }
+}
+
+#[test]
+fn a_harness_with_no_resumable_fold_reads_its_transcript_again_rather_than_going_static() {
+    let scratch = scratch_claude("unresumable", &[prompt("go and read the log")]);
+    let mut registry = Registry::new();
+    registry.register(std::sync::Arc::new(Unresumable(claude())));
+    let mut feed = registry.fold(Some("unresumable"));
+    assert_eq!(feed.moved(&scratch.transcript, None), None);
+
+    append(
+        &scratch.transcript,
+        &lines(&[enqueue("and copy the config across", "2026-08-28T02:10:59.658Z")]),
+    );
+
+    assert_eq!(
+        queued_texts(
+            &feed
+                .moved(&scratch.transcript, None)
+                .expect("the whole file, read again")
+        ),
+        ["and copy the config across"],
+        "the fallback costs what a whole-transcript read costs; it does not cost the facets"
     );
 }

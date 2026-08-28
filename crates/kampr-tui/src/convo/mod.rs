@@ -27,6 +27,13 @@ use std::sync::OnceLock;
 /// pane — so it is never paged from, never cited, and never kept across a reload.
 const LIVE: &str = "live";
 
+/// The one `turn.kind` the wire carries.
+const COMPACT: &str = "compact";
+
+/// Kampr's own `kind`, and the one that never rides the wire: the node sends the queue as
+/// `convo.facets` and this is what a folded prompt is called once it is a turn.
+const QUEUED: &str = "queued";
+
 /// What an attachment is allowed to take of a pane once its bytes have actually landed. A header
 /// that never resolves keeps the single row its marker text already needed.
 const IMAGE_ROWS: u16 = 12;
@@ -97,6 +104,10 @@ struct Turn {
     role: String,
     #[serde(default)]
     at: Option<String>,
+    /// Additive, and absent on every turn but one. A `kind` this build has never heard of is a
+    /// turn like any other, which is what lets a later one ship without a client release.
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     blocks: Vec<Block>,
 }
@@ -113,7 +124,30 @@ impl Turn {
     /// 45% of what claude files under a user role is the harness talking to itself (#286) — so
     /// what arrives is trusted rather than filtered again.
     fn person(&self) -> bool {
-        self.role == "user"
+        self.role == "user" && !self.summary()
+    }
+
+    /// The harness's own summary of the conversation it dropped, which `/compact` files under a
+    /// **user** record (#259). Nobody spoke it and nobody typed it.
+    fn summary(&self) -> bool {
+        self.kind.as_deref() == Some(COMPACT)
+    }
+
+    /// A prompt the harness has taken and not yet answered. **Not a record and not this client's
+    /// guess**: it is folded from the harness's own `queue-operation` records, so it stands for a
+    /// prompt typed at the desk exactly as it does for one sent from here.
+    fn queued(&self) -> bool {
+        self.kind.as_deref() == Some(QUEUED)
+    }
+
+    fn lines(&self) -> usize {
+        self.blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Md { text, .. } => Some(text.lines().count()),
+                _ => None,
+            })
+            .sum()
     }
 }
 
@@ -152,6 +186,11 @@ struct Transcript {
     cursor: Option<String>,
     more: bool,
     pending: Option<Pending>,
+    /// What the operator has half-typed at the pane's own keyboard and not sent. `input` is
+    /// `pane.send_text` and **appends**, so a reply sent from here joins onto this — which is
+    /// invisible unless it is said. Empty arrives as `text: null` and takes the line down, the
+    /// same shape `pending` uses, because neither has a resolved event.
+    desk: Option<String>,
     /// Lines held back from the bottom. Zero is pinned to the newest turn, which is where a
     /// conversation belongs.
     scroll: usize,
@@ -164,6 +203,12 @@ struct Transcript {
     /// save. Filled from [`Images::offer`] as the fetches land.
     notes: HashMap<String, String>,
     requested: HashSet<String>,
+    /// The summaries the reader has opened. A summary is drawn shut, so this is the departure
+    /// from the default rather than the state of every turn.
+    open: HashSet<String>,
+    /// What the harness has queued, held apart from the turns because it is not a record: it is
+    /// republished whole whenever it moves, so it is replaced rather than merged.
+    queued: Vec<Turn>,
     laid: Option<Laid>,
 }
 
@@ -228,8 +273,31 @@ impl Transcript {
         self.laid = None;
     }
 
+    /// Opens every summary this transcript holds, or puts every one of them away, and says whether
+    /// that changed anything. **Nothing to move is not consumed**: the two keys this costs are the
+    /// agent's own everywhere else on the surface.
+    fn unfold(&mut self, open: bool) -> bool {
+        let ids: Vec<String> = self
+            .turns
+            .iter()
+            .filter(|t| t.summary() && t.visible() && self.open.contains(&t.id) != open)
+            .map(|t| t.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return false;
+        }
+        for id in ids {
+            match open {
+                true => self.open.insert(id),
+                false => self.open.remove(&id),
+            };
+        }
+        self.touch();
+        true
+    }
+
     fn showing(&self) -> bool {
-        self.turns.iter().any(Turn::visible)
+        self.turns.iter().chain(self.queued.iter()).any(Turn::visible)
     }
 
     fn height(&self) -> usize {
@@ -262,6 +330,29 @@ impl Convo {
     /// strip, because there is no resolved event.
     pub fn absorb(&mut self, event: &Event) {
         match event {
+            Event::ConvoFacets { pane, facets } => {
+                let held = self.panes.entry(pane.clone()).or_default();
+                // Position is the only identity a queued prompt has — the harness records no id
+                // and works the queue by position — so a prompt leaving the head renumbers what
+                // is behind it. That costs a re-lay and nothing else, because none of these are
+                // merged against anything.
+                held.queued = facets
+                    .queued
+                    .iter()
+                    .enumerate()
+                    .map(|(at, prompt)| Turn {
+                        id: format!("queued:{at}"),
+                        role: "user".into(),
+                        at: prompt.at.clone(),
+                        kind: Some(QUEUED.into()),
+                        blocks: vec![Block::Md {
+                            text: prompt.text.clone(),
+                            att: None,
+                        }],
+                    })
+                    .collect();
+                held.touch();
+            }
             Event::Convo(page) => {
                 let held = self.panes.entry(page.pane.clone()).or_default();
                 // `fresh` is the node saying it could not name the turns to withdraw: a socket it
@@ -277,6 +368,11 @@ impl Convo {
             Event::ConvoTurn { pane, turns } => {
                 let held = self.panes.entry(pane.clone()).or_default();
                 held.revise(decode(turns));
+            }
+            Event::ConvoComposer { pane, text, .. } => {
+                let held = self.panes.entry(pane.clone()).or_default();
+                held.desk = text.clone().filter(|line| !line.trim().is_empty());
+                held.laid = None;
             }
             Event::Pending(pending) => {
                 let held = self.panes.entry(pending.pane.clone()).or_default();
@@ -322,6 +418,11 @@ impl Convo {
         };
         let page = held.height().clamp(1, 20);
         match key.code {
+            // The only thing on this surface that opens, and the transcript takes the key only
+            // where there is a summary to move — a pane that was never compacted goes on handing
+            // its arrows to the agent's own prompt.
+            KeyCode::Right => return held.unfold(true),
+            KeyCode::Left => return held.unfold(false),
             KeyCode::Up => held.scroll = held.scroll.saturating_add(1),
             KeyCode::Down => held.scroll = held.scroll.saturating_sub(1),
             KeyCode::PageDown => held.scroll = held.scroll.saturating_sub(page),
@@ -333,6 +434,19 @@ impl Convo {
             KeyCode::PageUp => held.scroll = held.scroll.saturating_add(page),
             _ => return false,
         }
+        true
+    }
+
+    /// The wheel over this pane's transcript. Same window `up`/`down` move, and the same reason it
+    /// is separate from the pane's ring: two scrolling surfaces that must not move together.
+    pub fn wheel(&mut self, pane: &str, up: bool, by: usize) -> bool {
+        let Some(held) = self.panes.get_mut(pane) else {
+            return false;
+        };
+        held.scroll = match up {
+            true => held.scroll.saturating_add(by),
+            false => held.scroll.saturating_sub(by),
+        };
         true
     }
 
@@ -368,11 +482,15 @@ impl Convo {
         let Some(held) = self.panes.get_mut(pane) else {
             return Marks::default();
         };
-        let strip = held
+        let mut strip = held
             .pending
             .as_ref()
             .map(|p| prompt(p, theme, area.width))
             .unwrap_or_default();
+        if let Some(line) = held.desk.as_deref() {
+            strip.lines.insert(0, waiting(line, theme, area.width));
+            strip.chip_row += 1;
+        }
         let rows = (strip.lines.len() as u16).min(area.height);
         let body = Rect {
             height: area.height - rows,
@@ -386,9 +504,9 @@ impl Convo {
             fill(buf, area.x, y, area.width, theme.blocked_bg);
             buf.set_line(area.x, y, &line, area.width);
         }
-        // The chips are on the strip's second line, which is only on screen if there was room.
-        if rows > 1 {
-            let y = area.y + body.height + 1;
+        // The chips are on one known line of the strip, which is only on screen if there was room.
+        if rows > strip.chip_row {
+            let y = area.y + body.height + strip.chip_row;
             marks.options = chips
                 .into_iter()
                 .map(|(x, width)| Rect {
@@ -442,8 +560,15 @@ impl Transcript {
             notes: &self.notes,
             writes,
         };
-        for turn in self.turns.iter().filter(|t| t.visible()) {
-            lay_turn(turn, &at, &mut pieces);
+        // The queue stands at the foot, after everything recorded: it is what has not happened
+        // yet, and the transcript is pinned to its own end.
+        for turn in self
+            .turns
+            .iter()
+            .chain(self.queued.iter())
+            .filter(|t| t.visible())
+        {
+            lay_turn(turn, &at, &self.open, &mut pieces);
         }
         self.laid = Some(Laid {
             width,
@@ -570,12 +695,16 @@ impl Laying<'_> {
     }
 }
 
-fn lay_turn(turn: &Turn, at: &Laying<'_>, out: &mut Vec<Piece>) {
+fn lay_turn(turn: &Turn, at: &Laying<'_>, open: &HashSet<String>, out: &mut Vec<Piece>) {
     let theme = at.theme;
-    let person = turn.person();
-    let (who, colour) = match person {
-        true => ("you", theme.accent_hi),
-        false => ("agent", theme.done),
+    let summary = turn.summary();
+    // **Not "you".** The queue belongs to the pane, so a prompt standing in it may have been
+    // typed at the desk by somebody else entirely.
+    let (who, colour) = match (summary, turn.queued(), turn.person()) {
+        (true, _, _) => ("compacted", theme.dim),
+        (_, true, _) => ("queued", theme.working),
+        (_, _, true) => ("you", theme.accent_hi),
+        _ => ("agent", theme.done),
     };
     out.push(Piece::Line(Line::default()));
     let mut head = vec![Span::styled(
@@ -589,8 +718,21 @@ fn lay_turn(turn: &Turn, at: &Laying<'_>, out: &mut Vec<Piece>) {
         ));
     }
     out.push(Piece::Line(Line::from(head)));
+    if summary && !open.contains(&turn.id) {
+        out.push(Piece::Line(Line::styled(
+            format!("  ⟨ {} lines · → to open ⟩", turn.lines()),
+            Style::default().fg(theme.mute),
+        )));
+        return;
+    }
     for block in &turn.blocks {
         lay_block(block, at, out);
+    }
+    if summary {
+        out.push(Piece::Line(Line::styled(
+            "  ⟨ ← to put it away ⟩".to_string(),
+            Style::default().fg(theme.mute),
+        )));
     }
     if turn.id == LIVE {
         // The wording may still change under the reader, so it is marked rather than drawn as a
@@ -815,8 +957,31 @@ fn diff(path: Option<&str>, text: &str, width: u16, theme: &Theme, out: &mut Vec
 struct Strip {
     lines: Vec<Line<'static>>,
     chips: Vec<(u16, u16)>,
+    /// Which of [`Self::lines`] the chips were laid on. A row rather than a constant because the
+    /// desk line stands above the prompt and moves it.
+    chip_row: u16,
 }
 
+/// A line the operator left at the pane's own keyboard. Dim rather than alarming: it is context for
+/// the reply about to be appended to it, not a fault.
+fn waiting(line: &str, theme: &Theme, width: u16) -> Line<'static> {
+    // At least one character of the line survives however narrow the pane is: a bare ellipsis
+    // says a line is waiting and refuses to say anything about it.
+    let room = (width.saturating_sub(16) as usize).max(2);
+    let shown: String = match line.chars().count() > room {
+        true => line.chars().take(room - 1).chain(['…']).collect(),
+        false => line.to_string(),
+    };
+    Line::from(vec![
+        Span::styled(
+            " at the desk ".to_string(),
+            Style::default().fg(theme.on_accent).bg(theme.working),
+        ),
+        Span::styled(format!(" {shown}"), Style::default().fg(theme.dim)),
+    ])
+}
+
+/// The chips land on the second line, which is what [`Strip::chip_row`] carries out to the caller.
 fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
     let Some(question) = pending.question.as_deref() else {
         return Strip::default();
@@ -871,7 +1036,11 @@ fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
         ));
     }
     lines.push(Line::from(spans));
-    Strip { lines, chips }
+    Strip {
+        lines,
+        chips,
+        chip_row: 1,
+    }
 }
 
 pub(super) fn clip(text: &str, width: usize) -> String {
