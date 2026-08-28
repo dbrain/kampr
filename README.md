@@ -53,12 +53,14 @@ are all below, and all of them are optional.
 
 Two notes on the installer, since it is fetching a binary that will hold your shells. It writes the
 script to a file rather than piping into `sh` on purpose — a piped `curl` sends nothing into `sh`
-when the URL 404s and the pipeline still exits 0. And it needs
-[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) on the host: the checksums
-come from the same server as the tarball, so they say who *served* it and never who built it, and
-the signature is the only thing that answers the second question. Without a cosign the run refuses
-and prints how to get one. `KAMPR_ALLOW_UNVERIFIED=1` takes a checksum-only install anyway, for a
-binary you built yourself.
+when the URL 404s and the pipeline still exits 0. And it checks the tarball twice where it can: the
+`SHA256SUMS` always, and the [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+signature beside it when a cosign is on the host. The second check is the one that matters — the
+checksums come from the same server as the tarball, so they say who *served* it and never who built
+it — but cosign ships on no distribution by default, so a host without one is told the signature
+went unchecked rather than being stopped. A cosign that is present and *rejects* the signature is
+still fatal, and so is a checksum that does not match. `KAMPR_REQUIRE_SIGNATURE=1` refuses to
+install without a verified signature, if you would rather have the old behaviour.
 
 ---
 
@@ -150,9 +152,10 @@ sh install.sh
 OS and architecture, checks it against the release's `SHA256SUMS`, and checks that against the
 cosign bundle beside it, pinned to this repository's release workflow. It refuses rather than
 half-succeeding: a checksum mismatch installs nothing, a release with no `SHA256SUMS` installs
-nothing, a release with no signature installs nothing, a host with no `cosign` to check the
-signature with installs nothing, and a new binary that will not run on the host is put back
-(#156).
+nothing, a release with no signature installs nothing, a signature that does not verify installs
+nothing, and a new binary that will not run on the host is put back (#156). A host with no `cosign`
+installs and is told the signature was not checked; `KAMPR_REQUIRE_SIGNATURE=1` makes that fatal
+too.
 
 Linux binaries are statically linked against musl, so there is no glibc floor and an old Raspberry Pi
 is fine. macOS needs 11.0 or newer.

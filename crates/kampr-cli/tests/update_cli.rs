@@ -230,6 +230,10 @@ impl Installed {
     }
 
     fn run_on(&self, args: &[&str], path: Option<&str>) -> Output {
+        self.run_with(args, path, &[])
+    }
+
+    fn run_with(&self, args: &[&str], path: Option<&str>, env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(&self.binary);
         command
             .args(args)
@@ -242,7 +246,11 @@ impl Installed {
             .env("HOME", self.home.path())
             .env("XDG_CONFIG_HOME", self.home.path().join("xdg"))
             .env_remove("KAMPR_ALLOW_UNVERIFIED")
+            .env_remove("KAMPR_REQUIRE_SIGNATURE")
             .env_remove("KAMPR_BASE_URL");
+        for (key, value) in env {
+            command.env(key, value);
+        }
         if let Some(path) = path {
             command.env("PATH", path);
         }
@@ -668,11 +676,13 @@ fn a_release_from_the_canonical_base_with_no_signature_is_refused() {
 /// every real installation takes — `docs/06-audit.md` records that every install to date printed
 /// `signature verified: skipped` under `checksum verified: yes`.
 ///
-/// That leaves a checksum-only install, and the checksums come from the same server as the
-/// tarball. It is the identical reasoning that already makes an *absent* bundle fatal one branch
-/// below, so a missing verifier and a missing signature have to agree: neither is a pass.
+/// It used to refuse there, and that was the wrong trade: a missing verifier is not evidence of
+/// anything, so the common case was made indistinguishable from an attack and the way through it
+/// was an environment variable to remember on every host, for ever. The signature is now checked
+/// when it can be and *reported* when it cannot — and reported honestly, because a checksum that
+/// travelled with the tarball proves nothing about who built it.
 #[test]
-fn a_host_with_no_cosign_refuses_the_install_and_says_how_to_get_one() {
+fn a_host_with_no_cosign_installs_and_says_the_signature_was_not_checked() {
     let installed = Installed::new();
     let release = Release::built(installed.home.path(), WORKS);
     let before = installed.digest();
@@ -680,13 +690,42 @@ fn a_host_with_no_cosign_refuses_the_install_and_says_how_to_get_one() {
     let out = installed.run_on(&["update"], Some(&release.path_without_cosign()));
     let said = text(&out);
     assert!(
-        !out.status.success(),
-        "a host with no way to check the signature installed anyway, and printed a checksum as \
-         though it proved something:\n{said}"
+        out.status.success(),
+        "a host with no cosign — which is nearly every host — could not update:\n{said}"
+    );
+    assert_ne!(
+        installed.digest(),
+        before,
+        "the update reported success without replacing the binary:\n{said}"
     );
     assert!(
-        !said.contains("signature verified: skipped — cosign is not installed"),
-        "the missing verifier was reported as a skipped step rather than a refusal:\n{said}"
+        said.contains("no cosign"),
+        "it has to say the signature went unchecked rather than stay quiet:\n{said}"
+    );
+    // The one thing it must never do is imply the signature passed.
+    assert!(
+        !said.contains("signed by"),
+        "an unchecked signature was reported as a verified one:\n{said}"
+    );
+}
+
+/// The strict path, for anyone who wants a missing verifier to stop the install. This is what the
+/// default used to be, kept as a choice rather than imposed as one.
+#[test]
+fn requiring_a_signature_refuses_a_host_with_no_cosign_and_says_how_to_get_one() {
+    let installed = Installed::new();
+    let release = Release::built(installed.home.path(), WORKS);
+    let before = installed.digest();
+
+    let out = installed.run_with(
+        &["update"],
+        Some(&release.path_without_cosign()),
+        &[("KAMPR_REQUIRE_SIGNATURE", "1")],
+    );
+    let said = text(&out);
+    assert!(
+        !out.status.success(),
+        "KAMPR_REQUIRE_SIGNATURE=1 installed anyway:\n{said}"
     );
     assert_eq!(
         installed.digest(),
@@ -697,10 +736,6 @@ fn a_host_with_no_cosign_refuses_the_install_and_says_how_to_get_one() {
     assert!(
         said.contains("cosign") && said.contains("https://"),
         "the refusal did not tell the operator how to get a cosign:\n{said}"
-    );
-    assert!(
-        said.contains("KAMPR_ALLOW_UNVERIFIED"),
-        "the refusal did not name the escape hatch it is refusing on behalf of:\n{said}"
     );
 }
 

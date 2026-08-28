@@ -19,6 +19,7 @@
 #   KAMPR_MODE            plugin | update | standalone (default standalone)
 #                         plugin stops after installing; update also restarts the service but
 #                         drops the first-run epilogue, and is what `kampr update` runs
+#   KAMPR_REQUIRE_SIGNATURE=1 refuse to install unless cosign is present and the signature checks
 #   KAMPR_ALLOW_UNVERIFIED=1  proceed without a checksum, or without a cosign to check the
 #                         signature with. Only for a local test build. `kampr update` clears it.
 set -eu
@@ -129,25 +130,26 @@ if fetch "${base}/SHA256SUMS" "$tmp/SHA256SUMS" optional; then
        Do not run this file. Report it at https://github.com/${REPO}/issues"
       fi
     else
-      # The reasoning one branch below applies verbatim: a checksum that came from the same place
-      # as the tarball proves nothing about who built it. Having no verifier and having no
-      # signature are the same fact about this download, so they get the same answer.
+      # A missing cosign is not evidence of anything, and it used to stop the install dead. That
+      # made the *common* case — a host that has never heard of sigstore — indistinguishable from
+      # the attack, and the way through it was an environment variable nobody remembers, on every
+      # machine, for ever. So the signature is checked when it can be and reported when it cannot.
+      #
+      # What is *not* softened: a cosign that is present and says no still refuses, because that is
+      # evidence. `KAMPR_REQUIRE_SIGNATURE=1` puts the old behaviour back for anyone who wants the
+      # install to fail rather than proceed unverified.
       case "$os" in apple-darwin) goos=darwin ;; *) goos=linux ;; esac
       case "$arch" in x86_64) goarch=amd64 ;; *) goarch=arm64 ;; esac
-      [ -n "$own_base" ] || [ "${KAMPR_ALLOW_UNVERIFIED:-}" = 1 ] || die "cosign is not installed, so the signature beside SHA256SUMS cannot be checked,
-       and nothing else here establishes who built this tarball — refusing to install.
-       The checksums that just matched came from wherever the tarball did.
+      [ "${KAMPR_REQUIRE_SIGNATURE:-}" != 1 ] || die "cosign is not installed and KAMPR_REQUIRE_SIGNATURE=1 was set,
+       so the signature beside SHA256SUMS cannot be checked — refusing to install.
 
        Install cosign and run this again:
          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-${goos}-${goarch}
          chmod +x cosign && sudo mv cosign /usr/local/bin/cosign
        On macOS, 'brew install cosign'. Other ways, including package managers and a signed
-       installer: https://docs.sigstore.dev/cosign/system_config/installation/
-
-       Or set KAMPR_ALLOW_UNVERIFIED=1 to take a checksum-only install of a binary that will be
-       able to type into every terminal in your herd. 'kampr update' does not inherit that
-       variable, so the next upgrade will ask you again."
-      signature_state="skipped — cosign is not installed (https://docs.sigstore.dev/cosign/installation)"
+       installer: https://docs.sigstore.dev/cosign/system_config/installation/"
+      signature_state="not checked — no cosign on this host; the checksum matched, but a checksum
+                    came from the same place as the tarball. Install cosign to check who built it."
     fi
   else
     # An absent signature is the one downgrade an attacker gets for free: serve a tarball, serve
