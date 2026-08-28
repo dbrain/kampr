@@ -257,7 +257,13 @@ jobs:
       # The branch nearly every operator takes, on the real published release. cosign is on no
       # distribution by default, and until this job hid it the whole matrix installed with a
       # verifier present — which is how a checksum-only install came to be treated as a pass.
-      - name: a host with no cosign refuses the published release
+      #
+      # **A missing cosign is not evidence, and stopped being fatal.** It used to refuse, which made
+      # the common case — a host that has never heard of sigstore — indistinguishable from an
+      # attack, and the way through was an environment variable nobody remembers, on every machine,
+      # for ever. So the install proceeds and *says* what it could not check. Both halves are
+      # asserted here: that it proceeds, and that it says so loudly enough to act on.
+      - name: a host with no cosign installs the published release and says what went unchecked
         env:
           KAMPR_VERSION: ${{ github.ref_name }}
         run: |
@@ -271,11 +277,35 @@ jobs:
           took_it=$?
           set -e
           sudo mv "$cosign_at.hidden" "$cosign_at"
-          if [ "$took_it" -eq 0 ]; then
-            echo "::error::install.sh installed a release nothing had checked the signature of"
+          if [ "$took_it" -ne 0 ]; then
+            echo "::error::install.sh refused a host with no cosign — that refusal was deliberately removed; the guard is KAMPR_REQUIRE_SIGNATURE=1"
             cat nocosign.txt; exit 1
           fi
+          # It installed — and it must not have claimed a signature it never checked.
+          [ -x "$RUNNER_TEMP/nocosign/kampr" ]
+          grep -q "signature verified: not checked" nocosign.txt
           # And it must leave the operator somewhere to go.
           grep -q "cosign" nocosign.txt
           grep -q "docs.sigstore.dev" nocosign.txt
-          [ ! -e "$RUNNER_TEMP/nocosign/kampr" ]
+
+      # **Where the refusal went.** Softening the default took a check away from every install, and
+      # this is the only thing that gives it back — so a release whose escape hatch has rotted has
+      # removed the guard rather than moved it, and nothing else would notice.
+      - name: requiring the signature still refuses a host with no cosign
+        env:
+          KAMPR_VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cosign_at="$(command -v cosign)"
+          sudo mv "$cosign_at" "$cosign_at.hidden"
+          set +e
+          KAMPR_REQUIRE_SIGNATURE=1 KAMPR_PREFIX="$RUNNER_TEMP/required" sh install.sh > required.txt 2>&1
+          took_it=$?
+          set -e
+          sudo mv "$cosign_at.hidden" "$cosign_at"
+          if [ "$took_it" -eq 0 ]; then
+            echo "::error::KAMPR_REQUIRE_SIGNATURE=1 installed a release nothing had checked the signature of"
+            cat required.txt; exit 1
+          fi
+          grep -q "KAMPR_REQUIRE_SIGNATURE=1 was set" required.txt
+          [ ! -e "$RUNNER_TEMP/required/kampr" ]

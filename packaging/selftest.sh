@@ -56,7 +56,30 @@ release
 if command -v cosign >/dev/null 2>&1; then
   check "a bogus signature is refused" fail "did not verify"
 else
-  check "a missing cosign is reported, not skipped silently" pass "signature verified: skipped — cosign is not installed"
+  # A host with no cosign installs and *says* the signature went unchecked. Softening this is what
+  # stopped the common case — a machine that has never heard of sigstore — being indistinguishable
+  # from an attack; the refusal moved to KAMPR_REQUIRE_SIGNATURE=1, which is the next case.
+  check "a missing cosign is reported, not skipped silently" pass "signature verified: not checked — no cosign on this host"
+fi
+
+# **The guard that replaced the old refusal, and it was covered by nothing.** Making a missing
+# cosign non-fatal took a check away from every install; `KAMPR_REQUIRE_SIGNATURE=1` is where it
+# went, so an operator who wants the old behaviour has somewhere to get it. A softening whose
+# escape hatch is untested has quietly removed the guard rather than moved it.
+release
+: > "$work/rel/SHA256SUMS.cosign.bundle"
+if ! command -v cosign >/dev/null 2>&1; then
+  rm -rf "$work/prefix"
+  if KAMPR_REQUIRE_SIGNATURE=1 KAMPR_BASE_URL="file://$work/rel" KAMPR_PREFIX="$work/prefix" \
+       sh "$ROOT/packaging/install.sh" > "$work/out" 2>&1; then
+    echo "FAIL asking for the signature to be required installed anyway"; sed 's/^/     | /' "$work/out"; fails=$((fails + 1))
+  elif ! grep -q "KAMPR_REQUIRE_SIGNATURE=1 was set" "$work/out"; then
+    echo "FAIL the refusal did not say which setting caused it"; sed 's/^/     | /' "$work/out"; fails=$((fails + 1))
+  elif [ -e "$work/prefix/kampr" ]; then
+    echo "FAIL it refused and installed the binary anyway"; fails=$((fails + 1))
+  else
+    echo "ok   requiring the signature still refuses a host with no cosign"
+  fi
 fi
 
 release
