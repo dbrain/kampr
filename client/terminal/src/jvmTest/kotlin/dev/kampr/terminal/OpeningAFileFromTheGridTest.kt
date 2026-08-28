@@ -44,16 +44,21 @@ private class Route(
 
 private fun words(text: String) = AttachmentBytes.Ok(text.encodeToByteArray(), "text/plain")
 
-// Short enough that the whole grid is on screen, so a tap lands on the row it is aimed at.
+// As tall as the desktop that made it, with the caret on the last line written. Both matter to
+// where a tap lands. The default zoom is max(fit-width, fit-height), so an eight-row pane on a
+// phone is blown up until barely nine columns are on screen and a column eight cells in is off
+// the right edge — and how far off depends on the line height of whatever font the machine
+// resolves for monospace, which is why that only ever failed on a runner. A full-height pane is
+// width-fit instead, and the caret's row is the one row `caretFloor` guarantees is on screen.
 private fun paneShowing(vararg lines: String): PaneState {
     val pane = PaneState(Phone.PANE, StyleTable())
     pane.applyReset(
         ServerMsg.GridReset(
             pane = Phone.PANE,
             cols = 94,
-            rows = 8,
+            rows = 40,
             rowsData = lines.mapIndexed { row, text -> RowDiff(row, listOf(Run(0, text))) },
-            cursor = Cursor(0, lines.size, true),
+            cursor = Cursor(lines.last().length, lines.lastIndex, true),
             links = emptyList(),
         ),
     )
@@ -67,6 +72,13 @@ private fun ComposeUiTest.tapCell(session: PaneSession, row: Int, col: Int) {
     val at = Offset(
         grid.originX + (col + 0.5f) * grid.cellWidth,
         grid.originY + (row + 0.5f) * grid.cellHeight,
+    )
+    // A point off the surface is delivered to nothing at all, so without this the test reads as
+    // "the grid does not offer paths" when what happened is that the cell was never touched.
+    val surface = onRoot().fetchSemanticsNode().size
+    assertTrue(
+        at.x >= 0f && at.y >= 0f && at.x < surface.width && at.y < surface.height,
+        "cell $row,$col is painted at $at, outside the ${surface.width}x${surface.height} surface",
     )
     onRoot().performTouchInput {
         down(at)

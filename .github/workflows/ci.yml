@@ -74,10 +74,31 @@ jobs:
       # Not `build`: that packages the *release* variant, and `checkReleaseSigning` correctly
       # refuses to produce an unsigned APK on a runner with no keystore. The key stays on the
       # operator's machine, so CI verifies everything except the one step that needs it.
-      - run: env -u GRADLE_HOME ./gradlew check :webApp:stageNodeBundle :androidApp:assembleDebug
+      #
+      # A test task's cache key is its classpath, not the machine that ran it, so a result stored
+      # by one runner is restored onto another with different fonts, a different locale and no
+      # display and reported as a pass with nothing executed. Four `:terminal:jvmTest` tests
+      # failed on every runner for weeks behind `FROM-CACHE`. The init script makes test tasks
+      # run; the greps are here because an init script that silently stopped applying would put
+      # the hole straight back, and only compilation stays cached.
+      - name: check — a test restored from the build cache is not a test that ran
         working-directory: client
         env:
           KAMPR_QR_DECODE: '1'
+        run: |
+          set -euo pipefail
+          env -u GRADLE_HOME ./gradlew -I gradle/tests-must-run.init.gradle.kts \
+            check :webApp:stageNodeBundle :androidApp:assembleDebug 2>&1 | tee check.log
+          if grep -E '^> Task :[^ ]+[Tt]est FROM-CACHE$' check.log; then
+            echo "::error::a test task was served from the build cache — this job proved nothing"
+            exit 1
+          fi
+          for task in :shared:jvmTest :terminal:jvmTest :shared:testAndroidHostTest; do
+            grep -qx "> Task $task" check.log || {
+              echo "::error::$task did not run, so nothing it guards was checked"
+              exit 1
+            }
+          done
       - name: the build staged a real bundle
         run: |
           test -s crates/kampr-node/dist/index.html
@@ -103,7 +124,8 @@ jobs:
             -H 'content-type: application/json' \
             -d "{\"code\":\"$code\",\"device_name\":\"ci\"}" | jq -er .token)
           KAMPR_URL=http://127.0.0.1:8794 KAMPR_TOKEN="$token" \
-            env -u GRADLE_HOME ./client/gradlew -p client :shared:jvmTest \
+            env -u GRADLE_HOME ./client/gradlew -p client \
+              -I client/gradle/tests-must-run.init.gradle.kts :shared:jvmTest \
               --tests 'dev.kampr.shared.LiveNodeTest.theClientReadsTheAuthSurfaceOfARealNode' \
               --tests 'dev.kampr.shared.LiveNodeTest.preferencesWrittenOnOneConnectionComeBackOnTheNext'
       - uses: actions/upload-artifact@v7
