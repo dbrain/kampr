@@ -1,4 +1,6 @@
+mod facet;
 mod record;
+mod subagent;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,13 +13,16 @@ use crate::attach::{self, Fetched, Origin};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
+use crate::facet::Facets;
 use crate::live::{Layout, LiveBlock, ScreenReader};
+use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
+use crate::sub::SubRef;
 use crate::summary::{count_lines, image_marker, marker_of, summarise};
-use crate::tail::TranscriptParser;
+use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 use record::{Content, ContentBlock, Record, image, image_subtype, result_atts, result_text, unified_patch};
 
@@ -49,6 +54,38 @@ impl ClaudeAdapter {
         }
         Err(JournalError::NotFound(id.to_string()))
     }
+
+    /// `~/.claude/sessions/<pid>.json`, which Claude 2.1.236 and later writes when a session
+    /// opens and **removes when it exits** — so its presence is already the claim that this pid
+    /// is on this session right now.
+    ///
+    /// `procStart` beside it is field 22 of `/proc/<pid>/stat` verbatim, and checking it is what
+    /// stops a file the kernel has since handed the pid to somebody else from being believed.
+    fn read_marker(&self, process: &PaneProcess) -> Result<SessionMarker, JournalError> {
+        let named = format!("{}.json", process.pid);
+        let record = self.root.contain(&format!("sessions/{named}"))?;
+        let text = std::fs::read_to_string(&record).map_err(|_| JournalError::NotFound(named.clone()))?;
+        let session: Value =
+            serde_json::from_str(&text).map_err(|_| JournalError::NotFound(named.clone()))?;
+        if !process.owns(session.get("procStart").and_then(Value::as_str)) {
+            return Err(JournalError::NotFound(named));
+        }
+        let id = session
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| JournalError::NotFound(named.clone()))?;
+        let field = |key: &str| session.get(key).and_then(Value::as_str).map(str::to_string);
+        Ok(SessionMarker {
+            agent: AGENT.to_string(),
+            pid: process.pid,
+            session: id.to_string(),
+            cwd: field("cwd").map(PathBuf::from),
+            name: field("name"),
+            name_source: field("nameSource"),
+            status: field("status"),
+            transcript: self.find_by_id(id).ok(),
+        })
+    }
 }
 
 /// Claude names a project directory after its working directory with every `/` replaced by `-`.
@@ -74,26 +111,15 @@ impl JournalAdapter for ClaudeAdapter {
         }
     }
 
-    /// `~/.claude/sessions/<pid>.json`, which Claude 2.1.236 and later writes when a session
-    /// opens and **removes when it exits** — so its presence is already the claim that this pid
-    /// is on this session right now.
-    ///
-    /// `procStart` beside it is field 22 of `/proc/<pid>/stat` verbatim, and checking it is what
-    /// stops a file the kernel has since handed the pid to somebody else from being believed.
     fn locate_by_process(&self, process: &PaneProcess) -> Result<PathBuf, JournalError> {
-        let named = format!("{}.json", process.pid);
-        let record = self.root.contain(&format!("sessions/{named}"))?;
-        let text = std::fs::read_to_string(&record).map_err(|_| JournalError::NotFound(named.clone()))?;
-        let session: Value =
-            serde_json::from_str(&text).map_err(|_| JournalError::NotFound(named.clone()))?;
-        if !process.owns(session.get("procStart").and_then(Value::as_str)) {
-            return Err(JournalError::NotFound(named));
-        }
-        let id = session
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or(JournalError::NotFound(named))?;
-        self.find_by_id(id)
+        let marker = self.read_marker(process)?;
+        marker.transcript.ok_or(JournalError::NotFound(marker.session))
+    }
+
+    /// Reading `sessions/<pid>.json` per candidate *is* the intersection with the marker
+    /// directory, and it is cheaper than listing one.
+    fn marker(&self, pipeline: &[PaneProcess]) -> Option<SessionMarker> {
+        pipeline.iter().find_map(|p| self.read_marker(p).ok())
     }
 
     fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError> {
@@ -123,8 +149,44 @@ impl JournalAdapter for ClaudeAdapter {
         Box::new(ClaudeParser::default())
     }
 
+    /// A launched conversation read as its own, which is the one place a sidechain record is this
+    /// transcript's own words rather than somebody else's. `filed` is kept so an agent that
+    /// launched its own is still reachable one level further down.
+    fn open_sub(&self, sub: &SubRef) -> Result<Box<dyn Journal>, JournalError> {
+        let path = self.root.contain(&sub.path)?;
+        let mut parser = ClaudeParser {
+            launched: true,
+            filed: Some(Filed {
+                root: self.root.clone(),
+                transcript: path.clone(),
+            }),
+            ..ClaudeParser::default()
+        };
+        parser.set_origin(Origin::new(AGENT, &self.root, &path));
+        Ok(Box::new(FileJournal::new(path, Box::new(parser), self.screen())))
+    }
+
+    /// A launched agent's transcript is filed relative to the launching one, so the parser is told
+    /// where on disk it is reading rather than only which agent and which relative path — which is
+    /// all an [`Origin`] carries.
+    fn open_path(&self, path: PathBuf) -> Box<dyn Journal> {
+        let mut parser = ClaudeParser {
+            filed: Some(Filed {
+                root: self.root.clone(),
+                transcript: path.clone(),
+            }),
+            ..ClaudeParser::default()
+        };
+        parser.set_origin(Origin::new(AGENT, &self.root, &path));
+        Box::new(FileJournal::new(path, Box::new(parser), self.screen()))
+    }
+
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
+    }
+
+    fn facets(&self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
+        facet::collect(transcript, marker)
     }
 
     fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -134,12 +196,28 @@ impl JournalAdapter for ClaudeAdapter {
     }
 }
 
+struct Filed {
+    root: TranscriptRoot,
+    transcript: PathBuf,
+}
+
 #[derive(Default)]
 pub struct ClaudeParser {
+    /// Whether a sidechain record is this conversation's own words rather than another's.
+    ///
+    /// **The same flag means opposite things either side of the boundary.** In a pane's own
+    /// transcript `isSidechain` marks a record that belongs to something the agent *launched*, and
+    /// inlining it would put a subagent's words in the parent's voice — so it is dropped. In the
+    /// launched conversation's own file every record carries it (134 of 134, measured), because
+    /// the whole file is the sidechain: dropping them there leaves a reader an empty panel, which
+    /// is what shipped until a real transcript was put through this rather than a fixture built to
+    /// pass.
+    launched: bool,
     store: TurnStore,
     tool_turns: HashMap<String, (String, usize)>,
     seq: u64,
     origin: Option<Origin>,
+    filed: Option<Filed>,
 }
 
 impl TranscriptParser for ClaudeParser {
@@ -159,6 +237,7 @@ impl TranscriptParser for ClaudeParser {
     fn reset(&mut self) {
         *self = Self {
             origin: self.origin.take(),
+            filed: self.filed.take(),
             ..Self::default()
         };
     }
@@ -179,7 +258,7 @@ impl ClaudeParser {
             "user" => Role::User,
             _ => return,
         };
-        if record.is_sidechain == Some(true) || record.is_meta == Some(true) {
+        if (record.is_sidechain == Some(true) && !self.launched) || record.is_meta == Some(true) {
             return;
         }
         let atts = match &self.origin {
@@ -256,6 +335,16 @@ impl ClaudeParser {
         }
     }
 
+    /// The handle a launched conversation is opened by, minted only once its transcript has been
+    /// found on disk — an `Agent` call is named by the `agentId` on its result rather than by the
+    /// tool's own name, which is a label.
+    fn launched(&self, result: &Value) -> Option<(String, subagent::Launched)> {
+        let filed = self.filed.as_ref()?;
+        let found = subagent::launched(&filed.transcript, result)?;
+        let id = SubRef::new(AGENT, &filed.root, &found.transcript).encode();
+        Some((id, found))
+    }
+
     fn settle(
         &mut self,
         tool_use_id: &str,
@@ -268,16 +357,34 @@ impl ClaudeParser {
             return;
         };
         let patch = tool_use_result.and_then(unified_patch);
+        let launched = tool_use_result.and_then(|result| self.launched(result));
         let Some(turn) = self.store.revise(&target) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(at) {
+        if let Some(Block::Tool {
+            state,
+            lines,
+            summary,
+            ..
+        }) = turn.tool_block_mut(at)
+        {
             *state = if is_error {
                 ToolState::Error
             } else {
                 ToolState::Done
             };
             *lines = count_lines(text);
+            if let Some(label) = launched.as_ref().and_then(|(_, found)| found.label()) {
+                *summary = Some(label);
+            }
+        }
+        if let Some((id, found)) = launched {
+            turn.blocks.push(Block::Sub {
+                id,
+                kind: found.kind,
+                title: found.title,
+                depth: found.depth,
+            });
         }
         if let Some((path, text)) = patch {
             turn.blocks.push(Block::Diff { path, text });

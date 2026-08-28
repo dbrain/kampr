@@ -1,3 +1,4 @@
+mod facet;
 mod record;
 
 use std::collections::HashMap;
@@ -11,7 +12,9 @@ use crate::attach::{self, Fetched, Origin};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
+use crate::facet::Facets;
 use crate::live::{Layout, LiveBlock, ScreenReader};
+use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
@@ -116,6 +119,10 @@ impl JournalAdapter for CodexAdapter {
         Box::new(CodexParser::default())
     }
 
+    fn facets(&self, transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        facet::collect(transcript)
+    }
+
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
     }
@@ -181,32 +188,7 @@ impl CodexParser {
         let mut atts = atts.into_iter();
         match payload {
             Payload::Message { role, content } => {
-                // `developer` carries the harness's own instruction blocks, not the conversation.
-                let role = match role.as_deref() {
-                    Some("assistant") => Role::Assistant,
-                    Some("user") => Role::User,
-                    _ => return,
-                };
-                let mut turn = Turn::new(id, role, at);
-                for item in content {
-                    match item.kind.as_str() {
-                        "input_text" | "output_text" => {
-                            if let Some(text) = item.text.filter(|t| !t.is_empty()) {
-                                push_text(&mut turn, text);
-                            }
-                        }
-                        "input_image" => turn.blocks.push(Block::Md {
-                            text: image_marker(item.image_url.as_deref().and_then(data_url_subtype)),
-                            att: item
-                                .image_url
-                                .as_deref()
-                                .and_then(data_url_att)
-                                .and_then(|_| atts.next()),
-                        }),
-                        _ => {}
-                    }
-                }
-                if !turn.blocks.is_empty() {
+                if let Some(turn) = message_turn(id, role.as_deref(), content, at, &mut atts) {
                     self.store.push(turn);
                 }
             }
@@ -289,6 +271,47 @@ impl CodexParser {
             });
         }
     }
+}
+
+/// The turn one `message` payload becomes, or nothing where it becomes no turn at all.
+///
+/// **[`facet`] asks this the same question the parse does, and must get the same answer.** A
+/// timing is named by the id the parser minted from a record's position, so a record this drops
+/// and the facet scan keeps — a `developer` instruction block, a user record that is nothing but
+/// a harness envelope — would leave the timing hanging off an id no turn ever carried.
+fn message_turn(
+    id: String,
+    role: Option<&str>,
+    content: Vec<record::ContentItem>,
+    at: Option<String>,
+    atts: &mut impl Iterator<Item = Attachment>,
+) -> Option<Turn> {
+    // `developer` carries the harness's own instruction blocks, not the conversation.
+    let role = match role {
+        Some("assistant") => Role::Assistant,
+        Some("user") => Role::User,
+        _ => return None,
+    };
+    let mut turn = Turn::new(id, role, at);
+    for item in content {
+        match item.kind.as_str() {
+            "input_text" | "output_text" => {
+                if let Some(text) = item.text.filter(|t| !t.is_empty()) {
+                    push_text(&mut turn, text);
+                }
+            }
+            "input_image" => turn.blocks.push(Block::Md {
+                text: image_marker(item.image_url.as_deref().and_then(data_url_subtype)),
+                att: item
+                    .image_url
+                    .as_deref()
+                    .and_then(data_url_att)
+                    .and_then(|_| atts.next()),
+            }),
+            _ => {}
+        }
+    }
+    (!turn.blocks.is_empty()).then_some(turn)
 }
 
 /// Codex 0.149 opens both its assistant messages and its own status line with `•` in column zero.

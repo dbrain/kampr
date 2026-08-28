@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -53,9 +54,23 @@ private val PaneInfo?.talks: Boolean get() = this?.hasConversation == true
 private fun viewOn(info: PaneInfo?, view: PaneView): PaneView =
     if (info.talks) view else PaneView.Terminal
 
-// Why this pane will never paint, when there is nothing on its surface to read instead.
+// The room a conversation needs at its foot to be worth opening: one line of reply box, its
+// padding, and the send button beside it — 70 dp, which `aReplyBoxIsNoTallerThanTheRoomReservedForIt`
+// holds the composer to.
+//
+// **The pane header floats over the conversation and is paid for as a top padding**, so on a short
+// window the two compete for the same pixels and the header, being measured first, wins all of
+// them. Rotated with the keys up that left the reply box 0 dp tall (#319) — a pane you cannot type
+// into, which is the defect this whole surface exists to prevent. A header you cannot read is worth
+// less than a box you can type into, so the header is what yields.
+val REPLY_ROOM: Dp = 70.dp
+
+// Why this pane will never paint, when there is nothing on its surface to read instead. The
+// node's own refusal about this pane stands in where the herd entry says nothing: a failure the
+// global strip stayed quiet about — because the operator was on another pane when it arrived — is
+// still the answer to why they are looking at an empty one now.
 private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
-    info?.detail?.takeUnless { pane.painted }
+    (info?.detail ?: pane.refusal)?.takeUnless { pane.painted }
 
 // The zoom sheet belongs to the terminal surface, so the control that opens it has nothing to open
 // on a transcript. Withdrawing it outright is what the report is about: every one of these headers
@@ -166,13 +181,17 @@ fun PaneScreenMobile(
     val presence = rememberWatchPresence(pane.id, info)
     val shown = viewOn(info, view)
     val named = rememberLastKnown(pane.id, info)
-    Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(tokens.color.surface2)) {
+        val guessed = chrome ?: if (landscape) 44.dp else 108.dp
+        // Never more of the window than leaves a reply box standing. The terminal is unaffected:
+        // it paints edge to edge and insets its own scrollable content by what it measures.
+        val inset = guessed.coerceAtMost((maxHeight - REPLY_ROOM).coerceAtLeast(0.dp))
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             when (shown) {
                 PaneView.Conversation -> surfaces.Conversation(
                     pane,
                     info,
-                    Modifier.fillMaxSize().padding(top = chrome ?: if (landscape) 44.dp else 108.dp),
+                    Modifier.fillMaxSize().padding(top = inset),
                 )
                 else -> surfaces.Terminal(pane, info, Modifier.fillMaxSize())
             }

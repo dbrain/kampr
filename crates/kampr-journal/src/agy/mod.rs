@@ -1,3 +1,4 @@
+mod facet;
 mod presence;
 mod record;
 
@@ -7,7 +8,9 @@ use std::time::SystemTime;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::error::JournalError;
+use crate::facet::Facets;
 use crate::live::{Layout, LiveBlock, ScreenReader};
+use crate::marker::SessionMarker;
 use crate::model::{Block, Role, ToolState, Turn};
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
@@ -89,6 +92,10 @@ impl JournalAdapter for AgyAdapter {
 
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(AgyParser::default())
+    }
+
+    fn facets(&self, transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        facet::collect(transcript)
     }
 
     fn screen(&self) -> Option<ScreenReader> {

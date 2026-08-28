@@ -37,6 +37,22 @@ object ConversationIcons {
     )
     val download = Icon(16f, 1.6f, trace("M8 2.2v7.6M4.8 6.8 8 10.2l3.2-3.4", "M2.6 13.2h10.8"))
     val diff = Icon(16f, 1.6f, trace("M3 5h10M3 11h10M8 2.6v4.8", "M5.4 11H10.6"))
+    // A conversation this one launched: a line that leaves the trunk and an arrow onto its own
+    // thread.
+    val branch = Icon(
+        16f, 1.6f,
+        trace("M4 2.6v6.4a2.4 2.4 0 0 0 2.4 2.4h5.2", "M9.4 9 12.4 11.4 9.4 13.8"),
+    )
+    val file = Icon(
+        16f, 1.6f,
+        listOf(Glyph.Frame(3f, 1.8f, 10f, 12.4f, 1.6f)) + trace("M5.6 5.6h4.8M5.6 8h4.8M5.6 10.4h3"),
+    )
+    // The clip an operator looks for to hand something over, and nothing else on this bar is a
+    // curve.
+    val attach = Icon(
+        18f, 1.6f,
+        trace("M12.6 5.2 6.4 11.4a2.2 2.2 0 0 0 3.1 3.1l6.2-6.2a3.9 3.9 0 0 0-5.5-5.5L3.9 9.1"),
+    )
     val speech = Icon(
         18f, 1.6f,
         listOf(Glyph.Frame(2f, 3f, 14f, 10f, 2.4f)) + trace("M6 16l1.6-3"),

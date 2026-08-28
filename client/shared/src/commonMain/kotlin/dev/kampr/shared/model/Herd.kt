@@ -83,4 +83,4 @@ fun Herd.gone(paneId: String): PaneGone? = when {
     else -> PaneGone.Node
 }
 
-fun paneTitle(pane: PaneInfo): String = Naming.default.render(fieldsOf(pane))
+fun paneTitle(pane: PaneInfo): String = Naming.default.render(fieldsOf(pane, pane.title))

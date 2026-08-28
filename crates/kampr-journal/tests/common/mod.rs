@@ -21,6 +21,25 @@ pub fn agy_root() -> PathBuf {
     fixtures().join("agy")
 }
 
+/// A `.claude`-shaped root of its own, so the sessions the facet tests need — a manual title, a
+/// generated one, neither — do not have to be grafted onto the transcript several tests assert
+/// byte offsets into.
+pub fn facets_root() -> PathBuf {
+    fixtures().join("facets")
+}
+
+pub fn facets_transcript(session: &str) -> PathBuf {
+    facets_root()
+        .join("projects/-home-u-facets")
+        .join(format!("{session}.jsonl"))
+}
+
+pub const FACETS_TITLED: &str = "3c9e7a10-0000-4000-8000-0000000000f1";
+pub const FACETS_GENERATED: &str = "3c9e7a10-0000-4000-8000-0000000000f2";
+pub const FACETS_UNTITLED: &str = "3c9e7a10-0000-4000-8000-0000000000f3";
+pub const FACETS_RECORDED: &str = "3c9e7a10-0000-4000-8000-0000000000f4";
+pub const FACETS_QUEUE: &str = "3c9e7a10-0000-4000-8000-0000000000f5";
+
 pub const CLAUDE_SESSION: &str = "9f1c0b2e-0000-4000-8000-000000000001";
 pub const CODEX_SESSION: &str = "01a01311-5036-7e52-8bef-ac91e2fe2b51";
 pub const AGY_SESSION: &str = "ded9537c-7c10-4c47-9b02-8f8f688b9938";
@@ -40,6 +59,27 @@ pub fn codex_transcript() -> PathBuf {
 pub fn agy_transcript() -> PathBuf {
     agy_root().join(format!(
         "brain/{AGY_SESSION}/.system_generated/logs/transcript_full.jsonl"
+    ))
+}
+
+/// A root per harness holding the shapes probe #322 measured facets out of, kept apart from the
+/// corpora the parsing tests assert byte offsets and turn counts against.
+pub fn harness_facets_root(harness: &str) -> PathBuf {
+    fixtures().join("harness-facets").join(harness)
+}
+
+pub const CODEX_FACETS_SESSION: &str = "01a01db9-177e-7ae3-99e3-9c42d9b6fc3d";
+pub const AGY_FACETS_SESSION: &str = "7d1a4c60-2b93-4f5e-9a01-6c3e88f2d114";
+
+pub fn codex_facets_transcript() -> PathBuf {
+    harness_facets_root("codex").join(format!(
+        "sessions/2026/08/20/rollout-2026-08-20T15-51-04-{CODEX_FACETS_SESSION}.jsonl"
+    ))
+}
+
+pub fn agy_facets_transcript() -> PathBuf {
+    harness_facets_root("agy").join(format!(
+        "brain/{AGY_FACETS_SESSION}/.system_generated/logs/transcript_full.jsonl"
     ))
 }
 

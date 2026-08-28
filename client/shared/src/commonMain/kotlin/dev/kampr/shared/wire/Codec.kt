@@ -79,10 +79,12 @@ object Wire {
                 more = obj.bool("more") ?: false,
                 turns = obj.decodeList<Turn>("turns"),
                 fresh = obj.bool("fresh") ?: false,
+                sub = obj.str("sub"),
             )
             "convo.turn" -> ServerMsg.ConvoTurn(
                 pane = obj.str("pane") ?: return null,
                 turns = obj.decodeList<Turn>("turns").ifEmpty { listOfNotNull(obj.decode<Turn>("turn")) },
+                sub = obj.str("sub"),
             )
             "pending" -> ServerMsg.Pending(
                 pane = obj.str("pane") ?: return null,
@@ -107,6 +109,7 @@ object Wire {
                 code = obj.str("code") ?: "bad_request",
                 message = obj.str("message").orEmpty(),
                 pane = obj.str("pane"),
+                node = obj.str("node"),
             )
             "prefs" -> ServerMsg.Prefs(
                 panes = (obj["panes"] as? JsonObject)?.mapValues { (_, value) ->
@@ -139,6 +142,14 @@ object Wire {
         is ClientMsg.Answer -> buildJsonObject { put("t", "answer"); put("pane", msg.pane); put("key", msg.key) }
         is ClientMsg.ConvoLoad -> buildJsonObject {
             put("t", "convo.load"); put("pane", msg.pane); msg.before?.let { put("before", it) }
+        }
+        is ClientMsg.ConvoSub -> buildJsonObject {
+            put("t", "convo.sub"); put("pane", msg.pane); put("id", msg.id)
+            msg.before?.let { put("before", it) }
+        }
+        is ClientMsg.Paste -> buildJsonObject {
+            put("t", "paste"); put("pane", msg.pane); put("b64", msg.b64)
+            msg.name?.let { put("name", it) }
         }
         is ClientMsg.SetPrefs -> buildJsonObject {
             put("t", "prefs"); put("pane", msg.pane)

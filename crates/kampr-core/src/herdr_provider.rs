@@ -1,11 +1,14 @@
 use crate::agent_view::{DeskAgents, View};
 use crate::backoff::Backoff;
 use crate::naming::Template;
+use crate::procfs::{Foreground, Procfs};
 use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
 use crate::reporter::Reporter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use kampr_herdr::{Command, Herdr, Observer, Snapshot, StreamEvent, Sub, rpc::Subscription};
+use kampr_herdr::{
+    Command, ForegroundProcess, Herdr, Observer, ProcessInfo, Snapshot, StreamEvent, Sub, rpc::Subscription,
+};
 use kampr_journal::{Harness, PaneProcess};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -181,6 +184,16 @@ struct Inner {
     /// from the same `pane.process_info` round trip the harness does, and because six panes in one
     /// directory are otherwise indistinguishable.
     commands: Mutex<HashMap<String, Command>>,
+    /// Every foreground pid in each pane, herdr's and this machine's alike, newest read wins.
+    ///
+    /// **Held for a sweep and no longer.** It is what a pid-keyed session marker is intersected
+    /// with, and a pid the kernel has handed on to somebody else would hand back somebody else's
+    /// conversation — so it is re-walked on the sweep rather than accumulated.
+    pids: Mutex<HashMap<String, Vec<u32>>>,
+    /// This machine's own procfs. herdr answers what a pane is only where the job leaves the
+    /// shell's process group, which on a machine that sources ble.sh is never (probe #297); this
+    /// is how the node answers the rest, and it answers nothing where `/proc` is not readable.
+    procfs: Procfs,
     reporter: Reporter,
     desk_agents: DeskAgents,
     /// Whether this herdr has ever answered `pane.process_info`, which is the difference between
@@ -408,6 +421,8 @@ impl HerdrProvider {
             widths: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
             commands: Mutex::new(HashMap::new()),
+            pids: Mutex::new(HashMap::new()),
+            procfs: Procfs::default(),
             reporter: Reporter::new(),
             desk_agents: DeskAgents::new(),
             probed: AtomicBool::new(false),
@@ -434,6 +449,27 @@ impl HerdrProvider {
     /// The harness process behind a pane, as of the last refresh.
     pub fn agent_harness(&self, pane_id: &str) -> Harness {
         self.inner.agent_harness(pane_id)
+    }
+
+    /// Every process the pane has in the foreground, looked up fresh.
+    ///
+    /// **The seam a session marker is resolved through.** A harness writes a file keyed on its own
+    /// pid from the moment it opens — minutes before it writes a transcript, and whether or not
+    /// herdr has scraped an agent out of the screen — so intersecting this set with that directory
+    /// says which session a pane is having, exactly, and immediately. It is the whole set and not
+    /// the one that matched a name because the name is the part that fails: under ble.sh herdr
+    /// reports only `bash`, and a harness launched through a wrapper is reported as the wrapper.
+    ///
+    /// Looked up rather than cached: the pid set is as old as the last sweep, and whether each pid
+    /// is still that process is a question procfs answers for free at the moment of asking.
+    pub fn pane_processes(&self, pane_id: &str) -> Vec<PaneProcess> {
+        self.inner
+            .pids
+            .lock()
+            .unwrap()
+            .get(pane_id)
+            .map(|pids| pids.iter().copied().map(PaneProcess::look_up).collect())
+            .unwrap_or_default()
     }
 
     /// Puts the desk's own agent order back, for a caller that is shutting this node down.
@@ -599,6 +635,7 @@ impl Inner {
 
         let mut found = Vec::new();
         let mut commands = Vec::new();
+        let mut pids = Vec::new();
         for pane in &snapshot.panes {
             let pane_id = pane.pane_id.clone();
             // An error is *not* an absent harness: one says nothing looked, the other says the
@@ -608,9 +645,24 @@ impl Inner {
             match self.herdr.process_info(&pane_id).await {
                 Ok(info) => {
                     self.probed.store(true, Ordering::Relaxed);
-                    commands.push((pane_id.clone(), info.command()));
+                    // Walked every sweep and never held: a `children` file goes on naming a
+                    // child that has exited, so a job named from a walk taken a minute ago is a
+                    // pane described as running something it finished.
+                    let walked = info
+                        .shell_pid
+                        .map_or_else(Foreground::default, |shell| self.procfs.below(shell));
+                    // herdr stays the source of truth where it has one. It has none whenever the
+                    // foreground process group is the shell's — a pane at its prompt, and every
+                    // pane on a machine that sources ble.sh (probe #297) — and that is the only
+                    // case this answers.
+                    let command = info.command().or_else(|| as_info(&walked.jobs).command());
+                    commands.push((pane_id.clone(), command));
+                    pids.push((pane_id.clone(), foreground_pids(&info, &walked)));
                     if let Some(agent) = wanted.get(&pane_id) {
-                        found.push((pane_id, Some(Running::new(agent, info.harness(agent)))));
+                        let harness = info
+                            .harness(agent)
+                            .or_else(|| as_info(&walked.all).harness(agent));
+                        found.push((pane_id, Some(Running::new(agent, harness))));
                     }
                 }
                 Err(e) => {
@@ -622,6 +674,7 @@ impl Inner {
             }
         }
         let commands_moved = self.record_commands(snapshot, commands);
+        self.record_pids(snapshot, pids);
 
         let agents: HashMap<&str, Option<&str>> = snapshot
             .panes
@@ -674,6 +727,18 @@ impl Inner {
 
     fn command(&self, pane_id: &str) -> Option<Command> {
         self.commands.lock().unwrap().get(pane_id).cloned()
+    }
+
+    /// Replaced wholesale rather than merged: a pane that was not read this pass has no pid set
+    /// worth keeping, and a pane that closed has none at all.
+    fn record_pids(&self, snapshot: &Snapshot, read: Vec<(String, Vec<u32>)>) {
+        let live: std::collections::HashSet<&str> =
+            snapshot.panes.iter().map(|p| p.pane_id.as_str()).collect();
+        let mut pids = self.pids.lock().unwrap();
+        pids.retain(|pane_id, _| live.contains(pane_id.as_str()));
+        for (pane_id, found) in read {
+            pids.insert(pane_id, found);
+        }
     }
 
     /// Probe #68/#84: in a headless session the PTY does not follow the layout rect, so the rect
@@ -981,6 +1046,71 @@ fn observe_produced_nothing(reason: &str) -> String {
     )
 }
 
+/// Reuses herdr's own rules — the shell filter, the pipeline join, the launcher-aware name match
+/// — against processes this machine found rather than processes herdr reported. The two pid
+/// fields are deliberately left unset: they carry the process-group check that gave up on this
+/// pane in the first place, and there is nothing here for it to give up on.
+fn as_info(processes: &[ForegroundProcess]) -> ProcessInfo {
+    ProcessInfo {
+        foreground_processes: processes.to_vec(),
+        ..ProcessInfo::default()
+    }
+}
+
+/// Every pid the pane has in the foreground, herdr's answer first and this machine's below it.
+///
+/// herdr's own list is kept even where it is only the shell: a marker directory keyed on a pid
+/// simply will not contain a shell's, and dropping it would drop the case where herdr sees the
+/// harness and the walk cannot reach it.
+fn foreground_pids(info: &ProcessInfo, walked: &Foreground) -> Vec<u32> {
+    let mut pids: Vec<u32> = info
+        .foreground_processes
+        .iter()
+        .map(|p| p.pid)
+        .chain(walked.all.iter().map(|p| p.pid))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    pids.retain(|pid| seen.insert(*pid));
+    pids
+}
+
+/// The most of a command line that goes on the wire.
+///
+/// **This is a name in a sidebar, not a transcript.** Measured on the operator's own machine: a
+/// pane running `claude --append-system-prompt <a five-kilobyte brief>` has a five-kilobyte
+/// command line, and the default template renders `{argv|cmd}` straight into the pane's name —
+/// which then goes to every device in a herd patch and back into herdr's own pane title. Until
+/// the walk below, ble.sh hid every such line on that machine and nothing had ever met one.
+const ARGV_CEILING: usize = 256;
+
+/// One line, and a bounded one.
+///
+/// A command line carries whatever the shell was given, newlines included, and a name is rendered
+/// on one row: an unfolded line does not truncate a title, it breaks the row it is drawn on.
+fn as_a_name(line: &str) -> String {
+    let mut folded = String::with_capacity(line.len().min(ARGV_CEILING + 4));
+    let mut spaced = false;
+    for c in line.chars() {
+        match c.is_whitespace() || c.is_control() {
+            true if spaced => continue,
+            true => {
+                folded.push(' ');
+                spaced = true;
+            }
+            false => {
+                folded.push(c);
+                spaced = false;
+            }
+        }
+        if folded.chars().count() > ARGV_CEILING {
+            folded.pop();
+            folded.push('…');
+            return folded;
+        }
+    }
+    folded.trim_end().to_string()
+}
+
 fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> PaneInfo {
     let (rect, rect_rows) = snapshot.geometry(&pane.pane_id).unwrap_or((0, 0));
     // The rect is the desk's idea of the pane; the PTY is what the program inside it writes to,
@@ -1017,9 +1147,9 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         } else {
             0
         },
-        cmd: command.as_ref().map(|c| c.name.clone()),
+        cmd: command.as_ref().map(|c| as_a_name(&c.name)),
         argv: match inner.config.send_argv {
-            true => command.map(|c| c.line),
+            true => command.map(|c| as_a_name(&c.line)),
             false => None,
         },
         detail: inner.stream_fault(),
@@ -1416,7 +1546,34 @@ async fn run_observer(
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, PROOF_LIFETIME, Proof, Reading, Wrapped, columns, reading};
+    use super::{
+        ARGV_CEILING, Measured, PROOF_LIFETIME, Proof, Reading, Wrapped, as_a_name, columns, reading,
+    };
+
+    /// A command line can carry a whole brief — measured at five kilobytes on the operator's own
+    /// machine — and it is rendered as a pane's name by the default template.
+    #[test]
+    fn a_command_line_long_enough_to_be_a_document_is_still_only_a_name() {
+        let long = format!("claude --append-system-prompt {}", "brief ".repeat(2000));
+        let name = as_a_name(&long);
+        assert_eq!(name.chars().count(), ARGV_CEILING + 1);
+        assert!(name.starts_with("claude --append-system-prompt brief"));
+        assert!(name.ends_with('…'), "and it says it was cut: {name}");
+    }
+
+    /// The same line carries newlines and tabs, and a name is drawn on one row.
+    #[test]
+    fn a_command_line_with_a_newline_in_it_is_folded_into_one_row() {
+        assert_eq!(
+            as_a_name("claude -p 'do\n\n  this\ttoo'  "),
+            "claude -p 'do this too'"
+        );
+    }
+
+    #[test]
+    fn a_line_short_enough_to_render_is_left_exactly_as_it_is() {
+        assert_eq!(as_a_name("cargo test -p kampr-core"), "cargo test -p kampr-core");
+    }
     use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, subscriptions};
     use kampr_herdr::Snapshot;
     use unicode_width::UnicodeWidthChar;

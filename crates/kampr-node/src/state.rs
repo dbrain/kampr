@@ -33,6 +33,9 @@ const HERD_RECONCILE: Duration = Duration::from_secs(30);
 
 pub struct Node {
     pub config: Config,
+    /// Where this node keeps what it owns on disk. A paste writes here, so it is the one
+    /// directory a client can cause bytes to land in and the node picks every part of the path.
+    pub state_dir: PathBuf,
     pub origin: String,
     /// Resolved once: the wildcard case asks the routing table which address a phone would find
     /// this machine on, and that is not a thing to do per request.
@@ -109,6 +112,7 @@ impl Node {
         tasks.append(&mut push_tasks);
 
         let node = Arc::new(Self {
+            state_dir: state_dir.to_path_buf(),
             origin: config.origin(),
             allowed_origins: config.allowed_origins(),
             // A configured zero would be a node that answers nothing, which is never what an
@@ -449,7 +453,7 @@ impl Conversations {
         if !journals.serves(info.agent.as_deref()) {
             return false;
         }
-        let announced = crate::convo::identity(&session.provider, &info.pane_id).announced;
+        let announced = crate::convo::identity(journals, &session.provider, &info.pane_id).announced;
         let key = (
             info.agent.clone().unwrap_or_default(),
             info.cwd.clone().unwrap_or_default(),
@@ -535,7 +539,17 @@ async fn build_model(
         for info in session.registry.list_panes().await.unwrap_or_default() {
             let has_conversation = conversations.resolves(journals, &session, &info, &mut live);
             let watchers = session.registry.watcher_count(&info.pane_id);
-            panes.push(PaneEntry::new(&session.node_id, &info, has_conversation).with_watchers(watchers));
+            // The harness's own name for the session, off the marker it writes by pid (#311) —
+            // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
+            // affordable once per pane per rebuild.
+            let title = journals
+                .marker(&session.provider.pane_processes(&info.pane_id))
+                .and_then(|marker| marker.name);
+            panes.push(
+                PaneEntry::new(&session.node_id, &info, has_conversation)
+                    .with_watchers(watchers)
+                    .with_title(title),
+            );
         }
     }
     conversations.keep(&live);

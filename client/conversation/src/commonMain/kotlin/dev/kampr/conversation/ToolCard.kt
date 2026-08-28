@@ -22,6 +22,7 @@ import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.touchable
+import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.wire.Block
 
 const val TOOL_RUNNING = "running"
@@ -37,6 +38,8 @@ fun ToolCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    sub: Block.Sub? = null,
+    attachments: AttachmentStore = rememberAttachmentStore(""),
 ) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
@@ -101,6 +104,15 @@ fun ToolCard(
                     )
                 }
             }
+            // What the call touched, under the call. The path is the node's own — `summary` is
+            // filled from `file_path`/`path` for every read, edit and write — so this is a target
+            // a reader cannot dispute rather than a guess at a path inside a sentence.
+            val path = filePathOf(tool.summary)
+            if (sub != null || path != null) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
+                if (sub != null) SubCard(sub)
+                if (path != null) FileAffordance(path, attachments)
+            }
             if (expanded && detail.isNotEmpty()) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
                 Column(
@@ -110,7 +122,7 @@ fun ToolCard(
                     for (block in detail) {
                         when (block) {
                             is Block.Code -> CodeCard(block.lang, block.text, query)
-                            is Block.Diff -> DiffCard(block.path, block.text, query)
+                            is Block.Diff -> DiffCard(block.path, block.text, query, attachments = attachments)
                             else -> Unit
                         }
                     }

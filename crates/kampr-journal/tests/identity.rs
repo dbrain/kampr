@@ -394,3 +394,85 @@ fn a_process_start_is_read_from_the_field_claude_records() {
         "a different start is a different process"
     );
 }
+
+/// The pane is an agent pane the moment the agent opens, and that is minutes before there is
+/// anything to read: the marker is written at session start and the transcript is not created
+/// until the first prompt is submitted — 13:00:13 against 13:02:55, measured.
+///
+/// So a marker with no transcript is an **agent pane with an empty conversation**, which is a
+/// different answer from "this pane has no conversation" and has to stay a different answer.
+#[test]
+fn a_pane_running_claude_is_an_agent_pane_before_it_has_written_a_transcript() {
+    let home = home_with("marker-first", &[]);
+    let pipeline = [PaneProcess::default(), live_process()];
+
+    assert_eq!(
+        located(&home, &Harness::Running(live_process())),
+        None,
+        "nothing on disk resolves — without which this test proves nothing"
+    );
+
+    let found = registry(&home)
+        .marker(&pipeline)
+        .expect("the session the pane's own process opened");
+    assert_eq!(found.agent, "claude");
+    assert_eq!(found.pid, LIVE_PID);
+    assert_eq!(found.session, "c5eec836-44cf-4563-829c-cfdc322b3254");
+    assert_eq!(found.cwd.as_deref(), Some(Path::new(CWD)));
+    assert_eq!(found.name.as_deref(), Some("proj-4f"));
+    assert_eq!(found.name_source.as_deref(), Some("derived"));
+    assert_eq!(found.status.as_deref(), Some("idle"));
+    assert_eq!(
+        found.transcript, None,
+        "an empty conversation, not the absence of one"
+    );
+}
+
+/// Nothing here reads a process name, and that is the whole point. `process_info` reports only
+/// `bash` for every job ble.sh runs in the shell's own process group (#297), which is every
+/// interactive shell on the operator's machine — so a pane whose visible command says nothing at
+/// all is still matched exactly, because the match is on **pid** against the marker directory.
+#[test]
+fn a_pane_whose_visible_command_is_only_bash_is_still_matched_on_pid() {
+    let home = home_with("pipeline", &[DECOY, QUIT, RUNNING]);
+    let shell = PaneProcess {
+        pid: 1_463_000,
+        start: Some("28770000".into()),
+        started: None,
+    };
+    let pager = PaneProcess {
+        pid: 1_463_001,
+        ..shell.clone()
+    };
+
+    for alone in [&shell, &pager] {
+        assert!(
+            registry(&home).marker(std::slice::from_ref(alone)).is_none(),
+            "neither of the other members of the pipeline is on a session"
+        );
+    }
+    let found = registry(&home)
+        .marker(&[shell, pager, live_process()])
+        .expect("the harness anywhere in the pipeline");
+    assert_eq!(found.pid, LIVE_PID);
+    assert!(found.transcript.expect("its transcript").ends_with(RUNNING));
+}
+
+/// The `procStart` check survives the widening. A pid is a small integer the kernel hands out
+/// again, and a whole pipeline of them is a whole pipeline of chances to believe a marker left
+/// behind by a process that has gone.
+#[test]
+fn a_marker_left_by_a_dead_process_is_not_claimed_by_the_pid_that_replaced_it() {
+    let home = home_with("pipeline-reused", &[DECOY, QUIT, RUNNING]);
+    let reused = PaneProcess {
+        start: Some("99999999".into()),
+        ..live_process()
+    };
+
+    assert!(
+        registry(&home).marker(&[live_process()]).is_some(),
+        "the real process still resolves — without which this test proves nothing"
+    );
+    assert!(registry(&home).marker(&[reused]).is_none());
+    assert!(registry(&home).marker(&[]).is_none());
+}

@@ -1,0 +1,3 @@
+{"parentUuid":null,"type":"user","uuid":"cccccccc-0000-4000-8000-00000000000c","timestamp":"2026-08-27T09:00:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f4","message":{"role":"user","content":"a title typed into the transcript rather than beside it"}}
+{"type":"custom-title","customTitle":"the fit ladder","sessionId":"3c9e7a10-0000-4000-8000-0000000000f4"}
+{"type":"ai-title","aiTitle":"Ladders and fitting","sessionId":"3c9e7a10-0000-4000-8000-0000000000f4"}

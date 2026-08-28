@@ -10,6 +10,7 @@ pub mod agent_view;
 pub mod backoff;
 pub mod herdr_provider;
 pub mod naming;
+pub mod procfs;
 pub mod provider;
 pub mod registry;
 pub mod reporter;

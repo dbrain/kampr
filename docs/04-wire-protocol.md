@@ -784,6 +784,97 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
 
+### `paste`
+```jsonc
+client -> node  { "t": "paste", "pane": "01J/w1:p1", "b64": "<base64>", "name": "shot" }
+```
+
+Bytes for the pane's agent to work on. The node writes them to a file **on the pane's own machine**
+and types the path in as ordinary `input`; there is no reply of its own, and what the operator sees
+is the path appearing in the composer.
+
+**The path is the whole point.** An agent reached over ssh reads a local file perfectly well — it is
+the terminal's own image-paste protocol that dies, so nothing here tries to speak one.
+
+`name` is a hint at the *stem* only, and it is the only thing the client has any say in. The node
+owns the directory, and the **extension is derived from the bytes**, never from what the sender
+called them: an extension decides what the harness on the far end will do with the file, so a body
+claiming `png` while holding something else is the entire shape of the problem. A name that is a
+path cannot climb out of the directory it is joined to — separators, `..` and a leading dot are
+dropped rather than escaped.
+
+Gated exactly as `input` is, in the same dispatch-time device refresh, because it **is** typing: a
+device that may not type is refused with `not_writer`. A pane on a peer is relayed rather than
+written here — the file has to land on the machine the harness will read it from.
+
+Ceiling **8 MiB**, checked against the base64's own length before anything is allocated, and refused
+with `bad_request` rather than truncated. A pasted file is swept after a day, and the directory is
+capped, so a pane that never reads its paste does not keep the bytes for ever.
+
+### `convo.facets`
+```jsonc
+node -> client  { "t": "convo.facets", "pane": "01J/w1:p1", "facets": {
+  "title":   { "text": "the width inference rewrite", "source": "manual" },
+  "timings": [ { "turn": "<turn id>", "duration_ms": 315990, "messages": 144 } ],
+  "queued":  [ { "text": "and copy the config across", "at": "2026-08-28T02:10:59.658Z" } ],
+  "mode":    { "mode": "normal", "permission": "bypassPermissions" },
+  "compactions": [ { "trigger": "manual", "pre_tokens": 756165, "post_tokens": 18709 } ]
+} }
+```
+
+What the harness wrote down about the **session** rather than about any one turn. Sent unasked,
+**once, when a conversation opens** — collecting it is a whole-transcript read (154 ms for 29.4 MB
+measured), which a conversation opening can afford and a poll cannot, and none of it changes at the
+follow rate.
+
+**Every field is optional and the whole object may be `{}`.** Kampr serves three harnesses and the
+wire is additive for ever, so nothing here is named after the record one harness happens to write:
+a facet is filled only where a harness has been *measured* to carry an equivalent, and a harness
+with nothing to say says nothing. Today Claude fills all five and Codex and agy fill none — their
+nearest candidates were looked at and rejected as unmeasured rather than guessed at. A client draws
+nothing for what it does not get.
+
+`title.source` is `manual` or `generated`, and it is the whole point of carrying the source at all:
+a name a person typed outranks one a harness made up, however good. `timings[].turn` is a turn id
+the client already holds, so a duration hangs off the turn it belongs to.
+
+### `convo.sub`
+```jsonc
+client -> node  { "t": "convo.sub", "pane": "01J/w1:p1", "id": "<handle>", "before": null }
+node -> client  { "t": "convo", "pane": "01J/w1:p1", "sub": "<handle>", "fresh": true, "turns": [...] }
+```
+
+A page of a conversation the pane's agent **launched**, named by the handle a `sub` block carried.
+
+**The node then follows it.** A subagent's transcript grows while it runs and the reason to open
+one is to watch it work, so what it grows by arrives as `convo.turn` carrying the same `sub`:
+
+```jsonc
+node -> client  { "t": "convo.turn", "pane": "01J/w1:p1", "sub": "<handle>", "turns": [...] }
+```
+
+One at a time, and only while the reader has it open: asking for another replaces it, leaving the
+pane replaces it with nothing, and a client that never opens one costs the node nothing. `sub` is
+absent on the pane's own turns and always was, so an installed client only ever receives the frame
+it already understood.
+
+A turn carrying `sub` is **appended**, replaced by id — not merged the way a page is. A page runs
+backwards and files what the reader does not hold above what they do; a transcript still being
+written runs forwards, and merging it the page's way puts the newest step above the ones taken
+before it. That is the same distinction `convo` and `convo.turn` already carry for a pane's own
+conversation.
+
+Its own verb rather than a field on `convo.load`, so a node that has never heard of it ignores the
+frame exactly as it ignores any other unknown `t`. The page it answers with is an ordinary `convo`
+frame wearing one additive field, `sub`, and it is **always `fresh`** — a launched conversation
+shares no turn id with the pane's own, so there is nothing for a client to merge it into. A page
+without `sub` is the pane's own and looks precisely as it always did.
+
+`id` is opaque, minted by the node that served the turn, and resolved by handing it back. It is
+**not** a path and must not be built by a client: the node proves the file it resolves to sits
+under the session tree of the transcript *this node* derived for *this pane*, which is a fact the
+request has no say in. Everything else is `not_found`, in the one wording every refusal here uses.
+
 ### `error`
 ```jsonc
 { "t": "error", "code": "not_writer", "message": "this device is read-only", "pane": null }
@@ -799,7 +890,22 @@ verbatim, so a newer peer's code reaches a client unchanged rather than being dr
 
 `herdr_unavailable` and `node_offline` are both emitted for a herd outage: the first names the
 cause on the connection, the second says which node went with it, and an op addressed at a pane on
-a node that is down is refused with `node_offline` rather than left to time out.
+a node that is down is refused with `node_offline` rather than left to time out. **Both carry
+`node`**, the id of the node they are about:
+
+```jsonc
+{ "t": "error", "code": "node_offline", "message": "workbox is offline", "node": "01JWORKBOX" }
+```
+
+Additive and optional — absent is what every error carried before it, and absent is what a
+pane-scoped or connection-scoped error carries still, so an installed client that has never heard
+of the field behaves exactly as it did. It exists because **only the client can tell a fault from
+an interruption**: a node going unreachable used to arrive with no subject at all, so a client
+showed it the only way it could, as a strip over whatever screen was open — and a node the
+operator was not looking at interrupted a pane on a different one. The node cannot know which
+pane is on screen and must not guess. A client that reads `node` should say it loudly only when
+it is about the node whose pane is in front of the operator, and otherwise leave it to the herd
+screen, where `nodes[].online` and `nodes[].detail` already say the same thing quietly.
 
 `stream_unavailable` is **not** an outage and is deliberately its own code: the node is answering,
 the pane list is right, and only the frames are missing. It always names a `pane`, it carries the

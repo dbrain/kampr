@@ -210,7 +210,6 @@ fun HerdSidebar(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    val safe = LocalSafeArea.current
     val groups = herd.groups()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.width(SIDEBAR_WIDTH).fillMaxHeight()) {
@@ -224,7 +223,7 @@ fun HerdSidebar(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 18.dp, top = 18.dp + safe.top, end = 18.dp, bottom = 14.dp),
+                    .padding(start = 18.dp, top = 18.dp, end = 18.dp, bottom = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

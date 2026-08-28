@@ -88,6 +88,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                     when (offer) {
                         AttachmentOffer.Image -> ConversationIcons.image
                         AttachmentOffer.Video -> ConversationIcons.film
+                        AttachmentOffer.Text -> ConversationIcons.file
                         AttachmentOffer.File -> ConversationIcons.download
                     },
                     15.dp,
@@ -105,6 +106,15 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                     tokens.color.working,
                     Modifier.announce("Fetching $headline"),
                 )
+
+                is AttachmentState.Text -> DisableSelection {
+                    QuietAction(
+                        "Read it",
+                        { attachments.view(att) },
+                        Modifier.fillMaxWidth(),
+                        label = "Read $headline",
+                    )
+                }
 
                 is AttachmentState.Saved -> KText(
                     "saved to ${state.where}",

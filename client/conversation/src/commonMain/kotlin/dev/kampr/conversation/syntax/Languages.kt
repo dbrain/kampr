@@ -74,6 +74,13 @@ private val SPECS = listOf(
 
 private val PLAIN = LangSpec("text", emptySet(), emptySet(), lineComment = emptyList(), blockComment = null, quotes = "")
 
+// The only thing a path says about its contents. Every name here is one of the specs above, and
+// an extension with no spec is plain text rather than a guess.
+fun langOf(name: String): String? =
+    name.substringAfterLast('.', "").lowercase().takeIf { extension ->
+        extension.isNotEmpty() && SPECS.any { it.name == extension }
+    }
+
 fun langSpec(lang: String?): LangSpec {
     val key = lang?.trim()?.lowercase()?.substringBefore(' ') ?: return PLAIN
     return SPECS.firstOrNull { it.name == key } ?: PLAIN

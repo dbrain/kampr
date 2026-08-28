@@ -33,6 +33,8 @@ fun ColumnIndicator(
     onOpen: () -> Unit,
     onReview: () -> Unit,
     modifier: Modifier = Modifier,
+    attachTo: String? = null,
+    onAttach: (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.pill)
@@ -84,21 +86,33 @@ fun ColumnIndicator(
             )
         }
 
+        // An agent over ssh reads a local path perfectly well; it is the terminal's own
+        // image-paste protocol that dies. So this hands the bytes to the node, which writes them
+        // beside the pane and types the path in. Absent where there is no picker to raise, and
+        // absent on a device that may not type — a paste is typing.
+        if (onAttach != null) {
+            ChromePill("attach", "Attach a file for ${attachTo ?: "this pane"}", onAttach)
+        }
+
         // The strip that review puts up carries its own way out, and two controls with the same
         // name is a worse thing to meet with a screen reader than one control that goes away.
-        if (!reviewing) {
-            val pill = RoundedCornerShape(tokens.radii.pill)
-            Row(
-                Modifier
-                    .defaultMinSize(minHeight = 26.dp)
-                    .background(tokens.color.raise, pill)
-                    .edge(tokens.card, pill)
-                    .action("Review this pane row by row", onReview, pill)
-                    .padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                KText("review", tokens.type.metaSmall, tokens.color.dim)
-            }
-        }
+        if (!reviewing) ChromePill("review", "Review this pane row by row", onReview)
+    }
+}
+
+@Composable
+private fun ChromePill(word: String, label: String, onClick: () -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.pill)
+    Row(
+        Modifier
+            .defaultMinSize(minHeight = 26.dp)
+            .background(tokens.color.raise, shape)
+            .edge(tokens.card, shape)
+            .action(label, onClick, shape)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        KText(word, tokens.type.metaSmall, tokens.color.dim)
     }
 }

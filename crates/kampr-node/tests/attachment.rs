@@ -676,3 +676,23 @@ async fn a_tilde_path_resolves_against_the_home_the_node_is_configured_with() {
         "the configured home and the process's are the same here, so this proves nothing"
     );
 }
+
+/// **#304's shape, guarded for the form that came second.** The file id is allowed because it is
+/// equivalent to typing, so it is gated like typing — and a gate written as a match on one variant
+/// stops being a gate the moment a second path-shaped id exists. A read-only device must be
+/// refused a diff for exactly the reason it is refused the file.
+#[test]
+fn a_diff_id_is_a_path_form_and_is_gated_as_one() {
+    for id in [
+        kampr_journal::FileRef::new("/etc/hosts").encode(),
+        attach::Source::Diff(attach::FileRef::new("/etc/hosts")).encode(),
+    ] {
+        assert!(
+            matches!(
+                attach::Source::decode(&id),
+                Ok(attach::Source::File(_) | attach::Source::Diff(_))
+            ),
+            "an id that names a path did not decode as one: {id}"
+        );
+    }
+}

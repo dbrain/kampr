@@ -13,11 +13,12 @@ use crate::provider::AgentStatus;
 use crate::wire::PaneEntry;
 use std::fmt;
 
-pub const DEFAULT_TEMPLATE: &str = "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}";
+pub const DEFAULT_TEMPLATE: &str = "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
     Label,
+    Title,
     Workspace,
     Tab,
     Cwd,
@@ -32,6 +33,7 @@ impl Token {
     fn parse(name: &str) -> Option<Self> {
         Some(match name {
             "label" => Self::Label,
+            "title" => Self::Title,
             "workspace" => Self::Workspace,
             "tab" => Self::Tab,
             "cwd" => Self::Cwd,
@@ -60,8 +62,8 @@ impl fmt::Display for TemplateError {
         match self {
             Self::UnknownToken(name) => write!(
                 f,
-                "no such template token `{name}`; the tokens are label, workspace, tab, cwd, pane, \
-                 agent, status, cmd, argv"
+                "no such template token `{name}`; the tokens are label, title, workspace, tab, \
+                 cwd, pane, agent, status, cmd, argv"
             ),
             Self::EmptyChoice => write!(f, "a `{{}}` needs at least one token or 'literal' in it"),
             Self::UnclosedSlot => write!(f, "a `{{` was never closed"),
@@ -126,6 +128,14 @@ pub struct Fields<'a> {
     /// the segment is the thing six panes in one directory share.
     pub cwd: Option<&'a str>,
     pub label: Option<&'a str>,
+    /// What the harness in the pane calls the conversation, and never what a person called the
+    /// pane — `label` is that, it is herdr's, and it wins. Automatic only where nothing manual
+    /// exists, which is why this sits second in the default template rather than first.
+    ///
+    /// Overlaid by whoever holds one rather than read off the pane: it is the session's, it comes
+    /// from `JournalAdapter::facets`, and the wire does not carry it yet — so the two constructors
+    /// below leave it absent and a template renders as it did before.
+    pub title: Option<&'a str>,
     pub agent: Option<&'a str>,
     pub status: AgentStatus,
     pub cmd: Option<&'a str>,
@@ -140,6 +150,7 @@ impl<'a> Fields<'a> {
             tab: entry.tab.as_deref(),
             cwd: entry.cwd.as_deref(),
             label: entry.label.as_deref(),
+            title: entry.title.as_deref(),
             agent: entry.agent.as_deref(),
             status: entry.agent_status,
             cmd: entry.cmd.as_deref(),
@@ -154,6 +165,9 @@ impl<'a> Fields<'a> {
             tab: info.tab.as_deref(),
             cwd: info.cwd.as_deref(),
             label: info.label.as_deref(),
+            // herdr's own snapshot, which is upstream of the session marker a title comes from.
+            // The entry the herd is assembled into is where it lands.
+            title: None,
             agent: info.agent.as_deref(),
             status: info.agent_status,
             cmd: info.cmd.as_deref(),
@@ -188,6 +202,7 @@ fn status_word(status: AgentStatus) -> Option<&'static str> {
 fn value<'a>(token: Token, fields: &Fields<'a>) -> Option<&'a str> {
     let raw = match token {
         Token::Label => fields.label,
+        Token::Title => fields.title,
         Token::Workspace => fields.workspace,
         Token::Tab => fields.tab,
         Token::Cwd => fields.cwd.map(basename),

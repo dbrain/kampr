@@ -163,7 +163,7 @@ impl ProcessInfo {
         let jobs: Vec<&ForegroundProcess> = self
             .foreground_processes
             .iter()
-            .filter(|p| !SHELLS.contains(&p.name.trim_start_matches('-')))
+            .filter(|p| !is_shell(&p.name))
             .collect();
         let first = jobs.first()?;
         Some(Command {
@@ -210,9 +210,13 @@ pub struct Command {
     pub line: String,
 }
 
-/// Shell names, which are never the answer to "what is this pane running".
+/// Whether this is a shell, which is never the answer to "what is this pane running".
 ///
 /// A login shell arrives as `-bash`, so the leading dash is stripped before the comparison.
+pub fn is_shell(name: &str) -> bool {
+    SHELLS.contains(&name.trim_start_matches('-'))
+}
+
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "fish", "dash", "ash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh",
 ];

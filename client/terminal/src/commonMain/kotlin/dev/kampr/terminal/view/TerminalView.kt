@@ -42,6 +42,8 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.platform.LocalReduceMotion
+import dev.kampr.shared.platform.filePickAvailable
+import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
@@ -57,6 +59,10 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.terminal.PaneSession
+import dev.kampr.terminal.file.Handover
+import dev.kampr.terminal.file.handoverAfter
+import dev.kampr.terminal.file.handoverName
+import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneTextInput
@@ -75,8 +81,10 @@ import dev.kampr.terminal.review.historyEdgeLabel
 import dev.kampr.terminal.review.historyEdgeSpoken
 import dev.kampr.terminal.review.historyWarning
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
@@ -131,6 +139,7 @@ fun TerminalView(
     val logical = remember(rows) { LogicalText(rows) }
     val probe = session.grid
     val review = session.review
+    val peek = session.peek
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
     @Suppress("DEPRECATION")
@@ -138,6 +147,12 @@ fun TerminalView(
     val uris = LocalUriHandler.current
     val view = session.view
     val ground = palette.background(pane.styles[0])
+
+    val scope = rememberCoroutineScope()
+    // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
+    // write — and that error is quiet everywhere else by design, so this is the only place on this
+    // surface it can be said.
+    LaunchedEffect(pane.refusal) { session.handover = handoverAfter(session.handover, pane.refusal) }
 
     val stillness = LocalReduceMotion.current
     var cursorOn by remember { mutableStateOf(true) }
@@ -323,7 +338,14 @@ fun TerminalView(
             }
             val (line, offset) = logical.lineAt(cell.row, cell.col)
             val found = detectTarget(line, offset)
-            view.target = found
+            // The route is gated on a device that may send input, and the whole argument for a
+            // client-minted file id is that such a device can already `cat` the file. A device
+            // that may not type is offered the string instead of the bytes.
+            view.target = if (found?.kind == TargetKind.File && io.readOnly) {
+                found.copy(kind = TargetKind.Path)
+            } else {
+                found
+            }
             if (found == null) session.openKeyboard()
         }
 
@@ -374,7 +396,7 @@ fun TerminalView(
                 // detector consumes the release — so leaving *it* live is what let a tap meant for
                 // the scrim raise the keyboard instead of closing the sheet.
                 .then(
-                    if (view.sheetOpen || session.confirm.held != null) {
+                    if (view.sheetOpen || session.confirm.held != null || peek.path != null) {
                         Modifier
                     } else {
                         Modifier.pointerInput(pane.id) {
@@ -463,7 +485,7 @@ fun TerminalView(
         PaneTextInput(
             session = session,
             sink = sink,
-            enabled = !io.readOnly && !view.sheetOpen && session.confirm.held == null,
+            enabled = !io.readOnly && !view.sheetOpen && session.confirm.held == null && peek.path == null,
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),
         )
 
@@ -493,11 +515,24 @@ fun TerminalView(
                     onLeave = { review.leave() },
                 )
             }
+            HandoverLine(session.handover, info?.agent)
             ColumnIndicator(
                 window = window,
                 reviewing = review.active,
                 onOpen = { view.sheetOpen = true },
                 onReview = { session.closeKeyboard(); review.enter(reviewSurface()) },
+                attachTo = info?.agent,
+                onAttach = if (io.readOnly || !filePickAvailable) {
+                    null
+                } else {
+                    {
+                        scope.launch {
+                            val picked = pickFile() ?: return@launch
+                            session.handover = Handover.Going(handoverName(picked))
+                            session.handover = handoverOf(pane, io, picked)
+                        }
+                    }
+                },
             )
         }
 
@@ -529,6 +564,7 @@ fun TerminalView(
                 onAct = {
                     when (target.kind) {
                         TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
+                        TargetKind.File -> scope.launch { peek.open(io, pane.id, target.text) }
                         else -> uris.openUri(target.text)
                     }
                     view.target = null
@@ -538,6 +574,10 @@ fun TerminalView(
                     .align(Alignment.BottomStart)
                     .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),
             )
+        }
+
+        peek.path?.let { at ->
+            FileSheet(path = at, state = peek.state, onClose = peek::close)
         }
 
         session.confirm.held?.let { held ->

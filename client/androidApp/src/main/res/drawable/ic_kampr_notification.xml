@@ -1,21 +1,17 @@
-<!-- Android discards colour on a notification icon, so this is one flat silhouette with the eyes
-     and muzzle knocked out rather than drawn. It has to read at 24dp in a status bar. -->
+<!-- Android discards colour on a notification icon, so this is one flat silhouette with the door
+     knocked out rather than drawn. The sheep this replaced could not survive the reduction: at the
+     24dp Android actually draws, its eyes were 1.6px and its muzzle 2.8px, so the knockouts filled
+     in and it rendered as a blob 12x9px in the lower half of the badge.
+
+     The ink box is 470x378 of the 512 viewport, centred — the 22dp keyline inside a 24dp canvas,
+     which is what puts it at 22x18px at mdpi. Anything that moves the geometry has to hold that;
+     it is not styling, it is the difference between a tent and a dot. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="512" android:viewportHeight="512"
     android:tint="#FFFFFF">
-    <group android:pivotX="158" android:pivotY="318" android:rotation="19">
-        <path android:fillColor="#FFFFFF"
-            android:pathData="M124,318 a34,19 0 1 0 68,0 a34,19 0 1 0 -68,0 Z" />
-    </group>
-    <group android:pivotX="354" android:pivotY="318" android:rotation="-19">
-        <path android:fillColor="#FFFFFF"
-            android:pathData="M320,318 a34,19 0 1 0 68,0 a34,19 0 1 0 -68,0 Z" />
-    </group>
     <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
-        android:pathData="M256,244 q66,0 78,52 q30,12 26,44 q-4,30 -34,34 q-8,52 -70,52 q-62,0 -70,-52
-                          q-30,-4 -34,-34 q-4,-32 26,-44 q12,-52 78,-52 Z
-                          M209,336 a17,18 0 1 0 34,0 a17,18 0 1 0 -34,0 Z
-                          M269,336 a17,18 0 1 0 34,0 a17,18 0 1 0 -34,0 Z
-                          M226,382 a30,23 0 1 0 60,0 a30,23 0 1 0 -60,0 Z" />
+        android:pathData="M256,67 C291,67 324,181 406,335 C432,393 461,445 492,445 L20,445
+                          C51,445 80,393 106,335 C188,181 221,67 256,67 Z
+                          M256,311 Q285,377 298,445 L214,445 Q227,377 256,311 Z" />
 </vector>

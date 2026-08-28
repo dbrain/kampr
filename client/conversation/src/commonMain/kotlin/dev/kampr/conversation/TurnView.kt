@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import dev.kampr.conversation.md.Markdown
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
@@ -37,8 +38,11 @@ sealed interface Piece {
     data class Prose(val text: String) : Piece
     data class Fence(val lang: String?, val text: String) : Piece
     data class Patch(val path: String?, val text: String) : Piece
-    data class Call(val tool: Block.Tool, val detail: List<Block>) : Piece
+    data class Call(val tool: Block.Tool, val detail: List<Block>, val sub: Block.Sub? = null) : Piece
     data class Attach(val att: Attachment) : Piece
+    // A launched conversation with no call in front of it. The node writes the two together, so
+    // this is the shape a page that opened between them arrives in rather than the ordinary one.
+    data class Launch(val sub: Block.Sub) : Piece
 }
 
 // A tool call and the code or patch that follows it in the same turn are one thing to a reader,
@@ -50,12 +54,20 @@ fun groupBlocks(blocks: List<Block>): List<Piece> {
         when (val block = blocks[index]) {
             is Block.Tool -> {
                 val detail = mutableListOf<Block>()
+                var launched: Block.Sub? = null
                 index++
-                while (index < blocks.size && blocks[index].let { it is Block.Code || it is Block.Diff }) {
-                    detail += blocks[index]
+                // The launch rides between the card and its output, so both are collected here:
+                // what an agent was told to do and what it wrote back are one thing to a reader,
+                // and collapsing the call has to take them together.
+                while (index < blocks.size) {
+                    when (val next = blocks[index]) {
+                        is Block.Code, is Block.Diff -> detail += next
+                        is Block.Sub -> launched = launched ?: next
+                        else -> break
+                    }
                     index++
                 }
-                out += Piece.Call(block, detail)
+                out += Piece.Call(block, detail, launched)
             }
             is Block.Md -> {
                 // The marker the node writes beside a header — `[image · png]` — is a fallback for
@@ -66,6 +78,7 @@ fun groupBlocks(blocks: List<Block>): List<Piece> {
             }
             is Block.Code -> { out += Piece.Fence(block.lang, block.text); index++ }
             is Block.Diff -> { out += Piece.Patch(block.path, block.text); index++ }
+            is Block.Sub -> { out += Piece.Launch(block); index++ }
             is Block.Unknown -> index++
         }
     }
@@ -160,7 +173,12 @@ private fun PieceView(
         is Piece.Prose -> Markdown(piece.text, query, Modifier.fillMaxWidth())
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
-        is Piece.Patch -> DiffCard(piece.path, piece.text, query)
+        is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
+        is Piece.Launch -> Surface(
+            Modifier.fillMaxWidth(),
+            background = Kampr.tokens.color.raise,
+            radius = Kampr.tokens.radii.md,
+        ) { SubCard(piece.sub) }
         is Piece.Call -> {
             val key = "$turnId#$index"
             ToolCard(
@@ -169,6 +187,8 @@ private fun PieceView(
                 query = query,
                 expanded = key in expanded,
                 onToggle = { onToggle(key) },
+                sub = piece.sub,
+                attachments = attachments,
             )
         }
     }

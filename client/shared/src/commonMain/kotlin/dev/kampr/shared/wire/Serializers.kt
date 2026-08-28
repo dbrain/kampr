@@ -70,6 +70,16 @@ object BlockSerializer : KSerializer<Block> {
                 state = obj["state"]?.jsonPrimitive?.contentOrNull,
             )
             "diff" -> Block.Diff(obj["path"]?.jsonPrimitive?.contentOrNull, text)
+            // Without an id there is nothing to hand back, and a card offering to open a
+            // conversation it cannot name is the inert affordance rule in miniature.
+            "sub" -> (obj["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { id ->
+                Block.Sub(
+                    id = id,
+                    kind = (obj["kind"] as? JsonPrimitive)?.contentOrNull,
+                    title = (obj["title"] as? JsonPrimitive)?.contentOrNull,
+                    depth = (obj["depth"] as? JsonPrimitive)?.intOrNull,
+                )
+            } ?: Block.Unknown(kind)
             else -> Block.Unknown(kind)
         }
     }
@@ -113,6 +123,12 @@ object BlockSerializer : KSerializer<Block> {
                     value.state?.let { put("state", it) }
                 }
                 is Block.Diff -> buildJsonObject { put("b", "diff"); value.path?.let { put("path", it) }; put("text", value.text) }
+                is Block.Sub -> buildJsonObject {
+                    put("b", "sub"); put("id", value.id)
+                    value.kind?.let { put("kind", it) }
+                    value.title?.let { put("title", it) }
+                    value.depth?.let { put("depth", it) }
+                }
                 is Block.Unknown -> buildJsonObject { put("b", value.kind) }
             }
         )

@@ -4,6 +4,7 @@ import dev.kampr.shared.model.BLANK
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
 import dev.kampr.shared.model.glyphUnits
+import dev.kampr.shared.net.filePathOf
 
 data class GridPoint(val row: Int, val col: Int) : Comparable<GridPoint> {
     override fun compareTo(other: GridPoint): Int =
@@ -151,14 +152,41 @@ class LogicalText(private val rows: SurfaceRows) {
 private val URL = Regex("""\b(?:https?|ftp|file)://[^\s"'`<>()\[\]{}]+""")
 private val PATH = Regex("""\b[\w.\-/]+\.[A-Za-z][\w]{0,7}:\d+(?::\d+)?\b""")
 
-enum class TargetKind { Link, Url, Path }
+// Where a shell, a compiler or an agent stops writing a path: whitespace, and the brackets and
+// quotes every one of them wraps one in.
+private const val BREAKS = "\"'`<>()[]{},;|"
+
+// `main.rs:412:9` is a path and a place in it. The place is the compiler's; the node opens the path.
+private val LOCATION = Regex(""":\d+(?::\d+)?$""")
+
+// `File` is a path the route can fetch — absolute or `~/`-rooted, which is all `filePathOf`
+// accepts. `Path` is the weaker thing beside it: a `file.rs:12` reference a reader can copy but
+// nothing can resolve, because a relative path has no directory to be relative to from here.
+enum class TargetKind { Link, Url, Path, File }
 
 data class Target(val text: String, val kind: TargetKind)
+
+private fun breaks(c: Char): Boolean = c.isWhitespace() || c in BREAKS
+
+// The token under the finger, with the compiler's location and the sentence's punctuation taken
+// off it, and only if `filePathOf` — the same arbiter the conversation surface uses — will have it.
+// Deliberately not a search through prose: a bare `foo.rs` is a guess about English, and a guess
+// that offers to fetch a file is worse than not offering one.
+fun detectPath(line: String, offset: Int): String? {
+    if (offset !in line.indices || breaks(line[offset])) return null
+    var start = offset
+    while (start > 0 && !breaks(line[start - 1])) start--
+    var end = offset + 1
+    while (end < line.length && !breaks(line[end])) end++
+    val token = line.substring(start, end).trimEnd('.', ',', ';', ':', '!', '?')
+    return filePathOf(LOCATION.replace(token, ""))
+}
 
 fun detectTarget(line: String, offset: Int): Target? {
     for (match in URL.findAll(line)) {
         if (offset in match.range) return Target(match.value.trimEnd('.', ',', ';', ':', '!', '?'), TargetKind.Url)
     }
+    detectPath(line, offset)?.let { return Target(it, TargetKind.File) }
     for (match in PATH.findAll(line)) {
         if (offset in match.range) return Target(match.value, TargetKind.Path)
     }

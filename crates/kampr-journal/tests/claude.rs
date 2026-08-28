@@ -134,33 +134,29 @@ fn an_edit_result_appends_a_diff_block() {
     );
 }
 
+/// **A page opens at a question or it does not open.** Every tool call is its own record and so
+/// its own turn, so a page counted in turns lands partway into a reply and the question that
+/// caused it falls off the top — measured at 53 turns for a single exchange against a page of 40.
+/// This fixture is one exchange, so every page of it is the whole of it however small the limit.
 #[test]
-fn pages_backwards_from_the_newest_turn() {
+fn a_small_page_of_one_exchange_still_opens_at_the_question_that_caused_it() {
     let mut journal = journal();
-    drain(journal.as_mut());
+    let turns = drain(journal.as_mut());
 
     let newest = journal.page_before(None, 2);
-    assert_eq!(newest.turns.len(), 2);
-    assert!(newest.more);
+
+    assert_eq!(
+        newest.turns.first().map(|t| t.id.as_str()),
+        Some("86ce419f-c0d3-4f51-bfc5-cbded73665d3"),
+        "the page opened at {:?} rather than at the operator's own question",
+        newest.turns.first().map(|t| t.id.as_str()),
+    );
+    assert_eq!(newest.turns.len(), turns.len(), "the exchange came back cut");
+    assert!(!newest.more, "there is nothing older than the question");
     assert_eq!(
         newest.cursor.as_deref(),
-        Some("d880dc91-044a-4449-accb-ae813a6bc922")
+        Some("86ce419f-c0d3-4f51-bfc5-cbded73665d3")
     );
-
-    let older = journal.page_before(newest.cursor.as_deref(), 2);
-    let ids: Vec<&str> = older.turns.iter().map(|t| t.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        [
-            "ea8efd25-b0e1-46bf-8520-714c93dea66f",
-            "aa803b51-afc2-4dd4-8c0c-cd27526951ea"
-        ]
-    );
-    assert!(older.more);
-
-    let oldest = journal.page_before(older.cursor.as_deref(), 2);
-    assert_eq!(oldest.turns.len(), 1);
-    assert!(!oldest.more);
 }
 
 /// A conversation's recency is when it was **last** written, not when it opened.

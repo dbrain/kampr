@@ -127,6 +127,9 @@ private fun BlockView(block: Block) {
                 maxLines = 24,
             )
         }
+        // The fallback surface has no way to open one, and the tool card above it already says
+        // an agent was launched.
+        is Block.Sub -> Unit
         is Block.Unknown -> Unit
     }
 }

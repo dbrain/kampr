@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.gone
+import dev.kampr.shared.model.saidOutLoud
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.DeviceRecord
@@ -293,6 +294,7 @@ internal fun AppScaffold(
         // and this screen is about four.
         if (state.screen is Screen.Mosaic) {
             mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
+            // Every pane at once, so there is no pane here the operator is not on.
             failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
             refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
             state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
@@ -469,7 +471,11 @@ internal fun AppScaffold(
             }
         }
 
-        failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+        // Loud only about the pane in hand or the node it is on. Everything else is said quietly
+        // where it belongs — the herd screen's offline dot, or the pane's own surface when the
+        // operator opens it — rather than over whatever they are doing on another machine.
+        failure?.takeIf { saidOutLoud(it, (state.screen as? Screen.Pane)?.paneId) }
+            ?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
         refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
         state.passkeyNote?.let {
@@ -489,8 +495,10 @@ internal fun AppScaffold(
 // so padding it here would take that away; it reads `LocalSafeArea` itself. Everything else is a
 // scrolling column of text that has no business under the clock — or, rotated with three-button
 // navigation, under the navigation bar that has moved to the side of the screen. Chrome that
-// carries the bar colour — the sidebar's title row, the desktop status strip, the bottom
-// navigation — pays for its own edge instead, so its ground still runs under what the system draws.
+// carries the bar colour at an edge this box never takes — the desktop status strip, the bottom
+// navigation — pays for its own instead, so its ground still runs under what the system draws.
+// The sidebar is not one of them: it sits inside this box on the desktop column, and adding the
+// top inset again there stood the app's own name two status bars down on every non-pane screen.
 //
 // Never the bottom: whatever is below this box is the thing that owes the gesture handle.
 @Composable

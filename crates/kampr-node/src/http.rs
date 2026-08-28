@@ -610,11 +610,14 @@ async fn attachment(
     }
     let pane = format!("{node_id}/{local}");
     let id = id.to_string();
-    let file = match kampr_journal::Source::decode(&id) {
-        Ok(kampr_journal::Source::File(file)) => Some(file),
+    // Both path forms read a file this node can see, so both are gated as typing is, and both are
+    // decided here rather than after the mesh hop — a hub must refuse them on its own device row.
+    let path_form = match kampr_journal::Source::decode(&id) {
+        Ok(kampr_journal::Source::File(file)) => Some((file, false)),
+        Ok(kampr_journal::Source::Diff(file)) => Some((file, true)),
         _ => None,
     };
-    if file.is_some()
+    if path_form.is_some()
         && let Some(response) = auth.refused(&node, "api.attachment.path")
     {
         return response;
@@ -629,8 +632,12 @@ async fn attachment(
     // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
     // of megabytes of synchronous reads on a tokio worker for a request any device may make.
     let served = tokio::task::spawn_blocking(move || {
-        if let Some(file) = file {
-            return Some(attach::serve_file(&file, &node.config.journal_home()));
+        if let Some((file, diff)) = path_form {
+            let home = node.config.journal_home();
+            return Some(match diff {
+                true => attach::serve_diff(&file, &home),
+                false => attach::serve_file(&file, &home),
+            });
         }
         let transcript = transcript_of(&node, &pane)?;
         Some(attach::serve(&node.journals(), &transcript, &id))
@@ -653,8 +660,9 @@ pub(crate) fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBu
     let (session, local) = node.resolve(pane)?;
     let herd = node.herd();
     let entry = herd.pane(pane)?;
-    let identity = crate::convo::identity(&session.provider, &local);
-    node.journals()
+    let journals = node.journals();
+    let identity = crate::convo::identity(&journals, &session.provider, &local);
+    journals
         .locate(
             entry.agent.as_deref(),
             identity.announced.as_ref(),

@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Kampr" parent="android:Theme.Material.NoActionBar">
+    <!-- `enableEdgeToEdge()` owns the two bar colours: it makes them transparent and manages
+         their scrims itself, so a theme that also names them is describing a window the app is
+         not drawing. The launch background is the theme's own and has to stay — it is what is on
+         screen before the first frame, and without it that frame is white.
+
+         `DeviceDefault` rather than `Material`: the platform's current theme is the one
+         `enableEdgeToEdge` is written and tested against, and `Material` is the 2014 one. Nothing
+         else comes from here — every pixel after the launch frame is Compose's. -->
+    <style name="Theme.Kampr" parent="android:Theme.DeviceDefault.NoActionBar">
         <item name="android:windowBackground">#FF0E0F13</item>
-        <item name="android:statusBarColor">#FF0E0F13</item>
-        <item name="android:navigationBarColor">#FF0E0F13</item>
     </style>
 </resources>

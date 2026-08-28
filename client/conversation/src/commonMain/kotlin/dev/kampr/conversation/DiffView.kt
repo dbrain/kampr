@@ -44,7 +44,13 @@ fun parseDiff(text: String): List<DiffLine> = text.split('\n').map { line ->
 }
 
 @Composable
-fun DiffCard(path: String?, text: String, query: String, modifier: Modifier = Modifier) {
+fun DiffCard(
+    path: String?,
+    text: String,
+    query: String,
+    modifier: Modifier = Modifier,
+    attachments: AttachmentStore = rememberAttachmentStore(""),
+) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
     val lines = remember(text) { parseDiff(text).dropLastWhile { it.text.isEmpty() } }
@@ -72,6 +78,12 @@ fun DiffCard(path: String?, text: String, query: String, modifier: Modifier = Mo
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
             Column(Modifier.fillMaxWidth().horizontalScroll(scroll).width(IntrinsicSize.Max)) {
                 for (line in lines) DiffRow(line, query, palette)
+            }
+            // The patch says what changed; the file says what it changed *into*, and the node is
+            // on the machine the path is on.
+            path?.let {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
+                FileAffordance(it, attachments)
             }
         }
     }

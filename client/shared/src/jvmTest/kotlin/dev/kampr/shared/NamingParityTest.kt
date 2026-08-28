@@ -55,6 +55,11 @@ class NamingParityTest {
         )
     }
 
+    // `title` is the session's own — the harness writes it, the wire does not carry it yet — so it
+    // is overlaid onto the fields rather than read off a `PaneInfo`.
+    private fun fields(case: JsonObject) =
+        fieldsOf(pane(case), title = (case["title"] as? JsonPrimitive)?.contentOrNull)
+
     @Test
     fun `every shipped case renders the string the fixture pins`() {
         assertTrue(cases.size > 10, "the fixture is meant to carry the cases, and it carried ${cases.size}")
@@ -62,7 +67,7 @@ class NamingParityTest {
             val template = Template.parse(case["template"]!!.jsonPrimitive.content)
             assertEquals(
                 case["expect"]!!.jsonPrimitive.content,
-                template.render(fieldsOf(pane(case["fields"]!!.jsonObject))),
+                template.render(fields(case["fields"]!!.jsonObject)),
                 name,
             )
         }
@@ -72,7 +77,10 @@ class NamingParityTest {
     // side cannot land without the other.
     @Test
     fun `the default template is the one the fixture pins`() {
-        assertEquals("{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}", Naming.DEFAULT_TEMPLATE)
+        assertEquals(
+            "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+            Naming.DEFAULT_TEMPLATE,
+        )
     }
 
     @Test
@@ -87,6 +95,25 @@ class NamingParityTest {
         )
         assertEquals("kampr (cargo test) · bash", paneTitle(busy))
         assertEquals("kampr · bash", paneTitle(busy.copy(cmd = null, argv = null)))
+    }
+
+    // The operator's rule: automatic only where nothing manual exists. `label` is what they typed
+    // on the pane and `title` is what the harness called the conversation, so a template that puts
+    // the generated one first is the defect this names.
+    @Test
+    fun `a name the operator set by hand beats a title the session generated`() {
+        val pane = PaneInfo(id = "01JNODE/w3:p2", nodeId = "01JNODE", workspace = "kampr", agent = "claude")
+        val title = "the width inference rewrite"
+
+        assertEquals(
+            "the width inference rewrite · claude",
+            Naming.default.render(fieldsOf(pane, title = title)),
+        )
+        assertEquals(
+            "build · claude",
+            Naming.default.render(fieldsOf(pane.copy(label = "build"), title = title)),
+        )
+        assertEquals("build · claude", Naming.default.render(fieldsOf(pane.copy(label = "build"))))
     }
 
     // `{last_cmd}` and `{branch}` have no source behind them (11-cli-briefs W9), so asking for one

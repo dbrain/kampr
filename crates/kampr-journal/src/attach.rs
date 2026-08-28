@@ -95,15 +95,19 @@ impl Locator {
     pub fn decode(id: &str) -> Result<Self, JournalError> {
         match Source::decode(id)? {
             Source::Record(locator) => Ok(locator),
-            Source::File(_) => Err(refuse()),
+            Source::File(_) | Source::Diff(_) => Err(refuse()),
         }
     }
 }
 
-/// The tag a file id carries in the first field. Nothing else is tagged: a record id is five
-/// fields and has been since the first build that minted one, so arity is what tells the two
-/// apart and an installed client's id keeps decoding to exactly what it decoded to before.
+/// The tag a file id carries in the first field. A record id is five fields and has been since the
+/// first build that minted one, so arity is what separates a record from everything else and an
+/// installed client's id keeps decoding to exactly what it decoded to before. Within the
+/// two-field form the tag is what separates the kinds, so a new one costs nothing.
 const FILE_TAG: &str = "file";
+
+/// The same path, asked about rather than read: what `git` says has changed in it since HEAD.
+const DIFF_TAG: &str = "diff";
 
 /// A plain path on the node's filesystem, with no transcript behind it and no working directory
 /// to resolve against.
@@ -122,7 +126,24 @@ impl FileRef {
     }
 
     pub fn encode(&self) -> String {
-        URL_SAFE_NO_PAD.encode(format!("{FILE_TAG}{SEP}{}", self.path.display()))
+        self.encode_as(FILE_TAG)
+    }
+
+    pub fn encode_as(&self, tag: &str) -> String {
+        URL_SAFE_NO_PAD.encode(format!("{tag}{SEP}{}", self.path.display()))
+    }
+
+    /// The path this id names, resolved against `home` and proved to be an absolute regular file
+    /// — the same checks [`Self::fetch`] makes before it reads a byte, without reading one.
+    pub fn resolve(&self, home: &Path) -> Result<PathBuf, JournalError> {
+        let path = self.against(home);
+        if !path.is_absolute() {
+            return Err(refuse());
+        }
+        if !std::fs::metadata(&path).map_err(|_| refuse())?.is_file() {
+            return Err(refuse());
+        }
+        Ok(path)
     }
 
     /// The path with a **leading** `~/` resolved against `home`, and nothing else touched.
@@ -202,11 +223,15 @@ impl FileRef {
     }
 }
 
-/// The two things an attachment id can name.
+/// The things an attachment id can name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Record(Locator),
     File(FileRef),
+    /// A file's uncommitted changes rather than its contents. Gated exactly as [`Self::File`] is,
+    /// and for the same reason: it reads a path on the node, and a device that can type into a
+    /// terminal can already run `git diff` there.
+    Diff(FileRef),
 }
 
 impl Source {
@@ -214,6 +239,7 @@ impl Source {
         match self {
             Self::Record(locator) => locator.encode(),
             Self::File(file) => file.encode(),
+            Self::Diff(file) => file.encode_as(DIFF_TAG),
         }
     }
 
@@ -233,6 +259,7 @@ impl Source {
                 bytes: bytes.parse().map_err(|_| refuse())?,
             })),
             [tag, path] if *tag == FILE_TAG && !path.is_empty() => Ok(Self::File(FileRef::new(*path))),
+            [tag, path] if *tag == DIFF_TAG && !path.is_empty() => Ok(Self::Diff(FileRef::new(*path))),
             _ => Err(refuse()),
         }
     }
@@ -312,7 +339,10 @@ pub struct Fetched {
 }
 
 /// The exact length the base64 decodes to, without decoding it.
-fn decoded_len(b64: &str) -> u64 {
+///
+/// Public because every path that takes base64 off a socket has to apply its ceiling *before* it
+/// allocates, or a body claiming a gigabyte costs a gigabyte to refuse.
+pub fn decoded_len(b64: &str) -> u64 {
     let padding = b64.bytes().rev().take_while(|b| *b == b'=').count();
     (b64.len().saturating_sub(padding) as u64) * 3 / 4
 }

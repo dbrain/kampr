@@ -61,6 +61,29 @@ pub fn serve_file(file: &FileRef, home: &Path) -> Response {
     respond(file.fetch(home))
 }
 
+/// What `git` says has changed in that file since HEAD, as `text/plain`.
+///
+/// Gated exactly as [`serve_file`] is and refused in exactly the same words, because it reads the
+/// same paths: a device that may type into the terminal can already run `git diff` there, and one
+/// that may not must not learn from a response code which of this machine's files are tracked.
+pub fn serve_diff(file: &FileRef, home: &Path) -> Response {
+    let Ok(path) = file.resolve(home) else {
+        return missing();
+    };
+    match crate::git::diff_against_head(&path) {
+        Ok(text) => (
+            [
+                (CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (CACHE_CONTROL, "private, no-store"),
+            ],
+            text,
+        )
+            .into_response(),
+        Err(crate::git::DiffError::TooLarge) => past_the_ceiling(),
+        Err(crate::git::DiffError::None) => missing(),
+    }
+}
+
 fn respond(found: Result<Fetched, JournalError>) -> Response {
     match found {
         Ok(found) => body(found),

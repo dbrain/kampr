@@ -214,6 +214,20 @@ pub struct PaneEntry {
     pub cmd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argv: Option<String>,
+    /// What the harness in this pane calls the session it is having.
+    ///
+    /// **Generated, and therefore beneath anything the operator set by hand.** `label` is herdr's
+    /// and is what somebody typed; this is what the harness derived for itself, and the naming
+    /// template takes the first of the two that resolves. A pane with a name of its own is
+    /// otherwise described by its working directory, which is the same word for every pane in a
+    /// repository.
+    ///
+    /// Cheap by construction: it is read from the session marker the pane's own harness writes
+    /// (#311), which is opened by pid. The richer titles a transcript carries — `ai-title`, and a
+    /// `custom-title.json` the operator typed — cost a whole-transcript read and ride the
+    /// conversation instead, where that read is already being paid for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl PaneEntry {
@@ -238,6 +252,7 @@ impl PaneEntry {
             detail: p.detail.clone(),
             cmd: p.cmd.clone(),
             argv: p.argv.clone(),
+            title: None,
         }
     }
 
@@ -245,6 +260,11 @@ impl PaneEntry {
     /// the wire document another.
     pub fn with_watchers(mut self, watchers: usize) -> Self {
         self.watchers = (watchers > 1).then_some(watchers as u32);
+        self
+    }
+
+    pub fn with_title(mut self, title: Option<String>) -> Self {
+        self.title = title;
         self
     }
 }
@@ -357,12 +377,29 @@ pub enum ServerMsg {
         /// client that has never heard of the field merges, exactly as it does today.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         fresh: bool,
+        /// Which launched conversation this page is of, absent for the pane's own. A client that
+        /// has never heard of the field only ever receives pages without it, because a page with
+        /// one is only ever an answer to a verb such a client cannot send.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sub: Option<String>,
         turns: Vec<Turn>,
     },
     /// Turns added *or revised*. A tool turn is replaced by id when its result lands, so a client
     /// that appends renders every tool twice.
     #[serde(rename = "convo.turn")]
-    ConvoTurn { pane: String, turns: Vec<Turn> },
+    ConvoTurn {
+        pane: String,
+        /// Which launched conversation these turns belong to, absent for the pane's own.
+        ///
+        /// A subagent's transcript grows while it runs, so a reader who opened one wants it to
+        /// keep arriving rather than to close and re-open it — but a turn of a *launched*
+        /// conversation must never be appended to the pane's own, which would put a subagent's
+        /// words in the parent's voice. Absent is what every turn carried before this, so a client
+        /// that has never heard of the field only ever receives the turns it already understood.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sub: Option<String>,
+        turns: Vec<Turn>,
+    },
     /// `question: null` is how a prompt clears, so it is serialised as null rather than omitted.
     #[serde(rename = "pending")]
     Pending {
@@ -371,11 +408,37 @@ pub enum ServerMsg {
         options: Vec<PendingOption>,
         source: PendingSource,
     },
+    /// What the harness wrote down about the *session* rather than about any one turn — its own
+    /// title for the conversation, how long each turn took, what is queued behind the one running,
+    /// which mode it is in, where it was compacted.
+    ///
+    /// **Sent once, when a conversation opens.** Collecting it is a whole-transcript read, measured
+    /// at 154 ms for 29.4 MB, so it is not something a poll may do — and none of it changes often
+    /// enough to be worth re-reading at the follow rate. Every field is optional and a harness with
+    /// nothing to say sends an empty object, so a client draws nothing for what it does not get.
+    #[serde(rename = "convo.facets")]
+    ConvoFacets {
+        pane: String,
+        facets: kampr_journal::Facets,
+    },
     #[serde(rename = "error")]
     Error {
         code: ErrorCode,
         message: String,
         pane: Option<String>,
+        /// Which node this is about, when it is about a node rather than a pane.
+        ///
+        /// **The client is the only half that can tell a fault from an interruption.** A node
+        /// going unreachable used to be sent with no subject at all, so every client showed it
+        /// the only way it could — a strip over whatever screen was open — and a node the
+        /// operator was not looking at interrupted a pane on a different one. The node cannot
+        /// know which pane is on screen and must not guess; naming itself is what lets the half
+        /// that does know decide whether to say it loudly or leave it to the herd screen.
+        ///
+        /// Additive: absent is what every error carried before this, and a client that has never
+        /// heard of the field behaves exactly as it does today.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     #[serde(rename = "pong")]
     Pong { n: u64 },
@@ -388,6 +451,21 @@ impl ServerMsg {
             cursor: page.cursor,
             more: page.more,
             fresh,
+            sub: None,
+            turns: page.turns,
+        }
+    }
+
+    /// A page of a conversation the pane's agent launched. Always `fresh`: it is not a slice of
+    /// the pane's own transcript and has no turn in common with it, so there is nothing for a
+    /// client to merge it into.
+    pub fn convo_sub(pane: &str, sub: &str, page: Page) -> Self {
+        Self::Convo {
+            pane: pane.to_string(),
+            cursor: page.cursor,
+            more: page.more,
+            fresh: true,
+            sub: Some(sub.to_string()),
             turns: page.turns,
         }
     }
@@ -438,10 +516,35 @@ pub enum ClientMsg {
         #[serde(default)]
         keys: Option<Vec<String>>,
     },
+    /// Bytes for the pane to work on, written to a file on the pane's own node and typed in as
+    /// the path to it.
+    ///
+    /// **The path is the point.** An agent reached over ssh reads a local file perfectly well; it
+    /// is the terminal's own image-paste protocol that dies, so nothing here tries to speak one.
+    /// `name` is a hint at the stem only — the node owns the directory and derives the extension
+    /// from the bytes, because an extension the sender chose is an extension the sender chose.
+    #[serde(rename = "paste")]
+    Paste {
+        pane: String,
+        b64: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
     #[serde(rename = "answer")]
     Answer { pane: String, key: String },
     #[serde(rename = "convo.load")]
     ConvoLoad { pane: String, before: Option<String> },
+    /// A page of a conversation this pane's agent *launched*, named by the handle a `sub` block
+    /// carried. Its own verb rather than a field on `convo.load`, so that a node which has never
+    /// heard of it ignores the frame exactly as it ignores any other unknown `t` — and so the
+    /// page it answers with cannot be mistaken for the pane's own.
+    #[serde(rename = "convo.sub")]
+    ConvoSub {
+        pane: String,
+        id: String,
+        #[serde(default)]
+        before: Option<String>,
+    },
     #[serde(rename = "resync")]
     Resync,
     #[serde(rename = "ping")]

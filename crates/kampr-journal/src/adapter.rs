@@ -5,9 +5,12 @@ use std::time::SystemTime;
 
 use crate::attach::{Fetched, Origin};
 use crate::error::JournalError;
+use crate::facet::Facets;
 use crate::live::ScreenReader;
+use crate::marker::SessionMarker;
 use crate::process::{Harness, PaneProcess};
 use crate::root::TranscriptRoot;
+use crate::sub::{self, SubRef};
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +61,29 @@ pub trait JournalAdapter: Send + Sync {
         Err(JournalError::NotFound(String::new()))
     }
 
+    /// Which of a pane's processes is on a session of this harness, and what the harness itself
+    /// wrote down about it.
+    ///
+    /// **The pipeline, not the name.** A pane's foreground job is matched on pid against what the
+    /// harness records, so a pane herdr can only describe as `bash` (#297) is still identified
+    /// exactly, and it is identified from the moment the session opens rather than from the moment
+    /// it has written a transcript.
+    ///
+    /// The default is a harness that publishes no such map — every one but Claude today. That is
+    /// this adapter having nothing to say, not a claim that the pane is running no agent.
+    fn marker(&self, _pipeline: &[PaneProcess]) -> Option<SessionMarker> {
+        None
+    }
+
+    /// A conversation one of this harness's own launched, named by a handle minted onto a turn.
+    ///
+    /// Containment is the whole of what this adds: the caller's string is resolved through this
+    /// adapter's root before anything is opened. Proving it is a conversation the *pane* may see
+    /// is [`Registry::open_sub`]'s half.
+    fn open_sub(&self, sub: &SubRef) -> Result<Box<dyn Journal>, JournalError> {
+        Ok(self.open_path(self.root().contain(&sub.path)?))
+    }
+
     /// The newest transcript that declares `cwd` as its working directory, out of those still
     /// being written after `since`.
     ///
@@ -67,6 +93,18 @@ pub trait JournalAdapter: Send + Sync {
     /// directory leaves a transcript behind it.
     fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError>;
     fn parser(&self) -> Box<dyn TranscriptParser>;
+
+    /// What this harness wrote down beside the conversation that is about the *session* rather
+    /// than about a turn: a title, the mode it is in, the prompts still waiting, how long its
+    /// turns took, where it was compacted.
+    ///
+    /// The default is a harness that fills none of them, and that is not a second-class harness —
+    /// it is one nobody has measured an equivalent for. Filling a facet from a field that merely
+    /// reads like one is worse than leaving it empty, because the client cannot tell the
+    /// difference and the wire keeps the promise for ever.
+    fn facets(&self, _transcript: &Path, _marker: Option<&SessionMarker>) -> Facets {
+        Facets::default()
+    }
 
     /// Reads an in-progress message off this harness's visible screen, for the harnesses whose
     /// screen somebody has actually probed. `None` — the default — means a pane running this
@@ -124,6 +162,64 @@ impl Registry {
 
     pub fn serves_any(&self) -> bool {
         !self.adapters.is_empty()
+    }
+
+    /// Which harness a pane's processes are running, and the session it is on — asked of every
+    /// registered adapter, and answered without herdr having scraped anything out of the pane.
+    ///
+    /// This is what makes a pane an agent pane the moment the agent opens. Two gates used to stand
+    /// in the way and they were usually blamed on each other: the sweep only looked a pane up when
+    /// herdr had already labelled it, and `has_conversation` meant a transcript file resolves —
+    /// which it does not for the whole of the gap between a session opening and its first prompt.
+    /// A [`SessionMarker`] carrying no transcript closes both, and says so as its own state rather
+    /// than as an empty conversation.
+    pub fn marker(&self, pipeline: &[PaneProcess]) -> Option<SessionMarker> {
+        self.adapters
+            .values()
+            .find_map(|adapter| adapter.marker(pipeline))
+    }
+
+    /// What the harness the pane is running wrote down about this session, and nothing from any
+    /// other adapter: a pane with no harness, or one whose harness is not registered here, has no
+    /// facets rather than somebody else's.
+    pub fn facets(
+        &self,
+        pane_agent: Option<&str>,
+        transcript: &Path,
+        marker: Option<&SessionMarker>,
+    ) -> Facets {
+        pane_agent
+            .and_then(|agent| self.adapters.get(agent))
+            .map(|adapter| adapter.facets(transcript, marker))
+            .unwrap_or_default()
+    }
+
+    /// The conversation a `sub` handle names, proved to be one the pane asking may see.
+    ///
+    /// **Two independent checks, and both are load-bearing.** The handle arrives from the network,
+    /// so the path inside it is resolved through the adapter's own [`TranscriptRoot`] —
+    /// canonicalised, and proved to be inside it, which is what stops `../`, an absolute path and
+    /// a symlink pointing out. That alone would still let a caller name *another* pane's
+    /// transcript, which is inside the root and perfectly readable, so the result must also sit
+    /// inside the session tree of the transcript this pane is on — a path the node derived itself
+    /// and the request had no say in.
+    pub fn open_sub(&self, id: &str, transcript: &Path) -> Result<Box<dyn Journal>, JournalError> {
+        let handle = SubRef::decode(id)?;
+        let adapter = self
+            .adapters
+            .get(&handle.agent)
+            .ok_or_else(|| JournalError::NotFound(handle.agent.clone()))?;
+        let resolved = adapter.root().contain(&handle.path)?;
+        let tree = sub::tree(transcript)
+            .canonicalize()
+            .map_err(|_| JournalError::NotFound(handle.path.clone()))?;
+        if !resolved.starts_with(&tree) {
+            return Err(JournalError::Escape(handle.path.clone()));
+        }
+        adapter.open_sub(&SubRef {
+            path: resolved.to_string_lossy().into_owned(),
+            ..handle
+        })
     }
 
     /// `Ok(None)` covers every "this pane simply has no conversation" case: no harness, no

@@ -3,6 +3,7 @@ package dev.kampr.shared.model
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.Cursor
@@ -88,11 +89,86 @@ private const val QUIET_AFTER_MOVES = 3
 fun paneMoved(before: PaneInfo, after: PaneInfo): Boolean =
     after.scrollbackRows > before.scrollbackRows || after.agentStatus != before.agentStatus
 
+// One conversation a pane's agent launched. A page of one is always `fresh` — it has nothing in
+// common with the pane's transcript to merge into — but a page of it can still be asked for with a
+// `before`, so the turns merge among themselves by the rule the pane's own turns use.
+class SubConversation(val handle: String) {
+    val turns = mutableStateListOf<Turn>()
+
+    var cursor by mutableStateOf<String?>(null)
+        private set
+    var more by mutableStateOf(false)
+        private set
+
+    // True from the moment a page has landed, which is what tells an empty conversation apart
+    // from one that has not answered yet.
+    var loaded by mutableStateOf(false)
+        private set
+
+    fun apply(msg: ServerMsg.Convo) {
+        mergeTurns(turns, msg.turns)
+        cursor = msg.cursor
+        more = msg.more
+        loaded = true
+    }
+
+    // What the conversation has grown by since it was opened — replaced by id, and otherwise
+    // **appended**.
+    //
+    // Not the page's merge. A page runs *backwards* and files what the reader does not hold above
+    // what they do; a transcript that is still being written runs forwards, and the same merge put
+    // the newest step at the top, above turns the agent took before it. That is the pane's own
+    // `convo` / `convo.turn` distinction, and a launched conversation has both halves for the same
+    // reason.
+    fun apply(turns: List<Turn>) {
+        for (turn in turns) {
+            val at = this.turns.indexOfFirst { it.id == turn.id }
+            if (at >= 0) this.turns[at] = turn else this.turns.add(turn)
+        }
+        loaded = true
+    }
+}
+
+// A page merges by id, and an id the client does not hold goes where the page puts it — after the
+// last turn the two have in common, before the next one. Transcript order is the node's, not the
+// client's: a resumed session stamps later records with earlier times, and sorting on `at` would
+// shuffle a real conversation.
+//
+// Unconditional prepending was the rule, written for `convo.load`, which pages *backwards*. A
+// journal that is closed and re-opened on the same transcript pages *forwards*: the turns the
+// client is missing are the ones written while the pump was down, and every one of them landed at
+// index 0 — the newest turn in the conversation, above turns from hours earlier, on a view pinned
+// to the bottom. That is a message that was never dropped and never seen, and never revisited
+// either, because the node had recorded it as delivered.
+//
+// Prepending is still what happens when the page and the conversation share nothing, which is the
+// older-page case the rule was written for and the only case where position is a guess.
+fun mergeTurns(into: MutableList<Turn>, page: List<Turn>) {
+    var after = -1
+    val waiting = mutableListOf<Turn>()
+    for (turn in page) {
+        val at = into.indexOfFirst { it.id == turn.id }
+        if (at < 0) {
+            waiting += turn
+            continue
+        }
+        into[at] = turn
+        after = at
+        if (waiting.isNotEmpty()) {
+            into.addAll(at, waiting)
+            after = at + waiting.size
+            waiting.clear()
+        }
+    }
+    if (waiting.isNotEmpty()) into.addAll(if (after < 0) 0 else after + 1, waiting)
+}
+
 class PaneState(val id: String, val styles: StyleTable) {
     val cells = CellBuffer(80, 24)
     val links = mutableListOf<String>()
     val scrollback = ScrollbackStore()
     val turns = mutableStateListOf<Turn>()
+    private val subs = mutableStateMapOf<String, SubConversation>()
 
     var cursor by mutableStateOf(Cursor())
         private set
@@ -186,45 +262,38 @@ class PaneState(val id: String, val styles: StyleTable) {
         revision++
     }
 
-    // A page merges by id, and an id the client does not hold goes **where the page puts it** —
-    // after the last turn the two have in common, before the next one. Transcript order is the
-    // node's, not the client's: a resumed session stamps later records with earlier times, and
-    // sorting on `at` would shuffle a real conversation, so the page's own order is the only
-    // order there is.
-    //
-    // Unconditional prepending was the rule, written for `convo.load`, which pages *backwards*.
-    // A journal that is closed and re-opened on the same transcript pages *forwards*: the turns
-    // the client is missing are the ones written while the pump was down, and every one of them
-    // landed at index 0 — the newest turn in the conversation, above turns from hours earlier, on
-    // a view pinned to the bottom. That is a message that was never dropped and never seen, and
-    // never revisited either, because the node had recorded it as delivered.
-    //
-    // Prepending is still what happens when the page and the conversation share nothing, which is
-    // the older-page case the rule was written for and the only case where position is a guess.
     fun applyConvo(msg: ServerMsg.Convo) {
-        var after = -1
-        val waiting = mutableListOf<Turn>()
-        for (turn in msg.turns) {
-            val at = turns.indexOfFirst { it.id == turn.id }
-            if (at < 0) {
-                waiting += turn
-                continue
-            }
-            turns[at] = turn
-            after = at
-            if (waiting.isNotEmpty()) {
-                turns.addAll(at, waiting)
-                after = at + waiting.size
-                waiting.clear()
-            }
-        }
-        if (waiting.isNotEmpty()) turns.addAll(if (after < 0) 0 else after + 1, waiting)
+        mergeTurns(turns, msg.turns)
         convoCursor = msg.cursor
         convoMore = msg.more
         revision++
     }
 
+    // A conversation the pane's agent launched, held apart from the pane's own turns and keyed by
+    // the opaque handle the `sub` block carried. Apart is the whole of it: a launched conversation
+    // shares no turn id with the pane's, so merging one in would put a subagent's words in the
+    // transcript as the pane's own reply — the one thing the wire went out of its way to prevent
+    // by refusing to inline them.
+    fun applySubConvo(msg: ServerMsg.Convo) {
+        val handle = msg.sub ?: return
+        sub(handle).apply(msg)
+        revision++
+    }
+
+    fun sub(handle: String): SubConversation = subs.getOrPut(handle) { SubConversation(handle) }
+
+    fun subOrNull(handle: String): SubConversation? = subs[handle]
+
     fun applyConvoTurn(msg: ServerMsg.ConvoTurn) {
+        // **A launched conversation's turns are never the pane's own.** Appending them here would
+        // put a subagent's words in the parent's voice, which is the one thing the whole `sub`
+        // shape exists to prevent — and it is the shape a growing transcript arrives in, so this
+        // is the path it would happen on.
+        msg.sub?.let { handle ->
+            sub(handle).apply(msg.turns)
+            revision++
+            return
+        }
         for (turn in msg.turns) {
             val at = turns.indexOfFirst { it.id == turn.id }
             if (at >= 0) turns[at] = turn else turns.add(turn)
@@ -232,7 +301,18 @@ class PaneState(val id: String, val styles: StyleTable) {
         revision++
     }
 
+    // The last thing the node refused about this pane, in its own words. Held here so it can be
+    // said on the pane it is about rather than only over whatever screen happened to be open — a
+    // refusal about a pane the operator is not looking at is news for when they arrive at it.
+    var refusal: String? by mutableStateOf(null)
+        internal set
+
+    fun clearRefusal() {
+        refusal = null
+    }
+
     fun markStale() {
+        refusal = null
         if (painted) stale = true
         // Nothing carried across a dropped socket is trustworthy, and a question least of all: the
         // node publishes `pending` on a blocked-state edge and its first attempt at a newly blocked

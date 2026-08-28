@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.terminal.file.FilePeek
+import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.review.ReviewState
@@ -21,6 +23,14 @@ class PaneSession(val paneId: String) {
     // and it is the only place the painted geometry of a frame is a value rather than a local.
     val grid = GridProbe()
     val review = ReviewState()
+
+    // A file the operator opened off the grid. Held here rather than in the view that opened it,
+    // because a fetch outlives the strip that started it.
+    val peek = FilePeek()
+
+    // Where a file the operator handed to this pane has got to. Session-scoped like the peek: the
+    // node's refusal can land after the strip that started the paste has been recomposed away.
+    var handover by mutableStateOf<Handover>(Handover.Idle)
     val latches = Latches()
     val confirm = ConfirmState()
 

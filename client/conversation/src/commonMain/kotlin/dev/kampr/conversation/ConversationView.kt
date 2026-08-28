@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -29,6 +30,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -39,12 +43,16 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
+import dev.kampr.shared.platform.PickedFile
+import dev.kampr.shared.platform.filePickAvailable
+import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
@@ -56,8 +64,10 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
+import kotlin.io.encoding.Base64
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -131,6 +141,11 @@ fun ConversationView(
     val leading = if (pane.convoMore) 1 else 0
 
     val scope = rememberCoroutineScope()
+    var handover by remember(pane.id) { mutableStateOf<Handover>(Handover.Idle) }
+    // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
+    // write — and that error is quiet everywhere else by design, so this is the only place it can
+    // be said.
+    LaunchedEffect(pane.refusal) { handover = handoverAfter(handover, pane.refusal) }
     val stillness = LocalReduceMotion.current
     LaunchedEffect(hits, focus) {
         val target = hits.getOrNull(focus) ?: return@LaunchedEffect
@@ -235,6 +250,18 @@ fun ConversationView(
                 )
                 return
             }
+            is AttachmentState.Text -> {
+                FileViewer(
+                    att = att,
+                    text = open.text,
+                    attachments = attachments,
+                    saved = attachments.saved(att.id),
+                    onSave = { scope.launch { attachments.save(att) } },
+                    onClose = { attachments.close() },
+                    modifier = modifier,
+                )
+                return
+            }
             // Dropped out of the held set while it was open. Nothing reaches this today — the only
             // thing that evicts is another picture being opened, and none can be while this one is
             // — but the alternative to saying so is a blank pane with no way off it. Cleared in an
@@ -243,148 +270,218 @@ fun ConversationView(
         }
     }
 
-    Column(modifier.fillMaxSize().background(tokens.color.bg)) {
-        if (searching || !keyboardOpen) {
-            TranscriptBar(
-                count = turns.size,
-                searching = searching,
-                query = query,
-                hits = hits.size,
-                focus = focus,
-                onQuery = { query = it; focus = 0 },
-                onSearching = { searching = it; if (!it) query = "" },
-                onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
+    // A stack, not a flag: `depth` says a launched conversation can launch one of its own, so
+    // going in twice and coming back once has to mean something. Dropped with the pane.
+    val opened = remember(pane.id) { mutableStateListOf<Block.Sub>() }
+    val openSub: (Block.Sub) -> Unit = { sub ->
+        // Asked for every time it is opened rather than only the first: the file is appended to
+        // while the agent runs, and the page is `fresh` by rule, so a second ask is how a running
+        // subagent's latest step arrives.
+        io.send(ClientMsg.ConvoSub(pane.id, sub.id))
+        opened.add(sub)
+    }
+
+    CompositionLocalProvider(LocalOpenSub provides openSub) {
+        opened.lastOrNull()?.let { sub ->
+            SubConversationView(
+                sub = sub,
+                state = pane.subOrNull(sub.id),
                 agent = info?.agent,
-                adrift = !following && rows.isNotEmpty(),
-                onEnd = { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
+                now = now,
+                onBack = { opened.removeAt(opened.lastIndex) },
+                onOlder = { cursor -> io.send(ClientMsg.ConvoSub(pane.id, sub.id, cursor)) },
+                modifier = modifier,
+                clock = clock,
             )
+            return@CompositionLocalProvider
         }
 
-        // Everything the transcript shows, under one selection: the turns, the prompt the agent
-        // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
-        // list only holds the items it has composed, so a drag reaches as far as the reader has
-        // scrolled and no further — the alternative is laying an unbounded transcript out at once.
-        SelectionContainer(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxSize()) {
-                if (turns.isEmpty()) {
-                    KText(
-                        "waiting for the transcript",
-                        tokens.type.caption,
-                        tokens.color.mute,
-                        Modifier.align(Alignment.Center),
-                    )
-                }
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
-                        .onSizeChanged { viewport = it.height },
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
-                    ),
-                    // None. A block is one box drawn a piece at a time, and a gap between the
-                    // pieces is a gap in the box — the foot of each block pays the space that
-                    // separates it from the next one, outside its own paint.
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                ) {
-                    if (pane.convoMore) {
-                        item(key = "older") {
-                            DisableSelection {
-                                Row(
-                                    Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
-                                    KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
-                                }
-                            }
-                        }
-                    }
-                    itemsIndexed(shown, key = { _, row -> row.key }) { at, row ->
-                        val stamp = stamps.getOrNull(at)
-                        val edge = blockEdge(
-                            shown.getOrNull(at - 1)?.block,
-                            row.block,
-                            shown.getOrNull(at + 1)?.block,
+        ConversationColumn(modifier.fillMaxSize().background(tokens.color.bg), bar = {
+            if (searching || !keyboardOpen) {
+                TranscriptBar(
+                    count = turns.size,
+                    searching = searching,
+                    query = query,
+                    hits = hits.size,
+                    focus = focus,
+                    onQuery = { query = it; focus = 0 },
+                    onSearching = { searching = it; if (!it) query = "" },
+                    onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
+                    agent = info?.agent,
+                    adrift = !following && rows.isNotEmpty(),
+                    onEnd = { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
+                )
+            }
+
+            // Everything the transcript shows, under one selection: the turns, the prompt the agent
+            // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
+            // list only holds the items it has composed, so a drag reaches as far as the reader has
+            // scrolled and no further — the alternative is laying an unbounded transcript out at once.
+            }, transcript = {
+        SelectionContainer(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
+                    if (turns.isEmpty()) {
+                        KText(
+                            "waiting for the transcript",
+                            tokens.type.caption,
+                            tokens.color.mute,
+                            Modifier.align(Alignment.Center),
                         )
-                        when (row) {
-                            is TranscriptRow.Ask -> TurnView(
-                                row.turn, query, expanded, toggle,
-                                attachments = attachments, now = now, agent = info?.agent,
-                                edge = edge,
-                            )
-                            is TranscriptRow.Head -> ReplyHead(
-                                row.reply, info?.agent, now,
-                                collapsed = row.key in expanded,
-                                onToggle = { toggle(row.key) },
-                                edge = edge,
-                            )
-                            // A step is not a card of its own — it is content inside the one box
-                            // its whole reply is drawn as, and the box's own piece supplies the
-                            // ground, the rail and the margins.
-                            is TranscriptRow.One -> TurnView(
-                                row.turn, query, expanded, toggle,
-                                attachments = attachments, now = now,
-                                agent = info?.agent, head = TurnHead.Stamp(stamp), edge = edge,
-                            )
-                            is TranscriptRow.Working -> BlockFrame(
-                                speakerSkin(Speaker.Agent, info?.agent), edge,
-                            ) { WorkingStrip(row.reply, clock = clock) }
-                            is TranscriptRow.Run ->
-                                BlockFrame(speakerSkin(Speaker.Agent, info?.agent), edge) {
-                                    StepStamp(stamp)
-                                    ToolRunCard(row, row.key in expanded, { toggle(row.key) }) {
-                                    for (turn in row.turns) {
-                                        TurnView(
-                                            turn, query, expanded, toggle,
-                                            attachments = attachments, now = now,
-                                            agent = info?.agent, framed = false, head = TurnHead.None,
-                                        )
-                                    }
+                    }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
+                            .onSizeChanged { viewport = it.height },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
+                        ),
+                        // None. A block is one box drawn a piece at a time, and a gap between the
+                        // pieces is a gap in the box — the foot of each block pays the space that
+                        // separates it from the next one, outside its own paint.
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
+                        if (pane.convoMore) {
+                            item(key = "older") {
+                                DisableSelection {
+                                    Row(
+                                        Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
+                                        KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
                                     }
                                 }
+                            }
+                        }
+                        itemsIndexed(shown, key = { _, row -> row.key }) { at, _ ->
+                            TranscriptRowView(
+                                shown, at, stamps.getOrNull(at), query, expanded, toggle,
+                                attachments = attachments, now = now, agent = info?.agent, clock = clock,
+                            )
                         }
                     }
-                }
-                // The header of whatever the reader is standing in the middle of, pinned where
-                // that turn's own header used to be, so putting a long message away never means
-                // scrolling back up to find the chevron that does it. It sits under the question
-                // card for the same reason the list is inset by it: the card is the one thing on
-                // this screen that outranks the transcript.
-                pinned?.let { at ->
-                    PinnedBlockBar(
-                        at,
-                        info?.agent,
-                        now,
-                        onCollapse = collapseKey(at.head)?.let { key ->
-                            {
-                                toggle(key)
-                                scope.launch { listState.scrollToItem(at.index + leading) }
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() }),
-                    )
-                }
-                question?.let {
-                    PendingStrip(
-                        it,
-                        onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
-                        modifier = Modifier.onSizeChanged { size -> strip = size.height },
-                    )
+                    // The header of whatever the reader is standing in the middle of, pinned where
+                    // that turn's own header used to be, so putting a long message away never means
+                    // scrolling back up to find the chevron that does it. It sits under the question
+                    // card for the same reason the list is inset by it: the card is the one thing on
+                    // this screen that outranks the transcript.
+                    pinned?.let { at ->
+                        PinnedBlockBar(
+                            at,
+                            info?.agent,
+                            now,
+                            onCollapse = collapseKey(at.head)?.let { key ->
+                                {
+                                    toggle(key)
+                                    scope.launch { listState.scrollToItem(at.index + leading) }
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() }),
+                        )
+                    }
+                    question?.let {
+                        PendingStrip(
+                            it,
+                            onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
+                            modifier = Modifier.onSizeChanged { size -> strip = size.height },
+                        )
+                    }
                 }
             }
-        }
 
-        Composer(
-            agent = info?.agent,
-            enabled = !io.readOnly,
-            onSend = { text -> replyMessages(pane.id, text).forEach(io::send) },
-        )
+        }, composer = {
+            Composer(
+                agent = info?.agent,
+                enabled = !io.readOnly,
+                onSend = { text -> replyMessages(pane.id, text).forEach(io::send) },
+                onAttach = if (io.readOnly || !filePickAvailable) null else {
+                    {
+                        scope.launch {
+                            val picked = pickFile() ?: return@launch
+                            handover = handoverOf(pane, io, picked)
+                        }
+                    }
+                },
+                handover = handover,
+            )
+        })
     }
+}
+
+// The reply box is the one child of this column that must survive a short window.
+//
+// **A column measures its unweighted children in index order against what the ones before them
+// left**, so the reply box — last in reading order — was last in the queue for room that had
+// already gone: rotated with the keys up it measured 0 dp tall and there was nothing to type into
+// (#319). The bar above it is a count and a search field, and the transcript is scrollable; both
+// can lose height and still be themselves, and the reply box cannot.
+//
+// So the three are measured in priority order — the composer at its natural height, then the bar
+// with what is left, then the transcript with the remainder, which may legitimately be nothing —
+// and placed afterwards in the order a reader meets them. The previous shape was a plain `Column`
+// with the transcript weighted, which is the same thing for every window tall enough to hold all
+// three and silently the wrong thing for every window that is not.
+@Composable
+internal fun ConversationColumn(
+    modifier: Modifier,
+    bar: @Composable () -> Unit,
+    transcript: @Composable () -> Unit,
+    composer: @Composable () -> Unit,
+) {
+    Layout(contents = listOf(composer, bar, transcript), modifier = modifier) { (composerM, barM, transcriptM), constraints ->
+        val width = constraints.maxWidth
+        val room = constraints.maxHeight
+        fun slot(measurables: List<Measurable>, height: Int, exact: Boolean = false) =
+            measurables.map {
+                it.measure(
+                    Constraints(
+                        minWidth = width,
+                        maxWidth = width,
+                        minHeight = if (exact) height else 0,
+                        maxHeight = height,
+                    )
+                )
+            }
+
+        val composed = slot(composerM, room)
+        val afterComposer = (room - composed.sumOf { it.height }).coerceAtLeast(0)
+        val barred = slot(barM, afterComposer)
+        val left = (afterComposer - barred.sumOf { it.height }).coerceAtLeast(0)
+        val body = slot(transcriptM, left, exact = true)
+
+        layout(width, room) {
+            var y = 0
+            barred.forEach { it.place(0, y); y += it.height }
+            body.forEach { it.place(0, y); y += it.height }
+            composed.forEach { it.place(0, y); y += it.height }
+        }
+    }
+}
+
+// The ceiling the node applies, applied here as well. Sending eight megabytes up a phone link to
+// be refused at the other end is a minute of somebody's tethering spent on a certain no.
+internal const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
+
+// The node answers a paste it will not take with an error naming this pane — too large, not
+// base64, nowhere to write — and that error is deliberately quiet everywhere else, so the composer
+// is the only place it can be said. Nothing else the composer does produces one, and the pane's
+// refusal is cleared before the bytes go, so what lands next is the answer to this.
+internal fun handoverAfter(handover: Handover, refusal: String?): Handover =
+    if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
+
+internal fun handoverOf(pane: PaneState, io: PaneIo, picked: PickedFile): Handover {
+    val name = picked.name?.takeIf { it.isNotBlank() } ?: "the file"
+    if (picked.bytes.size > MOST_BYTES_HANDED_OVER) {
+        return Handover.Refused("$name is larger than the 8 MiB a node will take.")
+    }
+    pane.clearRefusal()
+    io.send(ClientMsg.Paste(pane.id, Base64.encode(picked.bytes), picked.name))
+    return Handover.Sent(name)
 }
 
 @Composable

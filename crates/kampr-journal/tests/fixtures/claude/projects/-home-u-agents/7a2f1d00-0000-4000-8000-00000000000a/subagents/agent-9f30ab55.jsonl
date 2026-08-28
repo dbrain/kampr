@@ -1,0 +1,2 @@
+{"type":"user","uuid":"n1","timestamp":"2026-08-27T09:00:24.000Z","cwd":"/home/u/agents","message":{"role":"user","content":"Read crates/kampr-core/src/wire.rs and report every manage variant it encodes."}}
+{"type":"assistant","uuid":"n2","timestamp":"2026-08-27T09:01:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"`ClientMsg::Manage` carries `op` and `pane`."}]}}

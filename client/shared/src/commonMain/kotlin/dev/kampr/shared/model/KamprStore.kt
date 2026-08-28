@@ -81,6 +81,7 @@ class KamprStore {
     fun prefsFor(paneId: String): PanePrefs = _prefs.value[paneId] ?: PanePrefs()
 
     fun dismissFailure() {
+        _failure.value?.pane?.let { paneStates[it]?.clearRefusal() }
         _failure.value = null
     }
 
@@ -194,8 +195,17 @@ class KamprStore {
             // transcript in a case where it cannot name the turns to withdraw: a socket it has
             // never seen, because this client reconnected or that node restarted.
             is ServerMsg.Convo -> pane(msg.pane).let { pane ->
-                if (msg.fresh) pane.turns.clear()
-                pane.applyConvo(msg)
+                // A page naming a sub is a conversation the pane's agent *launched*, and it is
+                // the one page that must never reach `turns`: those ids belong to another
+                // transcript, and a reader would be shown a subagent's words as this pane's own
+                // reply. `fresh` is set on every one of them, so routing it here would clear the
+                // pane's transcript and replace it outright.
+                if (msg.sub != null) {
+                    pane.applySubConvo(msg)
+                } else {
+                    if (msg.fresh) pane.turns.clear()
+                    pane.applyConvo(msg)
+                }
             }
             is ServerMsg.ConvoTurn -> pane(msg.pane).applyConvoTurn(msg)
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
@@ -204,6 +214,7 @@ class KamprStore {
                 _failure.value = msg
                 // Read without creating: a refusal about a pane nobody has open is not news about
                 // any grid on screen.
+                msg.pane?.let { paneStates[it]?.refusal = msg.message }
                 if (msg.code == "stream_unavailable") {
                     msg.pane?.let { paneStates[it]?.noteStreamStopped() }
                 }

@@ -20,6 +20,7 @@ import kotlin.math.round
 
 private const val IMAGE = "image"
 private const val VIDEO = "video"
+private const val TEXT = "text"
 
 // A kind this release has never heard of is a file, offered as a download. Matching an exhaustive
 // set instead is what would make the next kind the node learns to produce vanish out of a
@@ -27,12 +28,16 @@ private const val VIDEO = "video"
 enum class AttachmentOffer(val label: String) {
     Image("Show image"),
     Video("Show video"),
+    Text("Show file"),
     File("Download file"),
 }
 
-fun offerFor(att: Attachment): AttachmentOffer = when (att.kind) {
-    IMAGE -> AttachmentOffer.Image
-    VIDEO -> AttachmentOffer.Video
+fun offerFor(att: Attachment): AttachmentOffer = when {
+    att.kind == IMAGE -> AttachmentOffer.Image
+    att.kind == VIDEO -> AttachmentOffer.Video
+    // A file whose bytes are words is read here rather than handed to the device's downloads
+    // folder, which on a phone is a file the reader then has to go and find an app for.
+    att.kind == TEXT || att.mime?.startsWith("$TEXT/") == true -> AttachmentOffer.Text
     else -> AttachmentOffer.File
 }
 
@@ -47,6 +52,13 @@ sealed interface AttachmentState {
         override fun equals(other: Any?): Boolean = this === other
         override fun hashCode(): Int = image.hashCode()
     }
+    // Held beside the text for the same reason a picture's are: the viewer hands the file to the
+    // device afterwards, and re-fetching bytes that never left is a second authorised round trip
+    // for nothing.
+    data class Text(val text: String, val bytes: ByteArray, val mime: String?) : AttachmentState {
+        override fun equals(other: Any?): Boolean = this === other
+        override fun hashCode(): Int = text.hashCode()
+    }
     data class Saved(val where: String) : AttachmentState
     data class Failed(val reason: String) : AttachmentState
 }
@@ -56,6 +68,7 @@ fun headlineOf(att: Attachment): String = att.name?.takeIf { it.isNotBlank() }
     ?: when (offerFor(att)) {
         AttachmentOffer.Image -> "Image"
         AttachmentOffer.Video -> "Video"
+        AttachmentOffer.Text -> "File"
         AttachmentOffer.File -> "File"
     }
 
@@ -82,6 +95,9 @@ private fun oneDecimal(value: Double): String {
 // Holding the four most recently opened, and no more than 24 MB of them, keeps a reader who is
 // paging back through a day's images from walking the phone into an out-of-memory kill; an image
 // that falls out is not lost, it is a button again and one press from coming back.
+//
+// A fetched file is held against the same budget for the same reason: the route will hand back
+// 8 MiB of one, and a reader opening every path an agent touched would otherwise hold all of them.
 private const val MOST_IMAGES_HELD = 4
 private const val MOST_PIXEL_BYTES_HELD = 24L * 1024 * 1024
 
@@ -122,10 +138,21 @@ class AttachmentStore(
     // MediaStore row and writes the whole file, and doing that under a click handler is a frame
     // budget spent on a syscall.
     suspend fun save(att: Attachment) {
-        val shown = states[att.id] as? AttachmentState.Shown ?: return
-        val name = attachmentFileName(att.name, shown.mime, att.id)
-        val where = withContext(Dispatchers.Default) { saveToDevice(name, shown.mime, shown.bytes) } ?: return
+        val (bytes, mime) = when (val held = states[att.id]) {
+            is AttachmentState.Shown -> held.bytes to held.mime
+            is AttachmentState.Text -> held.bytes to held.mime
+            else -> return
+        }
+        val name = attachmentFileName(att.name, mime, att.id)
+        val where = withContext(Dispatchers.Default) { saveToDevice(name, mime, bytes) } ?: return
         savedTo[att.id] = where
+    }
+
+    // One press for a target the reader named themselves: they asked for the file, so the fetch
+    // and the opening of it are one action rather than two.
+    suspend fun reveal(io: PaneIo, att: Attachment) {
+        open(io, att)
+        if (state(att.id).let { it is AttachmentState.Shown || it is AttachmentState.Text }) view(att)
     }
 
     suspend fun open(io: PaneIo, att: Attachment) {
@@ -135,26 +162,40 @@ class AttachmentStore(
             is AttachmentBytes.Failed -> AttachmentState.Failed(got.reason)
             is AttachmentBytes.Ok -> withContext(Dispatchers.Default) { received(att, got) }
         }
-        if (landed is AttachmentState.Shown) hold(att.id, landed) else states[att.id] = landed
-    }
-
-    private fun received(att: Attachment, got: AttachmentBytes.Ok): AttachmentState {
-        if (offerFor(att) != AttachmentOffer.Image) {
-            val mime = att.mime ?: got.mime
-            val where = saveToDevice(attachmentFileName(att.name, mime, att.id), mime, got.bytes)
-                ?: return AttachmentState.Failed("This device would not take the file.")
-            return AttachmentState.Saved(where)
+        when (landed) {
+            is AttachmentState.Shown -> hold(att.id, landed, landed.image.width.toLong() * landed.image.height * 4)
+            is AttachmentState.Text -> hold(att.id, landed, landed.bytes.size.toLong())
+            else -> states[att.id] = landed
         }
-        val image = decodeImage(got.bytes)
-            ?: return AttachmentState.Failed("Those bytes are not a picture this device can read.")
-        return AttachmentState.Shown(image, got.bytes, att.mime ?: got.mime)
     }
 
-    private fun hold(id: String, shown: AttachmentState.Shown) {
-        states[id] = shown
+    // What came back decides, not what the header promised: the route answers a media type from
+    // the bytes when the record named none, and a path this client built an id for has nothing but
+    // an extension behind its guess. So an image that will not decode and a file that is not text
+    // both fall through to the download rather than to a blank viewer.
+    private fun received(att: Attachment, got: AttachmentBytes.Ok): AttachmentState {
+        val mime = att.mime ?: got.mime
+        val offer = offerFor(att)
+        if (offer == AttachmentOffer.Image || mime?.startsWith("$IMAGE/") == true) {
+            decodeImage(got.bytes)?.let { return AttachmentState.Shown(it, got.bytes, mime) }
+            if (offer == AttachmentOffer.Image && att.mime != null) {
+                return AttachmentState.Failed("Those bytes are not a picture this device can read.")
+            }
+        }
+        if (offer == AttachmentOffer.Text) {
+            runCatching { got.bytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
+                ?.let { return AttachmentState.Text(it, got.bytes, mime) }
+        }
+        val where = saveToDevice(attachmentFileName(att.name, mime, att.id), mime, got.bytes)
+            ?: return AttachmentState.Failed("This device would not take the file.")
+        return AttachmentState.Saved(where)
+    }
+
+    private fun hold(id: String, landed: AttachmentState, bytes: Long) {
+        states[id] = landed
         held.remove(id)
         held.addLast(id)
-        pixelBytes[id] = shown.image.width.toLong() * shown.image.height.toLong() * 4
+        pixelBytes[id] = bytes
         while (held.size > 1 && (held.size > mostImagesHeld || pixelBytes.values.sum() > mostPixelBytesHeld)) {
             val oldest = held.removeFirst()
             pixelBytes.remove(oldest)

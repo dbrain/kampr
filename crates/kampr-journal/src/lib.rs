@@ -6,11 +6,15 @@ pub mod codex;
 pub(crate) mod discover;
 pub mod envelope;
 pub mod error;
+pub mod facet;
 pub mod live;
+pub mod marker;
 pub mod model;
 pub mod process;
 pub mod root;
+pub(crate) mod scan;
 mod store;
+pub mod sub;
 mod summary;
 pub mod tail;
 
@@ -23,10 +27,13 @@ pub use attach::{Att, Fetched, FileRef, Locator, Origin, Source};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use error::JournalError;
+pub use facet::{Compaction, Facets, Mode, Queued, Timing, Title, TitleSource, Titles};
 pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, Watch, retired};
+pub use marker::SessionMarker;
 pub use model::{Attachment, Block, Page, Role, ToolState, Turn};
 pub use process::{Harness, PaneProcess};
 pub use root::TranscriptRoot;
+pub use sub::SubRef;
 pub use tail::{FileJournal, Journal, TranscriptParser};
 
 /// Registers whichever harnesses have a transcript root on this machine. A missing root is not

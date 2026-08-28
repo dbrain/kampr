@@ -13,6 +13,9 @@ fun blockText(block: Block): String = when (block) {
     is Block.Code -> block.text
     is Block.Diff -> listOfNotNull(block.path, block.text).joinToString("\n")
     is Block.Tool -> toolLabel(block, " ")
+    // What the card shows of it, which is the agent's type and what it was asked — the turns
+    // themselves are another conversation and are not on this screen to be found.
+    is Block.Sub -> listOfNotNull(block.kind, block.title).joinToString(" ")
     is Block.Unknown -> ""
 }
 

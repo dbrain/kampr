@@ -3,26 +3,27 @@
     "Neither side owns this file. `crates/kampr-core/tests/naming.rs` and",
     "`client/shared/src/jvmTest/kotlin/dev/kampr/shared/NamingParityTest.kt` both render every case",
     "below and both assert the same string, because a phone and a CLI that disagree about what a",
-    "pane is called are two clients, not one. `fields` is a `PaneEntry` as the wire carries it; a",
-    "key that is absent is absent on the wire."
+    "pane is called are two clients, not one. `fields` is a `PaneEntry` as the wire carries it,",
+    "plus `title` — the session's own, which the harness writes and the wire does not carry yet; a",
+    "key that is absent is absent."
   ],
   "the default template says which of six panes in a directory is the busy one": {
-    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "cmd": "cargo", "argv": "cargo test" },
     "expect": "kampr (cargo test) · bash"
   },
   "a pane whose command ble.sh hid renders no empty parens": {
-    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr" },
     "expect": "kampr · bash"
   },
   "an agent pane keeps the agent where the shell name would be": {
-    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "agent": "claude", "status": "blocked" },
     "expect": "kampr · claude"
   },
   "a renamed pane beats its workspace": {
-    "template": "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}",
     "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "cwd": "/home/dbrain/dev/kampr" },
     "expect": "build · bash"
   },
@@ -100,6 +101,26 @@
     "template": "  [{cmd} ]{pane}  ",
     "fields": { "pane": "w3:p2" },
     "expect": "w3:p2"
+  },
+  "a conversation title names a pane herdr was never asked to label": {
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "cwd": "/home/dbrain/dev/kampr", "title": "the width inference rewrite", "agent": "claude" },
+    "expect": "the width inference rewrite \u00b7 claude"
+  },
+  "a name the operator set by hand still beats the title the session made up": {
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "label": "build", "title": "the width inference rewrite", "agent": "claude" },
+    "expect": "build \u00b7 claude"
+  },
+  "a session with no title of its own falls through exactly as it did before": {
+    "template": "{label|title|workspace|cwd|pane}[ ({argv|cmd})] \u00b7 {agent|'bash'}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "agent": "claude" },
+    "expect": "kampr \u00b7 claude"
+  },
+  "a whitespace title is an absent title": {
+    "template": "{title|workspace|pane}",
+    "fields": { "pane": "w3:p2", "workspace": "kampr", "title": "  " },
+    "expect": "kampr"
   },
   "a node-qualified id is shortened to the pane herdr knows": {
     "template": "{pane}",

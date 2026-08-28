@@ -44,6 +44,8 @@ struct AgentView {
 
 struct FakeHerdr {
     calls: Mutex<HashMap<String, usize>>,
+    /// What herdr's screen-scrape calls the pane, which is what gates harness resolution today.
+    agent: Mutex<Option<String>>,
     metadata: Mutex<Metadata>,
     /// `foreground_processes`, exactly as herdr shapes them, plus the two pids that say whether
     /// the shell has a job at all (probe #297).
@@ -61,6 +63,7 @@ impl FakeHerdr {
         let listener = UnixListener::bind(&socket).expect("bind");
         let fake = Arc::new(Self {
             calls: Mutex::default(),
+            agent: Mutex::default(),
             metadata: Mutex::default(),
             processes: Mutex::new(idle_shell()),
             view: Mutex::default(),
@@ -89,6 +92,19 @@ impl FakeHerdr {
 
     fn running(&self, processes: Value) {
         *self.processes.lock().unwrap() = processes;
+    }
+
+    fn scraped(&self, agent: &str) {
+        *self.agent.lock().unwrap() = Some(agent.to_string());
+    }
+
+    fn snapshot(&self) -> Value {
+        let mut snapshot = snapshot();
+        snapshot["panes"][0]["agent"] = match self.agent.lock().unwrap().clone() {
+            Some(agent) => json!(agent),
+            None => Value::Null,
+        };
+        snapshot
     }
 
     fn showing(&self, pane: &str) -> Option<String> {
@@ -181,7 +197,7 @@ impl FakeHerdr {
 
     fn pane(&self, params: &Value) -> Value {
         let pane_id = params["pane_id"].as_str().unwrap_or_default();
-        let mut pane = snapshot()["panes"][0].clone();
+        let mut pane = self.snapshot()["panes"][0].clone();
         pane["title"] = match self.showing(pane_id) {
             Some(title) => json!(title),
             None => Value::Null,
@@ -209,7 +225,7 @@ impl FakeHerdr {
             return;
         }
         let result = match method.as_str() {
-            "session.snapshot" => json!({ "snapshot": snapshot() }),
+            "session.snapshot" => json!({ "snapshot": self.snapshot() }),
             "pane.process_info" => json!({ "process_info": self.processes.lock().unwrap().clone() }),
             "pane.get" => self.pane(&request["params"]),
             "pane.report_metadata" => self.report(&request["params"]),
@@ -250,7 +266,9 @@ fn running(name: &str, cmdline: &str) -> Value {
 }
 
 /// Probe #297: ble.sh keeps the job in the shell's own process group, so herdr names `bash` while
-/// `cargo test` is running. This is the operator's own machine and it must not render `kampr ()`.
+/// `cargo test` is running. The shell pid here is nobody, so the procfs walk that answers this
+/// case for real has nothing to find and the pane degrades — which is what a host with no procfs
+/// does too.
 fn ble_sh_running() -> Value {
     json!({
         "pane_id": "w1:p1",
@@ -334,7 +352,7 @@ async fn a_pane_running_a_job_carries_it_and_a_pane_at_its_prompt_carries_nothin
     let hidden = only_pane(&provider).await;
     assert_eq!(
         hidden.cmd, None,
-        "ble.sh hides the job and there is nothing to claim"
+        "herdr claims nothing and pid 4242 is nobody, so nothing may be claimed"
     );
     assert_eq!(
         Template::default().render(&kampr_core::naming::Fields::from_info(&hidden)),
@@ -672,4 +690,405 @@ async fn a_node_shutting_down_puts_the_desk_back() {
 
     provider.restore_desk().await;
     assert_eq!(fake.view(), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// W8/W3: what the node can see about a pane by looking at its own machine.
+//
+// These drive the **real** procfs of the process running them. A synthetic tree would prove the
+// parser and nothing about the kernel, and the two facts that matter here — that a shell's job is
+// reachable through `/proc/<pid>/task/*/children`, and that a job which has exited stays in that
+// file as a zombie — are facts about the kernel.
+
+/// A real process tree, rooted at a process standing in for the pane's shell.
+///
+/// The root `exec`s so that it never reaps: a child killed under it stays a zombie in its
+/// `children` file, which is the staleness these tests exist to catch.
+struct Tree(std::process::Child);
+
+impl Tree {
+    fn spawn(script: &str) -> Self {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{script} exec sleep 900"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("this machine can run sh");
+        let tree = Self(child);
+        tree.settle();
+        tree
+    }
+
+    fn shell(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Waits for the script's own children to exist, because a walk run before `sh` has forked
+    /// would measure nothing and pass for the wrong reason.
+    fn settle(&self) {
+        for _ in 0..200 {
+            if !children_of(self.shell()).is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the tree never started");
+    }
+
+    fn children(&self) -> Vec<u32> {
+        children_of(self.shell())
+    }
+
+    /// herdr's answer on a machine that sources ble.sh: the shell, however busy the pane is
+    /// (probe #297).
+    fn as_ble_sh_reports_it(&self) -> Value {
+        json!({
+            "pane_id": "w1:p1",
+            "shell_pid": self.shell(),
+            "foreground_process_group_id": self.shell(),
+            "foreground_processes": [
+                { "pid": self.shell(), "name": "bash", "argv": ["bash"], "cmdline": "bash" },
+            ],
+        })
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        // Depth-first, because a wrapper shell's own job is a grandchild and an orphan left
+        // holding this test binary's stdout keeps `cargo test` from ever finishing.
+        fn reap(pid: u32) {
+            for child in children_of(pid) {
+                reap(child);
+            }
+            kill(pid);
+        }
+        for child in children_of(self.shell()) {
+            reap(child);
+        }
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn children_of(pid: u32) -> Vec<u32> {
+    let mut pids = Vec::new();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return pids;
+    };
+    for task in tasks.flatten() {
+        if let Ok(text) = std::fs::read_to_string(task.path().join("children")) {
+            pids.extend(
+                text.split_ascii_whitespace()
+                    .filter_map(|p| p.parse::<u32>().ok()),
+            );
+        }
+    }
+    pids
+}
+
+fn kill(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .status();
+}
+
+fn procfs_readable() -> bool {
+    std::path::Path::new("/proc/self/task").is_dir()
+}
+
+fn walking_config() -> HerdrConfig {
+    HerdrConfig {
+        send_argv: true,
+        ..config()
+    }
+}
+
+/// **The defect W8 names.** `ProcessInfo::command` answers `None` whenever the foreground process
+/// group is the shell's, which is what ble.sh does to every interactive shell on the operator's
+/// machine (probe #297) — so `cmd` and `argv` are blank on precisely the panes worth naming, and
+/// the sidebar says `kampr · bash` for a pane running a build. The node is on that machine as
+/// that user, and `/proc/<shell>/task/*/children` names the job outright.
+#[tokio::test]
+async fn a_job_ble_sh_hides_from_herdr_is_still_what_the_sidebar_says_the_pane_is_running() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(
+        pane.cmd.as_deref(),
+        Some("sleep"),
+        "herdr answered the shell; the machine itself answers the job"
+    );
+    assert_eq!(pane.argv.as_deref(), Some("sleep 300"));
+    assert_eq!(
+        Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
+        "kampr (sleep 300) · bash",
+    );
+}
+
+/// **The failure to guard is staleness, not absence.** A child that has exited stays in its
+/// parent's `children` file until it is reaped, so a walk that trusts the file names a job that is
+/// gone — the sidebar saying `kampr (sleep 300)` for a pane sitting at its prompt. Naming nothing
+/// is the honest answer and the template already renders it.
+#[tokio::test]
+async fn a_job_that_has_already_exited_is_not_named_as_though_it_were_still_running() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+    assert_eq!(only_pane(&provider).await.cmd.as_deref(), Some("sleep"));
+
+    let job = *tree.children().first().expect("the tree has a job");
+    kill(job);
+    for _ in 0..200 {
+        if std::fs::read(format!("/proc/{job}/cmdline")).is_ok_and(|line| line.is_empty()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        tree.children().contains(&job),
+        "the whole point: the kernel still lists the dead child, so the file cannot be trusted"
+    );
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.cmd, None, "a job that exited is not a job");
+    assert_eq!(pane.argv, None);
+    assert_eq!(
+        Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
+        "kampr · bash",
+        "and the empty-parens group the template exists to avoid stays avoided"
+    );
+}
+
+/// A pane genuinely sitting at its prompt has to go on reporting nothing. The `[…]` group in the
+/// naming template exists so `kampr ()` is never rendered, and a walk that named the shell itself
+/// as the job would defeat it on every idle pane on the machine.
+#[tokio::test]
+async fn a_pane_sitting_at_its_prompt_still_names_no_job_at_all() {
+    if !procfs_readable() {
+        return;
+    }
+    let idle = std::process::Command::new("sleep")
+        .arg("900")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("this machine can run sleep");
+    let fake = FakeHerdr::start();
+    fake.running(json!({
+        "pane_id": "w1:p1",
+        "shell_pid": idle.id(),
+        "foreground_process_group_id": idle.id(),
+        "foreground_processes": [
+            { "pid": idle.id(), "name": "bash", "argv": ["bash"], "cmdline": "bash" },
+        ],
+    }));
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.cmd, None, "there is nothing under this shell to name");
+    assert_eq!(
+        Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
+        "kampr · bash",
+    );
+    kill(idle.id());
+    let _ = { idle }.wait();
+}
+
+/// herdr stays the source of truth where it has one. The walk is a fallback for the case herdr's
+/// process-group check gives up on, not a second opinion about a pane herdr has already answered
+/// for — and a pane whose job is a wrapper would otherwise be renamed after whatever the wrapper
+/// spawned.
+#[tokio::test]
+async fn herdrs_own_answer_wins_over_the_walk_wherever_herdr_has_one() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 &");
+    let fake = FakeHerdr::start();
+    fake.running(json!({
+        "pane_id": "w1:p1",
+        "shell_pid": tree.shell(),
+        "foreground_process_group_id": 5150,
+        "foreground_processes": [
+            { "pid": 5150, "name": "cargo", "argv": ["cargo"], "cmdline": "cargo test" },
+        ],
+    }));
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.cmd.as_deref(), Some("cargo"));
+    assert_eq!(pane.argv.as_deref(), Some("cargo test"));
+}
+
+/// A script is a shell with a job under it, and stopping at the shell would name the pane `bash`
+/// — a shell name, which is the one answer the template cannot render.
+#[tokio::test]
+async fn a_job_run_through_a_wrapper_shell_is_named_after_the_job_and_not_the_wrapper() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sh -c 'sleep 300; true' &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.cmd.as_deref(), Some("sleep"));
+}
+
+/// A pipeline names every member (probe #297), and under ble.sh every member is a child of the
+/// shell. Naming only the first of them would call `sleep 300 | sleep 301` a `sleep`.
+#[tokio::test]
+async fn a_pipeline_hidden_by_ble_sh_is_named_the_way_the_shell_wrote_it() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 & sleep 301 &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.argv.as_deref(), Some("sleep 300 | sleep 301"));
+}
+
+/// **W3.** `ProcessInfo::harness` matches by *name* over what herdr reported, and under ble.sh
+/// herdr reports only `bash` — so a pane herdr has screen-scraped as a `claude` pane resolves to
+/// no harness at all, which reads as `Absent` and refuses the conversation outright. The pid is
+/// under the shell where it always was.
+#[tokio::test]
+async fn a_harness_ble_sh_hides_from_herdr_is_still_the_process_the_pane_is_having_its_session_in() {
+    if !procfs_readable() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let harness = dir.path().join("claude");
+    std::fs::copy("/usr/bin/sleep", &harness).expect("this machine has sleep");
+    let tree = Tree::spawn(&format!("{} 300 &", harness.display()));
+    let fake = FakeHerdr::start();
+    fake.scraped("claude");
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    let pid = *tree.children().first().expect("the tree has a job");
+    assert_eq!(
+        pane.agent_harness.process().map(|p| p.pid),
+        Some(pid),
+        "the harness is the process under the shell, whatever herdr could see of it"
+    );
+}
+
+/// **W3's seam.** Which session a pane is having is answered by intersecting the pane's pids with
+/// the harness's own pid-keyed marker directory, and that intersection needs *every* foreground
+/// pid rather than the one that happened to match a name. It has to be there for a pane herdr has
+/// not called an agent at all, because that is the gap: the marker exists from the moment the
+/// agent opens, minutes before herdr's screen-scrape or any transcript.
+#[tokio::test]
+async fn every_pid_in_a_pane_is_offered_up_even_where_herdr_has_not_called_it_an_agent() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.agent, None, "herdr has scraped nothing out of this pane");
+
+    let pids: Vec<u32> = provider
+        .pane_processes("w1:p1")
+        .into_iter()
+        .map(|p| p.pid)
+        .collect();
+    let job = *tree.children().first().expect("the tree has a job");
+    assert!(
+        pids.contains(&job),
+        "the job under the shell is a candidate: {pids:?}"
+    );
+    assert!(
+        pids.contains(&tree.shell()),
+        "and so is the shell herdr named: {pids:?}"
+    );
+}
+
+/// The set is re-walked, never held: a pid that has gone must not go on being offered to a
+/// marker directory that could hand back the session of whoever inherits it.
+#[tokio::test]
+async fn a_pid_that_has_gone_stops_being_offered_on_the_very_next_sweep() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn("sleep 300 &");
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+    only_pane(&provider).await;
+    let job = *tree.children().first().expect("the tree has a job");
+    assert!(provider.pane_processes("w1:p1").iter().any(|p| p.pid == job));
+
+    kill(job);
+    for _ in 0..200 {
+        if std::fs::read(format!("/proc/{job}/cmdline")).is_ok_and(|line| line.is_empty()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    only_pane(&provider).await;
+    assert!(
+        !provider.pane_processes("w1:p1").iter().any(|p| p.pid == job),
+        "the walk is re-run on the sweep and the dead child is dropped"
+    );
+}
+
+/// A host with no procfs degrades to exactly what it did before any of this, rather than refusing
+/// to serve the pane: the shell pid names nothing, and the pane keeps herdr's answer.
+#[tokio::test]
+async fn a_pane_whose_shell_cannot_be_looked_up_is_served_exactly_as_it_was_before() {
+    let fake = FakeHerdr::start();
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    assert_eq!(pane.cmd, None, "pid 4242 is nobody on this machine");
+    assert_eq!(
+        Template::default().render(&kampr_core::naming::Fields::from_info(&pane)),
+        "kampr · bash",
+    );
+}
+
+/// The walk reaches command lines herdr's process-group check used to hide, and a harness
+/// launched with a brief in its arguments has a command line kilobytes long — which the default
+/// template renders straight into the pane's name, sends to every device in a herd patch, and
+/// writes back into herdr's own pane title.
+#[tokio::test]
+async fn a_command_line_long_enough_to_be_a_document_does_not_become_the_panes_name() {
+    if !procfs_readable() {
+        return;
+    }
+    let tree = Tree::spawn(&format!("sleep{} &", " 300".repeat(80)));
+    let fake = FakeHerdr::start();
+    fake.running(tree.as_ble_sh_reports_it());
+    let provider = HerdrProvider::spawn(fake.herdr(), walking_config());
+
+    let pane = only_pane(&provider).await;
+    let argv = pane.argv.expect("the job is named");
+    assert!(
+        argv.chars().count() < 300,
+        "a name is a name, and this one is {} characters",
+        argv.chars().count()
+    );
+    assert!(argv.starts_with("sleep 300 300"), "and it still says what it is");
 }

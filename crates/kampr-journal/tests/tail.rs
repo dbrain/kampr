@@ -265,3 +265,59 @@ fn blank_lines_are_not_records_and_do_not_move_what_follows_them() {
     let got = attach::fetch(&scratch.journals, &only(&turns).id, &scratch.transcript).expect("the gif");
     assert_eq!(got.data, decoded(GIF));
 }
+
+fn asked(uuid: &str, text: &str) -> String {
+    json!({
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": "2026-08-20T02:56:20.000Z",
+        "message": { "role": "user", "content": text }
+    })
+    .to_string()
+}
+
+/// One prompt and the reply to it, at the length a real reply reaches.
+///
+/// Every tool call is its own record and therefore its own turn: this session's first exchange —
+/// one question, one answer — parsed to **53**. A page counted in turns and taken from the newest
+/// one opens partway into the reply, and the question that caused it is not in it, on a view
+/// pinned to its own end with nothing above to scroll to.
+fn one_long_exchange(steps: usize) -> String {
+    let mut body = asked("ask", "make the hero mock");
+    body.push('\n');
+    for i in 0..steps {
+        body.push_str(&said(&format!("a{i}"), &format!("step {i}")));
+        body.push('\n');
+    }
+    body
+}
+
+#[test]
+fn a_page_never_opens_in_the_middle_of_a_reply_without_the_question_that_caused_it() {
+    let mut scratch = scratch_claude_body("page-exchange", &one_long_exchange(52));
+    scratch.turns();
+
+    let page = scratch.journal.page_before(None, 40);
+
+    assert_eq!(
+        page.turns.first().map(|t| t.id.as_str()),
+        Some("ask"),
+        "the page opened at {:?}, partway into a reply, with no question above it",
+        page.turns.first().map(|t| t.id.as_str()),
+    );
+    assert_eq!(page.turns.len(), 53, "the whole exchange, not a slice of it");
+    assert!(!page.more, "there is nothing older than the question");
+}
+
+/// The extension is not unbounded. A reply long enough to be its own denial of service is cut,
+/// and the page says there is more rather than opening headless in silence.
+#[test]
+fn an_enormous_reply_is_still_cut_and_still_says_it_was() {
+    let mut scratch = scratch_claude_body("page-enormous", &one_long_exchange(600));
+    scratch.turns();
+
+    let page = scratch.journal.page_before(None, 40);
+
+    assert!(page.turns.len() < 601, "the whole reply arrived in one page");
+    assert!(page.more, "a cut page has to say something is older");
+}

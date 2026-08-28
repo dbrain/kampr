@@ -103,6 +103,10 @@ data class PaneInfo(
     val tab: String? = null,
     val cwd: String? = null,
     val label: String? = null,
+    // The harness's own name for the session, read off the marker it writes by pid. Generated, so
+    // it loses to `label`, which is what the operator typed by hand — the naming template says so
+    // and this only has to arrive.
+    val title: String? = null,
     val agent: String? = null,
     @SerialName("agent_status") val agentStatus: String = "unknown",
     // Absent until something has measured the PTY: a soft wrap proves a width and the layout rect
@@ -157,6 +161,18 @@ sealed interface Block {
     data class Code(val lang: String?, val text: String) : Block
     data class Tool(val name: String, val summary: String?, val lines: Int?, val state: String?) : Block
     data class Diff(val path: String?, val text: String) : Block
+
+    // A conversation this turn launched, offered for opening rather than spoken here. It rides
+    // beside the tool card that started it, and its own turns are deliberately not inlined: a
+    // client that rendered them here would be saying the pane's agent said what a subagent said.
+    // `depth` is the node's word that a launched conversation can launch one of its own.
+    data class Sub(
+        val id: String,
+        val kind: String? = null,
+        val title: String? = null,
+        val depth: Int? = null,
+    ) : Block
+
     data class Unknown(val kind: String) : Block
 }
 
@@ -240,9 +256,16 @@ sealed interface ServerMsg {
         // older slices of the same transcript, which merge. Additive: a node that never sends it
         // gets the merging behaviour every build before it had.
         val fresh: Boolean = false,
+        // Whose conversation this page is. Absent is the pane's own, which is every page any
+        // build before this one ever saw; present names the handle a `sub` block carried, and a
+        // page carrying it must never reach the pane's own turns.
+        val sub: String? = null,
     ) : ServerMsg
 
-    data class ConvoTurn(val pane: String, val turns: List<Turn>) : ServerMsg
+    // `sub` names a launched conversation these turns belong to, absent for the pane's own. A
+    // subagent's transcript grows while it runs, so what a reader opened keeps arriving instead of
+    // going stale until they close and re-open it.
+    data class ConvoTurn(val pane: String, val turns: List<Turn>, val sub: String? = null) : ServerMsg
 
     // question == null clears the prompt; there is no separate "resolved" message.
     data class Pending(
@@ -267,7 +290,16 @@ sealed interface ServerMsg {
         val sessions: List<SessionInfo>,
     ) : ServerMsg
 
-    data class Failure(val code: String, val message: String, val pane: String?) : ServerMsg
+    // `node` is what the node is about when it is about a node rather than a pane, and it is the
+    // only thing that lets this half tell a fault from an interruption: a node going unreachable
+    // used to arrive with no subject at all, so every client showed it over whatever screen was
+    // open and a node nobody was looking at interrupted a pane on a different one.
+    data class Failure(
+        val code: String,
+        val message: String,
+        val pane: String?,
+        val node: String? = null,
+    ) : ServerMsg
 
     data class Prefs(val panes: Map<String, PanePrefs>) : ServerMsg
 
@@ -300,6 +332,17 @@ sealed interface ClientMsg {
     data class Answer(val pane: String, val key: String) : ClientMsg
 
     data class ConvoLoad(val pane: String, val before: String?) : ClientMsg
+
+    // A page of a conversation this pane's agent launched. `id` is opaque and is only ever handed
+    // back: it is minted by the node that served the turn and proved against that pane's own
+    // session tree, so a client that built one would be asking for a file it cannot name.
+    data class ConvoSub(val pane: String, val id: String, val before: String? = null) : ClientMsg
+
+    // Bytes for the agent to work on. The node writes them to a file on the pane's own machine
+    // and types the path in, because an agent reached over ssh reads a local path perfectly well
+    // and it is the terminal's own image-paste protocol that dies. `name` is a hint at the stem
+    // only — the node owns the directory and derives the extension from the bytes.
+    data class Paste(val pane: String, val b64: String, val name: String? = null) : ClientMsg
 
     data class SetPrefs(val pane: String, val prefs: Map<String, String>) : ClientMsg
 

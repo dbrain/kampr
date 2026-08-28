@@ -35,6 +35,7 @@ fun TargetStrip(
         TargetKind.Link -> "Declared link"
         TargetKind.Url -> "Detected address"
         TargetKind.Path -> "File path"
+        TargetKind.File -> "File on this machine"
     }
     Row(
         modifier
@@ -60,6 +61,7 @@ fun TargetStrip(
                     TargetKind.Link -> "link"
                     TargetKind.Url -> "detected"
                     TargetKind.Path -> "path"
+                    TargetKind.File -> "file"
                 },
                 tokens.type.metaSmall,
                 tokens.color.mute,
@@ -70,19 +72,17 @@ fun TargetStrip(
             Modifier
                 .background(tokens.color.accent, shape)
                 .touchable()
-                .action(
-                    if (target.kind == TargetKind.Path) "Copy ${target.text}" else "Open ${target.text}",
-                    onAct,
-                    shape,
-                )
+                .action(actLabel(target), onAct, shape)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
-            KText(
-                if (target.kind == TargetKind.Path) "Copy" else "Open",
-                tokens.type.buttonSmall,
-                tokens.color.onAccent,
-            )
+            KText(actWord(target), tokens.type.buttonSmall, tokens.color.onAccent)
         }
     }
 }
+
+// A reference nothing can resolve is copied; everything else is opened, and a file is opened by
+// the node handing back the bytes rather than by this device going and looking for them.
+private fun actWord(target: Target): String = if (target.kind == TargetKind.Path) "Copy" else "Open"
+
+private fun actLabel(target: Target): String = "${actWord(target)} ${target.text}"

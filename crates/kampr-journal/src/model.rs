@@ -62,6 +62,22 @@ pub enum Block {
         path: Option<String>,
         text: String,
     },
+    /// A conversation this turn launched, offered for opening rather than spoken here.
+    ///
+    /// Its own turns are deliberately **not** inlined: an installed phone would render them as
+    /// this turn's reply, which is a lie about who said what. A client that has never heard of
+    /// this `b` value drops the block and shows the tool card above it exactly as it does today,
+    /// which is the whole of what it shows now.
+    Sub {
+        /// Opaque, minted by the node that served the turn, and resolved by handing it back.
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        depth: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

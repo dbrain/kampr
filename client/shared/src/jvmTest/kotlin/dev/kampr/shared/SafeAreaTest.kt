@@ -29,6 +29,7 @@ import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.HerdLandscape
+import dev.kampr.shared.ui.HerdSidebar
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.keyboardInset
@@ -119,6 +120,41 @@ class SafeAreaTest {
                 )
             }
         }
+    }
+
+    // The desktop column pays the top inset once, at its outermost box, exactly as the portrait
+    // scaffold does — and the sidebar inside it paid it again, so the one screen that carries the
+    // app's own name stood two status bars down on every non-pane screen.
+    //
+    // Measured as the difference the bars make rather than against a number: a sidebar that
+    // ignored the inset and a sidebar that counted it twice are both wrong, and only the
+    // difference tells them apart from a header that simply has padding of its own.
+    @Test
+    fun theDesktopSidebarTitleStandsOneStatusBarDownAndNotTwo() {
+        val moved = titleTopWith(BARS) - titleTopWith(SafeArea.None)
+        assertEquals(
+            BARS.top,
+            moved,
+            "the ${BARS.top} status bar moved the sidebar title by $moved",
+        )
+    }
+
+    private fun titleTopWith(bars: SafeArea): Dp {
+        var top = 0.dp
+        runComposeUiTest {
+            setContent {
+                Bars(bars) {
+                    Box(Modifier.fillMaxSize().screenInset(Screen.Herd)) {
+                        HerdSidebar(
+                            Herd(), ConnectionStatus.Live("full"), 0.0, null, emptyList(), null,
+                            "this device", "full access", {}, {},
+                        )
+                    }
+                }
+            }
+            top = onNodeWithText("Kampr").getUnclippedBoundsInRoot().top
+        }
+        return top
     }
 
     // The pane is the exception, and it has to stay one: its terminal paints to the edge and its

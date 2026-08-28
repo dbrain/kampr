@@ -755,3 +755,25 @@ fn nothing_but_a_leading_tilde_is_expanded() {
         );
     }
 }
+
+/// A diff id is the file form wearing a different tag, so **every id an installed client holds
+/// decodes to exactly what it decoded to before**: a record is five fields and always was, and the
+/// two-field form is separated by its tag rather than by its shape.
+#[test]
+fn a_diff_id_is_told_from_a_file_id_by_its_tag_and_neither_disturbs_a_record_id() {
+    let path = "/home/u/demo/notes.md";
+    let as_file = attach::Source::File(attach::FileRef::new(path)).encode();
+    let as_diff = attach::Source::Diff(attach::FileRef::new(path)).encode();
+
+    assert_ne!(as_file, as_diff, "the two forms encode to the same id");
+    assert_eq!(
+        attach::Source::decode(&as_file).expect("a file id"),
+        attach::Source::File(attach::FileRef::new(path))
+    );
+    assert_eq!(
+        attach::Source::decode(&as_diff).expect("a diff id"),
+        attach::Source::Diff(attach::FileRef::new(path))
+    );
+    // And the id an already-installed client mints still means what it meant.
+    assert_eq!(attach::FileRef::new(path).encode(), as_file);
+}

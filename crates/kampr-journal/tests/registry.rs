@@ -227,3 +227,24 @@ fn a_home_with_no_harness_registers_nothing() {
     assert!(registry.get("codex").is_none());
     assert!(registry.get("agy").is_none());
 }
+
+/// "Which session is this pid on, and is it live" is a [`kampr_journal::JournalAdapter`]
+/// capability, not a Claude one. Claude answers it from a marker directory it happens to write;
+/// a harness that writes nothing says so, and a registry holding only such harnesses answers
+/// nothing rather than guessing — which is what keeps Codex from becoming second-class because
+/// Claude grew a convenient file.
+#[test]
+fn a_harness_that_publishes_no_marker_claims_none_of_a_panes_processes() {
+    let pipeline = [kampr_journal::PaneProcess::look_up(std::process::id())];
+
+    let mut only_codex = Registry::new();
+    only_codex.register(Arc::new(CodexAdapter::new(
+        TranscriptRoot::new(codex_root()).unwrap(),
+    )));
+    assert!(only_codex.marker(&pipeline).is_none());
+    assert!(Registry::new().marker(&pipeline).is_none());
+    assert!(
+        registry().marker(&pipeline).is_none(),
+        "this test's own pid is on no harness session"
+    );
+}

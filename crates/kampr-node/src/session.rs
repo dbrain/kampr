@@ -64,12 +64,19 @@ const CONCURRENT_TRANSFERS: usize = 4;
 
 /// Every `t` [`ClientMsg`] decodes, kept beside it because the enum's own refusal of an unknown
 /// variant is indistinguishable from a malformed known one.
-const CLIENT_VERBS: [&str; 7] = [
+/// Turns in a page of a launched conversation. Larger than the pane's own page because a
+/// subagent's whole conversation is usually shorter than one exchange of its parent's, and a
+/// reader who opened one asked for all of it.
+const SUB_PAGE: usize = 200;
+
+const CLIENT_VERBS: [&str; 9] = [
     "watch",
     "unwatch",
     "input",
+    "paste",
     "answer",
     "convo.load",
+    "convo.sub",
     "resync",
     "ping",
 ];
@@ -254,6 +261,8 @@ struct PaneHandle {
     scrollback: bool,
     conversation: bool,
     convo: convo::Open,
+    /// The launched conversation this client has open on the pane, followed while it has it.
+    followed: convo::Followed,
     _hold: Option<Hold>,
 }
 
@@ -497,8 +506,10 @@ impl Session {
         // typing. An operator demoting a hub writes SQLite in another process and tells this
         // session nothing, and a gate that waited for the next recheck is a two-second window on
         // an arbitrary read.
-        if matches!(tag.as_deref(), Some("manage" | "input" | "answer" | "att.fetch"))
-            && !self.refresh().await
+        if matches!(
+            tag.as_deref(),
+            Some("manage" | "input" | "paste" | "answer" | "att.fetch")
+        ) && !self.refresh().await
         {
             return false;
         }
@@ -545,8 +556,10 @@ impl Session {
                 b64,
                 keys,
             } => self.input(&pane, text, b64, keys).await,
+            ClientMsg::Paste { pane, b64, name } => self.paste(&pane, &b64, name.as_deref()).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
+            ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
                 self.wire.send(&ServerMsg::Pong { n });
@@ -595,8 +608,12 @@ impl Session {
             scrollback,
         }))];
         let convo = convo::open();
+        let followed = convo::followed();
         if conversation {
             let provider = session.provider.clone();
+            let for_identity = self.node.journals();
+            let for_marker = self.node.journals();
+            let marker_provider = session.provider.clone();
             let held = self
                 .held
                 .entry(pane.to_string())
@@ -606,12 +623,14 @@ impl Session {
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
                 herd: self.node.subscribe_herd(),
-                identity: Box::new(move |local| convo::identity(&provider, local)),
+                identity: Box::new(move |local| convo::identity(&for_identity, &provider, local)),
+                describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_provider, local)),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
                 local,
                 journal: convo.clone(),
                 held,
+                followed: followed.clone(),
             })));
         }
         self.panes.insert(
@@ -623,6 +642,7 @@ impl Session {
                 scrollback,
                 conversation,
                 convo,
+                followed,
                 _hold: hold,
             },
         );
@@ -667,6 +687,9 @@ impl Session {
                 scrollback,
                 conversation,
                 convo: convo::open(),
+                // A pane on another host is followed by the node that owns it; this side only
+                // relays, so there is nothing here to poll.
+                followed: convo::followed(),
                 _hold: hold,
             },
         );
@@ -684,6 +707,53 @@ impl Session {
     /// Pages backwards through a transcript the pump already has open. A pane that is not watched
     /// with `conversation` has nothing to page, which is `not_found` rather than `unsupported` —
     /// the node implements the op.
+    /// A page of a conversation this pane's agent launched.
+    ///
+    /// **Containment is proved against the pane's own transcript, not against the handle.** The
+    /// id arrives from the network, so the only thing that makes it safe is that the file it
+    /// resolves to has to sit under the session tree of the transcript *this node* derived for
+    /// this pane — which the request had no say in. Everything else is the ordinary refusal.
+    fn convo_sub(&self, pane: &str, id: &str, before: Option<&str>) {
+        if self.node.resolve(pane).is_none() {
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.sub", "pane": pane, "id": id, "before": before }),
+            );
+            return;
+        }
+        let Some(transcript) = self.panes.get(pane).and_then(|handle| {
+            let guard = handle.convo.lock().unwrap();
+            guard.as_ref().map(|open| open.path().to_path_buf())
+        }) else {
+            self.wire
+                .error(ErrorCode::NotFound, "this pane has no conversation", Some(pane));
+            return;
+        };
+        match self.node.journals().open_sub(id, &transcript) {
+            Ok(mut journal) => {
+                if journal.poll().is_err() {
+                    self.wire
+                        .error(ErrorCode::NotFound, "that conversation is unreadable", Some(pane));
+                    return;
+                }
+                let page = journal.page_before(before, SUB_PAGE);
+                if !self.wire.send(&ServerMsg::convo_sub(pane, id, page)) {
+                    return;
+                }
+                // Kept, so the pump follows it while the reader has it open. One at a time: asking
+                // for another replaces this, which is what closing one and opening the next does.
+                if let Some(handle) = self.panes.get(pane) {
+                    *handle.followed.lock().unwrap() = Some((id.to_string(), journal));
+                }
+            }
+            Err(e) => {
+                debug!(pane = %pane, error = %e, "refusing a launched conversation");
+                self.wire
+                    .error(ErrorCode::NotFound, "no such conversation", Some(pane));
+            }
+        }
+    }
+
     fn convo_load(&self, pane: &str, before: Option<&str>) {
         // A transcript lives on the host that runs the harness, so paging one is a question for
         // the node that owns the pane rather than for the hub relaying it.
@@ -736,14 +806,23 @@ impl Session {
         let (Some(pane), Some(id)) = (message["pane"].as_str(), message["id"].as_str()) else {
             return;
         };
-        // The same line the HTTP route holds: a file id names any path on this machine, so it is
-        // answered only for a hub whose device may send input here — one that has been demoted to
-        // read-only gets the single refusal, which is what the route it is relaying for gives too.
-        let file = match kampr_journal::Source::decode(id) {
-            Ok(kampr_journal::Source::File(file)) => Some(file),
+        // The same line the HTTP route holds: an id that names a path names *any* path on this
+        // machine, so it is answered only for a hub whose device may send input here — one that has
+        // been demoted to read-only gets the single refusal, which is what the route it is relaying
+        // for gives too.
+        //
+        // **Every path-shaped variant, not the one that existed first.** This is #304's shape: a
+        // verb that reaches the filesystem while the gate in front of it enumerates one case.
+        let decoded = kampr_journal::Source::decode(id);
+        let file = match &decoded {
+            Ok(kampr_journal::Source::File(file)) => Some(file.clone()),
             _ => None,
         };
-        if file.is_some() && !self.device.role.writes() {
+        let path_form = matches!(
+            decoded,
+            Ok(kampr_journal::Source::File(_) | kampr_journal::Source::Diff(_))
+        );
+        if path_form && !self.device.role.writes() {
             self.audit_refused(
                 "att.fetch",
                 Some(pane),
@@ -862,6 +941,62 @@ impl Session {
             self.wire
                 .error(offline_code(&session), &e.to_string(), Some(pane));
         }
+    }
+
+    /// Bytes from a client, written to a file on the pane's own node and typed in as its path.
+    ///
+    /// **This is typing, and it is gated as typing** — the same `may_write` and the same
+    /// dispatch-time device refresh, because the alternative is the shape of #304: a verb that
+    /// reaches the filesystem while the arm that re-reads the device row does not cover it.
+    ///
+    /// A pane on a peer is relayed rather than written here. The file has to land on the machine
+    /// the harness will read it from, so the frame travels and that node writes it — a path this
+    /// node chose would name nothing on the machine that matters.
+    async fn paste(&mut self, pane: &str, b64: &str, name: Option<&str>) {
+        if !self.may_write("paste", Some(pane)) {
+            return;
+        }
+        if self.node.resolve(pane).is_none() {
+            self.audit("paste", Some(pane), Some(json!({ "peer": true })));
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "paste", "pane": pane, "b64": b64, "name": name }),
+            );
+            return;
+        }
+        // The length is read off the base64 before anything is allocated, so a body claiming a
+        // gigabyte costs a comparison rather than a gigabyte.
+        if kampr_journal::attach::decoded_len(b64) > kampr_journal::attach::MAX_BYTES {
+            self.wire.error(
+                ErrorCode::BadRequest,
+                "that is larger than this node will take",
+                Some(pane),
+            );
+            return;
+        }
+        let Ok(body) = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(b64))
+        else {
+            self.wire
+                .error(ErrorCode::BadRequest, "the body was not base64", Some(pane));
+            return;
+        };
+        let written = crate::paste::write(&self.node.state_dir, &body, name);
+        let path = match written {
+            Ok(path) => path,
+            Err(e) => {
+                self.wire.error(ErrorCode::BadRequest, &e.to_string(), Some(pane));
+                return;
+            }
+        };
+        self.audit(
+            "paste",
+            Some(pane),
+            Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
+        );
+        self.input(pane, Some(path.display().to_string()), None, None)
+            .await;
     }
 
     async fn answer(&mut self, pane: &str, key: &str) {
@@ -1263,14 +1398,14 @@ async fn herd_updates(
                 // client that gave up on patches lands back on solid ground.
                 wire.send(&current.message())
             } else {
-                wire.error(
+                wire.node_error(
                     ErrorCode::HerdrUnavailable,
                     &current
                         .node(&id)
                         .and_then(|n| n.detail.clone())
                         .unwrap_or_else(|| format!("{id} is not reachable")),
-                    None,
-                ) && wire.error(ErrorCode::NodeOffline, &format!("{id} is offline"), None)
+                    &id,
+                ) && wire.node_error(ErrorCode::NodeOffline, &format!("{id} is offline"), &id)
             };
             if !sent {
                 return;
@@ -1738,6 +1873,7 @@ mod tests {
                     scrollback: false,
                     conversation: false,
                     convo: convo::open(),
+                    followed: convo::followed(),
                     _hold: hold,
                 },
             );

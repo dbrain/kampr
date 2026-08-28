@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::attach::{MAX_RECORD_BYTES, Origin};
 use crate::error::JournalError;
 use crate::live::{self, ScreenReader};
-use crate::model::{Block, Page, Turn};
+use crate::model::{Block, Page, Role, Turn};
 use crate::store::TurnStore;
 
 pub trait TranscriptParser: Send {
@@ -143,6 +143,31 @@ impl FileJournal {
 /// would hold all of it — twice over, while the buffer grows — on a tokio worker.
 const CHUNK: u64 = 1024 * 1024;
 
+/// How many pages back a page will reach for the question that opens the reply it landed in,
+/// before the cut stands instead.
+///
+/// **A page counted in turns opens partway into a reply**, because every harness writes one tool
+/// call per record and every record is a turn: one prompt and the answer to it measured **53**
+/// against a page of 40, so the question was off the first page of a session that had only ever
+/// been asked one thing — on a view pinned to its own end, with nothing above it to scroll to. A
+/// reply has no bound of its own, so the reach does: past this the page is cut mid-reply and
+/// `more` is what says so.
+const REACH: usize = 4;
+
+/// Where a page starts: the cut, moved back to the question that opens the reply it landed in.
+///
+/// A cut that already lands on a question is left alone — walking back from one would reach past
+/// it to the *previous* exchange and hand the reader a page they did not ask for.
+fn opening(turns: &[Turn], cut: usize, floor: usize) -> usize {
+    if turns.get(cut).is_some_and(|turn| turn.role == Role::User) {
+        return cut;
+    }
+    turns[floor..cut]
+        .iter()
+        .rposition(|turn| turn.role == Role::User)
+        .map_or(cut, |at| floor + at)
+}
+
 impl Journal for FileJournal {
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError> {
         let mut file = File::open(&self.path)?;
@@ -172,7 +197,8 @@ impl Journal for FileJournal {
         let store = self.parser.store();
         let turns = store.turns();
         let end = before.and_then(|id| store.position(id)).unwrap_or(turns.len());
-        let start = end.saturating_sub(limit);
+        let cut = end.saturating_sub(limit);
+        let start = opening(turns, cut, end.saturating_sub(limit.saturating_mul(REACH)));
         let slice = turns[start..end].to_vec();
         Page {
             cursor: slice.first().map(|t| t.id.clone()),

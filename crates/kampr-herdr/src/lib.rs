@@ -6,7 +6,7 @@ pub mod rpc;
 
 pub use control::{Controller, HOLD_LIMIT};
 pub use locate::{Found, Origin, Search};
-pub use model::{AgentStatus, Command, Pane, ProcessInfo, Snapshot, SnapshotReply};
+pub use model::{AgentStatus, Command, ForegroundProcess, Pane, ProcessInfo, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};
 pub use rpc::{Herdr, Sub};
 

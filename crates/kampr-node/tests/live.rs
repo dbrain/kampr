@@ -4,6 +4,7 @@
 //! `default` is never touched. When `herdr` is not on PATH the suite reports a skip rather than a
 //! failure, so it stays honest on a machine that has no herd.
 
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use kampr_auth::Role;
 use kampr_node::{Config, Node, http};
@@ -1957,9 +1958,26 @@ async fn a_herdr_outage_reaches_the_client_and_recovers() {
             continue;
         };
         match message["t"].as_str() {
+            // **Both name the node they are about.** Without that a client has nothing to decide
+            // with and shows every outage as a modal strip over whatever screen is open — so a
+            // node the operator is not looking at interrupts a pane on a different one, on a
+            // phone. The node cannot know which pane is on screen; naming itself is what lets the
+            // client know whether this is the thing in the operator's hands or the herd.
             Some("error") => match message["code"].as_str() {
-                Some("herdr_unavailable") => saw_unavailable = true,
-                Some("node_offline") => saw_node_offline = true,
+                Some("herdr_unavailable") => {
+                    saw_unavailable = true;
+                    assert!(
+                        message["node"].as_str().is_some_and(|n| !n.is_empty()),
+                        "herdr_unavailable named no node: {message}"
+                    );
+                }
+                Some("node_offline") => {
+                    saw_node_offline = true;
+                    assert!(
+                        message["node"].as_str().is_some_and(|n| !n.is_empty()),
+                        "node_offline named no node: {message}"
+                    );
+                }
                 _ => {}
             },
             Some("herd.patch") => {
@@ -5383,4 +5401,103 @@ async fn herdr_accepts_the_agents_view_the_node_sets_and_gives_the_desk_back_on_
         .await
         .expect("herdr clears the view");
     assert!(!cleared.active, "the desk has its own order back");
+}
+
+/// **A paste is bytes that become a path.** An agent reached over ssh reads a local file
+/// perfectly well and chokes on a terminal's image-paste protocol, so nothing here speaks one:
+/// the node writes what it is given beside its own state and types in where it put it.
+///
+/// The pane is a real herdr pane and the text really is typed, because the half that could
+/// silently not happen is the typing — a file written into a directory nobody looks at is exactly
+/// the shape of a feature that reports success and does nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paste_lands_on_the_node_and_its_path_is_typed_into_the_pane() {
+    let h = harness!("paste");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+
+    // A PNG's magic bytes, so the extension is decided by the body and can be seen to have been.
+    let body = b"\x89PNG\r\n\x1a\n\x00kampr-paste-body";
+    send(
+        &mut socket,
+        json!({
+            "t": "paste",
+            "pane": pane,
+            "b64": base64::engine::general_purpose::STANDARD.encode(body),
+            "name": "shot",
+        }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut typed: Option<String> = None;
+    while tokio::time::Instant::now() < deadline && typed.is_none() {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+            continue;
+        }
+        let painted = message.to_string();
+        if let Some(at) = painted.find("shot-") {
+            typed = Some(painted[at..].chars().take(64).collect());
+        }
+    }
+
+    let typed = typed.expect("the path was never typed into the pane");
+    assert!(
+        typed.contains(".png"),
+        "the extension came from somewhere other than the bytes: {typed}"
+    );
+
+    let dir = h.node.state_dir.join("pastes");
+    let written: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("no paste directory at {dir:?}: {e}"))
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(written.len(), 1, "expected one pasted file in {dir:?}");
+    assert_eq!(
+        std::fs::read(&written[0]).expect("the pasted file"),
+        body,
+        "the bytes on disk are not the bytes that were sent"
+    );
+}
+
+/// **A conversation must not be torn down because the agent went from busy to idle.**
+///
+/// The pump decides a conversation has moved by comparing what identifies the pane's session, and
+/// answers a difference by taking the open transcript off the client and paging a fresh one. So
+/// anything that merely *describes* a session and changes while it runs — the harness's own
+/// `status`, flipping every turn — must stay out of that comparison, or every turn ends by
+/// replacing the reader's conversation with its newest page. That is #314's defect wearing a
+/// different hat, and it was briefly reintroduced by carrying the session marker in the wrong
+/// struct.
+///
+/// **What this does and does not prove.** The pane here runs a shell, so the marker resolves to
+/// nothing and a status field could not move even if one were back in [`Identity`] — this pins the
+/// invariant and would catch a field that churns on *any* pane, but only a real agent pane could
+/// catch one that churns solely on an agent's. The comment on `Identity` is what carries the rest.
+#[tokio::test(flavor = "multi_thread")]
+async fn what_the_pump_compares_holds_still_while_the_agent_works() {
+    let h = harness!("identity");
+    let pane = h.pane_id();
+    let (_, local) = h.node.resolve(&pane).expect("a local pane");
+    let (session, _) = h.node.resolve(&pane).expect("a local pane");
+    let journals = h.node.journals();
+
+    let first = kampr_node::convo::identity(&journals, &session.provider, &local);
+    for _ in 0..8 {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(
+            kampr_node::convo::identity(&journals, &session.provider, &local),
+            first,
+            "what the pump compares moved on its own, which re-pages the conversation"
+        );
+    }
 }

@@ -12,7 +12,7 @@ import dev.kampr.shared.wire.PaneInfo
 // and `[…]` is dropped whole when nothing inside it did — which exists because `{cmd}` is blank on
 // every pane of a machine that sources ble.sh (probe #297) and `kampr ()` is worse than `kampr`.
 object Naming {
-    const val DEFAULT_TEMPLATE = "{label|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}"
+    const val DEFAULT_TEMPLATE = "{label|title|workspace|cwd|pane}[ ({argv|cmd})] · {agent|'bash'}"
 
     val default: Template by lazy { Template.parse(DEFAULT_TEMPLATE) }
 }
@@ -26,18 +26,25 @@ data class Fields(
     // The whole path. `{cwd}` renders its last segment.
     val cwd: String? = null,
     val label: String? = null,
+    // What the harness in the pane calls the conversation, and never what a person called the pane
+    // — `label` is that, it is herdr's, and it wins. Automatic only where nothing manual exists,
+    // which is why this sits second in the default template rather than first.
+    val title: String? = null,
     val agent: String? = null,
     val status: AgentStatus = AgentStatus.Unknown,
     val cmd: String? = null,
     val argv: String? = null,
 )
 
-fun fieldsOf(pane: PaneInfo): Fields = Fields(
+// `title` is the session's own rather than the pane's, so it is overlaid by whoever holds it —
+// `PaneInfo.title` today, and nothing at all for a caller that has none.
+fun fieldsOf(pane: PaneInfo, title: String? = null): Fields = Fields(
     pane = pane.id.substringAfter('/'),
     workspace = pane.workspace,
     tab = pane.tab,
     cwd = pane.cwd,
     label = pane.label,
+    title = title,
     agent = pane.agent,
     status = statusOf(pane),
     cmd = pane.cmd,
@@ -74,10 +81,11 @@ private sealed interface Choice {
     data class Literal(val text: String) : Choice
 }
 
-private enum class Field { Label, Workspace, Tab, Cwd, Pane, Agent, Status, Cmd, Argv }
+private enum class Field { Label, Title, Workspace, Tab, Cwd, Pane, Agent, Status, Cmd, Argv }
 
 private fun field(name: String): Field? = when (name) {
     "label" -> Field.Label
+    "title" -> Field.Title
     "workspace" -> Field.Workspace
     "tab" -> Field.Tab
     "cwd" -> Field.Cwd
@@ -140,8 +148,8 @@ private class Scanner(private val source: String) {
                     val name = word.toString().trim()
                     if (name.isNotEmpty()) {
                         val token = field(name) ?: throw TemplateException(
-                            "no such template token `$name`; the tokens are label, workspace, tab, cwd, " +
-                                "pane, agent, status, cmd, argv",
+                            "no such template token `$name`; the tokens are label, title, workspace, " +
+                                "tab, cwd, pane, agent, status, cmd, argv",
                         )
                         choices.add(Choice.Token(token))
                     }
@@ -197,6 +205,7 @@ private fun renderInto(parts: List<Part>, fields: Fields, out: StringBuilder): F
 private fun value(token: Field, fields: Fields): String? {
     val raw = when (token) {
         Field.Label -> fields.label
+        Field.Title -> fields.title
         Field.Workspace -> fields.workspace
         Field.Tab -> fields.tab
         Field.Cwd -> fields.cwd?.let(::basename)

@@ -81,6 +81,18 @@ impl Wire {
             code,
             message: message.to_string(),
             pane: pane.map(str::to_string),
+            node: None,
+        })
+    }
+
+    /// A fault that belongs to a whole node rather than to one pane. See [`ServerMsg::Error`]'s
+    /// `node` for why it has to be said and why the client is what decides how loudly.
+    pub fn node_error(&self, code: ErrorCode, message: &str, node: &str) -> bool {
+        self.send(&ServerMsg::Error {
+            code,
+            message: message.to_string(),
+            pane: None,
+            node: Some(node.to_string()),
         })
     }
 }

@@ -4,7 +4,8 @@ use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_core::{HerdrProvider, PaneRegistry};
 use kampr_journal::{
-    Change, Harness, Journal, JournalError, Registry as Journals, Role, SessionKind, SessionRef, Turn, Watch,
+    Change, Harness, Journal, JournalError, Registry as Journals, Role, SessionKind, SessionMarker,
+    SessionRef, Turn, Watch,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,9 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::debug;
 
-/// Turns in a page. A client pages backwards from the cursor with `convo.load { before }`.
+/// Turns in a page, as a floor rather than a ceiling. A client pages backwards from the cursor
+/// with `convo.load { before }`, and a page runs back past this to the question that opens the
+/// reply it landed in — see `FileJournal::page_before`, where the rule and its bound live.
 const PAGE: usize = 40;
 
 /// How often a followed transcript is re-read. A transcript is a file that grows, so this is the
@@ -62,8 +65,28 @@ pub fn held() -> Held {
     Arc::new(Mutex::new(None))
 }
 
+/// The launched conversation this client currently has open on a pane, if any, followed for as
+/// long as it has it open.
+///
+/// **A subagent's transcript grows while it runs**, and the reason to open one is to watch it
+/// work — so a reader who has to close and re-open it to see the next step is being handed a
+/// snapshot of something live. One at a time is the whole rule: opening another replaces this,
+/// leaving the pane replaces it with nothing, and a client that never opens one pays for none of
+/// it.
+pub type Followed = Arc<Mutex<Option<(String, Box<dyn Journal>)>>>;
+
+pub fn followed() -> Followed {
+    Arc::new(Mutex::new(None))
+}
+
 /// Everything the pane's host knows about *which session* the pane is having, as opposed to which
 /// directory it is in.
+///
+/// **Only what identifies a session belongs here, because this is compared.** A [`Handle`] that
+/// differs is a different conversation, and the pump answers that by taking the open transcript
+/// off the client and paging a fresh one — so a field that merely *describes* the session and
+/// changes while it runs, such as the marker's `status` flipping between busy and idle, would tear
+/// a conversation down and re-page it mid-turn. That is #314's defect wearing a different hat.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
     /// The session a pane has announced to herdr, when it has announced one. Herdr 0.8.2 detects
@@ -76,7 +99,25 @@ pub struct Identity {
     pub harness: Harness,
 }
 
-pub fn identity(provider: &HerdrProvider, local: &str) -> Identity {
+/// What the pane's own harness says it is on, when it says anything.
+///
+/// **This is the exact handle, and it exists before the transcript does.** Herdr detects an agent
+/// by scraping the screen, so a pane is not looked up at all until that scrape lands (#75), and
+/// `has_conversation` then means *a transcript file resolves* — which it does not for the whole
+/// gap between a session opening and its first prompt, measured at 2 min 42 s (#311). Matching the
+/// pane's whole pipeline against the markers the harness itself writes closes both, and it closes
+/// them on **pid** rather than on a name, so a pane ble.sh lets herdr describe only as `bash`
+/// (#297) is still identified exactly.
+///
+/// Cheap enough for the pump's own loop, which is where it runs: the marker file is opened by pid
+/// rather than searched for, and only a hit goes on to scan the project directories. Measured on
+/// this machine at **34 us on a hit and 1.7 us on a miss**, against a loop that turns at most five
+/// times a second per watched pane — and a miss is every pane that is not an agent.
+pub fn marker_of(journals: &Journals, provider: &HerdrProvider, local: &str) -> Option<SessionMarker> {
+    journals.marker(&provider.pane_processes(local))
+}
+
+pub fn identity(journals: &Journals, provider: &HerdrProvider, local: &str) -> Identity {
     let snapshot = provider.snapshot();
     let announced = snapshot
         .pane(local)
@@ -90,7 +131,11 @@ pub fn identity(provider: &HerdrProvider, local: &str) -> Identity {
             value: session.value.clone(),
         });
     Identity {
-        announced,
+        // Herdr's own announcement first where there is one — it is the harness speaking through
+        // the host that owns the pane — and the marker underneath it, which is every case herdr
+        // has not spoken about yet and (today) every case at all.
+        announced: announced
+            .or_else(|| marker_of(journals, provider, local).map(|m| SessionRef::id(m.agent, m.session))),
         harness: provider.agent_harness(local),
     }
 }
@@ -130,6 +175,7 @@ fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>) -> Option<Se
     match turns.iter().any(|turn| ids.contains(&turn.id)) {
         true => Some(ServerMsg::ConvoTurn {
             pane: pane.to_string(),
+            sub: None,
             turns,
         }),
         false => page(journal, pane, None, true),
@@ -148,16 +194,23 @@ struct Handle {
 
 type Look = Box<dyn Fn(&str) -> Identity + Send>;
 
+/// The session marker, asked for separately from [`Identity`] and deliberately so: it carries what
+/// *describes* a session rather than what identifies one, and putting it where the pump compares
+/// would tear a conversation down every time the harness went from busy to idle.
+type Describe = Box<dyn Fn(&str) -> Option<SessionMarker> + Send>;
+
 pub struct ConvoCtx {
     pub journals: Arc<Journals>,
     pub panes: Arc<PaneRegistry>,
     pub herd: watch::Receiver<Arc<HerdModel>>,
     pub identity: Look,
+    pub describe: Describe,
     pub wire: Arc<Wire>,
     pub global: String,
     pub local: String,
     pub journal: Open,
     pub held: Held,
+    pub followed: Followed,
 }
 
 /// One pane's transcript for one client: the initial page, then the tail.
@@ -171,11 +224,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         panes,
         mut herd,
         identity,
+        describe,
         wire,
         global,
         local,
         journal,
         held,
+        followed,
     } = ctx;
 
     let mut follow = tokio::time::interval(POLL);
@@ -253,7 +308,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     if !withdraw(&wire, &global, &held, fresh.path()) {
                         return;
                     }
-                    opened = Some(fresh.path().to_path_buf());
+                    let path = fresh.path().to_path_buf();
+                    opened = Some(path.clone());
                     *journal.lock().unwrap() = Some(fresh);
                     // The first read is the page the client is about to be sent, so it must not
                     // also arrive behind it as a revision.
@@ -263,16 +319,51 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         _ => return,
                     }
                     *held.lock().unwrap() = showing(&journal);
+                    // Off the executor and only here: collecting these reads the whole transcript
+                    // (154 ms for 29.4 MB), which is a cost a conversation opening can carry and a
+                    // poll cannot. A harness with nothing to say sends `{}` and the client draws
+                    // nothing, so there is no case worth suppressing.
+                    let facets = {
+                        let journals = journals.clone();
+                        let agent = now.agent.clone();
+                        let marker = describe(&local);
+                        tokio::task::spawn_blocking(move || {
+                            journals.facets(agent.as_deref(), &path, marker.as_ref())
+                        })
+                        .await
+                        .unwrap_or_default()
+                    };
+                    if !wire.send(&ServerMsg::ConvoFacets {
+                        pane: global.clone(),
+                        facets,
+                    }) {
+                        return;
+                    }
                 }
             }
         }
 
         tokio::select! {
             _ = follow.tick() => {
+                // The launched conversation the reader has open, on the same tick and by the same
+                // rule as the pane's own: whatever it has grown by, under its own name so nothing
+                // files a subagent's words as the parent's.
+                match drain_sub(&followed).await {
+                    Some((id, turns)) if !turns.is_empty() => {
+                        if !wire.send(&ServerMsg::ConvoTurn {
+                            pane: global.clone(),
+                            sub: Some(id),
+                            turns,
+                        }) {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
                 match drain(&journal).await {
                     Ok(turns) if !turns.is_empty() => {
                         holding(&held, &turns);
-                        let revised = ServerMsg::ConvoTurn { pane: global.clone(), turns };
+                        let revised = ServerMsg::ConvoTurn { pane: global.clone(), sub: None, turns };
                         if !wire.send(&revised) {
                             return;
                         }
@@ -328,6 +419,7 @@ async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> bool {
             holding(held, &turns);
             wire.send(&ServerMsg::ConvoTurn {
                 pane: pane.to_string(),
+                sub: None,
                 turns,
             })
         }
@@ -346,6 +438,7 @@ fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(),
     holding(held, &turns);
     match wire.send(&ServerMsg::ConvoTurn {
         pane: pane.to_string(),
+        sub: None,
         turns,
     }) {
         true => Ok(()),
@@ -440,8 +533,31 @@ fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
         .collect();
     wire.send(&ServerMsg::ConvoTurn {
         pane: pane.to_string(),
+        sub: None,
         turns,
     })
+}
+
+/// Whatever the followed conversation has grown by, and which one it was.
+///
+/// A read that fails takes the follow down rather than retrying: unlike the pane's own transcript
+/// there is nothing to re-derive it from — the reader asked for one file by name, and if it has
+/// gone the honest answer is to stop rather than to guess at another.
+async fn drain_sub(followed: &Followed) -> Option<(String, Vec<Turn>)> {
+    let followed = followed.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let mut guard = followed.lock().unwrap();
+        let (id, journal) = guard.as_mut()?;
+        match journal.poll() {
+            Ok(turns) => Some((id.clone(), turns)),
+            Err(_) => {
+                *guard = None;
+                None
+            }
+        }
+    })
+    .await;
+    read.ok().flatten()
 }
 
 /// **Off the executor**, because the lock it takes is the one `convo.load` also wants and the

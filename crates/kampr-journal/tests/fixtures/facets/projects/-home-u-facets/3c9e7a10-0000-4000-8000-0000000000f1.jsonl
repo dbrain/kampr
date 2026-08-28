@@ -1,0 +1,17 @@
+{"type":"agent-name","agentName":"kampr-fb","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"type":"mode","mode":"normal","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"type":"permission-mode","permissionMode":"normal","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"parentUuid":null,"type":"user","uuid":"11111111-0000-4000-8000-000000000001","timestamp":"2026-08-27T11:38:13.700Z","cwd":"/home/u/facets","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","message":{"role":"user","content":"infer the width from a soft wrap"}}
+{"type":"ai-title","aiTitle":"Soft wrap width inference","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"parentUuid":"11111111-0000-4000-8000-000000000001","type":"assistant","uuid":"22222222-0000-4000-8000-000000000002","timestamp":"2026-08-27T11:43:29.100Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","message":{"role":"assistant","content":[{"type":"text","text":"The layout rect is not the PTY."}]}}
+{"parentUuid":"22222222-0000-4000-8000-000000000002","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":315990,"messageCount":144,"pendingBackgroundAgentCount":2,"timestamp":"2026-08-27T11:43:29.703Z","uuid":"33333333-0000-4000-8000-000000000003","isMeta":false,"sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T11:54:16.162Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","content":"then mutation-test the fit ladder"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T11:55:02.001Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","content":"and add a probe row for it"}
+{"type":"queue-operation","operation":"remove","timestamp":"2026-08-27T11:56:16.303Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","content":"then mutation-test the fit ladder","reason":"absorbed_mid_turn"}
+{"type":"ai-title","aiTitle":"Inferring a pane's width","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"parentUuid":null,"logicalParentUuid":"22222222-0000-4000-8000-000000000002","isSidechain":false,"type":"system","subtype":"compact_boundary","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"manual","preTokens":756165,"postTokens":18709,"cumulativeDroppedTokens":737456,"durationMs":129650},"uuid":"44444444-0000-4000-8000-000000000004","timestamp":"2026-08-27T12:01:24.491Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"parentUuid":"22222222-0000-4000-8000-000000000002","type":"user","uuid":"55555555-0000-4000-8000-000000000005","timestamp":"2026-08-27T12:10:01.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","message":{"role":"user","content":"and the height?"}}
+{"parentUuid":"55555555-0000-4000-8000-000000000005","type":"assistant","uuid":"66666666-0000-4000-8000-000000000006","timestamp":"2026-08-27T12:13:50.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1","message":{"role":"assistant","content":[{"type":"text","text":"viewport_rows is honest."}]}}
+{"parentUuid":"66666666-0000-4000-8000-000000000006","isSidechain":false,"type":"system","subtype":"turn_duration","durationMs":204378,"messageCount":198,"timestamp":"2026-08-27T12:13:51.344Z","uuid":"77777777-0000-4000-8000-000000000007","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}
+{"type":"mode","mode":"plan","sessionId":"3c9e7a10-0000-4000-8000-0000000000f1"}

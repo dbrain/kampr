@@ -12,12 +12,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import dev.kampr.shared.theme.Ground
+import dev.kampr.shared.ui.named
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
@@ -31,6 +35,9 @@ import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.ui.REPLY_ROOM
+import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.keyboardInset
@@ -80,6 +87,27 @@ private val ROTATED = listOf(
     SafeArea(top = 24.dp, bottom = 24.dp),
     SafeArea(top = 24.dp, bottom = 0.dp, left = 48.dp),
     SafeArea(top = 24.dp, bottom = 0.dp, right = 48.dp),
+)
+
+// What Android hangs off a selection: a 25 dp box below the line it grips, and another the same
+// distance to the left of the character the selection starts at. Both are windows of their own,
+// which is why no layout in this file can clip them and why room for them has to be left.
+private val SELECTION_HANDLE = 25.dp
+
+// The three shapes the reply box ends up in, and the difference between them is what is under it:
+// the tab bar, the gesture handle, or the keyboard itself.
+private data class Posture(
+    val name: String,
+    val safe: SafeArea,
+    val nav: Boolean,
+    val window: DpSize? = null,
+    val chrome: Dp = 0.dp,
+)
+
+private val POSTURES = listOf(
+    Posture("portrait, tab bar", BARS, nav = true),
+    Posture("portrait, no tab bar", BARS, nav = false),
+    Posture("rotated pane", ROTATED_KEYS, nav = false, window = ROTATED_WINDOW, chrome = PANE_CHROME),
 )
 
 // What the phone actually stacks: the app's root, the pane inside it, the bottom navigation under
@@ -227,6 +255,117 @@ class ComposerInsetTest {
         }
     }
 
+    // **The previous fix held for the one keyboard it was measured against and no taller one.**
+    // `aRotatedPaneWithTheKeysUpShowsTheWholeReplyBox` only ever asks about the 212 dp keyboard
+    // that produced the report; at 280 dp — an ordinary height for a keyboard carrying a
+    // suggestion strip, or a larger font scale — the field measured 0 dp again (#319).
+    //
+    // Two things were in the way and only both together fix it, which is why this drives the real
+    // `PaneScreenMobile` rather than standing in for it with a fixed top padding. The pane header
+    // floats over the conversation and is paid for as that padding, so on a short window it took
+    // room the reply box then could not have; and a column measures its unweighted children in
+    // index order, so the reply box was last in the queue for what was left. A harness that pads
+    // by a constant exercises neither and would go on passing with the header's half reverted —
+    // which is #191, a harness that was never the app.
+    //
+    // Swept rather than pinned, because the defect is not at one height: it is at every height
+    // past whichever one somebody happened to measure.
+    @Test
+    fun aRotatedPaneKeepsItsReplyBoxAtEveryKeyboardHeightAndNotJustTheMeasuredOne() {
+        val settled = settledReplyHeight()
+        for (ime in listOf(212.dp, 240.dp, 280.dp, 320.dp)) {
+            runComposeUiTest {
+                val keys = ROTATED_KEYS.copy(ime = ime)
+                setContent {
+                    Phone(keys, nav = false, window = ROTATED_WINDOW) {
+                        PaneScreenMobile(
+                            pane = rotatedPane(false),
+                            info = demoInfo(),
+                            view = PaneView.Conversation,
+                            surfaces = ConversationSurfaces(),
+                            landscape = true,
+                            readOnly = false,
+                            onBack = {},
+                            onView = {},
+                            onAnswer = {},
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                waitForIdle()
+                val floor = ROTATED_WINDOW.height - ime
+                val reply = onNodeWithContentDescription(REPLY).getUnclippedBoundsInRoot()
+                assertTrue(
+                    reply.bottom - reply.top >= settled - 1.dp,
+                    "ime=$ime: the reply box measured ${reply.bottom - reply.top}, against the " +
+                        "$settled one line of it needs — there is nothing to type into",
+                )
+                assertTrue(
+                    reply.bottom <= floor,
+                    "ime=$ime: the reply box ends at ${reply.bottom}, below the $floor the keys leave",
+                )
+            }
+        }
+    }
+
+    // **Searching with the keys up is the one posture where the bar and the reply box compete**,
+    // and it is why the conversation measures its children in priority order rather than in reading
+    // order. Everywhere else the bar stands down on its own — it is composed only while the
+    // keyboard is closed — so a plain column is indistinguishable from a correct one and the
+    // header's half of the fix appears to be the whole of it. Open search, and the bar is there
+    // with a keyboard under it.
+    // **The one posture where the bar and the reply box compete for the same pixels.** Everywhere
+    // else the bar stands down on its own — it is composed only while the keyboard is closed — so
+    // a column that measures in reading order is indistinguishable from one that measures in
+    // priority order, and the header's half of the fix looks like the whole of it. Searching keeps
+    // the bar on screen with the keys up, and then the order decides who gets nothing.
+    //
+    // Driven at the layout rather than through the search field: opening search puts focus in a
+    // text field, and flipping the keyboard under a focused field leaves `waitForIdle` spinning
+    // for ever. The three children are given the heights the real ones measure, which is what the
+    // rule is about — who is asked first, not what they contain.
+    @Test
+    fun theReplyBoxIsMeasuredBeforeTheBarAboveItAndNotAfter() = runComposeUiTest {
+        val room = 96.dp
+        setContent {
+            CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone, Ground.Dark)) {
+                ConversationColumn(
+                    Modifier.size(400.dp, room),
+                    bar = { Box(Modifier.fillMaxWidth().height(40.dp).named("bar")) },
+                    transcript = { Box(Modifier.fillMaxWidth().named("transcript")) },
+                    composer = { Box(Modifier.fillMaxWidth().height(REPLY_ROOM).named("composer")) },
+                )
+            }
+        }
+        waitForIdle()
+        val composer = onNodeWithContentDescription("composer").getUnclippedBoundsInRoot()
+        assertTrue(
+            composer.bottom - composer.top >= REPLY_ROOM - 1.dp,
+            "in ${room} of column the reply box got ${composer.bottom - composer.top}, against the " +
+                "$REPLY_ROOM it asked for — the bar above it was served first",
+        )
+    }
+
+    // The room the pane header gives up is the room the reply box needs, so the two have to agree
+    // on the number. This is the composer's side of it: if it grows past what `REPLY_ROOM` reserves,
+    // the header yields too little and the sweep above starts failing at a height nobody changed.
+    @Test
+    fun aReplyBoxIsNoTallerThanTheRoomReservedForIt() = runComposeUiTest {
+        setContent {
+            Phone(BARS.copy(ime = 0.dp), nav = false) {
+                Composer(agent = "claude", enabled = true, onSend = {}, modifier = Modifier)
+            }
+        }
+        waitForIdle()
+        val reply = onNodeWithContentDescription(REPLY).getUnclippedBoundsInRoot()
+        val send = onNodeWithContentDescription(SEND, substring = true).getUnclippedBoundsInRoot()
+        val tallest = maxOf(reply.bottom, send.bottom) - minOf(reply.top, send.top)
+        assertTrue(
+            tallest <= REPLY_ROOM,
+            "the reply box wants $tallest and the pane header only stands down by $REPLY_ROOM",
+        )
+    }
+
     // How tall one line of reply box is when nothing is squeezing it. Measured rather than named,
     // because what makes the report visible is the *difference*: a field shorter than its own line
     // of text clips that text through the middle, and Android draws the selection handles below
@@ -244,6 +383,41 @@ class ComposerInsetTest {
             height = reply.bottom - reply.top
         }
         return height
+    }
+
+    // The handles are drawn where the reply box is, in their own windows, and the rotated pane is
+    // the posture where what is directly under the reply box is the keyboard. The room under the
+    // field measured 26 dp against a 25 dp handle and the room beside it 28 — both of them the sum
+    // of two paddings chosen for how they look, so the clearance was a coincidence that any retune
+    // of the field's shape would have spent. All three postures, because only one of them is tight
+    // and a rule written for that one has to hold for the other two.
+    @Test
+    fun theReplyBoxKeepsAHandlesWorthOfRoomUnderAndBesideIt() {
+        for (posture in POSTURES) {
+            runComposeUiTest {
+                val (_, pane) = demoPane(RICH_CONVO)
+                setContent {
+                    Phone(posture.safe, nav = posture.nav, window = posture.window) {
+                        ConversationView(pane, demoInfo(), Modifier.fillMaxSize().padding(top = posture.chrome))
+                    }
+                }
+                waitForIdle()
+                val screen = onRoot().getUnclippedBoundsInRoot()
+                val reply = onNodeWithContentDescription(REPLY).getUnclippedBoundsInRoot()
+                val under = screen.bottom - posture.safe.ime - reply.bottom
+                val beside = reply.left - posture.safe.left
+                assertTrue(
+                    under >= SELECTION_HANDLE,
+                    "${posture.name}: $under under the reply box, and a handle hangs " +
+                        "$SELECTION_HANDLE below the line it grips",
+                )
+                assertTrue(
+                    beside >= SELECTION_HANDLE,
+                    "${posture.name}: $beside beside the reply box, and the start handle hangs " +
+                        "$SELECTION_HANDLE to the left of the character it grips",
+                )
+            }
+        }
     }
 
     // RICH_CONVO ends on a running `Edit` card, and a lazy list only composes what is in view.

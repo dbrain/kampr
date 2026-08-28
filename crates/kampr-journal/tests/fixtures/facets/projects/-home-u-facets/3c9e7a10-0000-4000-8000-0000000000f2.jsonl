@@ -1,0 +1,4 @@
+{"parentUuid":null,"type":"user","uuid":"aaaaaaaa-0000-4000-8000-00000000000a","timestamp":"2026-08-27T09:00:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f2","message":{"role":"user","content":"read the probe log first"}}
+{"type":"ai-title","aiTitle":"Reading the probe log","sessionId":"3c9e7a10-0000-4000-8000-0000000000f2"}
+{"parentUuid":"aaaaaaaa-0000-4000-8000-00000000000a","type":"assistant","uuid":"aaaaaaaa-0000-4000-8000-00000000000d","timestamp":"2026-08-27T09:01:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f2","message":{"role":"assistant","content":[{"type":"text","text":"Every row there is a measurement."}]}}
+{"type":"ai-title","aiTitle":"Probe rows and measurements","sessionId":"3c9e7a10-0000-4000-8000-0000000000f2"}

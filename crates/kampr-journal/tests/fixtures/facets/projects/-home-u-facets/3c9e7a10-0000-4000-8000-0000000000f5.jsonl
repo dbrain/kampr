@@ -1,0 +1,11 @@
+{"parentUuid":null,"type":"user","uuid":"dddddddd-0000-4000-8000-00000000000e","timestamp":"2026-08-27T09:00:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","message":{"role":"user","content":"work the queue"}}
+{"type":"agent-name","agentName":"kampr-queue","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:01:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"first"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:02:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"second"}
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-08-27T09:03:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":null}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:04:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"third"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:05:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"third"}
+{"type":"queue-operation","operation":"remove","timestamp":"2026-08-27T09:06:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"third","reason":"absorbed_mid_turn"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:07:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"fourth"}
+{"type":"queue-operation","operation":"popAll","timestamp":"2026-08-27T09:08:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"second\nthird\nfourth"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-27T09:09:00.000Z","sessionId":"3c9e7a10-0000-4000-8000-0000000000f5","content":"fifth"}

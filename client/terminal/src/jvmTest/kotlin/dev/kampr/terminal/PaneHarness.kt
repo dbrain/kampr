@@ -35,7 +35,7 @@ import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.TerminalView
 
-private object HushIo : PaneIo {
+internal object HushIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit
     override fun prefs(paneId: String) = PanePrefs()
 }
@@ -86,12 +86,13 @@ internal fun ComposeUiTest.phoneTerminal(
     session: PaneSession,
     width: Dp = 411.dp,
     height: Dp = 914.dp,
+    io: PaneIo = HushIo,
 ): MutableState<SafeArea> {
     val bars = mutableStateOf(Phone.BARS)
     setContent {
         CompositionLocalProvider(
             LocalTokens provides Phone.tokens(),
-            LocalPaneIo provides HushIo,
+            LocalPaneIo provides io,
             LocalSafeArea provides bars.value,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
         ) {
@@ -99,7 +100,7 @@ internal fun ComposeUiTest.phoneTerminal(
             // what is left. Nothing inside knows the keyboard is there — which is the whole point,
             // and the reason the surface has to notice that it got shorter.
             Box(Modifier.size(width, height).keyboardInset()) {
-                Box(Modifier.fillMaxSize()) { TerminalView(pane, session, HushIo) }
+                Box(Modifier.fillMaxSize()) { TerminalView(pane, session, io) }
             }
         }
     }

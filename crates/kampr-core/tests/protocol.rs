@@ -87,10 +87,30 @@ fn error_codes_use_the_documented_spelling() {
         code: ErrorCode::NotWriter,
         message: "this device is read-only".into(),
         pane: None,
+        node: None,
     })
     .unwrap();
     assert_eq!(v["code"], "not_writer");
     assert!(v["pane"].is_null());
+    assert!(
+        v.get("node").is_none(),
+        "an error about no particular node must look to an installed client exactly as it did          before the field existed: {v}"
+    );
+}
+
+/// A node's own fault names the node, because the client is the only half that knows whether that
+/// node is the one in the operator's hands.
+#[test]
+fn an_error_about_a_node_names_which_node() {
+    let v = serde_json::to_value(ServerMsg::Error {
+        code: ErrorCode::NodeOffline,
+        message: "workbox is offline".into(),
+        pane: None,
+        node: Some("01JWORKBOX".into()),
+    })
+    .unwrap();
+    assert_eq!(v["code"], "node_offline");
+    assert_eq!(v["node"], "01JWORKBOX");
 }
 
 #[test]
@@ -239,6 +259,7 @@ fn an_attachment_omits_what_its_source_never_carried() {
 fn a_revised_turn_travels_as_convo_turn() {
     let v = serde_json::to_value(ServerMsg::ConvoTurn {
         pane: "01J/w3:p2".into(),
+        sub: None,
         turns: vec![Turn {
             id: "t_812".into(),
             role: Role_::Assistant,
@@ -253,6 +274,11 @@ fn a_revised_turn_travels_as_convo_turn() {
     })
     .unwrap();
     assert_eq!(v["t"], "convo.turn");
+    assert!(
+        v.get("sub").is_none(),
+        "a pane's own revised turn must look to an installed client exactly as it did before the \
+         field existed: {v}"
+    );
     assert_eq!(v["pane"], "01J/w3:p2");
     assert_eq!(v["turns"][0]["id"], "t_812");
     assert_eq!(v["turns"][0]["blocks"][0]["state"], "running");
@@ -337,4 +363,57 @@ fn a_node_names_the_release_that_supersedes_it_and_says_nothing_otherwise() {
     let old: NodeEntry =
         serde_json::from_str(r#"{"id":"01J","name":"front","kind":"peer","online":true}"#).unwrap();
     assert_eq!(old.update, None);
+}
+
+/// A launched conversation is opened by its own verb, and the page that answers says which
+/// conversation it is — or a client would merge a subagent's words into the pane's own.
+#[test]
+fn a_launched_conversation_is_asked_for_and_answered_under_its_own_name() {
+    let asked: ClientMsg =
+        serde_json::from_str(r#"{"t":"convo.sub","pane":"01J/w1:p1","id":"aGFuZGxl"}"#).unwrap();
+    assert!(matches!(
+        asked,
+        ClientMsg::ConvoSub { ref id, ref before, .. } if id == "aGFuZGxl" && before.is_none()
+    ));
+
+    let page = kampr_journal::Page {
+        turns: Vec::new(),
+        cursor: None,
+        more: false,
+    };
+    let answered = serde_json::to_value(ServerMsg::convo_sub("01J/w1:p1", "aGFuZGxl", page)).unwrap();
+    assert_eq!(answered["t"], "convo");
+    assert_eq!(answered["sub"], "aGFuZGxl");
+    assert_eq!(
+        answered["fresh"], true,
+        "a launched conversation shares no turn with the pane's own, so there is nothing to merge \
+         it into: {answered}"
+    );
+}
+
+/// And the pane's own page is unchanged on the wire, so an installed client cannot tell that the
+/// field was ever added.
+#[test]
+fn a_panes_own_page_carries_no_sub_and_looks_exactly_as_it_did() {
+    let page = kampr_journal::Page {
+        turns: Vec::new(),
+        cursor: None,
+        more: false,
+    };
+    let value = serde_json::to_value(ServerMsg::convo("01J/w1:p1", page, false)).unwrap();
+    assert!(value.get("sub").is_none(), "{value}");
+}
+
+/// A launched conversation's turns travel under its own name, or a client appends a subagent's
+/// words to the pane's transcript and the parent appears to have said them.
+#[test]
+fn a_launched_conversations_turns_say_which_conversation_they_are() {
+    let v = serde_json::to_value(ServerMsg::ConvoTurn {
+        pane: "01J/w3:p2".into(),
+        sub: Some("aGFuZGxl".into()),
+        turns: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(v["t"], "convo.turn");
+    assert_eq!(v["sub"], "aGFuZGxl");
 }
