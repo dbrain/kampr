@@ -128,7 +128,7 @@ jobs:
             -d "{\"code\":\"$code\",\"device_name\":\"ci\"}" | jq -er .token)
           KAMPR_URL=http://127.0.0.1:8794 KAMPR_TOKEN="$token" \
             env -u GRADLE_HOME ./client/gradlew -p client \
-              -I client/gradle/tests-must-run.init.gradle.kts :shared:jvmTest \
+              -I "$PWD/client/gradle/tests-must-run.init.gradle.kts" :shared:jvmTest \
               --tests 'dev.kampr.shared.LiveNodeTest.theClientReadsTheAuthSurfaceOfARealNode' \
               --tests 'dev.kampr.shared.LiveNodeTest.preferencesWrittenOnOneConnectionComeBackOnTheNext'
       - uses: actions/upload-artifact@v7
