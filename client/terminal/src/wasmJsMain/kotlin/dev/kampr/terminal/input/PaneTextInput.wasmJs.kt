@@ -212,6 +212,14 @@ internal fun installInput() = installDom(::flushInput)
 internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean): Boolean =
     enabled && (keyboardAsked || !touch)
 
+// Standing down has to hand the focus *somewhere*, not merely let go of it.
+//
+// Measured in a real Chromium against the real client: blurring alone drops the slot to `BODY`, and
+// Compose reads keys off its own `<canvas>` — so with a sheet open nothing had them at all. Escape
+// did not dismiss, and the sheet's own `+`/`-` did nothing. Focusing the canvas by hand at that
+// point made both work immediately, which is what this does. The canvas already carries
+// `tabindex="0"`; it lives inside the shadow root `ComposeViewport` builds, so it is found by
+// walking those rather than by a plain `querySelector`.
 @OptIn(ExperimentalWasmJsInterop::class)
 internal fun focusInput(open: Boolean) {
     js(
@@ -220,8 +228,22 @@ internal fun focusInput(open: Boolean) {
             var s = globalThis.__kamprInput;
             if (!s) return;
             s.hold = open;
-            if (open) { s.el.textContent = ''; s.el.focus({ preventScroll: true }); }
-            else { s.el.blur(); }
+            if (open) { s.el.textContent = ''; s.el.focus({ preventScroll: true }); return; }
+            s.el.blur();
+            var find = function (root) {
+                var c = root.querySelector ? root.querySelector('canvas') : null;
+                if (c) return c;
+                var kids = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                for (var i = 0; i < kids.length; i++) {
+                    if (kids[i].shadowRoot) {
+                        var f = find(kids[i].shadowRoot);
+                        if (f) return f;
+                    }
+                }
+                return null;
+            };
+            var canvas = find(document);
+            if (canvas) canvas.focus({ preventScroll: true });
         })()
         """
     )

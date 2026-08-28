@@ -19,12 +19,6 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.PaneSession
 
-private fun label(zoom: Float): String {
-    if (zoom <= 0f) return "fit"
-    val tenths = (zoom * 10f + 0.5f).toInt()
-    return "${tenths / 10}.${tenths % 10}×"
-}
-
 // Sits beside the view tabs and carries the same weight as them: a real button with a 44 dp touch
 // target, not a chip bolted onto the end of a tab bar.
 @Composable
@@ -39,7 +33,7 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
             .edge(tokens.card, shape)
             .touchable()
             .action(
-                "Zoom, currently ${label(session.view.displayZoom)}",
+                "Zoom, currently ${zoomLabel(session.view.displayZoom)}",
                 { session.view.sheetOpen = !open },
                 shape,
                 selected = open,
@@ -51,7 +45,7 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
     ) {
         IconGlyph(KamprIcons.zoom, 15.dp, if (open) tokens.color.accent else tokens.color.dim)
         KText(
-            label(session.view.displayZoom),
+            zoomLabel(session.view.displayZoom),
             tokens.type.key,
             if (open) tokens.color.accent else tokens.color.dim,
         )

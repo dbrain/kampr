@@ -2814,6 +2814,45 @@ async fn every_client_op_lands_on_a_real_herd() {
     )
     .await;
 
+    // The one op that reshapes a pane, driven for real: claimed, resized, released. This session
+    // is headless, so #219 says the size stays — and the reply says what it *measured* rather than
+    // echoing what was asked for, because on an attached pane the desk takes it straight back
+    // (#19) and a reply that assumed otherwise would be a plausible-looking success.
+    let sized = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": first_pane, "cols": 100, "rows": 30 }),
+        30,
+    )
+    .await;
+    assert_eq!(sized["ok"], json!(true), "{sized}");
+
+    // The floor, against a real node: a size no shell is usable at is refused rather than made
+    // permanent. This is the guard the whole feature is shaped around.
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": first_pane, "cols": 40, "rows": 12 }),
+    )
+    .await;
+    let refused = managed(&mut socket, "pane.size", 15).await;
+    assert_eq!(refused["ok"], json!(false), "40x12 was allowed: {refused}");
+    assert_eq!(refused["code"], json!("bad_request"), "{refused}");
+
+    // Holding and letting go. The hold is what makes a size survive on a pane a desk is attached
+    // to; the release is the ordinary end of one, and the node's own deadline is the backstop.
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": first_pane,
+                "cols": 100, "rows": 30, "mode": "hold" }),
+        30,
+    )
+    .await;
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": first_pane, "mode": "release" }),
+        15,
+    )
+    .await;
+
     // Only a pane's label is nullable, and null is what clears it.
     ok(
         &mut socket,
@@ -3031,6 +3070,7 @@ async fn every_client_op_lands_on_a_real_herd() {
         "tab.create",
         "pane.split",
         "pane.zoom",
+        "pane.size",
         "rename",
         "close",
         "focus",
@@ -3065,6 +3105,10 @@ async fn a_readonly_device_is_refused_every_manage_op() {
         json!({ "t": "manage", "op": "pane.split", "at": pane, "direction": "right", "ratio": 0.5 }),
         json!({ "t": "manage", "op": "rename", "at": pane, "label": null }),
         json!({ "t": "manage", "op": "close", "at": pane }),
+        // The one that reshapes a pane for everybody, and so the one it matters most to refuse.
+        // Both forms: the resize itself, and the hold that would keep a desk's screen wrong.
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 200, "rows": 50 }),
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 200, "rows": 50, "mode": "hold" }),
     ] {
         send(&mut socket, op).await;
         assert_eq!(until(&mut socket, "error", 10).await["code"], "not_writer");

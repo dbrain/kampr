@@ -372,6 +372,12 @@ impl Manage {
                     op: json!({ "op": "pane.zoom", "at": at, "mode": "toggle" }),
                 },
             });
+            rows.push(Row {
+                key: Some('r'),
+                label: "size".into(),
+                note: "give this pane a real width, if it was born tiny".into(),
+                next: size_menu(at),
+            });
         }
         Next::Pick {
             title: "manage".into(),
@@ -745,6 +751,40 @@ impl Manage {
             )
             .style(Style::default().bg(t.surface))
             .render(rect, buf);
+    }
+}
+
+/// The sizes `pane.size` offers, and the only place in Kampr that reshapes a pane.
+///
+/// A menu rather than a typed number because these three are the ones worth having and every one
+/// of them clears the node's floor — a pane keeps the size it is given, so an operator who can type
+/// `40` into a prompt is an operator who can lock a pane at 40 columns for everybody.
+///
+/// The complement to `zoom` above rather than a replacement for it: `pane.zoom` moves the PTY only
+/// when a client is attached and does nothing at all headless (#265), and this is the other half.
+fn size_menu(at: &str) -> Next {
+    let rows = [(80, 24), (120, 40), (200, 50)]
+        .into_iter()
+        .map(|(cols, rows)| Row {
+            key: None,
+            label: format!("{cols}x{rows}"),
+            note: String::new(),
+            next: Next::Confirm {
+                lines: vec![
+                    format!("Resize {at} to {cols}x{rows}?"),
+                    "Kampr claims the PTY to do it and hands it straight back. On a headless \
+                     pane the size stays (#219); on one somebody has open at their desk it \
+                     reverts the moment the claim is released (#19) and their screen is wrong \
+                     while it is held (#298). The reply says which happened rather than assuming."
+                        .into(),
+                ],
+                op: json!({ "op": "pane.size", "at": at, "cols": cols, "rows": rows }),
+            },
+        })
+        .collect();
+    Next::Pick {
+        title: "pane size".into(),
+        rows,
     }
 }
 

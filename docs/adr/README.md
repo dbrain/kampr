@@ -69,7 +69,7 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | # | Decision | Status |
 | --- | --- | --- |
 | [0001](./0001-the-node-runs-a-vt-emulator.md) | The node runs a VT emulator over streamed frames | Accepted |
-| [0002](./0002-kampr-never-resizes-a-pane.md) | Kampr never resizes a pane | Accepted |
+| [0002](./0002-kampr-never-resizes-a-pane.md) | Kampr never resizes a pane | Superseded in part by 0012 |
 | [0003](./0003-the-client-contract-is-a-cell-grid.md) | The client contract is a cell grid, not ANSI | Accepted |
 | [0004](./0004-scrollback-is-stitched-and-a-gap-discards.md) | Scrollback is stitched from `pane.read`, and a gap discards rather than splices | Accepted |
 | [0005](./0005-structure-comes-from-the-transcript.md) | Structure comes from the transcript, never from the grid | Accepted |

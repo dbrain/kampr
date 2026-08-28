@@ -8,8 +8,9 @@ Six workstreams that can run in parallel **once the contracts exist**. Read
 1. **The probe log is the source of truth about Herdr.** [`03-probe-log.md`](./03-probe-log.md). If
    you need a fact about Herdr that isn't there, probe it and add a row — do not assume, and do not
    trust a memory of another terminal multiplexer.
-2. **Kampr never resizes a pane.** No `terminal session control`, no `terminal.resize`, ever
-   (probe #17, #18). Rendering handles small screens: zoom, pan, and the conversation view.
+2. **Looking at a pane never reshapes it**, and only the `pane.size` op reshapes one on purpose
+   (probe #17, #18; [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md)). Rendering handles
+   small screens: zoom, pan, and the conversation view.
 3. **Zero comments by default.** Names and types are the documentation. Comment only a non-obvious
    *why* — a constraint, a workaround, an invariant a reader cannot guess. The existing crates show
    the intended density.

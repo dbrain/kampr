@@ -1033,3 +1033,45 @@ async fn a_demotion_closes_a_modal_that_is_still_collecting_an_op() {
     let screen = painted(&mut app, 110, 24);
     assert!(!screen.contains("Call it what?"), "{screen}");
 }
+
+/// The one op that reshapes a pane, and the only one whose consequence lands on a person rather
+/// than on a layout — so it says what it will do, names both outcomes, and fires nothing until the
+/// operator agrees.
+#[tokio::test]
+async fn a_resize_says_which_way_it_can_go_before_it_claims_anything() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+
+    // `shifted` carries the prefix itself (#289), so this is prefix+shift+n into the manage menu.
+    shifted(&mut app, 'n');
+    ch(&mut app, 'r');
+    let sizes = painted(&mut app, 110, 24);
+    assert!(sizes.contains("80x24") && sizes.contains("200x50"), "{sizes}");
+    // A menu, not a typed number: a pane keeps the size it is given, so the operator is offered
+    // sizes that clear the node's floor rather than a prompt they can put 40 into.
+    conn.sent_nothing().await;
+
+    tap(&mut app, KeyCode::Enter);
+    let asked = painted(&mut app, 110, 24);
+    assert!(asked.contains("Resize 01JNODE/w1:p1 to 80x24?"), "{asked}");
+    assert!(
+        asked.contains("headless") && asked.contains("desk"),
+        "the copy names both outcomes, because they are opposite:\n{asked}"
+    );
+    assert!(
+        asked.contains("#219") && asked.contains("#19"),
+        "and cites what measured them:\n{asked}"
+    );
+    conn.sent_nothing().await;
+
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(sent["op"], "pane.size");
+    assert_eq!(sent["at"], "01JNODE/w1:p1");
+    assert_eq!((&sent["cols"], &sent["rows"]), (&json!(80), &json!(24)));
+    // The safe mode is the absent one: a plain resize hands the PTY straight back.
+    assert!(
+        sent.get("mode").is_none(),
+        "a resize does not hold unless asked: {sent}"
+    );
+}

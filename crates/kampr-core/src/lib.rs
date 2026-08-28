@@ -1,8 +1,9 @@
 //! Node core: the provider seam, one emulator per pane, and the values that go on the wire.
 //!
-//! Two probed constraints shape everything here. Kampr never resizes a pane, so rendering is an
-//! `observe` stream at the pane's *native* geometry and input goes over the JSON API
-//! (probe #17/#18). And frames carry end state only, so scrollback comes from `pane.read recent`
+//! Two probed constraints shape everything here. Nothing in this crate reshapes a pane — rendering
+//! is an `observe` stream at the pane's *native* geometry and input goes over the JSON API
+//! (probe #17/#18). The one op that does reshape one lives in the node and is asked for by name
+//! (ADR 0012); no path through here reaches it. And frames carry end state only, so scrollback comes from `pane.read recent`
 //! and never from the stream (probe #25).
 
 pub mod agent_view;

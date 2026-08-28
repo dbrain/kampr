@@ -457,7 +457,27 @@ project has a rule about those.
 
 ---
 
-## W7 — Resize, if we want it — deferred
+## W7 — Resize — shipped as `pane.size`
+
+> **Landed 2026-08-28 as [ADR 0012](./adr/0012-one-deliberate-resize-behind-a-panel.md).** The brief
+> below is kept for its reasoning, which is what the ADR was built on. Three things came out
+> differently and are worth naming:
+>
+> - **Not headless-only.** The `hold` mode exists precisely for the attached case — but it is
+>   opt-in, defaults to off, is session-local rather than remembered, and states #298's consequence
+>   before it claims anything. The scope below said "non-negotiable"; what is non-negotiable turned
+>   out to be *telling the operator*, not refusing them.
+> - **The node is not the sole controller of a long-lived child.** The default mode claims, resizes
+>   and releases inside a few hundred milliseconds. The wedge timeout this brief calls the one thing
+>   that must be built is `RELEASE_GRACE` in `kampr-herdr/src/control.rs`, and a held controller has
+>   a second deadline of its own in `kampr-node/src/holds.rs`.
+> - **`terminal.scroll` did not arrive with it**, deliberately. ADR 0004's compromise chain stands.
+>   Owning a controller for a deliberate resize does not make it a scroll transport, and the prize
+>   this brief names is still unclaimed.
+>
+> Two rows were measured for it: [#305](./03-probe-log.md) (a controller's size survives its own
+> clean exit, enlarging as well as shrinking) and [#306](./03-probe-log.md) (nothing anywhere says
+> whether a desk client is attached — which is why the op measures the outcome and reports it).
 
 **Owns** a successor to ADR 0002. **W0's control-eviction row has landed and it is worse than a
 refusal: #298 measured that `control` neither refuses nor evicts an attached desk TUI — it reshapes

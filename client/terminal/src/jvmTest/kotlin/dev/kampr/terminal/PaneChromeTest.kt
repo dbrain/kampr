@@ -121,7 +121,13 @@ class ZoomSheetDismissTest {
         waitForIdle()
         session.view.sheetOpen = true
         waitForIdle()
-        onNodeWithContentDescription("Close the zoom sheet").performClick()
+        // Tapped near the top of the scrim rather than at its centre. The scrim fills the window,
+        // so its centre moved *inside* the sheet once that grew a slider and a resize panel — and
+        // a tap landing on the sheet is not the thing this test is about.
+        onNodeWithContentDescription("Close the zoom sheet").performTouchInput {
+            down(Offset(width / 2f, 8f))
+            up()
+        }
         waitForIdle()
         assertFalse(session.view.sheetOpen, "a tap on the scrim has to close the sheet")
         assertFalse(

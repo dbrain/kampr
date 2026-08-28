@@ -193,6 +193,7 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
     override fun show(view: PaneView) = state.setPaneView(view)
+    override fun holding(paneId: String, held: Boolean) = state.holdingPane(paneId, held)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
 }
 
@@ -516,6 +517,7 @@ private fun StatusStrip(
 ) {
     val tokens = Kampr.tokens
     val herd by state.store.herd.collectAsState()
+    val held by state.heldPane.collectAsState()
     val hub = herd.nodes.firstOrNull { it.kind == "local" }
     Row(
         Modifier
@@ -551,6 +553,7 @@ private fun StatusStrip(
         KText(
             when {
                 refused -> "not paired — this node does not know this device"
+                held != null -> "holding $held at a size — the desk sees it this shape too"
                 offline == null -> "no lease held — desktop shape untouched"
                 else -> "reconnecting in ${offline.retryInMs / 1000}s — showing cached grid"
             },

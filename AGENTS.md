@@ -24,6 +24,7 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | How do I ship it? | [`docs/07-android-release.md`](./docs/07-android-release.md) |
 | Why won't passkeys work on my host? | [`docs/10-passkeys.md`](./docs/10-passkeys.md) — the Android asset-links constraint is structural |
 | How does the terminal client work? | [`docs/11-cli-briefs.md`](./docs/11-cli-briefs.md) — the workstreams, and the probes that reshaped three of them |
+| What does the agent in a pane write down, and what do we read? | [`docs/12-harness-briefs.md`](./docs/12-harness-briefs.md) — session markers, subagent transcripts, and the procfs walk three workstreams share |
 
 ## The rules
 
@@ -39,8 +40,13 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    and watching the test fail. A test that still passes with the defect restored is a harness that
    was never the app (#191) — delete it rather than keep it green.
 
-3. **Kampr never resizes a pane.** No `terminal session control`, no `terminal.resize`, ever
-   (#17, #18). Small screens are handled by rendering: zoom, pan, and the conversation view.
+3. **Looking at a pane never reshapes it**, and there is exactly **one** place that reshapes one
+   on purpose: the `pane.size` op, behind a panel, with a confirmation and an 80x24 floor
+   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). Nothing else may claim a
+   PTY — no watch, zoom, pan, fit, reconnect or layout — because `control` takes it with no way to
+   decline (#17), overrides the desk while held (#18) and leaves an attached desk rendering wrong
+   without being told (#298). Small screens are still handled by rendering: zoom, pan, and the
+   conversation view.
 
 4. **Bug fixes and logic changes are TDD**, at integration level where one exists. `live.rs` drives a
    real herdr end to end and is usually the honest level.
@@ -112,7 +118,8 @@ and read as defects if you do not know that.
 
 - **A wire change that is not additive.** Old clients are on real phones. New optional fields and
   new `t` values are fine; reinterpreting an existing field is not.
-- **Anything that resizes a pane** — see rule 3. It is the one thing Kampr must never do.
+- **Anything that resizes a pane outside `pane.size`** — see rule 3. One deliberate, confirmed
+  path exists; a second one, or an implicit one, is the thing Kampr must never do.
 - **A claim about herdr's behaviour with no probe row behind it**, in code or in a comment.
 - **A citation pointing at a probe number that does not exist.** This has happened; the log is
   append-only and gap-free, so `grep -c` the number before trusting it.

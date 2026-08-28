@@ -4,6 +4,7 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
+import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.ZoomMode
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -43,6 +44,14 @@ class ManageWireTest {
         "tab.create" to ManageOp.TabCreate("01JNODE/w3", "tests", "/home/dbrain/dev/kampr"),
         "pane.split" to ManageOp.PaneSplit("01JNODE/w3:p2", SplitDirection.Right, 0.35),
         "pane.zoom" to ManageOp.PaneZoom("01JNODE/w3:p2", ZoomMode.Toggle),
+        "pane.size" to ManageOp.PaneSize("01JNODE/w3:p2", cols = 200, rows = 50),
+        "pane.size.hold" to ManageOp.PaneSize(
+            at = "01JNODE/w3:p2",
+            cols = 200,
+            rows = 50,
+            mode = SizeMode.Hold,
+        ),
+        "pane.size.release" to ManageOp.PaneSize("01JNODE/w3:p2", mode = SizeMode.Release),
         "rename" to ManageOp.Rename("01JNODE/w3:p2", "build"),
         "rename.clear" to ManageOp.Rename("01JNODE/w3:p2", null),
         "close" to ManageOp.Close("01JNODE/w3:t1"),

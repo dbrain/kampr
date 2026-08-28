@@ -12,6 +12,7 @@ pub mod caps;
 pub mod config;
 pub mod convo;
 pub mod herd;
+pub mod holds;
 pub mod http;
 pub mod manage;
 pub mod mesh;

@@ -44,6 +44,12 @@ interface PaneIo {
     // adapter has no conversation to show, and offers the terminal instead of an error.
     fun show(view: PaneView) = Unit
 
+    // Told when a pane is being held at a size, because the status strip stands there saying "no
+    // lease held — desktop shape untouched" and that sentence is false exactly while one is. A
+    // held pane overrides whoever is at the desk (#18) and leaves their screen wrong (#298), so it
+    // is the one state the operator most needs said out loud rather than assumed away.
+    fun holding(paneId: String, held: Boolean) = Unit
+
     // The bytes behind a transcript attachment, on demand and over HTTP rather than over the
     // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines
     // every pane for seconds on a phone link.

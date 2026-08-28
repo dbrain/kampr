@@ -19,7 +19,7 @@ fn op(case: &str) -> ManageOp {
 fn every_fixture_case_decodes_into_a_manage_op() {
     let all = fixture();
     let cases = all.as_object().expect("the fixture is an object");
-    assert!(cases.len() >= 16, "the fixture must cover every op");
+    assert!(cases.len() >= 19, "the fixture must cover every op");
     for (case, value) in cases {
         assert_eq!(value["t"], "manage", "{case} is not a manage message");
         let parsed: ManageOp =
@@ -81,6 +81,30 @@ fn each_target_lands_on_the_kind_its_op_requires() {
         parse_target(node, &at("focus")).unwrap(),
         Target::Workspace(_)
     ));
+    for case in ["pane.size", "pane.size.hold", "pane.size.release"] {
+        assert!(
+            matches!(parse_target(node, &at(case)).unwrap(), Target::Pane(_)),
+            "{case} reshapes one pane's PTY and has to be addressed at one",
+        );
+    }
+}
+
+/// The two numbers `pane.size` is entirely about, and the mode that carries neither. They are
+/// `u32` rather than strings because a column count that arrives as `"200"` is a column count
+/// nothing can clamp.
+#[test]
+fn a_size_carries_its_two_numbers_and_a_release_carries_none() {
+    assert_eq!(
+        (op("pane.size").cols, op("pane.size").rows),
+        (Some(200), Some(50))
+    );
+    assert_eq!(op("pane.size").mode, None, "the safe mode is the default one");
+    assert_eq!(op("pane.size.hold").mode.as_deref(), Some("hold"));
+    assert_eq!(
+        (op("pane.size.release").cols, op("pane.size.release").rows),
+        (None, None),
+        "letting go names no size",
+    );
 }
 
 #[test]

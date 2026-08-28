@@ -54,6 +54,8 @@ import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.breakpointOf
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.SizeMode
 import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.InputSink
@@ -364,18 +366,20 @@ fun TerminalView(
                         if (transcript) add("Open the Conversation view" to { io.show(PaneView.Conversation) })
                     },
                 )
-                // A sheet over this surface is modal, and the grid's detector consumes the
-                // release — so leaving it live is what let a tap meant for the scrim raise the
-                // keyboard instead of closing the sheet.
+                // The wheel stays live under a sheet. It consumes nothing but a scroll, so it
+                // cannot steal the tap the scrim needs — and ctrl+wheel while the zoom sheet is
+                // open is the sheet's own readout moving, which is the point of having it there.
+                .pointerInput(pane.id) { terminalWheel(view, probe, presets) }
+                // The touch detector does not. A sheet over this surface is modal, and the grid's
+                // detector consumes the release — so leaving *it* live is what let a tap meant for
+                // the scrim raise the keyboard instead of closing the sheet.
                 .then(
                     if (view.sheetOpen || session.confirm.held != null) {
                         Modifier
                     } else {
-                        Modifier
-                            .pointerInput(pane.id) { terminalWheel(view, probe) }
-                            .pointerInput(pane.id) {
-                                terminalGestures(session, presets, paint, probe, ::tapped)
-                            }
+                        Modifier.pointerInput(pane.id) {
+                            terminalGestures(session, presets, paint, probe, ::tapped)
+                        }
                     },
                 ),
         ) {
@@ -450,10 +454,16 @@ fun TerminalView(
             )
         }
 
+        // Stood down while a sheet is up, and the web is why. The wasm actual reclaims DOM focus
+        // every animation frame and stands down only for an `INPUT`, a `TEXTAREA` or something
+        // contenteditable — and Compose renders into a `<canvas>`, which is none of those. So the
+        // offscreen div took the focus straight back off the sheet each frame and `preventDefault`ed
+        // Escape and every ctrl chord into the shell, and no key ever reached the sheet at all.
+        // `Modifier.modal`'s Escape-to-dismiss could not work in a browser while this was ungated.
         PaneTextInput(
             session = session,
             sink = sink,
-            enabled = !io.readOnly,
+            enabled = !io.readOnly && !view.sheetOpen && session.confirm.held == null,
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),
         )
 
@@ -568,7 +578,51 @@ fun TerminalView(
                     session.confirm.local = on
                     io.send(ClientMsg.SetPrefs(pane.id, mapOf("confirm" to if (on) "on" else "off")))
                 },
-                onDismiss = { view.sheetOpen = false },
+                // Hidden on a read-only device rather than disabled, which is `ManageLayer`'s rule
+                // for everything `manage` can reach.
+                sizing = if (io.readOnly) {
+                    null
+                } else {
+                    PaneSizing(
+                        cols = cols,
+                        rows = rows.liveRows,
+                        // What this client can actually show at the zoom it is on, which is what
+                        // "match this view" means. Below the floor the panel refuses it and says so.
+                        fitCols = (paint.width / metrics.width).toInt().coerceAtLeast(1),
+                        fitRows = visibleRows,
+                        held = view.sizeHeld,
+                    )
+                },
+                onResize = { c, r ->
+                    io.send(
+                        ClientMsg.Manage(
+                            ManageOp.PaneSize(
+                                at = pane.id,
+                                cols = c,
+                                rows = r,
+                                mode = if (view.sizeHeld) SizeMode.Hold else SizeMode.Once,
+                            ),
+                        ),
+                    )
+                },
+                onHoldSize = { on ->
+                    view.sizeHeld = on
+                    io.holding(pane.id, on)
+                    // Ticking it off is the release. Ticking it on claims nothing by itself — the
+                    // next resize is what takes the PTY, so the toggle is a choice about how the
+                    // next one behaves rather than an action of its own.
+                    if (!on) io.send(ClientMsg.Manage(ManageOp.PaneSize(pane.id, mode = SizeMode.Release)))
+                },
+                onDismiss = {
+                    view.sheetOpen = false
+                    // A hold outlives the panel only by mistake. The node releases at its own
+                    // deadline regardless, but that is the backstop and this is the ordinary path.
+                    if (view.sizeHeld) {
+                        view.sizeHeld = false
+                        io.holding(pane.id, false)
+                        io.send(ClientMsg.Manage(ManageOp.PaneSize(pane.id, mode = SizeMode.Release)))
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(bottom = with(density) { session.keyRowHeight.toDp() }),

@@ -328,8 +328,8 @@ iOS was never possible and this does not change that — third-party apps cannot
 - [-] Forking Collie (different product; the collision is architectural, not incidental)
 - [-] Trusted-header auth as the *only* gate (it stays available behind an opt-in `trust_proxy`, but never as the credential)
 - [-] Reflowing terminal rows into wrapped text for phone width (this is Collie's answer; the ladder in P6.5 replaces it)
-- [-] Resizing a pane for any reason. Kampr uses `observe` + JSON-RPC input and cannot reshape a session.
-- [-] `terminal session control` in any form — it always claims geometry, with no flag to decline.
+- [x] Resizing a pane, in exactly one deliberate place — `pane.size`, behind a panel and a confirmation, floored at 80x24 ([ADR 0012](./adr/0012-one-deliberate-resize-behind-a-panel.md)). Viewing still reshapes nothing.
+- [-] `terminal session control` as a general instrument — it always claims geometry, with no flag to decline. One caller exists, and it releases immediately.
 - [-] A VT emulator in Kotlin. It runs once, in Rust, on the server.
 - [-] Requiring Tailscale for anything. It is one way up the ladder, alongside NPM / Caddy / Traefik.
 - [-] A local shell on iOS. Third-party apps cannot spawn processes; no amount of effort changes it.

@@ -33,6 +33,8 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.Wire
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -109,6 +111,21 @@ class AppState(
     private val derived: Endpoint? = defaultEndpoint(),
 ) {
     val connection = KamprConnection(scope, store)
+
+    // Which pane, if any, this client is holding a controller on. One at a time: the panel that
+    // starts a hold releases the previous one, and the node refuses a second controller anyway
+    // (#21). Kept here rather than on the pane's own state because the status strip is what has to
+    // stop claiming the desk is untouched.
+    private val held = MutableStateFlow<String?>(null)
+    val heldPane: StateFlow<String?> = held
+
+    fun holdingPane(paneId: String, holding: Boolean) {
+        held.value = when {
+            holding -> paneId
+            held.value == paneId -> null
+            else -> held.value
+        }
+    }
 
     // The service worker outlives every page and cannot read where the token is kept, so it is
     // handed over on the way past. Without it a push arrives, warms nothing, and the tap that

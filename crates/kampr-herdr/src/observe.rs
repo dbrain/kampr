@@ -46,7 +46,8 @@ pub struct Observer {
 impl Observer {
     /// Always pass the pane's *native* geometry. `observe` defaults to 120x40 when the flags are
     /// omitted, which crops or pads a pane of any other size, and it crops rather than reflows.
-    /// It never touches the PTY — unlike `terminal session control`, which always claims it.
+    /// It never touches the PTY (#14) — unlike `terminal session control`, which always claims it
+    /// and lives next door in `control.rs` for the one op allowed to use it.
     pub fn spawn(herdr_bin: &str, socket: &Path, pane_id: &str, cols: u32, rows: u32) -> Result<Self> {
         let herdr = locate::locate(herdr_bin, &Search::from_env())?;
         let mut child = Command::new(&herdr.path)

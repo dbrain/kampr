@@ -17,9 +17,12 @@ running at your desk.
   reconstructs the grid exactly — truecolour, cursor, hyperlinks and all.
 - **A conversation view for agents.** Claude, Codex and Antigravity transcripts render as real markdown, so a
   table is a table. This is the default view for agent panes.
-- **It never resizes your panes.** Kampr observes and types; it is structurally incapable of
-  reshaping a session. Small screens are handled with zoom, pan and the conversation view, so the
-  desk you come back to is the desk you left.
+- **Looking never reshapes.** Kampr observes and types; watching a pane cannot change it, however
+  small the screen. Small screens are handled with zoom, pan and the conversation view, so the desk
+  you come back to is the desk you left. There is one deliberate exception, behind a panel and a
+  confirmation — a pane that was *born* unusable, which happens when an agent starts a herdr
+  headlessly, can be given a real width. It is the only thing that claims a PTY, it hands it back
+  immediately, and it refuses to make a pane smaller than 80x24.
 
 ---
 

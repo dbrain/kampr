@@ -41,6 +41,9 @@ pub struct Node {
     /// Every node reached over a mesh link, and what this node remembers of the ones that
     /// dropped. Empty until somebody joins, which is most nodes.
     pub peers: Arc<Peers>,
+    /// Controllers held open on the operator's behalf by `pane.size`. Empty on every node that has
+    /// never been asked to reshape a pane, which is nearly all of them.
+    pub holds: Arc<crate::holds::PaneHolds>,
     pub auth: Arc<Auth>,
     pub push: Arc<crate::push::Push>,
     /// One per node, because the rate limit it exists for is per *desktop*: a Toaster made at the
@@ -115,6 +118,7 @@ impl Node {
             config,
             sessions,
             peers,
+            holds: Arc::new(crate::holds::PaneHolds::default()),
             auth,
             push,
             toaster: crate::toast::Toaster::default(),

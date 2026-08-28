@@ -100,7 +100,7 @@ Android's backend is HWUI (platform-chosen Vulkan or GLES); the emulator ran wit
 
 ## Pinch-zoom and pan
 
-Kampr never resizes a pane, so zoom is the whole small-screen story. Two strategies, measured under
+Looking at a pane never reshapes it, so zoom is the whole small-screen story. Two strategies, measured under
 a scripted gesture (zoom oscillating 0.75×–1.85× plus pan, changing every frame — harsher than a
 human pinch).
 

@@ -433,8 +433,16 @@ gave it.
 publish, supervise or tear down a tunnel, and it never will — that is a CLI contract it could not
 test.
 
-**Kampr does not protect against you.** `manage` can close panes, kill workspaces and start agents.
-A structural action states what it will do before doing it; it does not ask twice.
+**Kampr does not protect against you.** `manage` can close panes, kill workspaces, start agents and
+— since [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md) — reshape a pane's PTY. A
+structural action states what it will do before doing it; it does not ask twice.
+
+**A resize reaches someone else's screen, and holding one keeps it there.** `pane.size` is the only
+op that claims a PTY. A full-role device may reshape any pane on any node in the herd, and while a
+hold is held the person at that desk is ignored (#18) and renders wrong without being told (#298).
+It is refused to a read-only device by the same gate as every other `manage` op, it will not go
+below 80x24, it releases on its own deadline, and the status strip says so while a hold is live —
+but nothing stops a full-role device doing it, because a full-role device is equivalent to a shell.
 
 **A destructive-command confirmation does not exist.** It is on the roadmap and is not built. Do not
 plan around it.

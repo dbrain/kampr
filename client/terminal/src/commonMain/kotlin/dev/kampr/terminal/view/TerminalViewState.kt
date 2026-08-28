@@ -31,6 +31,11 @@ class TerminalViewState {
     var pinching by mutableStateOf(false)
         private set
     var sheetOpen by mutableStateOf(false)
+
+    // Whether a controller is being held open on this pane by `pane.size`. Session-local and never
+    // persisted, unlike `remembered`: a held pane is one the desk cannot reshape (#18) and renders
+    // wrong at (#298), so it has to be asked for again every time rather than remembered into.
+    var sizeHeld by mutableStateOf(false)
     var selection by mutableStateOf<Selection?>(null)
     var blockSelect by mutableStateOf(false)
     var target by mutableStateOf<Target?>(null)

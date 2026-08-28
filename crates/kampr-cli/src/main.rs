@@ -6,6 +6,7 @@ mod mesh;
 mod pairing;
 mod recovery;
 mod report;
+mod resize;
 mod service;
 mod setup;
 mod update;
@@ -111,6 +112,21 @@ enum Command {
         dirs: Dirs,
         #[arg(long)]
         json: bool,
+    },
+    /// Give a pane a real width, when it was born too small to use
+    ///
+    /// The only command that reshapes a pane. It claims the PTY, resizes, hands it straight back,
+    /// and then measures — a headless pane keeps the new size, one with a desk attached does not.
+    Resize {
+        #[command(flatten)]
+        dirs: Dirs,
+        #[arg(long)]
+        cols: u32,
+        #[arg(long)]
+        rows: u32,
+        /// Defaults to the only pane, when there is only one.
+        #[arg(long)]
+        pane: Option<String>,
     },
     /// Join hosts into one herd
     Mesh {
@@ -252,6 +268,12 @@ async fn main() -> Result<()> {
             }
         }
         Command::Doctor { dirs, json } => doctor::run(&dirs, json).await,
+        Command::Resize {
+            dirs,
+            cols,
+            rows,
+            pane,
+        } => resize::run(&dirs.config(), cols, rows, pane).await,
         Command::Mesh { action } => match action {
             MeshAction::Invite { dirs } => mesh::invite(&dirs.config(), dirs.state_override()).await,
             MeshAction::Join {

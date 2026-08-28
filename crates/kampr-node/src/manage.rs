@@ -42,6 +42,44 @@ pub struct ManageOp {
     pub path: Option<String>,
     #[serde(default)]
     pub layout: Option<Value>,
+    #[serde(default)]
+    pub cols: Option<u32>,
+    #[serde(default)]
+    pub rows: Option<u32>,
+}
+
+/// The smallest pane `pane.size` will produce.
+///
+/// A headless resize *persists* after the controller lets go (#219), so a client that fits a pane
+/// to its own viewport locks that pane at that size until something else moves it. On a phone that
+/// viewport is far narrower than anything a shell is usable at, and the escape hatch would become
+/// the thing it exists to undo. 80x24 is the floor every terminal has agreed on for forty years.
+pub const MIN_COLS: u32 = 80;
+pub const MIN_ROWS: u32 = 24;
+
+/// Well past any real desk — a guard against a typo rather than a considered limit.
+pub const MAX_COLS: u32 = 1000;
+pub const MAX_ROWS: u32 = 500;
+
+/// The floor and the ceiling, apart from the op so they can be tested without a herdr.
+///
+/// The floor is the load-bearing one and it is there because of the operator this feature is for:
+/// a resize on a headless pane persists after the controller goes (#219), so fitting a pane to a
+/// phone's viewport would lock it at phone width for every other client, permanently. Refusing is
+/// the whole answer — there is nothing to undo it with except another resize.
+pub fn checked_size(cols: u32, rows: u32) -> Result<(u32, u32), ManageError> {
+    if cols < MIN_COLS || rows < MIN_ROWS {
+        return Err(ManageError::BadRequest(format!(
+            "{cols}x{rows} is smaller than {MIN_COLS}x{MIN_ROWS}, and a pane keeps the size it is \
+             given — fitting one to a small screen leaves it that narrow for everything else"
+        )));
+    }
+    if cols > MAX_COLS || rows > MAX_ROWS {
+        return Err(ManageError::BadRequest(format!(
+            "{cols}x{rows} is larger than {MAX_COLS}x{MAX_ROWS}"
+        )));
+    }
+    Ok((cols, rows))
 }
 
 /// Sixteen times the worst stop measured in #241, and a thousand times the worst create in #240.
@@ -101,6 +139,7 @@ pub struct Manager<'a> {
     pub herdr: &'a Herdr,
     pub node_id: &'a str,
     pub binary: &'a str,
+    pub holds: &'a crate::holds::PaneHolds,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -200,6 +239,7 @@ impl Manager<'_> {
                 self.call("pane.zoom", json!({ "pane_id": pane, "mode": mode }))
                     .await
             }
+            "pane.size" => self.size_pane(op).await,
             "rename" => match self.target(op)? {
                 // Only a pane's label is nullable: herdr's tab and workspace rename take a
                 // required string, so there is nothing to clear them to.
@@ -328,6 +368,92 @@ impl Manager<'_> {
             reply: json!({ "session": name }),
             settle: Some(self.settle(name, true, failure)),
         })
+    }
+
+    /// The one op that reshapes a pane, and the only place in Kampr that claims a PTY.
+    ///
+    /// It exists because a pane can be born unusable and nothing else can reach it: a headless
+    /// session's PTY is whatever created it, `observe` never touches it (#14), and no method on
+    /// herdr's socket API reports or sets a column count at all (#221). The already-shipped
+    /// `pane.zoom` is the complement rather than a substitute — it moves the PTY only when a client
+    /// is attached and does nothing at all headless (#265), which is exactly the case this serves.
+    ///
+    /// Three modes, and the default is the safe one:
+    /// - `once` claims, resizes, releases, then *measures* — because on an attached pane the desk
+    ///   takes its geometry straight back (#19) and a reply that assumed otherwise would be a
+    ///   plausible-looking success, which is the failure this project has paid for before (#233).
+    /// - `hold` keeps the claim so the size survives on an attached pane, at the cost of that desk
+    ///   rendering wrong while it is held (#298). Never implicit; the operator ticks it.
+    /// - `release` lets a hold go.
+    async fn size_pane(&self, op: &ManageOp) -> Result<Value, ManageError> {
+        let Target::Pane(pane) = self.target(op)? else {
+            return Err(ManageError::BadRequest("pane.size needs a pane".into()));
+        };
+        let mode = op.mode.as_deref().unwrap_or("once");
+
+        if mode == "release" {
+            let held = self.holds.release(&pane);
+            let rows = self.viewport_rows(&pane).await;
+            return Ok(json!({ "pane_id": pane, "held": false, "was_held": held, "rows": rows }));
+        }
+
+        // Checked before the numbers, so an unknown mode is reported as an unknown mode rather
+        // than as the missing `cols` it also happens to have.
+        if !matches!(mode, "hold" | "once") {
+            return Err(ManageError::BadRequest(format!("unknown size mode {mode}")));
+        }
+        let (cols, rows) = match (op.cols, op.rows) {
+            (Some(c), Some(r)) => (c, r),
+            _ => return Err(ManageError::BadRequest("pane.size needs cols and rows".into())),
+        };
+        checked_size(cols, rows)?;
+
+        // Let go *before* claiming, never after. Herdr allows one controller at a time and refuses
+        // the second with `already has an attached client` (#21), so a re-size while holding has to
+        // release first or it fails outright — and the release is asynchronous, so this waits for
+        // the pane to actually be free rather than racing it.
+        if self.holds.release(&pane) {
+            self.holds.wait_until_free(&pane).await;
+        }
+
+        let socket = self.herdr.socket().to_path_buf();
+        let controller = kampr_herdr::Controller::claim(self.binary, &socket, &pane, cols, rows)
+            .await
+            .map_err(|e| ManageError::Herdr(e.to_string()))?;
+
+        match mode {
+            "hold" => {
+                self.holds.park(&pane, controller);
+                Ok(json!({ "pane_id": pane, "cols": cols, "rows": rows, "held": true }))
+            }
+            _ => {
+                controller
+                    .release()
+                    .await
+                    .map_err(|e| ManageError::Herdr(e.to_string()))?;
+                // What actually stuck. Rows are the honest half — `viewport_rows` is the PTY's and
+                // not the rect's (#84) — and columns are reported by nothing anywhere (#221), so
+                // the reply says what it measured rather than echoing what was asked for.
+                let measured = self.viewport_rows(&pane).await;
+                let kept = measured == Some(u64::from(rows));
+                Ok(json!({
+                    "pane_id": pane, "cols": cols, "rows": rows,
+                    "held": false, "kept": kept, "measured_rows": measured,
+                }))
+            }
+        }
+    }
+
+    /// The PTY's rows, or `None` if herdr will not say. Never an error: this is the *check* after
+    /// a resize, and a check that cannot be made must not turn a resize that happened into a
+    /// failure that did not.
+    async fn viewport_rows(&self, pane: &str) -> Option<u64> {
+        let reply: kampr_herdr::model::PaneReply = self
+            .herdr
+            .call("pane.get", json!({ "pane_id": pane }))
+            .await
+            .ok()?;
+        reply.pane.scroll.map(|s| s.viewport_rows)
     }
 
     /// A named session has its own socket, so stopping one is an ordinary `server.stop` addressed
@@ -545,5 +671,32 @@ mod tests {
         assert_eq!(spelled(ManageError::BadRequest("x".into())), "bad_request");
         assert_eq!(spelled(ManageError::UnknownTarget("x".into())), "unknown_pane");
         assert_eq!(spelled(ManageError::Herdr("x".into())), "herdr_unavailable");
+    }
+
+    /// The guard the operator asked for by name: a phone must not be able to lock a pane at phone
+    /// width. A headless resize persists (#219), so there is no later event that undoes one.
+    #[test]
+    fn a_pane_cannot_be_resized_smaller_than_a_terminal_is_usable_at() {
+        let refused = |c, r| match checked_size(c, r) {
+            Err(ManageError::BadRequest(said)) => said,
+            other => panic!("{c}x{r} was allowed: {other:?}"),
+        };
+        // A phone's own viewport, which is exactly what "fit this to my screen" would ask for.
+        let said = refused(45, 20);
+        assert!(
+            said.contains("80x24"),
+            "the refusal has to name the floor: {said}"
+        );
+        assert!(
+            said.contains("keeps the size it is given"),
+            "and say why it cannot be undone: {said}",
+        );
+        refused(MIN_COLS - 1, MIN_ROWS);
+        refused(MIN_COLS, MIN_ROWS - 1);
+        refused(MAX_COLS + 1, MIN_ROWS);
+        refused(MIN_COLS, MAX_ROWS + 1);
+
+        assert_eq!(checked_size(MIN_COLS, MIN_ROWS).unwrap(), (80, 24));
+        assert_eq!(checked_size(200, 50).unwrap(), (200, 50));
     }
 }

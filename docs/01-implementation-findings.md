@@ -40,7 +40,9 @@ decision Collie made*, not a limitation of Herdr. Kampr can take the opposite be
 - **Soft native is the shipping look**, built on a token layer (colour, type, radius, border) so
   phosphor / warm editorial / brutalist stay reachable as themes rather than rewrites. The design
   canvas carries all four as a live switch, which is the proof it holds.
-- **Kampr never resizes a session.** Desktop geometry is authoritative and permanent. Small screens
+- **Kampr never resizes a session as a side effect of viewing.** *(Narrowed by
+  [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md): one deliberate, confirmed `pane.size`
+  op now exists for panes born unusable.)* Desktop geometry is authoritative. Small screens
   are handled by zoom, pan and the Conversation view — never by reshaping the pane. §3.4.
 - **Rust + axum on the server, Kotlin Multiplatform + Compose Multiplatform on the clients**, with VT
   emulation done once on the server and a cell-grid protocol to the clients. §5.5.
@@ -365,7 +367,10 @@ Both must also cover what Herdr will not do for us: **supervision** (`[[startup]
 so a systemd/launchd unit is still required) and **update** (plugin v1 has no `plugin update`, and a
 reinstall restarts nothing).
 
-### 3.4 Responsive UI — **Kampr never resizes a session**
+### 3.4 Responsive UI — **Kampr never resizes a session as a side effect of viewing**
+
+> Narrowed by [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md). Everything below still
+> describes what *viewing* does. One explicit op reshapes a pane on request.
 
 This reversed twice, and the probes are why. The final position is the simplest one available.
 

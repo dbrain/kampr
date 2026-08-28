@@ -1,8 +1,10 @@
+pub mod control;
 pub mod locate;
 pub mod model;
 pub mod observe;
 pub mod rpc;
 
+pub use control::{Controller, HOLD_LIMIT};
 pub use locate::{Found, Origin, Search};
 pub use model::{AgentStatus, Command, Pane, ProcessInfo, Snapshot, SnapshotReply};
 pub use observe::{Observer, StreamEvent};

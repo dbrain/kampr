@@ -1,6 +1,13 @@
 # 0002 — Kampr never resizes a pane
 
-- **Status:** Accepted
+> **Superseded in part by [ADR 0012](./0012-one-deliberate-resize-behind-a-panel.md) (2026-08-28).**
+> The invariant this ADR is really about — *looking at a pane never reshapes it* — still holds
+> absolutely. What 0012 narrows is the stronger claim below that the code path does not exist: one
+> deliberate, confirmed, floored path now does, for panes that are *born* unusable, which is a case
+> this ADR had not seen. Its reasoning about what a controller costs is unchanged and was the input
+> to 0012; read it first.
+
+- **Status:** Superseded in part by 0012
 - **Date:** 2026-08-20
 - **Shipped in:** `f1f8860`; restated in every brief since
 - **Evidence:** probes [#13–#21, #31–#34, #52, #68](../03-probe-log.md)

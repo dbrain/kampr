@@ -68,6 +68,15 @@ data class ZoomPresets(val fitWidth: Float, val readable: Float, val closeUp: Fl
     val maximum: Float get() = closeUp * 2.5f
 }
 
+// How a zoom is spoken and written wherever a person reads one — the button, the sheet's header,
+// the slider. Distinct from `TerminalView`'s two-decimal one, which is not a label at all: that is
+// the value written into the `zoom` pref and it goes on the wire.
+internal fun zoomLabel(zoom: Float): String {
+    if (zoom <= 0f) return "fit"
+    val tenths = (zoom * 10f + 0.5f).toInt()
+    return "${tenths / 10}.${tenths % 10}×"
+}
+
 fun zoomPresets(paintWidth: Float, cols: Int, baseCellWidth: Float): ZoomPresets {
     val fit = if (cols > 0 && baseCellWidth > 0f) paintWidth / (cols * baseCellWidth) else 1f
     return ZoomPresets(

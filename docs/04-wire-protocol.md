@@ -15,7 +15,8 @@ clients a cell grid. Clients parse no escape sequences. Consequences that are lo
 - One emulator per pane, shared by every viewer, not one per viewer.
 - Selection, find, and OSC 8 hyperlinks are node features over a cell model, not three client
   reimplementations. Hyperlinks survive here where `pane.read` drops them (probe #36/#37).
-- Zoom and pan are pure rendering. Kampr **never resizes a pane** (probe #17).
+- Zoom and pan are pure rendering and reshape nothing (probe #17). The one op that reshapes a pane
+  is `pane.size`, which an operator asks for by name — see [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md).
 
 ## Ids
 
@@ -852,7 +853,9 @@ the same path but is **not** an error and does not close anything — it arrives
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
 ```
 
-There is **no resize message and there will not be one.** The node cannot reshape a pane.
+There is **no resize message on the client socket**, and there will not be one: a resize is not
+something a viewing client does. Reshaping a pane is a `manage` op — `pane.size` — asked for
+explicitly, like every other structural action ([ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md)).
 
 **A `prefs` write is a merge, not a replacement.** It names the keys it is changing and leaves the
 rest of that pane's blob alone, so a client that stores a zoom does not thereby forget the view.
@@ -964,6 +967,17 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 // `at` for tab.create is a WORKSPACE id. Nodes accept a tab id too and derive its workspace.
 { "t": "manage", "op": "pane.split",       "at": "01J.../w3:p2", "direction": "right", "ratio": 0.5, "cwd": null }
 { "t": "manage", "op": "pane.zoom",        "at": "01J.../w3:p2", "mode": "toggle" }
+
+// The one op that reshapes a pane's PTY, and the only caller of `terminal session control` in the
+// product (ADR 0012). `mode` defaults to "once": claim, resize, release, then *measure* — on a pane
+// with a desk attached the geometry is restored the moment the claim goes (#19), and the ack says
+// `kept` and `measured_rows` rather than echoing what was asked for. "hold" keeps the claim so the
+// size survives there, at the cost of that desk rendering wrong while held (#298); "release" ends
+// one. Refused below 80x24, because a headless resize persists (#219, #305) and a pane fitted to a
+// small screen would stay that narrow for everybody.
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50 }
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50, "mode": "hold" }
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "mode": "release" }
 { "t": "manage", "op": "rename",           "at": "01J.../w3:p2", "label": "build" }   // null clears, panes only
 { "t": "manage", "op": "close",            "at": "01J.../w3:p2" }                     // pane | tab | workspace
 { "t": "manage", "op": "focus",            "at": "01J.../w3:p2" }
@@ -1039,7 +1053,7 @@ pane on a session that will never appear in the herd.
 ### A note on splits
 
 A `pane.split` changes the Herdr layout, so it changes pane geometry **for everyone**. That is
-correct for an explicit action and does not conflict with "Kampr never resizes a pane" — that
+correct for an explicit action and does not conflict with "looking at a pane never reshapes it" — that
 invariant is about side effects of *viewing*, not about refusing to act. Say what it will do before
 doing it.
 

@@ -11,6 +11,17 @@ enum class SplitDirection(val wire: String) { Right("right"), Down("down") }
 
 enum class ZoomMode(val wire: String) { Toggle("toggle"), On("on"), Off("off") }
 
+// `Once` resizes and hands the PTY straight back; `Hold` keeps the claim so the size survives on a
+// pane a desk is attached to, which restores its own geometry the moment a controller lets go;
+// `Release` gives a hold up. Off by default everywhere — a held pane is one the desk cannot reshape.
+enum class SizeMode(val wire: String) { Once("once"), Hold("hold"), Release("release") }
+
+// The smallest pane the node will produce, mirrored from `crates/kampr-node/src/manage.rs` so the
+// client can grey a control out rather than offer one the node refuses. A resize on a headless pane
+// persists, so fitting a pane to a small screen would leave it that narrow for every other client.
+const val MIN_PANE_COLS = 80
+const val MIN_PANE_ROWS = 24
+
 // One type per op, because `Map<String, String?>` could express four of them: `ratio` is a float,
 // `env` an object, `args` an array and `layout` a nested tree. Field names and shapes here are the
 // ones `crates/kampr-node/src/manage.rs` deserialises.
@@ -46,6 +57,17 @@ sealed interface ManageOp {
 
     data class PaneZoom(val at: String, val mode: ZoomMode = ZoomMode.Toggle) : ManageOp {
         override val op: String get() = "pane.zoom"
+    }
+
+    // The one op that reshapes a pane. `cols`/`rows` are absent on a `Release`, which names no
+    // size because it is only letting go of one.
+    data class PaneSize(
+        val at: String,
+        val cols: Int? = null,
+        val rows: Int? = null,
+        val mode: SizeMode = SizeMode.Once,
+    ) : ManageOp {
+        override val op: String get() = "pane.size"
     }
 
     // A null label clears a pane's; a tab or a workspace refuses it with bad_request.
@@ -134,6 +156,13 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.PaneZoom -> {
             put("at", at)
             put("mode", mode.wire)
+        }
+        is ManageOp.PaneSize -> {
+            put("at", at)
+            if (cols != null) put("cols", JsonPrimitive(cols))
+            if (rows != null) put("rows", JsonPrimitive(rows))
+            // Omitted when it is the default, matching the fixture's plain `pane.size` case.
+            if (mode != SizeMode.Once) put("mode", mode.wire)
         }
         is ManageOp.Rename -> {
             put("at", at)

@@ -77,9 +77,16 @@ that way, but because Herdr's frame stream carries information its read API dest
 and OSC 8 hyperlinks — and because applying a diff frame requires emulator state somewhere.
 [ADR 0001](./docs/adr/0001-the-node-runs-a-vt-emulator.md).
 
-**Kampr cannot resize a pane.** Not "does not" — *cannot*. The code path does not exist, because the
-only Herdr API that could resize also seizes the PTY from the person at the desk with no way to
-decline (#17). [ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md).
+**Looking at a pane cannot reshape it.** No watch, zoom, pan, fit, reconnect or layout reaches a
+PTY, and that half is structural. One path does exist and only one: the `pane.size` op, behind a
+panel, a confirmation and an 80x24 floor. It is there because a pane can be *born* unusable — an
+agent starting a Herdr headlessly gives it that shell's size — and nothing else can reach that:
+`observe` never touches the PTY (#14), `pane.zoom` moves it only with a client attached (#265), and
+no method on the socket API reports a column count at all (#221). The cost is why there is exactly
+one: `control` seizes the PTY with no way to decline (#17), overrides the desk while held (#18), and
+leaves an attached desk rendering wrong without being told (#298).
+[ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md), superseding
+[ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md) in part.
 
 **Clients receive a cell grid and parse no escape sequences.** Herdr's frame format stops at the
 node. [ADR 0003](./docs/adr/0003-the-client-contract-is-a-cell-grid.md).
@@ -700,10 +707,14 @@ rather than a defect list:
 Not planned, not scheduled — recorded so they are not re-discovered from scratch or acted on by
 accident.
 
-- **`terminal session control` in any form.** It always claims the PTY and there is no flag to
-  decline (#17), and while a controller holds it the person at the desk is ignored (#18). This is the
-  one entry on this list that is a hard rule rather than a parking spot.
-  [ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md).
+- **`terminal session control` as a general instrument.** It always claims the PTY and there is no
+  flag to decline (#17), and while a controller holds it the person at the desk is ignored (#18).
+  Exactly one caller exists — `pane.size`, which is deliberate, confirmed, floored and released
+  within milliseconds. A second caller, or an implicit one, stays refused.
+  [ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md).
+- **`terminal.scroll`.** It rides the same channel, and ADR 0004 priced scrollback on its absence.
+  Owning a controller for a deliberate resize does not make it a scroll transport.
+  [ADR 0004](./docs/adr/0004-scrollback-is-stitched-and-a-gap-discards.md).
 - **Recovering markdown structure by re-parsing the grid.** The information is not there to recover.
   [ADR 0005](./docs/adr/0005-structure-comes-from-the-transcript.md).
 - **Reflowing terminal rows into wrapped text for phone width.** That is Collie's answer and a good

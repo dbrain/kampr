@@ -970,6 +970,7 @@ impl Session {
             herdr: &session.herdr,
             node_id: &session.node_id,
             binary: &self.node.config.herdr.binary,
+            holds: &self.node.holds,
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {
@@ -1156,7 +1157,7 @@ fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: 
 
 fn manage_detail(op: &ManageOp) -> Value {
     let mut detail = json!({ "op": op.op });
-    let fields: [(&str, Value); 12] = [
+    let fields: [(&str, Value); 14] = [
         ("node", json!(op.node)),
         ("label", json!(op.label)),
         ("cwd", json!(op.cwd)),
@@ -1169,6 +1170,8 @@ fn manage_detail(op: &ManageOp) -> Value {
         ("branch", json!(op.branch)),
         ("base", json!(op.base)),
         ("path", json!(op.path)),
+        ("cols", json!(op.cols)),
+        ("rows", json!(op.rows)),
     ];
     for (key, value) in fields {
         if !value.is_null() {
