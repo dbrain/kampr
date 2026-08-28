@@ -140,6 +140,21 @@ fun NodeCountPill(online: Int, connection: ConnectionStatus, compact: Boolean, o
 
 // Four different pieces of news, and the operator can act on only some of them. Painting nothing
 // at all said the healthiest of the four to the device that had the worst of them.
+// A machine drawn with nothing under it, answering the question that leaves. `online` false on a
+// local node means its herdr is stopped rather than the machine being gone — and a manage op sent
+// there starts it (#324, #325), so the + in the bar is the answer and is worth naming: nothing
+// else on this screen says that starting a workspace on a cold host is a thing that works.
+@Composable
+fun NodeQuiet(node: NodeInfo, modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    val said = when {
+        !node.online && node.kind == "local" -> "herdr is not running on ${node.name} — New (+) starts it"
+        !node.online -> node.detail ?: "this machine is not reachable"
+        else -> "nothing running on this machine"
+    }
+    KText(said, tokens.type.captionSmall, tokens.color.mute, modifier.announce(said), maxLines = 2)
+}
+
 @Composable
 fun HerdEmpty(connection: ConnectionStatus, compact: Boolean, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens

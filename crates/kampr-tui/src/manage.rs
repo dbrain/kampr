@@ -901,10 +901,21 @@ fn digit(i: usize) -> Option<char> {
 
 /// The machines a `node`-scoped op may name are the herd's, **never `caps.sessions`**. A session
 /// that is running and not served is not a node of this herd and never will be, so a workspace
-/// made in one would be a workspace nothing here can reach. An offline node is left out for the
-/// same reason it is not a button: the op cannot land.
+/// made in one would be a workspace nothing here can reach.
+///
+/// An offline **local** node is still one of them: `online` there means only that its herdr is
+/// stopped, the wire to it is the connection this client is already talking over, and a manage op
+/// arriving at a node whose herdr is stopped starts it (#324, #325). Hiding the row would leave
+/// the operator looking at a machine with nothing they can do to it — which is the whole of
+/// visiting a host nobody has logged into for a month.
+///
+/// An offline **peer** is not: `online` false there can equally mean the mesh link is down, and
+/// nothing in the herd tells the two apart.
 fn reachable(herd: &Herd) -> Vec<&NodeEntry> {
-    herd.nodes.iter().filter(|n| n.online).collect()
+    herd.nodes
+        .iter()
+        .filter(|n| n.online || n.kind == "local")
+        .collect()
 }
 
 fn on_a_node(nodes: &[&NodeEntry], what: &str, then: impl Fn(&str) -> Next) -> Next {

@@ -325,6 +325,24 @@ impl Harness {
             .id
             .clone()
     }
+
+    /// Whether the node has noticed that its own herdr is gone. A test that stops herdr and acts
+    /// immediately is racing the poll loop, and proves whatever the race decided.
+    async fn offline(&self, seconds: u64) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+        while tokio::time::Instant::now() < deadline {
+            let herd = self.node.herd();
+            if herd
+                .nodes
+                .iter()
+                .any(|n| n.id == self.node.node_id() && !n.online)
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        false
+    }
 }
 
 async fn post(url: &str, body: &Value) -> Value {
@@ -2008,6 +2026,60 @@ async fn a_herdr_outage_reaches_the_client_and_recovers() {
         };
     }
     assert!(back, "the node must come back online on its own");
+}
+
+/// The rarely-visited host: the node is up, herdr is not, and the operator taps New. Probe #324
+/// says one spawn spelling starts either kind of server and #325 says racing it is harmless, so
+/// the op starts the herdr it needs rather than refusing — and waits for an answered call, which
+/// per #326 is the only thing that means the herdr it just started can serve the op.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manage_op_on_a_node_whose_herdr_is_stopped_starts_it_rather_than_refusing() {
+    let h = harness!("wake");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let node = h.node.node_id().to_string();
+
+    h._session.stop().await;
+    assert!(
+        h.offline(20).await,
+        "the node never noticed its herdr had gone, so this proves nothing"
+    );
+
+    let created = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "workspace.create", "node": node,
+                "label": "woken", "cwd": "/tmp" }),
+        30,
+    )
+    .await;
+
+    // The ack is not the claim. Herdr is answering again, and it is holding the workspace the op
+    // said it made — a `managed{ok}` for a workspace nothing has is exactly the shape of #233.
+    let snapshot = h._session.herdr().snapshot().await.expect("herdr answers again");
+    assert!(
+        snapshot
+            .workspaces
+            .iter()
+            .any(|w| w.label.as_deref() == Some("woken")),
+        "the woken herdr does not have the workspace the op acked: {created}"
+    );
+}
+
+/// Kampr must not start a herdr nobody asked it to. Watching, polling and reconnecting are not
+/// requests; only a manage op is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_left_alone_never_starts_the_herdr_it_is_missing() {
+    let h = harness!("no-wake");
+    h._session.stop().await;
+    assert!(h.offline(20).await, "the node never noticed the outage");
+
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(
+        !h._session.socket.exists(),
+        "the node started herdr on its own, with nobody asking for anything"
+    );
 }
 
 // ---------------------------------------------------------------------------

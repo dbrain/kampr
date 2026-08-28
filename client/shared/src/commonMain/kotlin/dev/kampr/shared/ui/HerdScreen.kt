@@ -89,6 +89,9 @@ fun HerdPortrait(
                             Modifier.padding(horizontal = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            if (group.panes.isEmpty()) {
+                                NodeQuiet(group.node, Modifier.padding(start = 6.dp, bottom = 4.dp))
+                            }
                             for (pane in group.panes) {
                                 PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
                             }
@@ -166,6 +169,9 @@ fun HerdLandscape(
                                 for (group in column) {
                                     NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (group.panes.isEmpty()) {
+                                            NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
+                                        }
                                         for (pane in group.panes) {
                                             PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
                                         }
@@ -258,6 +264,9 @@ fun HerdSidebar(
                             PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
                         )
                         Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (group.panes.isEmpty()) {
+                                NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
+                            }
                             for (pane in group.panes) {
                                 PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
                             }

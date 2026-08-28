@@ -249,11 +249,19 @@ fun NewSheet(
                 )
                 Step.Node -> Fields {
                     for (machine in nodes) {
+                        // A **local** machine that is offline is one whose herdr is stopped: the
+                        // wire to it is the connection this device is already talking over, and a
+                        // manage op arriving there starts the herdr it needs (#324, #325). A peer
+                        // that is offline may be that or a dead mesh link, and nothing here tells
+                        // them apart — so it stays unpickable rather than promising a herd it may
+                        // never reach.
+                        val cold = !machine.online && machine.kind == "local"
                         SheetCard(
                             icon = null,
                             iconTint = null,
                             title = machine.name,
                             subtitle = when {
+                                cold -> "herdr is not running here — making something starts it"
                                 !machine.online -> machine.detail ?: "unreachable"
                                 machine.id == node.id -> "what this sheet is aimed at"
                                 machine.kind == "local" -> "the node this device is connected to"
@@ -261,7 +269,7 @@ fun NewSheet(
                             },
                             selected = machine.id == node.id,
                             compact = breakpoint == Breakpoint.Landscape,
-                            onClick = if (!machine.online) null else ({
+                            onClick = if (!machine.online && !cold) null else ({
                                 onNode(machine.id)
                                 step = Step.Menu
                                 refusal = null

@@ -1137,6 +1137,23 @@ session stops being listed as running (#241) — so a client refreshing `caps` o
 be handed back the state it was trying to change. It may now refresh on the ack and trust the answer,
 and the session's node has appeared in, or gone from, the herd by the time the ack lands.
 
+**A `manage` op on a node whose herdr is stopped starts it.** Every other op needs the socket, so
+one that finds it dead asks herdr which session owns this node's socket — the list carries it
+whether or not anything is running (#326) — starts that server, waits for it to *answer a call*
+rather than merely accept a connection, and then does what it was sent to do. `default` is a
+session name like any other for this purpose: `herdr server --session default` binds the default
+socket rather than making a namesake beside it (#324). Racing is safe rather than negotiated: a
+second server for a session already running exits 1 and changes nothing (#243, #325), so two
+clients tapping at once cost one dead child process.
+
+Nothing else in a node ever starts herdr. Watching, polling, reconnecting and the herd sweep all
+find the same stopped server and leave it stopped — an operator who is not using herdr on a host is
+not asking for one. This is what makes a rarely-visited machine usable from a phone: the node
+answers, the herd is one offline node with no panes, and the first `workspace.create` brings the
+machine up. A client should therefore keep offering `node`-scoped ops on a **local** node that is
+offline. A **peer** that is offline is a different question — the mesh link may be what is down,
+and nothing in the herd tells the two apart.
+
 `readonly` devices are refused every `manage` op with `not_writer`.
 
 **Content-Security-Policy.** The node serves a strict CSP with **no external origins** — everything a

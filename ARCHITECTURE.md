@@ -126,6 +126,18 @@ Herdr's plugin host makes three of these choices for us and they are worth knowi
 `[[panes]]` with `placement = "popup"` is the setup vehicle: session-modal, receives Escape, closes
 when its command exits.
 
+**And the node outliving Herdr is what lets it start one.** A machine you visit twice a year has a
+node running as a service and no Herdr at all; the herd is one offline node with no panes, and
+before this there was nothing an operator could do about it from a phone. So a `manage` op that
+finds the socket dead starts the server that owns it and then does what it was sent to do. The
+whole of the policy is that **only a manage op may do this**: the sweep, the watchers, the
+reconnect loop and `caps` all meet the same stopped Herdr and leave it alone, because a host whose
+Herdr an operator has shut down is not a host asking for one back. What makes it safe to attempt
+rather than negotiate is that a second server for a session already running exits 1 and changes
+nothing (#243, #325), and what makes it one code path is that `--session default` is the default
+session rather than a namesake beside it (#324). It waits for an answered call, not for the socket
+to appear — those are ~50 ms apart (#326).
+
 ### One binary, no runtime toolchain
 
 Gradle builds the Compose Multiplatform wasm bundle; a Sync task stages it into the crate; `rust-embed`

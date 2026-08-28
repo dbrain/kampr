@@ -1,7 +1,9 @@
+use crate::caps::SessionEntry;
 use kampr_core::wire::ErrorCode;
 use kampr_herdr::Herdr;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::debug;
@@ -86,6 +88,18 @@ pub fn checked_size(cols: u32, rows: u32) -> Result<(u32, u32), ManageError> {
 const SESSION_SETTLE: Duration = Duration::from_secs(5);
 const SESSION_POLL: Duration = Duration::from_millis(20);
 const SESSION_POLL_MAX: Duration = Duration::from_millis(320);
+
+/// How long a herdr started by a manage op has to answer before the op gives up on it. Probe #326
+/// measured 50 ms on an idle machine with nothing to restore; this is four hundred times that,
+/// because a host nobody has visited for a month is reading its workspaces back while an operator
+/// waits on a phone.
+const WAKE_DEADLINE: Duration = Duration::from_secs(20);
+
+/// The readiness probe is a **call**, not a connection or a file test. A starting herdr binds its
+/// socket ~1 ms in and answers ~50 ms in, holding the early connection open rather than refusing
+/// it (#326) — so the call is both the honest question and the same wait the op was going to do.
+/// The window a wake must not act inside is the ~1 ms before the socket exists at all.
+const WAKE_PROBE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManageError {
@@ -181,13 +195,85 @@ impl Settle {
 impl Manager<'_> {
     pub async fn run(&self, op: &ManageOp) -> Result<Managed, ManageError> {
         match op.op.as_str() {
+            // Both session ops shell out and neither needs this node's socket: `session.create`
+            // is a wake with a name on it, and waking a herdr in order to stop it is absurd.
             "session.create" => self.create_session(op).await,
             "session.stop" => self.stop_session(op).await,
-            _ => Ok(Managed {
-                reply: self.structural(op).await?,
-                settle: None,
-            }),
+            _ => {
+                self.wake().await?;
+                Ok(Managed {
+                    reply: self.structural(op).await?,
+                    settle: None,
+                })
+            }
         }
+    }
+
+    /// Starts the herdr this node's socket belongs to, if a manage op finds it stopped.
+    ///
+    /// **Only a manage op may do this.** Watching, polling, reconnecting and the herd sweep all
+    /// find the same stopped herdr and all leave it stopped: an operator who is not using herdr on
+    /// a host is not asking for one, and a node that started one anyway would be resurrecting the
+    /// server they had just shut down. A manage op is the operator saying they want the machine.
+    ///
+    /// Racing is safe rather than negotiated — a second server for a session already running exits
+    /// 1 and changes nothing (#243 for a named one, #325 for the default) — so two clients tapping
+    /// at once, or a wake that crosses the operator's own `herdr` at the keyboard, costs one dead
+    /// child process and nothing else.
+    async fn wake(&self) -> Result<(), ManageError> {
+        if self.answers().await {
+            return Ok(());
+        }
+        let name = self.session_at_this_socket().await?;
+        spawn_server(self.binary, &name)?;
+        let deadline = Instant::now() + WAKE_DEADLINE;
+        let mut wait = SESSION_POLL;
+        loop {
+            if self.answers().await {
+                // The set of running sessions just changed, and a client refreshing on its own ack
+                // must not be told for another ten seconds that this one is stopped (#241).
+                crate::caps::sessions_changed(self.node_id);
+                debug!(session = %name, socket = %self.herdr.socket().display(), "started herdr for a manage op");
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(ManageError::Herdr(format!(
+                    "herdr was started for {name} but never answered on {} within {WAKE_DEADLINE:?}",
+                    self.herdr.socket().display()
+                )));
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(SESSION_POLL_MAX);
+        }
+    }
+
+    async fn answers(&self) -> bool {
+        self.herdr
+            .clone()
+            .with_timeout(WAKE_PROBE)
+            .snapshot()
+            .await
+            .is_ok()
+    }
+
+    /// Which session to start, asked of herdr rather than derived from the socket path.
+    ///
+    /// The node's socket is configuration and may be anything; only herdr knows which of its
+    /// sessions owns one, and it lists them all whether or not they are running (#326). A socket
+    /// no session claims is not something to guess a name for — `--session` would start a
+    /// *different* server somewhere else and the op would then fail against a socket still dead.
+    async fn session_at_this_socket(&self) -> Result<String, ManageError> {
+        let listed = crate::caps::sessions(self.binary)
+            .await
+            .map_err(|e| ManageError::Herdr(e.to_string()))?;
+        session_at(&listed, self.herdr.socket()).ok_or_else(|| {
+            ManageError::Herdr(format!(
+                "herdr is not running, and none of the {} sessions it lists owns {} — so there is \
+                 nothing to start",
+                listed.len(),
+                self.herdr.socket().display()
+            ))
+        })
     }
 
     async fn structural(&self, op: &ManageOp) -> Result<Value, ManageError> {
@@ -345,24 +431,12 @@ impl Manager<'_> {
         }
     }
 
-    /// The session outlives the node on purpose: an operator's agents are inside it, and a node
-    /// restart is not a reason to end them.
-    ///
-    /// `herdr server` does not daemonise, so without this the new session joins the node's own
-    /// process group and dies with it — a Ctrl-C on a foreground `kampr serve` signals the whole
-    /// group, and systemd's default `KillMode` signals the whole cgroup. The unit answers the
-    /// cgroup half with `KillMode=process`; this answers the group half.
+    /// Starting a session by name. `default` is one of the names: probe #324 measured
+    /// `herdr server --session default` binding the default socket rather than making a namesake
+    /// beside it, which is why [`Self::wake`] and this share one spawn.
     async fn create_session(&self, op: &ManageOp) -> Result<Managed, ManageError> {
         let name = session_name(op)?;
-        let mut command = Command::new(kampr_herdr::locate::program(self.binary));
-        command
-            .args(["server", "--session", &name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(unix)]
-        command.process_group(0);
-        command.spawn().map_err(|e| ManageError::Herdr(e.to_string()))?;
+        spawn_server(self.binary, &name)?;
         let failure = format!("{name} was started but never appeared in the session list");
         Ok(Managed {
             reply: json!({ "session": name }),
@@ -538,6 +612,49 @@ fn env_map(env: Option<&Value>) -> Result<Option<Value>, ManageError> {
     }
 }
 
+/// The session outlives the node on purpose: an operator's agents are inside it, and a node
+/// restart is not a reason to end them.
+///
+/// `herdr server` does not daemonise, so without the process group the new session joins the
+/// node's own and dies with it — a Ctrl-C on a foreground `kampr serve` signals the whole group,
+/// and systemd's default `KillMode` signals the whole cgroup. The unit answers the cgroup half
+/// with `KillMode=process`; this answers the group half.
+fn spawn_server(binary: &str, name: &str) -> Result<(), ManageError> {
+    let mut command = Command::new(kampr_herdr::locate::program(binary));
+    command
+        .args(["server", "--session", name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    command.spawn().map_err(|e| ManageError::Herdr(e.to_string()))?;
+    Ok(())
+}
+
+/// The name of the session herdr says owns `socket`, if any.
+///
+/// A path compare, then the same compare with the *directories* canonicalised — the socket file
+/// itself does not exist while the server is down, so a node configured through a symlinked home
+/// would otherwise match nothing and be told there is nothing to start.
+fn session_at(sessions: &[SessionEntry], socket: &Path) -> Option<String> {
+    let same = |listed: &Path| {
+        listed == socket
+            || (listed.file_name() == socket.file_name()
+                && match (listed.parent(), socket.parent()) {
+                    (Some(a), Some(b)) => match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+                        (Ok(a), Ok(b)) => a == b,
+                        _ => false,
+                    },
+                    _ => false,
+                })
+    };
+    sessions
+        .iter()
+        .find(|s| s.socket_path.as_deref().is_some_and(same))
+        .map(|s| s.name.clone())
+}
+
 fn session_name(op: &ManageOp) -> Result<String, ManageError> {
     let name = op
         .name
@@ -588,6 +705,82 @@ pub fn created_id(reply: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn listed(entries: &[(&str, Option<&str>)]) -> Vec<SessionEntry> {
+        entries
+            .iter()
+            .map(|(name, socket)| SessionEntry {
+                name: (*name).to_string(),
+                running: false,
+                socket_path: socket.map(PathBuf::from),
+            })
+            .collect()
+    }
+
+    /// The socket a node is configured with is the whole question — the *name* of the session to
+    /// start is herdr's answer about it, never a guess from the path. `default` is a name like any
+    /// other (#324), which is what lets one spawn serve both kinds of server.
+    #[test]
+    fn the_session_to_start_is_the_one_herdr_says_owns_this_nodes_socket() {
+        let sessions = listed(&[
+            ("default", Some("/c/herdr/herdr.sock")),
+            ("agents", Some("/c/herdr/sessions/agents/herdr.sock")),
+        ]);
+        assert_eq!(
+            session_at(&sessions, Path::new("/c/herdr/herdr.sock")).as_deref(),
+            Some("default")
+        );
+        assert_eq!(
+            session_at(&sessions, Path::new("/c/herdr/sessions/agents/herdr.sock")).as_deref(),
+            Some("agents")
+        );
+    }
+
+    /// A socket no session claims has no name to start, and inventing one would start a different
+    /// server somewhere else while the op went on failing against a socket still dead.
+    #[test]
+    fn a_socket_no_session_owns_is_nothing_to_start() {
+        let sessions = listed(&[("default", Some("/c/herdr/herdr.sock"))]);
+        assert_eq!(
+            session_at(&sessions, Path::new("/run/user/1000/herdr.sock")),
+            None
+        );
+        assert_eq!(session_at(&[], Path::new("/c/herdr/herdr.sock")), None);
+        // An entry with no socket path is one this node cannot address, not a match for anything.
+        assert_eq!(
+            session_at(&listed(&[("nameless", None)]), Path::new("/c/herdr/herdr.sock")),
+            None
+        );
+    }
+
+    /// The socket file does not exist while the server is down, so only its directory can be
+    /// canonicalised — and a node configured through a symlink (`/home/x` against `/var/home/x`)
+    /// must not be told there is nothing to start.
+    #[test]
+    fn a_socket_reached_through_a_symlink_is_the_same_socket() {
+        let dir = tempfile::tempdir().expect("a dir");
+        let real = dir.path().join("herdr");
+        std::fs::create_dir_all(&real).expect("the real dir");
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).expect("a symlink");
+        let sessions = listed(&[("default", Some(&real.join("herdr.sock").display().to_string()))]);
+        assert!(
+            !link.join("herdr.sock").exists(),
+            "the server is down: no socket file"
+        );
+        assert_eq!(
+            session_at(&sessions, &link.join("herdr.sock")).as_deref(),
+            Some("default"),
+            "a symlinked config root is the same session"
+        );
+        assert_eq!(
+            session_at(&sessions, &link.join("other.sock")),
+            None,
+            "the same directory is not the same socket"
+        );
+    }
 
     #[test]
     fn a_target_carries_its_kind_in_the_id() {

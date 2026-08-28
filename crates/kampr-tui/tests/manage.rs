@@ -863,6 +863,65 @@ async fn every_bound_op_reaches_the_node_addressed_at_the_right_kind_of_id() {
     assert_eq!(stopped["name"], "default");
 }
 
+/// A host nobody has visited for a month: the node answers, its herdr does not, and the herd is
+/// one offline machine with no panes. The op lands and starts herdr (#324, #325), so hiding the
+/// row leaves the operator with a node they can see and nothing they can do to it.
+#[tokio::test]
+async fn a_workspace_can_be_made_on_a_local_node_whose_herdr_is_not_running() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "coldbox", false)]),
+        json!([]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    shifted(&mut app, 'n');
+    let menu = painted(&mut app, 110, 24);
+    assert!(menu.contains("workspace"), "no way to make anything:\n{menu}");
+
+    ch(&mut app, 'w');
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(sent["op"], "workspace.create");
+    assert_eq!(sent["node"], "01JNODE");
+}
+
+/// The same charity is not extended to a peer. `online: false` on one of those can equally mean
+/// the mesh link is down, and nothing in the herd tells that from a stopped herdr.
+#[tokio::test]
+async fn an_offline_peer_is_still_not_somewhere_to_put_a_workspace() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([
+            node("01JNODE", "comingclean", true),
+            { "id": "01JGONE", "name": "gonebox", "kind": "peer", "online": false }
+        ]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    shifted(&mut app, 'w');
+    let picked = painted(&mut app, 110, 24);
+    assert!(
+        !picked.contains("gonebox"),
+        "an unreachable peer was offered as somewhere to put a workspace:\n{picked}"
+    );
+}
+
 #[tokio::test]
 async fn the_client_asks_a_node_what_it_can_be_told_to_make_and_routes_the_answer() {
     let mut fake = Fake::start().await;
