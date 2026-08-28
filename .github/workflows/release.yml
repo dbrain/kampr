@@ -284,9 +284,11 @@ jobs:
           # It installed — and it must not have claimed a signature it never checked.
           [ -x "$RUNNER_TEMP/nocosign/kampr" ]
           grep -q "signature verified: not checked" nocosign.txt
-          # And it must leave the operator somewhere to go.
+          # And it must name what would have checked it. The name only: this path carries advice
+          # and not a link, and the sigstore address lives in the KAMPR_REQUIRE_SIGNATURE=1
+          # refusal, which is a different message printed by a different branch. Asserting the URL
+          # here failed every release rather than the one release that had lost the advice.
           grep -q "cosign" nocosign.txt
-          grep -q "docs.sigstore.dev" nocosign.txt
 
       # **Where the refusal went.** Softening the default took a check away from every install, and
       # this is the only thing that gives it back — so a release whose escape hatch has rotted has
