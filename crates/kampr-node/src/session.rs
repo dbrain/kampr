@@ -1160,7 +1160,13 @@ impl Session {
                     // client acts on, so it has to mean the herd already knows — this is the op
                     // that changed the session set, and it is the only thing in the process that
                     // knows it did.
-                    node.sessions.reconcile().await;
+                    //
+                    // **And a reconcile that could not read the host has not made that true.** The
+                    // session list is a spawned process; one that times out under load leaves the
+                    // herd naming a session that has stopped, and nothing else would look again
+                    // for another `DISCOVERY_POLL`. So this retries rather than acking a promise
+                    // it did not keep.
+                    reconcile_hard(&node).await;
                     wire.send_json(&ack);
                 }
                 Err(e) => refuse_on(
@@ -1281,6 +1287,26 @@ impl Session {
 
 /// The `managed` ack and the `error` frame that follows it, in the order the protocol names
 /// them, with the caller's correlation token on the ack wherever there is one.
+/// Reconciles until the host actually answers, or until the budget is spent.
+///
+/// Bounded rather than patient: an ack held open for ever is worse than one that arrives with the
+/// herd a poll behind, and `DISCOVERY_POLL` is still the backstop. Four attempts over roughly a
+/// second covers a list that lost one race with a loaded machine, which is the whole of the
+/// failure this exists for.
+async fn reconcile_hard(node: &Node) {
+    const TRIES: usize = 4;
+    const GAP: Duration = Duration::from_millis(250);
+    for attempt in 0..TRIES {
+        if node.sessions.reconcile().await {
+            return;
+        }
+        if attempt + 1 < TRIES {
+            tokio::time::sleep(GAP).await;
+        }
+    }
+    tracing::warn!("could not read the session list after a session op; the herd is a poll behind");
+}
+
 fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
     let mut ack = json!({ "t": "managed", "op": op, "ok": false,
                           "code": code, "message": message });

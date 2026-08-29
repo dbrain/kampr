@@ -1667,17 +1667,33 @@ async fn a_node_told_to_report_names_puts_one_on_the_pane_at_the_desk() {
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
 
+    // The workspace this harness creates is labelled `kampr`, and its pane settles at a shell with
+    // no job in it — so the command section drops and the name is what is left.
+    //
+    // **Settled, not first.** For the first few hundred milliseconds a fresh pane's foreground job
+    // is a helper the operator's `bashrc` spawned beside the shell, and the node reports a name for
+    // *that* — `kampr · gawk`, `kampr · tail`, whatever ble.sh is doing as it starts (probe #342).
+    // Every one of those is a correct name for the instant it was read, so waiting for the shell is
+    // the assertion, and it proves the name is re-reported as the job goes rather than only that
+    // one arrived.
     let mut title = Value::Null;
+    let mut saw: Vec<String> = Vec::new();
     for _ in 0..60 {
         title = h._session.call("pane.get", json!({ "pane_id": local })).await["pane"]["title"].clone();
-        if !title.is_null() {
+        if title == "kampr · bash" {
             break;
+        }
+        if let Some(said) = title.as_str()
+            && saw.last().map(String::as_str) != Some(said)
+        {
+            saw.push(said.to_string());
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    // The workspace this harness creates is labelled `kampr`, and its pane sits at a shell with no
-    // job in it — so the command section drops and the name is what is left.
-    assert_eq!(title, "kampr · bash", "pane.get said {title}");
+    assert_eq!(
+        title, "kampr · bash",
+        "pane.get said {title}; the names before it were {saw:?}"
+    );
 
     // The same name goes in as a *token*, which is the only field herdr will sort its agents
     // sidebar on: the sortable builtins are `agent` and `status`, and `title` is not one of them.
@@ -5504,22 +5520,36 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
 
     let joined = format!("{node}.{session}");
     let _created = CreatedSession::named(&session);
-    let serving = async |want: bool| {
+    // Reports what it actually saw when it gives up. A bare `false` here made a real intermittent
+    // unattributable: the herd and herdr's own list can disagree, and which of them is wrong is
+    // the whole question.
+    let serving = async |want: bool| -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
         loop {
             if h.node.herd().nodes.iter().any(|n| n.id == joined) == want {
-                return true;
+                return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
-                return false;
+                let herd: Vec<String> = h.node.herd().nodes.iter().map(|n| n.id.clone()).collect();
+                let listed = match kampr_node::caps::sessions(&h.node.config.herdr.binary).await {
+                    Ok(found) => found
+                        .iter()
+                        .map(|s| format!("{}={}", s.name, s.running))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    Err(e) => format!("<the list could not be read: {e}>"),
+                };
+                return Err(format!(
+                    "wanted {joined} present={want}; herd has [{}]; herdr lists [{listed}]",
+                    herd.join(" ")
+                ));
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
-    assert!(
-        serving(false).await,
-        "the session is in the herd before it was made"
-    );
+    if let Err(saw) = serving(false).await {
+        panic!("the session is in the herd before it was made — {saw}");
+    }
 
     ok(
         &mut socket,
@@ -5527,10 +5557,9 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
         20,
     )
     .await;
-    assert!(
-        serving(true).await,
-        "the session was acknowledged and the herd waited for the poll to hear about it"
-    );
+    if let Err(saw) = serving(true).await {
+        panic!("the session was acknowledged and the herd waited for the poll to hear about it — {saw}");
+    }
 
     ok(
         &mut socket,
@@ -5538,10 +5567,9 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
         20,
     )
     .await;
-    assert!(
-        serving(false).await,
-        "the session was stopped and is still an online node"
-    );
+    if let Err(saw) = serving(false).await {
+        panic!("the session was stopped and is still an online node — {saw}");
+    }
 }
 
 /// Probe #272: keypress-to-glyph, socket in to socket out, against a real herdr.

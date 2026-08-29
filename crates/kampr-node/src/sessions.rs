@@ -144,8 +144,13 @@ impl Sessions {
 
     /// Adds and drops providers to match what is running on the host, leaving every other
     /// session's watchers untouched — a dead session is one node going offline, not this one.
-    pub async fn reconcile(&self) {
-        self.apply(list_sessions(&self.config.herdr.binary).await);
+    ///
+    /// **`false` means the host was never read**, not that nothing changed. A caller whose promise
+    /// depends on the herd being current has to know the difference: the session list is a spawned
+    /// process and it can time out under load, and a reconcile that could not read one leaves the
+    /// herd exactly as stale as it found it.
+    pub async fn reconcile(&self) -> bool {
+        self.apply(list_sessions(&self.config.herdr.binary).await)
     }
 
     /// **`Err` is no information, and no information may not evict.** A named session *is* a node
@@ -153,12 +158,12 @@ impl Sessions {
     /// dropped every extra server on the host out of every client's herd — tearing down its
     /// watchers — until the next sweep put them back. Adding on a partial read is still safe;
     /// only removal has to stand on an answer.
-    fn apply(&self, found: Result<Vec<SessionEntry>, SessionListError>) {
+    fn apply(&self, found: Result<Vec<SessionEntry>, SessionListError>) -> bool {
         let found = match found {
             Ok(found) => found,
             Err(e) => {
                 warn!(error = %e, "could not list herdr sessions; keeping the ones already served");
-                return;
+                return false;
             }
         };
         let wanted = self.wanted(&found);
@@ -191,6 +196,7 @@ impl Sessions {
         if changed {
             self.changed.notify_waiters();
         }
+        true
     }
 
     fn wanted(&self, found: &[SessionEntry]) -> Vec<SessionEntry> {
@@ -209,7 +215,8 @@ pub async fn discover(sessions: Arc<Sessions>) {
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         poll.tick().await;
-        sessions.reconcile().await;
+        // The sweep has nothing to promise anybody: the next tick is the retry.
+        let _ = sessions.reconcile().await;
     }
 }
 
@@ -231,6 +238,26 @@ fn default_socket() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A list that could not be read is not a list of nothing**, and the difference is the whole
+    /// contract of a session op's ack: it promises the herd already knows, and a reconcile that
+    /// never reached the host has not made that true. Swallowing this left a stopped session in
+    /// the herd until the next 15 s sweep, and surfaced only as an intermittent live failure that
+    /// named nothing.
+    #[tokio::test]
+    async fn a_reconcile_that_never_reached_the_host_says_so_rather_than_looking_done() {
+        let sessions = sessions();
+        assert!(
+            !sessions.apply(Err(SessionListError::Timeout {
+                program: "herdr".into()
+            })),
+            "a failed read must report that it read nothing"
+        );
+        assert!(
+            sessions.apply(Ok(Vec::new())),
+            "a read that found nothing is still a read"
+        );
+    }
 
     #[test]
     fn a_named_sessions_socket_carries_its_name() {

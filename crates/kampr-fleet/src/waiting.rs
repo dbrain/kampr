@@ -235,36 +235,34 @@ mod tests {
 
     #[test]
     fn the_leaf_of_the_tree_decides_not_the_relay_above_it() {
-        let root = tempdir();
+        let temp = tempdir();
+        let root = temp.path();
         // sudo(100) in ppoll, pacman(101) parked in read(0) — the shape probe #334 measured.
-        write_proc(&root, 100, "271 0x0 0x2 0x0", &[101]);
-        write_proc(&root, 101, "0 0x0 0x55d3 0x400", &[]);
-        assert_eq!(Procfs::at(&root).waiting(100), Waiting::Waiting);
+        write_proc(root, 100, "271 0x0 0x2 0x0", &[101]);
+        write_proc(root, 101, "0 0x0 0x55d3 0x400", &[]);
+        assert_eq!(Procfs::at(root).waiting(100), Waiting::Waiting);
     }
 
     #[test]
     fn a_tree_that_is_entirely_busy_says_busy() {
-        let root = tempdir();
-        write_proc(&root, 200, "271 0x0 0x2 0x0", &[201]);
-        write_proc(&root, 201, "230 0x0 0x0 0x0", &[]);
-        assert_eq!(Procfs::at(&root).waiting(200), Waiting::Busy);
+        let temp = tempdir();
+        let root = temp.path();
+        write_proc(root, 200, "271 0x0 0x2 0x0", &[201]);
+        write_proc(root, 201, "230 0x0 0x0 0x0", &[]);
+        assert_eq!(Procfs::at(root).waiting(200), Waiting::Busy);
     }
 
     #[test]
     fn a_tree_nothing_can_be_read_from_stays_unknown() {
-        let root = tempdir();
-        assert_eq!(Procfs::at(&root).waiting(999), Waiting::Unknown);
+        let temp = tempdir();
+        let root = temp.path();
+        assert_eq!(Procfs::at(root).waiting(999), Waiting::Unknown);
     }
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "kampr-fleet-waiting-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        dir
+    /// Removed when it goes out of scope. A test that leaves a directory in `/tmp` for every run
+    /// is a test that litters the machine it is measuring.
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("temp dir")
     }
 
     fn write_proc(root: &Path, pid: u32, syscall: &str, children: &[u32]) {
