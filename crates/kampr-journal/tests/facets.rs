@@ -634,3 +634,53 @@ fn pad_to(record: &str, len: usize) -> String {
     }
     padded
 }
+
+/// Measured on a real session: a `dequeue` carries **no content**, so the fold can only pop the
+/// head by position — and once one unmatched enqueue sits at position 0, every later delivery pops
+/// the wrong entry and the prompt that was actually answered stays for ever. The transcript
+/// settles it without guessing: a prompt the harness has taken is written down as a user record,
+/// and a queue holding one it has already answered is wrong however the operations folded.
+#[test]
+fn a_prompt_the_harness_has_since_delivered_is_not_still_waiting() {
+    let scratch = scratch_claude(
+        "delivered",
+        &[
+            serde_json::json!({ "type": "ai-title", "aiTitle": "the queue that would not drain" }),
+            enqueue("check the release notes", "2026-08-29T10:02:20.000Z"),
+            prompt("check the release notes"),
+        ],
+    );
+    let mut feed = feed(&scratch);
+
+    let moved = feed.moved(&scratch.transcript, None).expect("the title moved");
+    assert_eq!(
+        queued_texts(&moved),
+        Vec::<&str>::new(),
+        "the harness wrote this prompt down as delivered, so nothing is still waiting on it"
+    );
+}
+
+/// **909 of the 992 `enqueue` records on this machine are `<task-notification>` envelopes** — the
+/// harness handing itself the result of its own background work, never anything a person typed.
+/// Drawn as queued prompts they are attributed to the operator, and they are filed after every
+/// record on a view pinned to its end, so a few of them push the whole conversation off screen and
+/// the pane reads as though it stopped updating.
+#[test]
+fn a_task_notification_is_the_harness_talking_to_itself_and_never_a_queued_prompt() {
+    let scratch = scratch_claude(
+        "plumbing",
+        &[
+            enqueue(
+                "<task-notification>\n<task-id>blorajtic</task-id>\n</task-notification>",
+                "2026-08-29T08:07:03.000Z",
+            ),
+            enqueue("and add a probe row for it", "2026-08-29T08:08:00.000Z"),
+        ],
+    );
+    let mut feed = feed(&scratch);
+
+    let moved = feed
+        .moved(&scratch.transcript, None)
+        .expect("the operator's own prompt is still queued");
+    assert_eq!(queued_texts(&moved), ["and add a probe row for it"]);
+}
