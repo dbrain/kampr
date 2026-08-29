@@ -89,36 +89,31 @@ no new bytes in between — otherwise the first prompt on every run is empty.
 
 ## Privilege
 
-A supervisor can only read a job it forked *at its own privilege*. `sudo pacman -Syu` therefore
-reports `blind: true` — an observation made over the run rather than a sample taken once, because
-`spawn` returns while the child is still this process's own un-`exec`ed copy and readable whatever it
-is about to become. The node sees nothing of the process — and everything the board knows about
-it comes from rung 1b: the screen. In practice that covers the cases that matter (`[Y/n]`, numbered
-menus, and `su`-style password prompts), and misses `sudo`'s *own* password prompt, which arrives
-through a relay that hides both the process and the terminal state.
+A supervisor can only read a job it forked *at its own privilege*, so `sudo pacman -Syu` reports
+`blind: true` — an observation made over the run rather than a sample taken once, because `spawn`
+returns while the child is still this process's own un-`exec`ed copy and readable whatever it is
+about to become. The node sees nothing of the process, and everything the board knows about it comes
+from rung 1b: the screen.
 
-The complete fix is a helper that runs *under* the escalation rather than beside it, so that it is
-both root and the command's parent:
+**That is enough, and deliberately all there is.** Rung 1b covers what a privileged command actually
+asks — `[Y/n]`, numbered menus, and `su`-style password prompts, all tested against a real `sudo`.
+The one thing it cannot see is `sudo`'s *own* password prompt, which arrives through a relay that
+hides the process and the terminal state together (#341). Every host in this herd runs passwordless
+`sudo`, so that prompt does not happen here; if it ever did, the run still works and is still
+answerable by opening the pane.
 
-```
-sudo kampr-fleet-exec --report <socket> -- pacman -Syu   # readable: same uid, and the parent
-kampr-fleet-exec -- sudo pacman -Syu                     # blind: setuid child refuses its parent
-```
+Closing that last case properly would mean a second binary the node starts under `sudo`, a socket
+protocol for it to report on, and a new privileged surface — for one prompt that nothing in this
+fleet produces. It is not built and there is no plan to build it. What was measured while working
+that out stands on its own: [#334](./03-probe-log.md) for why a supervisor must share the
+command's privilege at all, and [#338](./03-probe-log.md) for how such a helper would have had
+to report, should the question ever come back.
 
-The transport for that is measured and settled (#338): `sudo` closes every descriptor above 2, so
-the helper cannot be handed one — it connects **out** to a `0600` unix socket in a `0700` directory,
-which root can do, and the node checks who connected with `SO_PEERCRED` rather than trusting
-whatever appears. The mode is load-bearing: bound under the ordinary umask the socket is `0755` and
-any local user could feed the node invented states for somebody else's run. **The helper is not
-built.**
+## Still unmeasured
 
-## What is not built
-
-- **The privileged helper above.** Root commands are `blind`, and rung 1b carries them. `sudo`'s own
-  password prompt is the case that falls through: the relay hides the process *and* the terminal
-  state (#341), so it shows as quiet and has to be answered by opening the pane.
-- `pacman`'s replace/conflict prompts are **unmeasured** — #336 could only produce the
-  `Proceed with installation?` one without an actual conflict.
+`pacman`'s replace and conflict prompts. [#336](./03-probe-log.md) could only produce the
+`Proceed with installation?` one without an actual conflict to provoke the others, so their exact
+wording — and whether the shapes here read them — is assumed rather than known.
 
 ## Answering several hosts at once
 

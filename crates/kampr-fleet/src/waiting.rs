@@ -5,7 +5,7 @@
 //! EPERM under yama `ptrace_scope=1` (#331), and a job running as root refuses `wchan` and `fd/0`
 //! as well, so the node can read *nothing at all* about a `sudo pacman` (#332). That is why a
 //! fleet run is a pty this process owns rather than a pane herdr forked, and why the supervisor
-//! has to be `sudo kampr-fleet-exec -- pacman` rather than `kampr-fleet-exec -- sudo pacman`.
+//! cannot follow a command that escalates: such a run is reported blind and read off its screen.
 //!
 //! The three-state answer is the point. `Unknown` is a real answer and it is not `Busy`: the
 //! caller renders it as quiet, never as a question, because a host that is merely unreadable must

@@ -74,9 +74,9 @@ pub struct FleetPane {
     pub cohort: String,
     pub command: String,
     pub state: FleetState,
-    /// The supervisor cannot read its own child (probe #334's privilege half — `kampr-fleet-exec`
-    /// running under the command's own uid rather than the command's). Every answer will be
-    /// `Quiet`, and the board has to say why rather than let the host look idle.
+    /// The supervisor cannot read its own child: a job that escalates refuses its own parent
+    /// (probe #334's privilege half). Nothing about the *process* is readable, so the state comes
+    /// off the screen and the board has to say so rather than let the host look idle.
     pub blind: bool,
     pub started_unix: i64,
 }

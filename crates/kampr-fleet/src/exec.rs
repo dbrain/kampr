@@ -1,13 +1,13 @@
 //! One command, on a pty this process owns.
 //!
-//! **The supervisor must share the command's privilege.** An unprivileged parent is refused
-//! `/proc/<pid>/syscall` for its own child the moment that child is setuid, so `sudo pacman` under
-//! an ordinary supervisor is exactly as opaque as it is to the node (probe #334). The shape that
-//! works is `sudo kampr-fleet-exec -- pacman`; the shape that silently reports `Unknown` forever
-//! is `kampr-fleet-exec -- sudo pacman`. [`RunEvent::Readable`] is how a caller finds out which one
-//! it got — an observation made over the run rather than a sample taken the instant after a fork,
-//! when the child is still this process's own un-`exec`ed copy and readable whatever it is about to
-//! become.
+//! **A supervisor can only read a job it forked at its own privilege.** An unprivileged parent is
+//! refused `/proc/<pid>/syscall` for its own child the moment that child is setuid, so a command
+//! that escalates is exactly as opaque here as it is to the node (probe #334) — and this process
+//! does not escalate to follow it. Such a run is reported blind and read off its screen instead.
+//!
+//! [`RunEvent::Readable`] is how a caller finds out which kind it got: an observation made over the
+//! run rather than a sample taken the instant after a fork, when the child is still this process's
+//! own un-`exec`ed copy and readable whatever it is about to become.
 
 use crate::tail::Tail;
 use crate::waiting::{Procfs, Waiting, mode_of};
