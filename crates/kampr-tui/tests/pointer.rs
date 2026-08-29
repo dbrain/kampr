@@ -13,7 +13,7 @@ use kampr_core::Backoff;
 use kampr_term::{Cell, CellAttrs, Color};
 use kampr_tui::app::{App, Layout, Options, Placed};
 use kampr_tui::image::Images;
-use kampr_tui::mouse::{Click, Link, Mouse};
+use kampr_tui::mouse::{Click, Link, Menu, Mouse};
 use kampr_tui::render::fit::{Pan, Placement};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -103,6 +103,18 @@ fn drag(x: u16, y: u16) -> MouseEvent {
 
 fn up(x: u16, y: u16) -> MouseEvent {
     at(MouseEventKind::Up(MouseButton::Left), x, y)
+}
+
+fn right(x: u16, y: u16) -> MouseEvent {
+    at(MouseEventKind::Down(MouseButton::Right), x, y)
+}
+
+fn right_drag(x: u16, y: u16) -> MouseEvent {
+    at(MouseEventKind::Drag(MouseButton::Right), x, y)
+}
+
+fn right_up(x: u16, y: u16) -> MouseEvent {
+    at(MouseEventKind::Up(MouseButton::Right), x, y)
 }
 
 /// The pane is focused and the click that arrives on it is spent focusing it, so every test
@@ -398,10 +410,14 @@ impl Conn {
     }
 
     fn greet(&self, panes: Value, prefs: Value) {
+        self.greet_as(panes, prefs, "full", true)
+    }
+
+    fn greet_as(&self, panes: Value, prefs: Value, role: &str, manage: bool) {
         self.send(json!({
             "t": "hello", "protocol": 1, "node_id": "01JNODE", "node_name": "comingclean",
-            "build": "0.1.29", "role": "full",
-            "caps": { "push": false, "scrollback": true, "conversation": true, "manage": true }
+            "build": "0.1.29", "role": role,
+            "caps": { "push": false, "scrollback": true, "conversation": true, "manage": manage }
         }));
         self.send(json!({
             "t": "herd",
@@ -1020,4 +1036,269 @@ async fn the_wheel_moves_the_ring_under_the_pointer_and_the_sidebar_under_it() {
         moved.contains("\u{2191} 3 back"),
         "and it is its own surface, so the pane's ring stayed where it was:\n{moved}"
     );
+}
+
+/// The chrome a right-click has to be able to name, laid out so nothing overlaps: a tab strip, a
+/// sidebar with one row that names a pane, and two panes side by side.
+fn chrome() -> Layout {
+    let mut layout = one_pane(Rect::new(30, 1, 20, 10));
+    layout.panes.push(Placed {
+        pane: "01JNODE/w1:p2".to_string(),
+        rect: Rect::new(50, 1, 20, 10),
+        ring: 0,
+        placement: Some(Placement {
+            history: Rect::new(51, 2, 18, 0),
+            grid: Rect::new(51, 2, 18, 8),
+            skip_history: 0,
+            skip_grid: 0,
+            pan: Pan::default(),
+            scroll: 0,
+        }),
+    });
+    layout.tabs = vec![("01JNODE/w1:t1".to_string(), Rect::new(30, 0, 10, 1))];
+    layout.sidebar = Rect::new(0, 0, 30, 12);
+    layout.rows = vec![
+        (None, Rect::new(0, 0, 30, 1)),
+        (Some("01JNODE/w1:p1".to_string()), Rect::new(0, 1, 30, 1)),
+    ];
+    layout
+}
+
+#[test]
+fn a_right_click_names_the_thing_under_the_pointer_and_not_the_thing_with_the_focus() {
+    let layout = chrome();
+    let mut mouse = Mouse::new();
+    // The focus is on the first pane, put there the way a click puts it there.
+    assert!(matches!(
+        mouse.hit(down(35, 5), &layout, Role::Full),
+        Click::Focus(_)
+    ));
+    assert_eq!(
+        mouse.hit(right(55, 5), &layout, Role::Full),
+        Click::Menu(Menu::Pane("01JNODE/w1:p2".into())),
+        "the pointer names the pane, or a menu closes the wrong shell"
+    );
+    assert_eq!(
+        mouse.hit(right(33, 0), &layout, Role::Full),
+        Click::Menu(Menu::Tab("01JNODE/w1:t1".into()))
+    );
+    assert_eq!(
+        mouse.hit(right(4, 1), &layout, Role::Full),
+        Click::Menu(Menu::Space("01JNODE/w1:p1".into()))
+    );
+    // A sidebar row that names nothing is a header, and there is no menu for a header.
+    assert_eq!(mouse.hit(right(4, 0), &layout, Role::Full), Click::None);
+}
+
+/// **The armed pane hears the button and kampr does not.** Passthrough is off by default and
+/// armed per pane by hand (#292/#297), so arming one is the operator saying that pane's program
+/// drives the mouse — and a program with a right-button menu of its own would be unreachable for
+/// as long as it was armed if this client took the button first.
+#[test]
+fn an_armed_pane_hears_the_right_button_and_gets_no_menu_over_it() {
+    let layout = one_pane(Rect::new(0, 0, 20, 10));
+    let mut mouse = Mouse::new();
+    assert!(
+        matches!(
+            mouse.hit(right(5, 5), &layout, Role::Full),
+            Click::Menu(Menu::Pane(_))
+        ),
+        "unarmed, the right button is kampr's"
+    );
+    mouse.set_passthrough("01JNODE/w1:p1", true);
+    // Arriving is spent focusing, exactly as the left button's first click is.
+    assert_eq!(
+        mouse.hit(right(5, 5), &layout, Role::Full),
+        Click::Focus("01JNODE/w1:p1".into())
+    );
+    assert_eq!(
+        mouse.hit(right(5, 5), &layout, Role::Full),
+        Click::Passthrough {
+            pane: "01JNODE/w1:p1".into(),
+            text: "\u{1b}[<2;5;5M".into(),
+        },
+        "SGR 1006 button 2 is the right button"
+    );
+    // 1002 reports motion while a button is held, and the held button is in the number: 32 + 2.
+    assert_eq!(
+        mouse.hit(right_drag(7, 5), &layout, Role::Full),
+        Click::Passthrough {
+            pane: "01JNODE/w1:p1".into(),
+            text: "\u{1b}[<34;7;5M".into(),
+        }
+    );
+    assert_eq!(
+        mouse.hit(right_drag(7, 5), &layout, Role::Full),
+        Click::None,
+        "once per cell, not once per event"
+    );
+    assert_eq!(
+        mouse.hit(right_up(7, 5), &layout, Role::Full),
+        Click::Passthrough {
+            pane: "01JNODE/w1:p1".into(),
+            text: "\u{1b}[<2;7;5m".into(),
+        }
+    );
+    mouse.set_passthrough("01JNODE/w1:p1", false);
+    assert!(
+        matches!(
+            mouse.hit(right(5, 5), &layout, Role::Full),
+            Click::Menu(Menu::Pane(_))
+        ),
+        "disarming with prefix m is the way back to the menu"
+    );
+}
+
+#[test]
+fn a_read_only_device_never_drives_a_pane_with_the_right_button_either() {
+    let layout = one_pane(Rect::new(0, 0, 20, 10));
+    let mut mouse = Mouse::new();
+    mouse.set_passthrough("01JNODE/w1:p1", true);
+    arrived(&mut mouse, &layout, Role::Readonly);
+    assert_eq!(
+        mouse.hit(right(5, 5), &layout, Role::Readonly),
+        Click::Menu(Menu::Pane("01JNODE/w1:p1".into())),
+        "the report is what a readonly device cannot send; the menu decides for itself"
+    );
+}
+
+/// Two panes of one tab, the mosaic drawing both, with the focus on the first.
+async fn two_panes(fake: &mut Fake) -> (Arc<Client>, Conn, App) {
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([pane("01JNODE/w1:p1", "t1"), pane("01JNODE/w1:p2", "t1")]),
+        json!({}),
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = App::new(client.clone(), Options::default(), Images::default());
+    app.adopt_prefs();
+    app.refocus();
+    painted(&mut app, 110, 24);
+    (client, conn, app)
+}
+
+fn poked(app: &mut App, client: &Arc<Client>, event: MouseEvent) {
+    let role = client.state().role;
+    let click = app.mouse.hit(event, &app.layout, role);
+    app.clicked(click);
+}
+
+fn rect_of(app: &App, pane: &str) -> Rect {
+    app.layout.pane(pane).expect("the mosaic drew both panes").rect
+}
+
+fn ops(frames: &[Value]) -> Vec<&Value> {
+    frames.iter().filter(|f| f["t"] == json!("manage")).collect()
+}
+
+#[tokio::test]
+async fn a_right_click_opens_the_manage_menu_for_the_pane_it_landed_on() {
+    let mut fake = Fake::start().await;
+    let (client, mut conn, mut app) = two_panes(&mut fake).await;
+    let _ = conn.heard().await;
+    assert_eq!(app.focused(), Some("01JNODE/w1:p1"));
+
+    let body = rect_of(&app, "01JNODE/w1:p2");
+    poked(&mut app, &client, right(body.x + 4, body.y + 3));
+    let menu = painted(&mut app, 110, 24);
+    assert!(
+        menu.contains("split right") && menu.contains("rename") && menu.contains("close"),
+        "herdr's own pane menu, in Kampr's ops:\n{menu}"
+    );
+    assert!(
+        app.focused() == Some("01JNODE/w1:p1"),
+        "and asking about a pane is not claiming it"
+    );
+
+    // The op is the clicked pane's, not the focused one's — the whole point of the gesture.
+    app.key(key(KeyCode::Char('c'), KeyModifiers::NONE));
+    let confirm = painted(&mut app, 110, 24);
+    assert!(
+        confirm.contains("Close this pane?") && confirm.contains("01JNODE/w1:p2"),
+        "a close says which pane before it does it:\n{confirm}"
+    );
+    assert!(
+        ops(&conn.heard().await).is_empty(),
+        "nothing left the client before the confirmation"
+    );
+    app.key(key(KeyCode::Enter, KeyModifiers::NONE));
+    let sent = conn.heard().await;
+    let ops = ops(&sent);
+    assert_eq!(ops.len(), 1, "one op, once: {sent:?}");
+    assert_eq!(ops[0]["op"], "close");
+    assert_eq!(
+        ops[0]["at"], "01JNODE/w1:p2",
+        "the pane under the pointer, not the focused one"
+    );
+}
+
+#[tokio::test]
+async fn a_right_click_on_the_tab_strip_and_on_the_sidebar_ask_about_those_instead() {
+    let mut fake = Fake::start().await;
+    let (client, mut conn, mut app) = two_panes(&mut fake).await;
+    let _ = conn.heard().await;
+
+    let (_, tab) = app.layout.tabs[0].clone();
+    poked(&mut app, &client, right(tab.x + 1, tab.y));
+    let tabs = painted(&mut app, 110, 24);
+    assert!(
+        tabs.contains("new tab") && tabs.contains("rename") && tabs.contains("close"),
+        "the tab's own menu:\n{tabs}"
+    );
+    app.key(key(KeyCode::Char('c'), KeyModifiers::NONE));
+    app.key(key(KeyCode::Enter, KeyModifiers::NONE));
+    let sent = conn.heard().await;
+    let sent = ops(&sent);
+    assert_eq!(sent[0]["op"], "close");
+    assert_eq!(
+        sent[0]["at"], "01JNODE/w1:t1",
+        "a tab op takes a tab id; a pane id there is refused by herdr and looks like a no-op"
+    );
+
+    let sidebar = app.layout.sidebar;
+    let row = app
+        .layout
+        .rows
+        .iter()
+        .position(|(pane, _)| pane.as_deref() == Some("01JNODE/w1:p1"))
+        .expect("the sidebar carries its panes") as u16;
+    poked(&mut app, &client, right(sidebar.x + 4, sidebar.y + row));
+    let spaces = painted(&mut app, 110, 24);
+    assert!(
+        spaces.contains("workspace needs a name"),
+        "the spaces list asks about the workspace:\n{spaces}"
+    );
+    app.key(key(KeyCode::Char('c'), KeyModifiers::NONE));
+    app.key(key(KeyCode::Enter, KeyModifiers::NONE));
+    let sent = conn.heard().await;
+    let sent = ops(&sent);
+    assert_eq!(sent[0]["at"], "01JNODE/w1", "a workspace id");
+}
+
+/// What a node has not claimed is **absent**, and a right-click on it opens nothing at all rather
+/// than a menu of rows that would all come back `not_writer`.
+#[tokio::test]
+async fn a_read_only_device_and_a_node_without_manage_get_no_menu_from_the_right_button() {
+    for (role, manage) in [("readonly", true), ("full", false)] {
+        let mut fake = Fake::start().await;
+        let client = Arc::new(fake.client());
+        let mut events = client.events();
+        let conn = fake.accept().await;
+        conn.greet_as(json!([pane("01JNODE/w1:p1", "t1")]), json!({}), role, manage);
+        until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+        let mut app = App::new(client.clone(), Options::default(), Images::default());
+        app.adopt_prefs();
+        app.refocus();
+        painted(&mut app, 110, 24);
+
+        let body = rect_of(&app, "01JNODE/w1:p1");
+        poked(&mut app, &client, right(body.x + 4, body.y + 3));
+        let screen = painted(&mut app, 110, 24);
+        assert!(
+            !screen.contains("split right"),
+            "{role}/manage={manage} opened a menu it cannot use:\n{screen}"
+        );
+    }
 }

@@ -43,6 +43,16 @@ pub enum Progress {
     Cancelled,
 }
 
+/// What a right-click was over. herdr's own context menus are shaped by the thing under the
+/// pointer — a pane's, a space's, a tab's — and Kampr mirrors that shape with the ops it already
+/// sends rather than with a second menu system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Pane,
+    Tab,
+    Space,
+}
+
 /// What an empty answer means, which is not the same thing three times. A creation **omits** the
 /// key, because omitting is what "let herdr name it" is: the schema types every one of these as
 /// `["string","null"]` and not required, so a `null` would be accepted too — it would just be this
@@ -151,6 +161,40 @@ impl Manage {
                 Some(Prompt { title, op: None })
             }
         }
+    }
+
+    /// The menu for whatever the pointer was over, **scoped to that thing and not to the
+    /// focus**: a right-click on a pane the operator is not driving is a question about that
+    /// pane, and answering it with the focused pane's ops is the wrong pane's shell closing.
+    ///
+    /// **Absent rather than empty**, the same rule [`Self::begin`] follows: a read-only device, a
+    /// node that does not claim `manage`, or a target the herd cannot resolve opens nothing at
+    /// all. There is no such thing here as a menu with everything greyed out.
+    pub fn context(&mut self, target: Target, herd: &Herd, pane: &str, caps: &Caps, role: Role) {
+        if !caps.manage || !role.writes() {
+            return;
+        }
+        let Some(entry) = herd.pane(pane) else {
+            return;
+        };
+        let rows = match target {
+            Target::Pane => pane_rows(entry),
+            Target::Tab => tab_rows(entry),
+            Target::Space => space_rows(entry),
+        };
+        if rows.is_empty() {
+            return;
+        }
+        let title = match target {
+            Target::Pane => "pane",
+            Target::Tab => "tab",
+            Target::Space => "space",
+        }
+        .to_string();
+        self.open = Some(Modal {
+            title: title.clone(),
+            stage: stage_of(Next::Pick { title, rows }),
+        });
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Progress {
@@ -377,17 +421,7 @@ impl Manage {
                 key: Some('z'),
                 label: "zoom".into(),
                 note: "give this pane the tab, at the desk".into(),
-                next: Next::Confirm {
-                    lines: vec![
-                        format!("Zoom {at} at the desk?"),
-                        "herdr gives the pane the whole tab and hands it back on the next \
-                         toggle. It is not this client's own zoom: #265 measured the PTY going \
-                         84 to 171 columns under an attached client, so a program in it is \
-                         redrawn at a size it did not ask for."
-                            .into(),
-                    ],
-                    op: json!({ "op": "pane.zoom", "at": at, "mode": "toggle" }),
-                },
+                next: zoom(at),
             });
             rows.push(Row {
                 key: Some('r'),
@@ -809,6 +843,128 @@ fn size_menu(at: &str) -> Next {
     Next::Pick {
         title: "pane size".into(),
         rows,
+    }
+}
+
+/// herdr's own pane menu, in its order: rename, the two splits, zoom, close — with `focus` and
+/// `size` from Kampr's own list because they are the two the pointer is the natural way to reach.
+///
+/// `Send right-clicks to pane` is not here and cannot be: it is this client's passthrough toggle,
+/// which sends nothing and is `prefix m`. A pane that has it armed never opens this menu at all.
+fn pane_rows(entry: &PaneEntry) -> Vec<Row> {
+    let at = entry.id.as_str();
+    vec![
+        Row {
+            key: Some('r'),
+            label: "rename".into(),
+            note: "name it, or clear the name it has".into(),
+            next: rename(at, "pane", entry.label.clone(), Empty::Null),
+        },
+        Row {
+            key: Some('s'),
+            label: "split right".into(),
+            note: "side by side".into(),
+            next: split(at, "right"),
+        },
+        Row {
+            key: Some('d'),
+            label: "split down".into(),
+            note: "one above the other".into(),
+            next: split(at, "down"),
+        },
+        Row {
+            key: Some('f'),
+            label: "focus".into(),
+            note: "put this pane in front at the desk".into(),
+            next: Next::Send(json!({ "op": "focus", "at": at })),
+        },
+        Row {
+            key: Some('z'),
+            label: "zoom".into(),
+            note: "give this pane the tab, at the desk".into(),
+            next: zoom(at),
+        },
+        Row {
+            key: Some('w'),
+            label: "size".into(),
+            note: "give this pane a real width, if it was born tiny".into(),
+            next: size_menu(at),
+        },
+        Row {
+            key: Some('c'),
+            label: "close".into(),
+            note: "end it, and whatever it is running".into(),
+            next: close(at, "pane"),
+        },
+    ]
+}
+
+/// A pane id carries its workspace and **never its tab**, so a pane whose entry has no `tab_id`
+/// has no tab menu at all — absent, not empty.
+fn tab_rows(entry: &PaneEntry) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if let Some(at) = entry.workspace_id.as_deref() {
+        rows.push(Row {
+            key: Some('t'),
+            label: "new tab".into(),
+            note: "another tab in this workspace".into(),
+            next: Next::Ask(Ask {
+                prompt: "What is the tab called?".into(),
+                hint: "enter with nothing typed lets herdr name it".into(),
+                op: json!({ "op": "tab.create", "at": at }),
+                field: "label",
+                empty: Empty::Omit,
+            }),
+        });
+    }
+    let Some(at) = entry.tab_id.as_deref() else {
+        return rows;
+    };
+    rows.push(Row {
+        key: Some('r'),
+        label: "rename".into(),
+        note: "a tab needs a name".into(),
+        next: rename(at, "tab", entry.tab.clone(), Empty::Refuse),
+    });
+    rows.push(Row {
+        key: Some('c'),
+        label: "close".into(),
+        note: "every pane in it goes too".into(),
+        next: close(at, "tab"),
+    });
+    rows
+}
+
+fn space_rows(entry: &PaneEntry) -> Vec<Row> {
+    let Some(at) = entry.workspace_id.as_deref() else {
+        return Vec::new();
+    };
+    vec![
+        Row {
+            key: Some('r'),
+            label: "rename".into(),
+            note: "a workspace needs a name".into(),
+            next: rename(at, "workspace", entry.workspace.clone(), Empty::Refuse),
+        },
+        Row {
+            key: Some('c'),
+            label: "close".into(),
+            note: "every tab and pane in it goes too".into(),
+            next: close(at, "workspace"),
+        },
+    ]
+}
+
+fn zoom(at: &str) -> Next {
+    Next::Confirm {
+        lines: vec![
+            format!("Zoom {at} at the desk?"),
+            "herdr gives the pane the whole tab and hands it back on the next toggle. It is not \
+             this client's own zoom: #265 measured the PTY going 84 to 171 columns under an \
+             attached client, so a program in it is redrawn at a size it did not ask for."
+                .into(),
+        ],
+        op: json!({ "op": "pane.zoom", "at": at, "mode": "toggle" }),
     }
 }
 

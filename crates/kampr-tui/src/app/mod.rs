@@ -290,7 +290,35 @@ impl App {
                 self.client.input(&pane, &text);
             }
             Click::Wheel { pane, up } => self.wheel(pane, up),
+            Click::Menu(menu) => self.context_menu(menu),
         }
+    }
+
+    /// The right button opened a menu about the thing under the pointer. **Silent when there is
+    /// nothing to offer** — a read-only device, a node that does not claim `manage` — because a
+    /// right-click is an exploratory gesture rather than an op the operator asked for, and a note
+    /// on every stray one is noise the keyboard path is the right place for.
+    fn context_menu(&mut self, menu: crate::mouse::Menu) {
+        use crate::mouse::Menu;
+        let state = self.client.state();
+        let (target, pane) = match &menu {
+            Menu::Pane(pane) => (crate::manage::Target::Pane, Some(pane.clone())),
+            Menu::Space(pane) => (crate::manage::Target::Space, Some(pane.clone())),
+            // The strip carries a tab id and the ops carry it too, but the entry a menu is built
+            // from is a pane's: the tab's own name and its workspace are only ever read off one.
+            Menu::Tab(tab) => (
+                crate::manage::Target::Tab,
+                state
+                    .herd
+                    .panes
+                    .iter()
+                    .find(|p| p.tab_id.as_deref() == Some(tab.as_str()))
+                    .map(|p| p.id.clone()),
+            ),
+        };
+        let Some(pane) = pane else { return };
+        let caps = state.caps();
+        self.manage.context(target, &state.herd, &pane, &caps, state.role);
     }
 
     /// The wheel over kampr's own surfaces. Whichever of the two a pane is showing moves; the

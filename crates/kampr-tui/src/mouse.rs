@@ -16,6 +16,12 @@ use std::collections::HashSet;
 /// lead or they are a glyph out.
 const TAIL: char = '\0';
 
+/// SGR 1006 button numbers: 0 is the left button, 2 is the right one, and 32 is the bit that
+/// makes a report a motion rather than a press.
+const LEFT: u8 = 0;
+const RIGHT: u8 = 2;
+const MOTION: u8 = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Click {
     None,
@@ -36,6 +42,9 @@ pub enum Click {
         pane: String,
         text: String,
     },
+    /// The right button over something kampr draws: the manage menu for whatever is under the
+    /// pointer, which is not necessarily what has the focus.
+    Menu(Menu),
     /// The wheel over something kampr draws rather than something a pane does. `None` is the
     /// sidebar; a pane is its own scrollback or its own transcript, whichever it is showing.
     ///
@@ -48,6 +57,16 @@ pub enum Click {
         pane: Option<String>,
         up: bool,
     },
+}
+
+/// What a right-click was over, named as the thing rather than as the place: a pane, the tab
+/// whose strip was clicked, or a sidebar row — which is the "spaces" list, so its menu is the
+/// workspace's, whether the row drawn there was a workspace or one of its panes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Menu {
+    Pane(String),
+    Tab(String),
+    Space(String),
 }
 
 /// Surface coordinates, `(col, row)`, of the two ends the operator dragged between.
@@ -103,6 +122,9 @@ impl Mouse {
             }
             MouseEventKind::Drag(MouseButton::Left) => self.extend(at, layout, role),
             MouseEventKind::Up(MouseButton::Left) => self.release(at, layout, role),
+            MouseEventKind::Down(MouseButton::Right) => self.menu(at, layout, role),
+            MouseEventKind::Drag(MouseButton::Right) => self.dragging(at, MOTION + RIGHT, layout, role),
+            MouseEventKind::Up(MouseButton::Right) => self.lifted(at, RIGHT, layout, role),
             MouseEventKind::ScrollUp => self.wheel(at, true, layout, role),
             MouseEventKind::ScrollDown => self.wheel(at, false, layout, role),
             _ => Click::None,
@@ -146,7 +168,7 @@ impl Mouse {
                 self.reported = Some(cell);
                 return Click::Passthrough {
                     pane,
-                    text: sgr(0, cell, true),
+                    text: sgr(LEFT, cell, true),
                 };
             }
             let Some(cell) = surface_cell(placed, at) else {
@@ -183,19 +205,9 @@ impl Mouse {
             }
             return Click::None;
         }
-        let Some((pane, cell)) = self.driving(at, layout, role) else {
-            return Click::None;
-        };
         // 1002, not 1003: motion is reported when it crosses into another cell and while a
         // button is down, which is what every mouse-aware program of the last decade asked for.
-        if self.reported == Some(cell) {
-            return Click::None;
-        }
-        self.reported = Some(cell);
-        Click::Passthrough {
-            pane,
-            text: sgr(32, cell, true),
-        }
+        self.dragging(at, MOTION + LEFT, layout, role)
     }
 
     fn release(&mut self, at: (u16, u16), layout: &Layout, role: Role) -> Click {
@@ -214,14 +226,7 @@ impl Mouse {
             }
             return Click::None;
         }
-        let Some((pane, cell)) = self.driving(at, layout, role) else {
-            return Click::None;
-        };
-        self.reported = None;
-        Click::Passthrough {
-            pane,
-            text: sgr(0, cell, false),
-        }
+        self.lifted(at, LEFT, layout, role)
     }
 
     fn wheel(&mut self, at: (u16, u16), up: bool, layout: &Layout, role: Role) -> Click {
@@ -243,6 +248,72 @@ impl Mouse {
         match inside(layout.sidebar, at) {
             true => Click::Wheel { pane: None, up },
             false => Click::None,
+        }
+    }
+
+    /// The right button, which is kampr's own — **except over a pane the operator armed**.
+    ///
+    /// Passthrough is off by default and armed per pane by hand (#292/#297), so arming one is the
+    /// operator saying that pane's program drives the mouse. A program with a right-button menu
+    /// of its own — an editor, a file manager — would be unreachable for as long as its pane was
+    /// armed if this client took the button first, and there would be nothing to press to get it
+    /// back. Disarming with `prefix m` is the way to this menu, and `prefix shift+n` reaches the
+    /// same rows from the keyboard without disarming anything.
+    fn menu(&mut self, at: (u16, u16), layout: &Layout, role: Role) -> Click {
+        if let Some(tab) = pick(&layout.tabs, at) {
+            return Click::Menu(Menu::Tab(tab));
+        }
+        if let Some(placed) = layout.panes.iter().find(|p| inside(p.rect, at)) {
+            let pane = placed.pane.clone();
+            if !self.sends(&pane, role) {
+                return Click::Menu(Menu::Pane(pane));
+            }
+            // Arriving is spent focusing, the same rule the left button follows: a pane the mouse
+            // was not already on can never be sent a report by the click that reaches it.
+            if self.focus.as_deref() != Some(pane.as_str()) {
+                self.focus = Some(pane.clone());
+                return Click::Focus(pane);
+            }
+            let Some(cell) = live_cell(placed, at) else {
+                return Click::None;
+            };
+            self.reported = Some(cell);
+            return Click::Passthrough {
+                pane,
+                text: sgr(RIGHT, cell, true),
+            };
+        }
+        if let Some(pane) = pick(&layout.herd, at) {
+            return Click::Menu(Menu::Pane(pane));
+        }
+        match pick_row(&layout.rows, at) {
+            Some(pane) => Click::Menu(Menu::Space(pane)),
+            None => Click::None,
+        }
+    }
+
+    fn dragging(&mut self, at: (u16, u16), button: u8, layout: &Layout, role: Role) -> Click {
+        let Some((pane, cell)) = self.driving(at, layout, role) else {
+            return Click::None;
+        };
+        if self.reported == Some(cell) {
+            return Click::None;
+        }
+        self.reported = Some(cell);
+        Click::Passthrough {
+            pane,
+            text: sgr(button, cell, true),
+        }
+    }
+
+    fn lifted(&mut self, at: (u16, u16), button: u8, layout: &Layout, role: Role) -> Click {
+        let Some((pane, cell)) = self.driving(at, layout, role) else {
+            return Click::None;
+        };
+        self.reported = None;
+        Click::Passthrough {
+            pane,
+            text: sgr(button, cell, false),
         }
     }
 
