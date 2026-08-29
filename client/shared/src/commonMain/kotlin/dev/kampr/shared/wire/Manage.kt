@@ -3,6 +3,7 @@ package dev.kampr.shared.wire
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -127,6 +128,28 @@ sealed interface ManageOp {
     data class SessionStop(val node: String, val name: String) : ManageOp {
         override val op: String get() = "session.stop"
     }
+
+    // One command on one host, as part of a fan-out. `cohort` is assigned by the client because a
+    // run spans hosts and no single node can name one; `args` is an argv and not a shell line, so
+    // `;` and `&&` are arguments rather than things that run.
+    data class FleetRun(
+        val node: String,
+        val cohort: String,
+        val args: List<String>,
+        val cwd: String? = null,
+    ) : ManageOp {
+        override val op: String get() = "fleet.run"
+    }
+
+    data class FleetStop(val at: String) : ManageOp {
+        override val op: String get() = "fleet.stop"
+    }
+
+    // Drops a *finished* run from the board. The node refuses a live one — forgetting it would
+    // leave nothing reading its pty and nobody able to answer it.
+    data class FleetForget(val at: String) : ManageOp {
+        override val op: String get() = "fleet.forget"
+    }
 }
 
 fun ManageOp.fields(): JsonObject = buildJsonObject {
@@ -198,6 +221,14 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             put("node", node)
             put("name", name)
         }
+        is ManageOp.FleetRun -> {
+            put("node", node)
+            put("cohort", cohort)
+            put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            opt("cwd", cwd)
+        }
+        is ManageOp.FleetStop -> put("at", at)
+        is ManageOp.FleetForget -> put("at", at)
         is ManageOp.SessionStop -> {
             put("node", node)
             put("name", name)

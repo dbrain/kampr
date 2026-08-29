@@ -6,7 +6,7 @@ use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
 use kampr_core::provider::PaneInfo;
 use kampr_core::wire::{NodeEntry, PaneEntry};
 use kampr_herdr::Herdr;
-use kampr_journal::{Harness, Registry as Journals};
+use kampr_journal::{Harness, Registry as Journals, SessionMarker};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
@@ -522,6 +522,9 @@ async fn build_model(
             name: session.node_name.clone(),
             kind: "local".into(),
             online: health.online,
+            // This process is answering by definition — it is the one assembling the message. A
+            // herdr that is down takes the panes and leaves the node able to run a fleet command.
+            reachable: Some(true),
             rtt_ms: match health.online {
                 true => ping(&session.herdr).await,
                 false => None,
@@ -544,7 +547,7 @@ async fn build_model(
             // affordable once per pane per rebuild.
             let title = journals
                 .marker(&session.provider.pane_processes(&info.pane_id))
-                .and_then(|marker| marker.name);
+                .and_then(chosen_name);
             panes.push(
                 PaneEntry::new(&session.node_id, &info, has_conversation)
                     .with_watchers(watchers)
@@ -563,4 +566,52 @@ async fn ping(herdr: &Herdr) -> Option<f64> {
         .await
         .ok()
         .map(|_| at.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// The harness's own name for a session, when it is a name somebody chose.
+///
+/// Claude derives one the moment a session opens — the working directory's basename
+/// and two hex characters, `kampr-44` — and it is what a pane is called before a word
+/// has been said in it. It identifies nothing a person would recognise, and it sits in
+/// the naming template *above* the workspace label the operator did choose. A name a
+/// person set is a different thing and still wins; `nameSource` is measured as `auto`,
+/// `derived` and absent (#311), and none of those is a person.
+fn chosen_name(marker: SessionMarker) -> Option<String> {
+    match marker.name_source.as_deref() {
+        Some("auto" | "derived") | None => None,
+        Some(_) => marker.name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(name: &str, source: Option<&str>) -> SessionMarker {
+        SessionMarker {
+            agent: "claude".into(),
+            pid: 1,
+            session: "s".into(),
+            cwd: None,
+            name: Some(name.into()),
+            name_source: source.map(str::to_string),
+            status: None,
+            transcript: None,
+        }
+    }
+
+    #[test]
+    fn a_name_the_harness_derived_for_itself_is_not_what_the_pane_is_called() {
+        assert_eq!(chosen_name(named("kampr-44", Some("derived"))), None);
+        assert_eq!(chosen_name(named("kampr-1f", Some("auto"))), None);
+        assert_eq!(chosen_name(named("kampr-44", None)), None);
+    }
+
+    #[test]
+    fn a_name_somebody_chose_is_still_what_the_pane_is_called() {
+        assert_eq!(
+            chosen_name(named("the release", Some("user"))).as_deref(),
+            Some("the release")
+        );
+    }
 }

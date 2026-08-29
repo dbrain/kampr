@@ -91,9 +91,17 @@ impl JournalAdapter for CodexAdapter {
     }
 
     /// A rollout carries its working directory in the `session_meta` record it opens with
-    /// (probe #45). Codex publishes no map from a process to the thread it is on — its
-    /// `~/.codex/thread-writer-locks` entries are empty files named after the thread — so the
-    /// directory, bounded by when the pane's `codex` started, is the whole handle here.
+    /// (probe #45). The directory, bounded by when the pane's `codex` started, is the whole
+    /// handle *this* function has — but it is no longer the only one available.
+    ///
+    /// **Codex does publish a process-to-thread map, and this crate does not read it yet.**
+    /// `~/.codex/thread-writer-locks/<thread-id>.lock` is empty, which is what made it look
+    /// like nothing, but it is held with `flock` from before the first prompt until the process
+    /// dies — the same kernel-backed handle [`crate::agy`] already calls the strongest one
+    /// available. Two cautions for whoever wires it: the holder is the **native** `codex`
+    /// binary, not the `bin/codex.js` wrapper that spawns it, so the pipeline walk has to reach
+    /// the child; and `/new` **takes a second lock without releasing the first**, so agy's
+    /// "exactly one held lock or nothing" rule would refuse a session that has used it.
     fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError> {
         let rollouts = discover::descend(&self.root.path().join("sessions"), 3)
             .iter()

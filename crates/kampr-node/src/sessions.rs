@@ -1,7 +1,8 @@
 use crate::caps::{SessionEntry, SessionListError, sessions as list_sessions};
 use crate::config::Config;
 use kampr_core::registry::RegistryConfig;
-use kampr_core::{HerdrConfig, HerdrProvider, PaneRegistry};
+use kampr_core::{Composite, HerdrConfig, HerdrProvider, PaneRegistry};
+use kampr_fleet::FleetProvider;
 use kampr_herdr::Herdr;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,9 @@ pub struct SessionNode {
     pub node_name: String,
     pub herdr: Herdr,
     pub provider: Arc<HerdrProvider>,
+    /// Runs this node forked itself. Kept beside the herdr provider rather than inside it: a fleet
+    /// run is not a herdr pane and must not appear in the operator's own workspaces (probe #331).
+    pub fleet: Arc<FleetProvider>,
     pub registry: Arc<PaneRegistry>,
 }
 
@@ -42,8 +46,11 @@ impl SessionNode {
                 ..HerdrConfig::default()
             },
         ));
+        let fleet = Arc::new(FleetProvider::new());
+        // Fleet first: it answers `owns` only for runs it is actually running, so herdr stays the
+        // catch-all for everything else.
         let registry = PaneRegistry::with_config(
-            provider.clone(),
+            Composite::new(vec![fleet.clone(), provider.clone()]),
             RegistryConfig {
                 scrollback_max_rows: config.limits.scrollback_max_rows,
                 ..RegistryConfig::default()
@@ -63,6 +70,7 @@ impl SessionNode {
             name: name.to_string(),
             herdr,
             provider,
+            fleet,
             registry,
         })
     }

@@ -73,6 +73,7 @@ data class NodeInfo(
     val id: String,
     val name: String = id,
     val kind: String = "peer",
+    // Whether this node's *herdr* is up — not whether the node can be reached. See `reachable`.
     val online: Boolean = true,
     @SerialName("rtt_ms") val rttMs: Double? = null,
     @SerialName("herdr_version") val herdrVersion: String? = null,
@@ -84,7 +85,15 @@ data class NodeInfo(
     // all three render the same way, which is not at all.
     val update: String? = null,
     val detail: String? = null,
+    // Whether the node process is answering at all. A herdr that is down takes the panes with it
+    // and leaves the machine perfectly able to run a fleet command, so anything that asks "can I
+    // send this there" asks `isReachable`, never `online`. Null is an older node that never sent
+    // it, for which `online` is the only answer available. **Last on purpose**: the artboards
+    // build a NodeInfo positionally.
+    val reachable: Boolean? = null,
 ) {
+    val isReachable: Boolean get() = reachable ?: online
+
     // A named session is its own herdr server and joins the herd as its own node, named
     // `<host>/<session>`; the primary session carries the bare host name.
     val host: String get() = name.substringBefore('/')
@@ -130,7 +139,66 @@ data class PaneInfo(
     // shell however busy the pane is (probe #297). `Naming`'s `[…]` is what drops the section.
     val cmd: String? = null,
     val argv: String? = null,
+    // Present only on a fleet run, and its presence is what files the pane under the fleet board
+    // instead of beside the operator's own workspaces.
+    val fleet: FleetInfo? = null,
 )
+
+// One option a prompt declared for itself.
+@Serializable
+data class QuestionOption(val key: String, val label: String)
+
+// What a fleet run is asking, as far as anything could tell.
+//
+// `shape` decides the answer control and nothing else. Failing to recognise a prompt never hides a
+// host that is waiting — that half comes from the kernel, not from the wording (probe #334).
+@Serializable
+data class Question(
+    val prompt: String = "",
+    val context: List<String> = emptyList(),
+    // confirm | numbered | secret | free | screen
+    val shape: String = "free",
+    val options: List<QuestionOption> = emptyList(),
+    @SerialName("default_key") val defaultKey: String? = null,
+    // The screen said this host was asking and the kernel did not — set only where `/proc` is
+    // closed to the node, which is every command that changes user. Enough to show, not enough to
+    // present as a measurement (probe #341).
+    val inferred: Boolean = false,
+) {
+    val isSecret: Boolean get() = shape == "secret"
+
+    // A full-screen program — `vim`, `less`. Its unterminated tail is not a prompt and must not be
+    // shown as one; the pane is the interface (probe #340).
+    val ownsTheScreen: Boolean get() = shape == "screen"
+
+    val answerable: List<QuestionOption> get() = if (isSecret || ownsTheScreen) emptyList() else options
+}
+
+// A fleet run's own state, beside the pane it is served as.
+@Serializable
+data class FleetInfo(
+    val cohort: String,
+    val command: String = "",
+    // running | waiting | quiet | exited
+    val state: String = "running",
+    val question: Question? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
+    val signal: Int? = null,
+    @SerialName("quiet_seconds") val quietSeconds: Long? = null,
+    // The node cannot read this run's state at all — a command that changes user (probe #332). It
+    // will never report anything but `quiet`, and a board that did not say so would let a waiting
+    // host look idle.
+    val blind: Boolean = false,
+    @SerialName("started_unix") val startedUnix: Long = 0,
+) {
+    val isWaiting: Boolean get() = state == "waiting"
+    val isFinished: Boolean get() = state == "exited"
+
+    // Zero, and no signal. A run the kernel killed is finished and is **not** a success — rounding
+    // a death to `0` would report it as a clean upgrade.
+    val succeeded: Boolean get() = isFinished && exitCode == 0 && signal == null
+    val failed: Boolean get() = isFinished && !succeeded
+}
 
 @Serializable
 data class HerdDelta(

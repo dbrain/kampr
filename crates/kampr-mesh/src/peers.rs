@@ -597,6 +597,9 @@ impl Peers {
             for node in &state.nodes {
                 herd.nodes.push(NodeEntry {
                     kind: "peer".into(),
+                    // The link is up, so the peer's node process is answering — whatever its own
+                    // herdr is doing. A peer that reports its own `reachable: false` is believed.
+                    reachable: Some(node.is_reachable()),
                     rtt_ms: state.rtt_ms.map(|link_rtt| link_rtt + node.rtt_ms.unwrap_or(0.0)),
                     build: node.build.clone().or_else(|| Some(link.build.clone())),
                     ..node.clone()
@@ -609,6 +612,8 @@ impl Peers {
                 herd.nodes.push(NodeEntry {
                     kind: "peer".into(),
                     online: false,
+                    // Served from memory with the link down: nothing can be asked of it at all.
+                    reachable: Some(false),
                     rtt_ms: None,
                     detail: Some(remembered.detail.clone()),
                     ..node.clone()

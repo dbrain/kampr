@@ -49,6 +49,10 @@ pub enum Action {
     /// first. #289's table binds no `prefix+shift+h`, so this is one of the handful Kampr claims
     /// for itself rather than a departure from herdr's keymap.
     HerdView,
+    /// The fleet board. `prefix+shift+f` is unbound in #289's table, like `shift+h`.
+    FleetView,
+    /// One command, every online node. `prefix+shift+e` for execute.
+    FleetRun,
     FocusPane(Dir),
     CyclePaneNext,
     CyclePanePrevious,
@@ -171,6 +175,10 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(RenamePane)
     } else if shifted(key, 'h') {
         Bind::Do(HerdView)
+    } else if shifted(key, 'f') {
+        Bind::Do(FleetView)
+    } else if shifted(key, 'e') {
+        Bind::Do(FleetRun)
     } else if shifted(key, 'v') {
         Bind::Do(ToggleView)
     } else if plain(key, '?') {
@@ -332,7 +340,9 @@ pub fn lookup(mode: Mode, key: KeyEvent) -> Option<Bind> {
 pub fn footer(mode: Mode) -> Option<&'static str> {
     match mode {
         Mode::Pane => None,
-        Mode::Prefix => Some("PREFIX  esc cancel · ctrl+b send prefix · w sidebar · shift+h herd · ? help"),
+        Mode::Prefix => Some(
+            "PREFIX  esc cancel · ctrl+b send prefix · w sidebar · shift+h herd · shift+f fleet · ? help",
+        ),
         Mode::Copy => Some(
             "COPY  h/j/k/l w/b/e { } move · / ? search · n/N repeat · v/space select · y/enter copy · q/esc exit",
         ),

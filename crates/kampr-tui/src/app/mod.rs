@@ -90,6 +90,10 @@ pub enum View {
 pub enum Screen {
     Panes,
     Herd,
+    /// Fleet runs, grouped by the fan-out that produced them. A separate screen rather than a
+    /// section of the herd, because a fleet run is not on anybody's desk and the question it
+    /// answers — how did they all go, and which one needs me — is not the herd's question.
+    Fleet,
 }
 
 pub struct App {

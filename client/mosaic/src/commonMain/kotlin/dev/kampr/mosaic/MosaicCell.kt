@@ -63,6 +63,7 @@ import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.ui.PaneManageAction
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.StreamNotice
 import dev.kampr.shared.ui.PaneView
@@ -73,6 +74,7 @@ import dev.kampr.shared.ui.StatusMark
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.paneActions
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.statusColor
 import dev.kampr.shared.ui.statusWord
@@ -157,6 +159,9 @@ fun MosaicCell(
             // The surface is taller and wider than the cell by design, and a graphicsLayer does
             // not clip: without this a cell paints over its neighbour and over the chrome.
             .clipToBounds()
+            // Right-click only. A long press inside a cell is the grid's, exactly as it
+            // is on the pane screen, and the header carries the touch affordance.
+            .paneActions(pane.id, longPress = false)
             // A drag needs to know where the cells actually landed, and only the layout does.
             .onGloballyPositioned {
                 val rect = it.boundsInWindow()
@@ -272,6 +277,7 @@ private fun CellHeader(
         statusWord(status)?.let {
             KText(it, tokens.type.metaSmall, if (quiet) tokens.color.mute else statusColor(status))
         }
+        PaneManageAction(pane.id, 28.dp)
         GlyphAction(
             KamprIcons.cross,
             "Remove $title from the mosaic",

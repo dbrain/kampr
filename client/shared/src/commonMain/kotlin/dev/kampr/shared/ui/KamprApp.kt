@@ -43,6 +43,7 @@ import dev.kampr.shared.theme.groundOf
 import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Security
 import kotlinx.coroutines.delay
@@ -167,6 +168,7 @@ fun KamprApp(
                 LocalMosaic provides remember(state, mosaic) {
                     if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null
                 },
+                LocalFleet provides remember(state) { { state.go(Screen.Fleet) } },
             ) {
                 AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
             }
@@ -362,6 +364,15 @@ internal fun AppScaffold(
                                 )
                                 Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                                 Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                                Screen.Fleet -> FleetScreen(
+                                    herd = herd,
+                                    breakpoint = breakpoint,
+                                    onOpenPane = state::openPane,
+                                    onAnswer = state::answerFleet,
+                                    onStop = { state.manage(ManageOp.FleetStop(it)) },
+                                    onRun = { state.runFleet(it) },
+                                    canRun = !readOnly && state.store.canManage,
+                                )
                                 Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                             }
                         }
@@ -413,6 +424,15 @@ internal fun AppScaffold(
                         )
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                        Screen.Fleet -> FleetScreen(
+                            herd = herd,
+                            breakpoint = breakpoint,
+                            onOpenPane = state::openPane,
+                            onAnswer = state::answerFleet,
+                            onStop = { state.manage(ManageOp.FleetStop(it)) },
+                            onRun = { state.runFleet(it) },
+                            canRun = !readOnly && state.store.canManage,
+                        )
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
                             herd, connectionStatus, now, localRtt, triage, state::openPane, null,
                             onResync = { state.connection.send(ClientMsg.Resync) },
@@ -460,6 +480,15 @@ internal fun AppScaffold(
                         )
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                        Screen.Fleet -> FleetScreen(
+                            herd = herd,
+                            breakpoint = breakpoint,
+                            onOpenPane = state::openPane,
+                            onAnswer = state::answerFleet,
+                            onStop = { state.manage(ManageOp.FleetStop(it)) },
+                            onRun = { state.runFleet(it) },
+                            canRun = !readOnly && state.store.canManage,
+                        )
                         Screen.Herd, Screen.Mosaic -> HerdPortrait(
                             herd, connectionStatus, now, localRtt, triage,
                             state::openPane,

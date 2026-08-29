@@ -253,6 +253,7 @@ mod tests {
                 name: "front".into(),
                 kind: "local".into(),
                 online: true,
+                reachable: None,
                 rtt_ms: None,
                 herdr_version: None,
                 build: Some(build.to_string()),

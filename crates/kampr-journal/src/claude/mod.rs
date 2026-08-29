@@ -114,7 +114,7 @@ impl JournalAdapter for ClaudeAdapter {
 
     fn locate_by_process(&self, process: &PaneProcess) -> Result<PathBuf, JournalError> {
         let marker = self.read_marker(process)?;
-        marker.transcript.ok_or(JournalError::NotFound(marker.session))
+        marker.transcript.ok_or(JournalError::Unwritten(marker.session))
     }
 
     /// Reading `sessions/<pid>.json` per candidate *is* the intersection with the marker

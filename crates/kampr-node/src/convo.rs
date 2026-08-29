@@ -277,9 +277,18 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // restarted looks identical in every field but the process, which is why the process is
         // in the handle.
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
+            let elsewhere = moved(handle.as_ref(), &now);
             handle = Some(now.clone());
             opened = None;
             release(&journal, &held);
+            // The pane named a *different* session, so what the client is holding
+            // belongs to the one before it — and the replacement does not exist for
+            // as long as it takes to send a first message (#259, #311). Waiting for
+            // one leaves the previous conversation on the screen taking no new turns,
+            // which is the panel that will not update (#260).
+            if elsewhere && !retire(&wire, &global, &held) {
+                return;
+            }
             due = true;
             misses = 0;
             composer = journals.composer(now.agent.as_deref());
@@ -561,10 +570,26 @@ fn holding(held: &Held, turns: &[Turn]) {
 /// refusing to update. Withdrawing first is the existing retirement mechanism applied to the
 /// whole conversation: a turn carrying no blocks is not drawn.
 fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
-    let Some((path, ids)) = held.lock().unwrap().take() else {
-        return true;
-    };
-    if path == fresh || ids.is_empty() {
+    let holding = held.lock().unwrap().take();
+    match holding {
+        Some((path, _)) if path == fresh => true,
+        Some((_, ids)) => send_retirement(wire, pane, ids),
+        None => true,
+    }
+}
+
+/// The same withdrawal with no replacement to compare against: whatever the client is
+/// holding, it is holding it of a conversation this pane has left.
+fn retire(wire: &Wire, pane: &str, held: &Held) -> bool {
+    let holding = held.lock().unwrap().take();
+    match holding {
+        Some((_, ids)) => send_retirement(wire, pane, ids),
+        None => true,
+    }
+}
+
+fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {
+    if ids.is_empty() {
         return true;
     }
     let turns = ids
@@ -576,6 +601,23 @@ fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
         sub: None,
         turns,
     })
+}
+
+/// Whether the pane named a *different* session, rather than merely stopped naming the
+/// one it had.
+///
+/// Herdr derives a pane's agent by scraping its screen (#75), so a blink in that leaves
+/// the handle with no identity for a tick — and a conversation withdrawn on every blink
+/// is its own defect, and a worse one than a dated view. Two names that disagree is the
+/// case this node is certain about.
+fn moved(was: Option<&Handle>, now: &Handle) -> bool {
+    let (Some(was), Some(now)) = (
+        was.and_then(|h| h.identity.announced.as_ref()),
+        now.identity.announced.as_ref(),
+    ) else {
+        return false;
+    };
+    was != now
 }
 
 /// Whatever the followed conversation has grown by, and which one it was.
@@ -639,4 +681,39 @@ async fn drain(journal: &Open) -> Result<Vec<Turn>, JournalError> {
     })
     .await
     .unwrap_or_else(|e| Err(JournalError::Io(std::io::Error::other(e))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn on(session: &str) -> Handle {
+        Handle {
+            agent: Some("claude".into()),
+            cwd: Some("/w".into()),
+            identity: Identity {
+                announced: Some(SessionRef::id("claude", session)),
+                harness: Harness::Unknown,
+            },
+        }
+    }
+
+    /// Herdr decides a pane is running an agent by scraping its screen (#75), so a
+    /// scrape that blinks is a handle that loses its identity for a tick and gets it
+    /// back. The pane has not gone anywhere, and a conversation that empties itself
+    /// while nothing is wrong is its own defect.
+    #[test]
+    fn a_pane_that_stops_naming_its_session_keeps_the_conversation_it_had() {
+        let named = on("a");
+        assert!(!moved(Some(&named), &Handle::default()));
+        assert!(!moved(None, &named));
+        assert!(!moved(Some(&named), &named));
+    }
+
+    /// Two names that disagree is the case this node is certain about: whatever the
+    /// client is holding, it is not of the session the pane is on now.
+    #[test]
+    fn a_pane_that_names_a_different_session_has_left_the_one_on_the_screen() {
+        assert!(moved(Some(&on("a")), &on("b")));
+    }
 }

@@ -277,7 +277,10 @@ impl Registry {
     ///    is stale and is dropped rather than followed.
     /// 2. The pane's harness **process**, which is what actually identifies a session. Exact
     ///    where the harness publishes the map, and it is the handle that moves the view when an
-    ///    agent is quit and a fresh one started in the same pane.
+    ///    agent is quit and a fresh one started in the same pane. A harness that names
+    ///    *this pane's* session but has written no transcript yet ends the ladder here
+    ///    with nothing: an empty conversation is the answer, and the directory holds only
+    ///    somebody else's (#311, #260).
     /// 3. The working directory, bounded by when that process started — never the directory
     ///    alone, because every run in a directory leaves a transcript and the newest of them
     ///    belongs to whoever ran last, not to this pane. Skipped entirely where the host has
@@ -299,8 +302,16 @@ impl Registry {
             return Ok(Some(path));
         }
         let process = harness.process();
-        if let Some(path) = process.and_then(|p| adapter.locate_by_process(p).ok()) {
-            return Ok(Some(path));
+        if let Some(p) = process {
+            match adapter.locate_by_process(p) {
+                Ok(path) => return Ok(Some(path)),
+                // The harness named *this pane's* session and it has written nothing yet
+                // (#311). The directory cannot hold a better answer than the one already
+                // in hand, and the newest transcript in it is somebody else's (#260), so
+                // an empty conversation is the honest answer rather than a guess.
+                Err(JournalError::Unwritten(_)) => return Ok(None),
+                Err(_) => {}
+            }
         }
         if !harness.may_search() {
             return Ok(None);

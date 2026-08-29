@@ -1106,6 +1106,7 @@ impl Session {
             node_id: &session.node_id,
             binary: &self.node.config.herdr.binary,
             holds: &self.node.holds,
+            fleet: &session.fleet,
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {

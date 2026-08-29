@@ -45,8 +45,11 @@ fun statusOf(pane: PaneInfo): AgentStatus = when (pane.agentStatus) {
     else -> AgentStatus.Unknown
 }
 
+// **Fleet runs are not on the operator's desk and must not be listed as if they were.** They are
+// ptys the node forked for one command, with no workspace and no place in anyone's layout; they
+// belong to their cohort and are reached from the fleet board.
 fun Herd.groups(): List<NodeGroup> {
-    val byNode = panes.groupBy { it.nodeId }
+    val byNode = panes.filter { it.fleet == null }.groupBy { it.nodeId }
     val ordered = nodes.sortedByDescending { it.kind == "local" }
     return ordered.map { NodeGroup(it, byNode[it.id].orEmpty().sortedWith(paneOrder)) }
 }
@@ -57,10 +60,14 @@ private val paneOrder = compareBy<PaneInfo>(
     { it.id },
 )
 
+// Herdr's own rollup order. `done` outranks `working` because herdr only ever synthesises it for
+// a pane that went working -> idle while *unfocused*: an unread marker, and a finished turn
+// nobody has seen wants the operator more than one still running does. Kept in step with
+// `sidebar.rs`'s `rank`, which PaneOrderTest and its Rust twin both pin.
 private fun statusRank(status: AgentStatus): Int = when (status) {
     AgentStatus.Blocked -> 0
-    AgentStatus.Working -> 1
-    AgentStatus.Done -> 2
+    AgentStatus.Done -> 1
+    AgentStatus.Working -> 2
     AgentStatus.Idle -> 3
     AgentStatus.Unknown -> 4
 }

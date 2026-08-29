@@ -16,6 +16,71 @@ pub enum AgentStatus {
     Unknown,
 }
 
+/// What a fleet run is doing, as measured rather than as guessed.
+///
+/// `Quiet` is deliberately not a kind of `Waiting`. Probes #331 and #332 describe hosts whose
+/// state cannot be read at all, and a board that rendered those as questions would send somebody
+/// to a host that is only slow — the same defect as [#233] seen from the other side, where a
+/// surface answered confidently while one of its paths was dead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetState {
+    Running,
+    /// Parked in a read on fd 0, with whatever it last said.
+    Waiting(Box<crate::question::Question>),
+    /// Silent, with nothing readable behind it. **Not a question.**
+    Quiet {
+        seconds: u64,
+    },
+    Exited {
+        code: Option<i32>,
+        signal: Option<i32>,
+    },
+}
+
+impl FleetState {
+    pub fn question(&self) -> Option<&crate::question::Question> {
+        match self {
+            Self::Waiting(q) => Some(q),
+            _ => None,
+        }
+    }
+
+    /// Whether the run has ended, however it ended.
+    pub fn finished(&self) -> bool {
+        matches!(self, Self::Exited { .. })
+    }
+
+    /// `true` only for an exit that actually succeeded. A signal is not a zero exit and must never
+    /// round to one.
+    pub fn succeeded(&self) -> bool {
+        matches!(
+            self,
+            Self::Exited {
+                code: Some(0),
+                signal: None
+            }
+        )
+    }
+}
+
+/// A pane that is a fleet run rather than anything herdr knows about.
+///
+/// Its presence is what files a pane under the fleet board instead of beside the operator's own
+/// workspaces — the grouping is a property of the pane, not a filter the client has to remember.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetPane {
+    /// The run this pane belongs to. One `pacman -Syu` across five hosts is five panes and one
+    /// cohort.
+    pub cohort: String,
+    pub command: String,
+    pub state: FleetState,
+    /// The supervisor cannot read its own child (probe #334's privilege half — `kampr-fleet-exec`
+    /// running under the command's own uid rather than the command's). Every answer will be
+    /// `Quiet`, and the board has to say why rather than let the host look idle.
+    pub blind: bool,
+    pub started_unix: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
     pub pane_id: String,
@@ -49,6 +114,9 @@ pub struct PaneInfo {
     /// the job never leaves the shell's process group (probe #297).
     pub cmd: Option<String>,
     pub argv: Option<String>,
+    /// Set on a fleet run and `None` on everything herdr owns. A client groups by this rather
+    /// than by parsing the pane id.
+    pub fleet: Option<FleetPane>,
     /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.
@@ -136,6 +204,90 @@ pub trait Provider: Send + Sync + 'static {
 
     /// Bumps whenever the pane list or its geometry may have changed.
     fn topology(&self) -> watch::Receiver<u64>;
+
+    /// Whether this implementation is the one that owns `pane_id`.
+    ///
+    /// Only [`Composite`] asks. The default is "yes", which makes a single provider the answer to
+    /// everything — the arrangement every node had before there were two.
+    fn owns(&self, _pane_id: &str) -> bool {
+        true
+    }
+}
+
+/// Two sources of panes behind one seam.
+///
+/// The node's panes come from herdr; its fleet runs come from ptys the node forked itself, and
+/// neither knows about the other. Order matters and is the routing rule: the first provider that
+/// claims a pane gets it, so a discriminating provider goes before the catch-all.
+pub struct Composite {
+    providers: Vec<std::sync::Arc<dyn Provider>>,
+    topology: watch::Sender<u64>,
+    _pumps: Vec<JoinHandle<()>>,
+}
+
+impl Composite {
+    pub fn new(providers: Vec<std::sync::Arc<dyn Provider>>) -> std::sync::Arc<Self> {
+        let (topology, _) = watch::channel(0);
+        // One revision for the union: a client watching the composite must wake for a change in
+        // either half, and neither half can know about the other's.
+        let pumps = providers
+            .iter()
+            .map(|provider| {
+                let mut source = provider.topology();
+                let out = topology.clone();
+                tokio::spawn(async move {
+                    while source.changed().await.is_ok() {
+                        out.send_modify(|n| *n += 1);
+                    }
+                })
+            })
+            .collect();
+        std::sync::Arc::new(Self {
+            providers,
+            topology,
+            _pumps: pumps,
+        })
+    }
+
+    fn route(&self, pane_id: &str) -> Result<&std::sync::Arc<dyn Provider>> {
+        self.providers
+            .iter()
+            .find(|p| p.owns(pane_id))
+            .ok_or_else(|| anyhow::anyhow!("no provider owns {pane_id}"))
+    }
+}
+
+#[async_trait]
+impl Provider for Composite {
+    async fn list_panes(&self) -> Result<Vec<PaneInfo>> {
+        let mut all = Vec::new();
+        for provider in &self.providers {
+            // **One source failing must not blank the other.** A herdr that has gone away would
+            // otherwise take the fleet board down with it, which is the same defect as a node that
+            // looks healthy while one of its two paths is dead (probe #233), inverted.
+            match provider.list_panes().await {
+                Ok(panes) => all.extend(panes),
+                Err(e) => tracing::warn!("a provider could not list its panes: {e:#}"),
+            }
+        }
+        Ok(all)
+    }
+
+    async fn watch_pane(&self, pane_id: &str) -> Result<PaneStream> {
+        self.route(pane_id)?.watch_pane(pane_id).await
+    }
+
+    async fn write_pane(&self, pane_id: &str, input: Input) -> Result<()> {
+        self.route(pane_id)?.write_pane(pane_id, input).await
+    }
+
+    async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>> {
+        self.route(pane_id)?.read_scrollback(pane_id).await
+    }
+
+    fn topology(&self) -> watch::Receiver<u64> {
+        self.topology.subscribe()
+    }
 }
 
 impl From<kampr_herdr::AgentStatus> for AgentStatus {

@@ -29,6 +29,9 @@ import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
+import dev.kampr.shared.net.wallClockMillis
+import dev.kampr.shared.model.fleetTargets
+import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.Wire
@@ -63,12 +66,16 @@ fun screenFor(tab: Tab): Screen = when (tab) {
 
 fun tabFor(screen: Screen): Tab = when (screen) {
     Screen.Setup, Screen.Devices, Screen.Appearance, Screen.Notifications -> Tab.Settings
-    Screen.Herd, Screen.Mosaic, is Screen.Pane -> Tab.Herd
+    Screen.Herd, Screen.Mosaic, Screen.Fleet, is Screen.Pane -> Tab.Herd
 }
 
 sealed interface Screen {
     data object Herd : Screen
     data object Mosaic : Screen
+    // One command across the herd, grouped by the fan-out that produced it. A place of its own
+    // rather than a section of the herd: a fleet run is on nobody's desk, and "which host needs
+    // me" is not the herd's question.
+    data object Fleet : Screen
     data class Pane(val paneId: String, val view: PaneView) : Screen
     data object Setup : Screen
     data object Devices : Screen
@@ -379,6 +386,27 @@ class AppState(
 
     fun manage(op: ManageOp) {
         connection.manage(op)
+    }
+
+    // An answer to a fleet host, typed as the ordinary pane input every other reply uses. There is
+    // no `fleet.answer` and there should not be: a second way to type into a terminal is a second
+    // thing to get wrong.
+    fun answerFleet(paneId: String, text: String) {
+        connection.send(ClientMsg.InputText(paneId, text + "\n"))
+    }
+
+    // One command, one op per machine that can be reached, all sharing a cohort so the board can
+    // gather them. The cohort is minted here because a run spans hosts and no single node can name
+    // one.
+    fun runFleet(argv: List<String>) {
+        if (argv.isEmpty()) return
+        val targets = fleetTargets(store.herd.value.nodes)
+        if (targets.isEmpty()) return
+        val cohort = newCohortId(wallClockMillis().toLong())
+        targets.forEach { node ->
+            connection.manage(ManageOp.FleetRun(node = node.id, cohort = cohort, args = argv))
+        }
+        go(Screen.Fleet)
     }
 
     // Watch on arrival, unwatch on departure: an observer that outlives the screen holding it is

@@ -117,6 +117,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "detail": "…",                        // ABSENT when it has a picture — see below
                "cmd": "cargo",                       // the foreground job's name — ABSENT far more often than not
                "argv": "cargo test",                 // its whole command line — OFF by default, see below
+               "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -1158,6 +1159,72 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 { "t": "manage", "op": "session.create", "node": "01J...", "name": "agents" }
 { "t": "manage", "op": "session.stop",   "node": "01J...", "name": "agents" }
 ```
+
+### Fleet runs
+
+One command sent to several hosts at once. Each host serves it as an ordinary pane — it is watched,
+scrolled and **answered with the same `input` message as every other pane**, because a second way to
+type into a terminal is a second thing to get wrong. What marks it is a `fleet` object, and its
+presence is what groups the pane onto the fleet board instead of listing it beside the operator's
+own workspaces:
+
+```jsonc
+"fleet": {
+  "cohort": "01JT…",                  // one fan-out; the same value on every host it reached
+  "command": "pacman -Syu",
+  "state": "waiting",                 // running | waiting | quiet | exited
+  "question": {                       // present exactly when state is "waiting"
+    "prompt": ":: Proceed with installation? [Y/n]",
+    "context": ["Total Installed Size:  9.69 MiB"],
+    "shape": "confirm",               // confirm | numbered | secret | free
+    "options": [ {"key":"y","label":"Y"}, {"key":"n","label":"n"} ],
+    "default_key": "y",               // only when the prompt capitalised one
+    "inferred": true                  // ABSENT unless the SCREEN said so and the kernel did not
+  },
+  "quiet_seconds": 45,                // present exactly when state is "quiet"
+  "exit_code": 0,                     // present when state is "exited" AND it exited normally
+  "signal": 15,                       // present instead when a signal killed it
+  "blind": false,                     // the node cannot read this run's state at all
+  "started_unix": 1774000000
+}
+```
+
+**`quiet` is not a kind of `waiting`, and a client must never render it as a question.** A node can
+read whether a job is parked on a read only for a job it forked at its own privilege (probe #334);
+for anything else — and for every command that changes user — `/proc` refuses it outright
+(#331, #332). `quiet` is the honest answer for those, and `blind: true` says the run will never
+answer anything else. A board that added the two together would send somebody to a machine that is
+only slow.
+
+**`exit_code` and `signal` are never both present, and neither is invented.** A run the kernel
+killed has no exit code; rendering one as `0` would report a death as a clean upgrade.
+
+**`inferred` means the screen said so and the kernel did not.** It is set only where `/proc` is
+closed to the node — every command that changes user — and the evidence is then: the output stopped,
+the last line was never terminated, and it parses as a question. Enough to show, not enough to be
+silent about, so a client says something like "looks like it is asking" rather than presenting it as
+a measurement. Note that termios is *not* consulted there: `sudo` relays for a command with a
+controlling terminal and the pty's ECHO and ICANON then describe the relay rather than the job
+(probe #341).
+
+`shape` decides the answer control and nothing else. `confirm` and `numbered` offer buttons;
+`secret` means the terminal stopped echoing and the reply must never be shown, stored or logged;
+`free` means nothing was recognised and the operator types. **Failing to recognise a prompt never
+hides a host that is waiting** — that half comes from the kernel, not from the wording.
+
+Three ops start and end them. There is no `fleet.answer`:
+
+```jsonc
+{ "t":"manage", "op":"fleet.run", "node":"01J…", "cohort":"01JT…",
+  "args":["pacman","-Syu"], "cwd":null, "cols":100, "rows":30 }   // cols/rows both or neither
+{ "t":"manage", "op":"fleet.stop",   "at":"01J…/fleet:01JX…" }    // hang it up
+{ "t":"manage", "op":"fleet.forget", "at":"01J…/fleet:01JX…" }    // drop a FINISHED run from the list
+```
+
+`args` is an argv, not a shell line: nothing runs `sh -c` for it, so `;` and `&&` are arguments. The
+client assigns `cohort`, because a run spans hosts and no single node can name one. Setting the
+geometry here is the one place Kampr chooses a pane's size, and it is allowed because the pane is
+Kampr's own — a pty the node forked, with no desk attached (see rule 3 in `AGENTS.md`).
 
 `workspace` and `tab` on a pane are **labels for a human**; `workspace_id` and `tab_id` are what a
 `manage` op's `at` takes. A pane id carries its workspace (`w3:p2` → `w3`) but never its tab, so

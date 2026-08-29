@@ -122,6 +122,7 @@ impl App {
         match self.screen {
             Screen::Panes => self.draw_panes(frame, panes, &mut layout),
             Screen::Herd => self.draw_herd(frame, panes, &mut layout),
+            Screen::Fleet => self.draw_fleet(frame, panes, &mut layout),
         }
         self.draw_status(frame, status);
         self.draw_footer(frame, footer);
@@ -398,6 +399,55 @@ impl App {
         caret
     }
 
+    /// The fleet board: one block per fan-out, its hosts under it, needs-you first.
+    ///
+    /// Rendered from the cohort model rather than from the pane list, so the ordering and the
+    /// tallies are the client's one implementation of them and this is only their shape.
+    fn draw_fleet(&mut self, frame: &mut Frame, area: Rect, layout: &mut Layout) {
+        let t = self.options.theme;
+        let rows: Vec<(Option<String>, Line)> = {
+            let state = self.client.state();
+            let cohorts = state.herd.cohorts();
+            if cohorts.is_empty() {
+                vec![(
+                    None,
+                    Line::from(Span::styled(
+                        "  no fleet runs — prefix then shift+e runs one command on every online node",
+                        Style::default().fg(t.mute),
+                    )),
+                )]
+            } else {
+                let mut rows = Vec::new();
+                for cohort in cohorts {
+                    rows.push((None, cohort_header(&cohort, &t)));
+                    for pane in &cohort.panes {
+                        let node = state
+                            .herd
+                            .node(&pane.node_id)
+                            .map(|n| n.name.clone())
+                            .unwrap_or_default();
+                        rows.push((Some(pane.id.clone()), fleet_line(pane, &node, &t)));
+                        if let Some(question) = pane.fleet.as_ref().and_then(|f| f.question.as_ref()) {
+                            let others = kampr_client::fleet::matching(&state.herd, &pane.id)
+                                .map(|m| m.others.len())
+                                .unwrap_or(0);
+                            rows.push((Some(pane.id.clone()), question_line(question, others, &t)));
+                        }
+                    }
+                    rows.push((None, Line::from("")));
+                }
+                rows
+            }
+        };
+        layout.herd = rows
+            .iter()
+            .zip(rows_of(area, 0, rows.len()))
+            .filter_map(|((pane, _), rect)| pane.clone().map(|id| (id, rect)))
+            .collect();
+        Paragraph::new(rows.into_iter().map(|(_, line)| line).collect::<Vec<_>>())
+            .render(area, frame.buffer_mut());
+    }
+
     fn draw_herd(&mut self, frame: &mut Frame, area: Rect, layout: &mut Layout) {
         let t = self.options.theme;
         let rows: Vec<(Option<String>, Line)> = {
@@ -609,6 +659,103 @@ impl App {
 
 fn label(entry: &PaneEntry) -> String {
     sidebar::name(entry)
+}
+
+/// `pacman -Syu · 2 need you · 1 running · 1 done · 1 failed`
+fn cohort_header<'a>(cohort: &kampr_client::herd::Cohort<'_>, t: &Theme) -> Line<'a> {
+    let mut spans = vec![Span::styled(
+        format!(" {} ", cohort.command),
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    )];
+    let mut tally = |n: usize, word: &str, colour| {
+        if n > 0 {
+            spans.push(Span::styled(format!(" {n} {word}"), Style::default().fg(colour)));
+        }
+    };
+    tally(cohort.waiting(), "need you", t.blocked);
+    tally(cohort.running(), "running", t.working);
+    tally(cohort.quiet(), "quiet", t.idle);
+    tally(cohort.failed(), "failed", t.blocked);
+    tally(cohort.succeeded(), "done", t.done);
+    Line::from(spans)
+}
+
+/// One host's row. The right-hand column is the **answer to "how did it go"**, and for a run that
+/// died it says so rather than showing a plausible code (probe #337 gets the real one).
+fn fleet_line<'a>(pane: &PaneEntry, node: &str, t: &Theme) -> Line<'a> {
+    let Some(fleet) = &pane.fleet else {
+        return Line::from("");
+    };
+    let (glyph, word, colour) = match fleet.state.as_str() {
+        "waiting" => ("●", "needs you".to_string(), t.blocked),
+        "running" => ("◐", "running".to_string(), t.working),
+        "quiet" => (
+            "◌",
+            match fleet.quiet_seconds {
+                Some(s) => format!("quiet {s}s"),
+                None => "quiet".to_string(),
+            },
+            t.idle,
+        ),
+        "exited" => match (fleet.exit_code, fleet.signal) {
+            (Some(0), None) => ("✓", "done".to_string(), t.done),
+            (_, Some(sig)) => ("✗", format!("killed · signal {sig}"), t.blocked),
+            (Some(code), None) => ("✗", format!("failed · exit {code}"), t.blocked),
+            (None, None) => ("✗", "ended · no status".to_string(), t.blocked),
+        },
+        other => ("·", other.to_string(), t.mute),
+    };
+    let detail = match (fleet.blind, pane.detail.as_deref()) {
+        (true, _) => "state unreadable — run it under sudo".to_string(),
+        (false, Some(d)) => d.to_string(),
+        (false, None) => String::new(),
+    };
+    Line::from(vec![
+        Span::styled(format!("  {glyph} "), Style::default().fg(colour)),
+        Span::styled(format!("{node:<14}"), Style::default().fg(t.text)),
+        Span::styled(format!("{word:<22}"), Style::default().fg(colour)),
+        Span::styled(detail, Style::default().fg(t.mute)),
+    ])
+}
+
+/// The question itself, under the host that is asking, with the choices it declared.
+///
+/// A `Free` or `Secret` question has no choices and gets none drawn — the operator opens the pane
+/// and types. That is the fallback rung and it is deliberately the plain one.
+/// The question itself, under the host that is asking, with the choices it declared.
+///
+/// A `Free`, `Secret` or `Screen` question has no choices and gets none drawn — the operator opens
+/// the pane and types. That is the fallback rung and it is deliberately the plain one.
+fn question_line<'a>(question: &kampr_core::question::Question, others: usize, t: &Theme) -> Line<'a> {
+    let said = if question.secret() {
+        "(asking for a password)"
+    } else if question.owns_the_screen() {
+        "(this one has taken the whole screen)"
+    } else {
+        &question.prompt
+    };
+    let mut spans = vec![Span::styled(format!("      {said}"), Style::default().fg(t.text))];
+    for option in question.options() {
+        spans.push(Span::styled(
+            format!("  [{}]", option.label),
+            Style::default().fg(t.accent),
+        ));
+    }
+    // Weaker evidence than the kernel's, and it says so rather than passing for a measurement
+    // (probe #341).
+    if question.inferred {
+        spans.push(Span::styled(
+            "  (looks like it is asking)",
+            Style::default().fg(t.mute),
+        ));
+    }
+    if others > 0 {
+        spans.push(Span::styled(
+            format!("  · {others} more asking the same"),
+            Style::default().fg(t.mute),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn herd_line<'a>(pane: &PaneEntry, herd: &kampr_client::Herd, t: &Theme, flag: bool) -> Line<'a> {

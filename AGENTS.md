@@ -24,7 +24,9 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | How do I ship it? | [`docs/07-android-release.md`](./docs/07-android-release.md) |
 | Why won't passkeys work on my host? | [`docs/10-passkeys.md`](./docs/10-passkeys.md) — the Android asset-links constraint is structural |
 | How does the terminal client work? | [`docs/11-cli-briefs.md`](./docs/11-cli-briefs.md) — the workstreams, and the probes that reshaped three of them |
+| How does one command run on every host? | [`docs/13-fleet-runs.md`](./docs/13-fleet-runs.md) — and why a fleet run is not a herdr pane |
 | What does the agent in a pane write down, and what do we read? | [`docs/12-harness-briefs.md`](./docs/12-harness-briefs.md) — session markers, subagent transcripts, and the procfs walk three workstreams share |
+| How do we know an agent is working, and how do we avoid guessing? | [`docs/14-agent-status.md`](./docs/14-agent-status.md) — the transparent signals, and the label drop that makes herdr say `idle` |
 
 ## The rules
 
@@ -40,20 +42,35 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    and watching the test fail. A test that still passes with the defect restored is a harness that
    was never the app (#191) — delete it rather than keep it green.
 
-3. **Looking at a pane never reshapes it**, and there is exactly **one** place that reshapes one
-   on purpose: the `pane.size` op, behind a panel, with a confirmation and an 80x24 floor
-   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). Nothing else may claim a
-   PTY — no watch, zoom, pan, fit, reconnect or layout — because `control` takes it with no way to
-   decline (#17), overrides the desk while held (#18) and leaves an attached desk rendering wrong
-   without being told (#298). Small screens are still handled by rendering: zoom, pan, and the
-   conversation view.
+3. **Nothing reshapes a pane because somebody looked at it.** The rule turns on *whose* pane it is
+   and *why* the write happens. It is not a ban on the op.
 
-   This is about **geometry**, and about *viewing* having no side effects. A write the operator
-   deliberately presses is a different thing: `convo.composer`'s takeover empties the pane's own
-   composer, behind a control, with the words moved into the reply box first and the keystroke
-   measured per harness — the shape [ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)
-   set. What the rule forbids is a write that happens *because somebody looked* — on a view switch,
-   a reconnect, a fit or a layout — and that is not weakened by having one more deliberate path.
+   A pane Kampr **found** belongs to the operator. It may have a desk attached on the machine
+   itself, and `control` takes the PTY with no way to decline (#17), overrides that desk while held
+   (#18) and leaves it rendering wrong without being told (#298). So nothing may claim one — no
+   watch, zoom, pan, fit, reconnect or layout — and exactly one path reshapes it on purpose: the
+   `pane.size` op, behind a panel, with a confirmation and an 80x24 floor
+   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). Small screens are handled
+   by rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
+   looking at.
+
+   **Nor may Kampr focus one.** `pane.focus` is not a resize, and it is not a read: it is the
+   only op that destroys herdr's `done` marker — the state herdr synthesises for a pane that
+   finished `working`→`idle` while *unfocused*, which is the operator's unread flag. Every read
+   leaves it standing; focus alone clears it. So focus is a thing the operator presses, never a
+   side effect of opening a view, and every create op passes `focus: false`.
+
+   A pane Kampr **created for a job of its own** is Kampr's: a short-lived TTY it spawned, ran a
+   command in, and will tear down. It may be given a geometry at creation and while Kampr holds it,
+   because there is no operator desk to trample and no other viewer's geometry to lose. Ownership
+   is a property of the pane and it ends: the moment the operator adopts one, it is a found pane
+   and the paragraph above governs it.
+
+   The same distinction governs writes that are not geometry. `convo.composer`'s takeover empties
+   the pane's own composer, behind a control, with the words moved into the reply box first and the
+   keystroke measured per harness — that is the operator pressing a thing. What the rule forbids is
+   the write that happens on a view switch, a reconnect, a fit or a layout: *because somebody
+   looked*.
 
 4. **Bug fixes and logic changes are TDD**, at integration level where one exists. `live.rs` drives a
    real herdr end to end and is usually the honest level.
@@ -66,6 +83,13 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 
 - **`env -u GRADLE_HOME ./gradlew`**, always, from `client/`. A `GRADLE_HOME` on this machine
   silently overrides the wrapper (#67). The `Makefile` does this for you.
+- **A pane's state can only be read by its own parent, at its own privilege.** `/proc/<pid>/syscall`
+  is EPERM to anything that did not fork the job (#331), and a job running as root refuses `wchan`
+  and `fd/0` too (#332) — so the node can see *nothing* about a `sudo` command in a herdr pane.
+  This is why a fleet run is a pty the node forked rather than a pane it asked herdr for.
+- **ble.sh leaves an idle pane's tty with ECHO already off** (#333), so the termios bit that looks
+  like a definitive password signal means nothing on a shell pane. It is honest only on a pty with
+  no shell on it (#337).
 - **A node reaches herdr two ways** — a socket, and a spawned `herdr terminal session observe`. They
   fail independently, and every surface a person can see is served by the socket, so a node whose
   binary half is broken looks completely healthy with every pane blank (#233). `kampr doctor`'s
@@ -89,6 +113,7 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
 | `crates/kampr-node` | HTTP/websocket server, herd model, sessions, manage ops |
 | `crates/kampr-client` | The client half of the wire: dial, token, greeting, herd state, per-pane grids, reconnect. No TUI |
 | `crates/kampr-tui` | The terminal client: the chrome, the keymap, the grid, the fit ladder, manage, mouse, images, the conversation |
+| `crates/kampr-fleet` | One command across the herd: the pty supervisor, the waiting ladder, the fleet provider |
 | `crates/kampr-auth`, `-mesh`, `-push`, `-journal`, `-cli`, `-spike` | Pairing and tokens; hub/peer links; web push; agent transcripts; the `kampr` binary; the fidelity canary |
 | `client/shared` | Model, wire, theme, and the screens that are not a pane |
 | `client/terminal`, `client/conversation`, `client/mosaic` | The three pane surfaces |

@@ -119,6 +119,30 @@ fn a_pane_whose_session_has_written_nothing_shows_nothing_rather_than_the_last_r
     );
 }
 
+/// The same fresh pane, with the operator still working in the same directory from a
+/// shell — which is the ordinary case, not a contrived one.
+///
+/// The marker names the session and the session has written nothing, so the start-time
+/// bound is the only thing still holding the search back, and a run started *after* this
+/// pane's `claude` walks straight past it. The pane knows exactly which session it is
+/// and serves somebody else's words anyway.
+#[test]
+fn a_pane_whose_session_has_written_nothing_shows_nothing_though_a_shell_run_is_newer() {
+    let home = home_with("fresh-pane-crowded", &[DECOY, NEWER]);
+
+    assert_eq!(
+        located(&home, &Harness::Unknown).as_deref(),
+        Some(NEWER),
+        "recency answers with the shell run — without which this test proves nothing"
+    );
+    assert_eq!(
+        located(&home, &Harness::Running(live_process())).as_deref(),
+        None,
+        "the marker names a session whose transcript does not exist yet, and that is an \
+         answer about this pane rather than a reason to go guessing in the directory"
+    );
+}
+
 /// The operator, verbatim: *"existing session with claude -> closed claude -> opened again fresh
 /// session -> conversation panel showing old and not updating to new at all"*.
 ///

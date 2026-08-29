@@ -17,6 +17,7 @@
 
 pub mod client;
 pub mod dial;
+pub mod fleet;
 pub mod frames;
 pub mod herd;
 pub mod pair;

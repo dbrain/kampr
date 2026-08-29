@@ -13,6 +13,7 @@ base64.workspace = true
 futures-util.workspace = true
 kampr-auth = { path = "../kampr-auth" }
 kampr-core = { path = "../kampr-core" }
+kampr-fleet = { path = "../kampr-fleet" }
 kampr-herdr = { path = "../kampr-herdr" }
 kampr-journal = { path = "../kampr-journal" }
 kampr-push = { path = "../kampr-push" }

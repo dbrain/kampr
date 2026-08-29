@@ -138,7 +138,33 @@ impl App {
     /// The ack is carried back rather than dropped. A **successful** op produces no frame the
     /// manage surface can otherwise see, so its in-flight notice would age out instead of
     /// resolving — and `layout.export`'s tree would never arrive.
+    /// Sends one op — or, for a fleet run, the one op per host it expands into.
+    ///
+    /// **The expansion happens here rather than in the panel** because it needs the herd as it is
+    /// at the moment of sending, and because one instruction reaching several machines is worth
+    /// having in exactly one place.
     fn dispatch(&mut self, op: serde_json::Value) {
+        if op["op"] == "fleet.run" && op["node"].is_null() {
+            let command = op["command"].as_str().unwrap_or_default().to_string();
+            let ops = {
+                let state = self.client.state();
+                kampr_client::fleet::fan_out(&command, &state.herd)
+            };
+            match ops {
+                Ok(ops) => {
+                    self.open(Screen::Fleet);
+                    for one in ops {
+                        self.send_manage(one);
+                    }
+                }
+                Err(e) => self.manage.refused("fleet.run", &e.to_string()),
+            }
+            return;
+        }
+        self.send_manage(op);
+    }
+
+    fn send_manage(&mut self, op: serde_json::Value) {
         let client = self.client.clone();
         let acked = self.acked.clone();
         let name = op["op"].as_str().unwrap_or_default().to_string();
@@ -183,7 +209,11 @@ impl App {
             ToggleSidebar => self.sidebar_open = !self.sidebar_open,
             HerdView => self.open(match self.screen {
                 Screen::Herd => Screen::Panes,
-                Screen::Panes => Screen::Herd,
+                Screen::Panes | Screen::Fleet => Screen::Herd,
+            }),
+            FleetView => self.open(match self.screen {
+                Screen::Fleet => Screen::Panes,
+                Screen::Panes | Screen::Herd => Screen::Fleet,
             }),
             // Zoom narrows the mosaic to one pane and widens it back to the tab's, so it moves
             // the subscription the same way a focus does.

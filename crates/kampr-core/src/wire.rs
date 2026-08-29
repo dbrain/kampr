@@ -116,7 +116,18 @@ pub struct NodeEntry {
     pub name: String,
     /// `local` for a herdr session this process serves, `peer` for one reached over a mesh link.
     pub kind: String,
+    /// Whether this node's **herdr** is up. It is not the same question as whether the node can
+    /// be reached, and conflating the two is what made a fleet run skip a machine that was
+    /// perfectly able to run one — see [`Self::reachable`].
     pub online: bool,
+    /// Whether the node *process* is answering: a local session always, a peer whose mesh link is
+    /// up, and never a peer being served from memory after its link dropped.
+    ///
+    /// Additive, and `None` means an older node that never sent it — for which `online` is the
+    /// only answer available and therefore the honest fallback. Read it through
+    /// [`Self::is_reachable`] rather than directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,6 +212,13 @@ pub struct PaneEntry {
     /// today. It clears itself, because the supervisor behind it retries for ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Present only on a fleet run, and its presence is what groups one.
+    ///
+    /// Additive in both directions: a client that has never heard of it lists these panes beside
+    /// the others and can still watch and answer them, because everything else on the entry is
+    /// filled in as usual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<FleetEntry>,
     /// The foreground job in this pane: `cmd` is the process name, `argv` the whole command line
     /// with its arguments, and a pipeline joins its members with ` | `.
     ///
@@ -230,6 +248,66 @@ pub struct PaneEntry {
     pub title: Option<String>,
 }
 
+/// A fleet run's own state, beside the pane it is served as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetEntry {
+    pub cohort: String,
+    pub command: String,
+    /// `running`, `waiting`, `quiet` or `exited`.
+    pub state: String,
+    /// Present exactly when `state` is `waiting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<crate::question::Question>,
+    /// Present exactly when `state` is `exited`. **A signal is reported as a signal**: a run the
+    /// kernel killed has no exit code, and rendering one as `0` would call a death a success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    /// How long this host has been silent with nothing readable behind it. Present exactly when
+    /// `state` is `quiet`, and it is **not** a question — see [`crate::provider::FleetState`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_seconds: Option<u64>,
+    /// The supervisor could not read its own child's state (probe #334). Every answer from this
+    /// host will be `quiet`, and a board that did not say so would let a waiting host look idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blind: bool,
+    pub started_unix: i64,
+}
+
+impl From<&crate::provider::FleetPane> for FleetEntry {
+    fn from(f: &crate::provider::FleetPane) -> Self {
+        use crate::provider::FleetState as S;
+        let mut entry = Self {
+            cohort: f.cohort.clone(),
+            command: f.command.clone(),
+            state: match &f.state {
+                S::Running => "running",
+                S::Waiting(_) => "waiting",
+                S::Quiet { .. } => "quiet",
+                S::Exited { .. } => "exited",
+            }
+            .to_string(),
+            question: None,
+            exit_code: None,
+            signal: None,
+            quiet_seconds: None,
+            blind: f.blind,
+            started_unix: f.started_unix,
+        };
+        match &f.state {
+            S::Waiting(q) => entry.question = Some((**q).clone()),
+            S::Quiet { seconds } => entry.quiet_seconds = Some(*seconds),
+            S::Exited { code, signal } => {
+                entry.exit_code = *code;
+                entry.signal = *signal;
+            }
+            S::Running => {}
+        }
+        entry
+    }
+}
+
 impl PaneEntry {
     pub fn new(node_id: &str, p: &PaneInfo, has_conversation: bool) -> Self {
         Self {
@@ -250,6 +328,7 @@ impl PaneEntry {
             watchers: None,
             updated_at: None,
             detail: p.detail.clone(),
+            fleet: p.fleet.as_ref().map(FleetEntry::from),
             cmd: p.cmd.clone(),
             argv: p.argv.clone(),
             title: None,
@@ -266,6 +345,16 @@ impl PaneEntry {
     pub fn with_title(mut self, title: Option<String>) -> Self {
         self.title = title;
         self
+    }
+}
+
+impl NodeEntry {
+    /// Whether anything can be *asked* of this node.
+    ///
+    /// A herdr that is down takes the panes with it and leaves the node perfectly able to run a
+    /// fleet command, so this is the question a fan-out asks — never `online`.
+    pub fn is_reachable(&self) -> bool {
+        self.reachable.unwrap_or(self.online)
     }
 }
 
@@ -293,7 +382,7 @@ impl HerdDelta {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingOption {
     pub key: String,
     pub label: String,

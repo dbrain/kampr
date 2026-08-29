@@ -48,6 +48,10 @@ pub struct ManageOp {
     pub cols: Option<u32>,
     #[serde(default)]
     pub rows: Option<u32>,
+    /// Groups the panes one fan-out produced. Assigned by the client, because a run spans hosts
+    /// and no single node can name it.
+    #[serde(default)]
+    pub cohort: Option<String>,
 }
 
 /// The smallest pane `pane.size` will produce.
@@ -82,6 +86,30 @@ pub fn checked_size(cols: u32, rows: u32) -> Result<(u32, u32), ManageError> {
         )));
     }
     Ok((cols, rows))
+}
+
+/// The geometry a fleet run gets.
+///
+/// **This is the one place Kampr chooses a pane's size, and rule 3 permits it precisely because
+/// the pane is Kampr's own**: a pty this node forked, with no desk attached and no operator
+/// geometry to lose. It is not `pane.size`, it never reaches herdr, and no view switch, fit,
+/// reconnect or layout can call it — the size is fixed when the run starts and the only other
+/// caller is the operator asking for a different one on a new run.
+fn fleet_geometry(op: &ManageOp) -> Result<kampr_fleet::Geometry, ManageError> {
+    let default = kampr_fleet::Geometry::default();
+    let (cols, rows) = match (op.cols, op.rows) {
+        (Some(cols), Some(rows)) => checked_size(cols, rows)?,
+        (None, None) => (default.cols as u32, default.rows as u32),
+        _ => {
+            return Err(ManageError::BadRequest(
+                "a fleet run takes both `cols` and `rows` or neither".into(),
+            ));
+        }
+    };
+    Ok(kampr_fleet::Geometry {
+        cols: cols as u16,
+        rows: rows as u16,
+    })
 }
 
 /// Sixteen times the worst stop measured in #241, and a thousand times the worst create in #240.
@@ -154,6 +182,7 @@ pub struct Manager<'a> {
     pub node_id: &'a str,
     pub binary: &'a str,
     pub holds: &'a crate::holds::PaneHolds,
+    pub fleet: &'a std::sync::Arc<kampr_fleet::FleetProvider>,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -199,6 +228,12 @@ impl Manager<'_> {
             // is a wake with a name on it, and waking a herdr in order to stop it is absurd.
             "session.create" => self.create_session(op).await,
             "session.stop" => self.stop_session(op).await,
+            // Fleet ops never touch herdr, so they never wake one. A host the operator has not
+            // opened a terminal on is still a host they can run a command across.
+            "fleet.run" | "fleet.stop" | "fleet.forget" => Ok(Managed {
+                reply: self.fleet_op(op)?,
+                settle: None,
+            }),
             _ => {
                 self.wake().await?;
                 Ok(Managed {
@@ -207,6 +242,59 @@ impl Manager<'_> {
                 })
             }
         }
+    }
+
+    /// The three fleet ops, which are deliberately the whole surface.
+    ///
+    /// There is no `fleet.answer`: an answer is `input` to the pane, the same message that reaches
+    /// every other pane in the herd. A second way to type into a terminal is a second thing to get
+    /// wrong, and the first one already carries a phone's reply across the mesh.
+    fn fleet_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
+        match op.op.as_str() {
+            "fleet.run" => {
+                let argv = op.args.clone().unwrap_or_default();
+                if argv.is_empty() {
+                    return Err(ManageError::BadRequest(
+                        "fleet.run needs `args`, the command to run".into(),
+                    ));
+                }
+                let cohort = op.cohort.clone().ok_or_else(|| {
+                    ManageError::BadRequest(
+                        "fleet.run needs a `cohort` so its panes can be grouped with the rest of                          the run"
+                            .into(),
+                    )
+                })?;
+                let geometry = fleet_geometry(op)?;
+                let pane = self
+                    .fleet
+                    .start(&cohort, &argv, op.cwd.as_deref(), geometry)
+                    .map_err(|e| ManageError::BadRequest(e.to_string()))?;
+                Ok(json!({ "pane_id": pane, "cohort": cohort }))
+            }
+            "fleet.stop" => {
+                let pane = self.fleet_target(op)?;
+                self.fleet
+                    .stop(&pane)
+                    .map_err(|e| ManageError::BadRequest(e.to_string()))?;
+                Ok(json!({ "ok": true }))
+            }
+            "fleet.forget" => {
+                let pane = self.fleet_target(op)?;
+                self.fleet
+                    .forget(&pane)
+                    .map_err(|e| ManageError::BadRequest(e.to_string()))?;
+                Ok(json!({ "ok": true }))
+            }
+            other => Err(ManageError::BadRequest(format!("{other} is not a fleet op"))),
+        }
+    }
+
+    fn fleet_target(&self, op: &ManageOp) -> Result<String, ManageError> {
+        let at = op
+            .at
+            .as_deref()
+            .ok_or_else(|| ManageError::BadRequest(format!("{} needs `at`", op.op)))?;
+        Ok(at.rsplit_once('/').map_or(at, |(_, local)| local).to_string())
     }
 
     /// Starts the herdr this node's socket belongs to, if a manage op finds it stopped.

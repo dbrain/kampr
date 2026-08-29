@@ -59,6 +59,14 @@ object KamprIcons {
     val tab = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15M6.5 2.5v4"))
     val mosaic = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13M1.5 9h15"))
     val split = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13"))
+    // Three machines and one instruction reaching all of them.
+    val fleet = icon(
+        18f,
+        1.6f,
+        Glyph.Frame(2f, 2f, 14f, 3.6f, 1.2f),
+        Glyph.Frame(2f, 7.2f, 14f, 3.6f, 1.2f),
+        Glyph.Frame(2f, 12.4f, 14f, 3.6f, 1.2f),
+    )
     val branch = icon(
         18f, 1.7f, Glyph.Round(5f, 4f, 2.2f), Glyph.Round(5f, 14f, 2.2f), Glyph.Round(13f, 9f, 2.2f),
         d("M5 6.2v5.6M7.2 4h1.6A2.2 2.2 0 0 1 11 6.2v.9"),

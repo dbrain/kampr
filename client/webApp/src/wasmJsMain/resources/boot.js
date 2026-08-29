@@ -43,3 +43,12 @@ window.kamprInstall = (function () {
     },
   };
 })();
+
+// A right-click on the canvas is Kampr's gesture — it opens the pane's own actions,
+// the way herdr opens its menus — and the browser's menu would land on top of the
+// sheet. Suppressed on the canvas alone: the rest of the document is chrome the
+// browser may keep its menu on. Registered here because the canvas is created by
+// wasm, so this waits for it rather than looking once.
+document.addEventListener('contextmenu', function (event) {
+  if (event.target instanceof HTMLCanvasElement) event.preventDefault();
+}, { passive: false });

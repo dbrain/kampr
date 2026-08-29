@@ -16,6 +16,57 @@ pub struct Herd {
     pub stale: bool,
 }
 
+/// One fan-out: the same command, on however many hosts it was sent to.
+#[derive(Debug, Clone)]
+pub struct Cohort<'a> {
+    pub id: String,
+    pub command: String,
+    pub started_unix: i64,
+    /// Needs-you first, then still going, then done — the order somebody scanning the board reads
+    /// in, and the only order in which the top of the list is the part that matters.
+    pub panes: Vec<&'a PaneEntry>,
+}
+
+impl Cohort<'_> {
+    pub fn waiting(&self) -> usize {
+        self.count("waiting")
+    }
+
+    pub fn running(&self) -> usize {
+        self.count("running")
+    }
+
+    pub fn quiet(&self) -> usize {
+        self.count("quiet")
+    }
+
+    /// Finished with an exit code of zero and no signal. A run the kernel killed is finished and
+    /// is **not** a success.
+    pub fn succeeded(&self) -> usize {
+        self.fleet()
+            .filter(|f| f.state == "exited" && f.exit_code == Some(0) && f.signal.is_none())
+            .count()
+    }
+
+    pub fn failed(&self) -> usize {
+        self.fleet()
+            .filter(|f| f.state == "exited" && !(f.exit_code == Some(0) && f.signal.is_none()))
+            .count()
+    }
+
+    pub fn finished(&self) -> bool {
+        self.fleet().all(|f| f.state == "exited")
+    }
+
+    fn count(&self, state: &str) -> usize {
+        self.fleet().filter(|f| f.state == state).count()
+    }
+
+    fn fleet(&self) -> impl Iterator<Item = &kampr_core::wire::FleetEntry> {
+        self.panes.iter().filter_map(|p| p.fleet.as_ref())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeGroup<'a> {
     pub node: &'a NodeEntry,
@@ -78,13 +129,50 @@ impl Herd {
     /// Panes grouped by the node that owns them, local nodes first — the sidebar's data model.
     /// An offline node keeps its group, empty or not: dropping it empties a node out of the UI at
     /// the moment the operator most needs to see that it exists and is unreachable.
+    /// Every fleet run, gathered into the fan-outs that produced them, newest first.
+    pub fn cohorts(&self) -> Vec<Cohort<'_>> {
+        let mut by_id: std::collections::HashMap<&str, Vec<&PaneEntry>> = std::collections::HashMap::new();
+        for pane in self.panes.iter() {
+            if let Some(fleet) = &pane.fleet {
+                by_id.entry(fleet.cohort.as_str()).or_default().push(pane);
+            }
+        }
+        let mut cohorts: Vec<Cohort<'_>> = by_id
+            .into_iter()
+            .map(|(id, mut panes)| {
+                panes.sort_by(|a, b| board_rank(a).cmp(&board_rank(b)).then_with(|| a.id.cmp(&b.id)));
+                let first = panes.first().and_then(|p| p.fleet.as_ref());
+                Cohort {
+                    id: id.to_string(),
+                    command: first.map(|f| f.command.clone()).unwrap_or_default(),
+                    started_unix: panes
+                        .iter()
+                        .filter_map(|p| p.fleet.as_ref().map(|f| f.started_unix))
+                        .min()
+                        .unwrap_or_default(),
+                    panes,
+                }
+            })
+            .collect();
+        cohorts.sort_by(|a, b| b.started_unix.cmp(&a.started_unix).then_with(|| a.id.cmp(&b.id)));
+        cohorts
+    }
+
     pub fn groups(&self) -> Vec<NodeGroup<'_>> {
         let mut ordered: Vec<&NodeEntry> = self.nodes.iter().collect();
         ordered.sort_by_key(|n| n.kind != "local");
         ordered
             .into_iter()
             .map(|node| {
-                let mut panes: Vec<&PaneEntry> = self.panes.iter().filter(|p| p.node_id == node.id).collect();
+                // **Fleet runs are not on the operator's desk and must not be listed as if they
+                // were.** They are ptys the node forked for one command, with no workspace and no
+                // place in anyone's layout; they belong to their cohort and are reached from the
+                // fleet board.
+                let mut panes: Vec<&PaneEntry> = self
+                    .panes
+                    .iter()
+                    .filter(|p| p.node_id == node.id && p.fleet.is_none())
+                    .collect();
                 panes.sort_by(|a, b| {
                     rank(a.agent_status)
                         .cmp(&rank(b.agent_status))
@@ -107,6 +195,23 @@ impl Herd {
             true => Some(Gone::Shell),
             false => Some(Gone::Node),
         }
+    }
+}
+
+/// The board's order: what needs somebody, then what is still going, then what is merely quiet,
+/// then what failed, then what worked.
+///
+/// Failures sort **above** successes among the finished, because the finished half of the board is
+/// read to find what went wrong.
+fn board_rank(pane: &PaneEntry) -> u8 {
+    let Some(fleet) = &pane.fleet else { return 9 };
+    match fleet.state.as_str() {
+        "waiting" => 0,
+        "running" => 1,
+        "quiet" => 2,
+        "exited" if fleet.exit_code == Some(0) && fleet.signal.is_none() => 4,
+        "exited" => 3,
+        _ => 5,
     }
 }
 

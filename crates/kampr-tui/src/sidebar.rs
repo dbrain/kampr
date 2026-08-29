@@ -55,11 +55,15 @@ fn glyph(status: AgentStatus) -> &'static str {
     }
 }
 
+/// Herdr's own order, measured off its tab rollup: `blocked > done > working > idle >
+/// unknown`. `done` outranks `working` because herdr only ever synthesises it for a pane
+/// that went `working`→`idle` while **unfocused** — it is an unread marker, and a finished
+/// turn nobody has seen wants the operator more than one still running does.
 fn rank(status: AgentStatus) -> u8 {
     match status {
         AgentStatus::Blocked => 0,
-        AgentStatus::Working => 1,
-        AgentStatus::Done => 2,
+        AgentStatus::Done => 1,
+        AgentStatus::Working => 2,
         AgentStatus::Idle => 3,
         AgentStatus::Unknown => 4,
     }
@@ -84,7 +88,8 @@ pub fn name(entry: &PaneEntry) -> String {
         .render(&Fields::from_entry(entry))
 }
 
-/// **Sorted by priority, not grouped**: blocked and working at the top, done and idle below.
+/// **Sorted by priority, not grouped**: blocked first, then what finished unwatched, then
+/// what is still running, and the quiet below that — herdr's own rollup order.
 /// Sorted **locally** — `agent.view.set` shapes herdr's own sidebar and leaves `agent.list`
 /// alone, so a client cannot read back the view it set and must sort for itself either way
 /// (#296).
@@ -310,5 +315,52 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
             ])
         }
         Row::Blank => Line::from(Span::styled(" ", Style::default().bg(t.bar))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kampr_core::provider::PaneInfo;
+
+    fn pane(id: &str, agent_status: AgentStatus) -> PaneEntry {
+        let info = PaneInfo {
+            pane_id: id.to_string(),
+            agent: Some("claude".into()),
+            agent_status,
+            ..PaneInfo::default()
+        };
+        PaneEntry::new("n", &info, false)
+    }
+
+    /// Herdr rolls a tab up as `blocked > done > working > idle > unknown`, measured by driving
+    /// two panes through every pair and reading `tab.get`. `done` is what a pane becomes when it
+    /// finished while nobody was looking, so it is news and `working` is not — and a sidebar that
+    /// disagrees with herdr's own attention queue sorts one herd two ways.
+    #[test]
+    fn a_pane_that_finished_unwatched_sits_above_one_that_is_still_working() {
+        let herd = Herd {
+            panes: vec![
+                pane("w1:p1", AgentStatus::Working),
+                pane("w1:p2", AgentStatus::Done),
+                pane("w1:p3", AgentStatus::Blocked),
+                pane("w1:p4", AgentStatus::Idle),
+                pane("w1:p5", AgentStatus::Unknown),
+            ],
+            ..Herd::default()
+        };
+
+        let order: Vec<AgentStatus> = triage(&herd).iter().map(|p| p.agent_status).collect();
+
+        assert_eq!(
+            order,
+            [
+                AgentStatus::Blocked,
+                AgentStatus::Done,
+                AgentStatus::Working,
+                AgentStatus::Idle,
+                AgentStatus::Unknown,
+            ]
+        );
     }
 }

@@ -11,7 +11,9 @@ pub mod backoff;
 pub mod herdr_provider;
 pub mod naming;
 pub mod procfs;
+pub mod prompt;
 pub mod provider;
+pub mod question;
 pub mod registry;
 pub mod reporter;
 pub mod scrollback;
@@ -20,7 +22,10 @@ pub mod wire;
 pub use backoff::Backoff;
 pub use herdr_provider::{HerdrConfig, HerdrProvider};
 pub use naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
-pub use provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
+pub use provider::{
+    Composite, FleetPane, FleetState, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback,
+};
+pub use question::{Question, Shape};
 pub use registry::{PaneRegistry, PaneUpdate, Screen, Watcher};
 pub use reporter::{Reported, Reporter};
 pub use scrollback::ScrollbackDoc;

@@ -1,3 +1,4 @@
+use kampr_core::prompt::{is_chrome, numbered_option as numbered, unbox};
 use kampr_core::wire::PendingOption;
 use kampr_herdr::Herdr;
 use serde_json::Value;
@@ -105,36 +106,6 @@ fn is_reference(line: &str) -> bool {
             || line.starts_with("https://")
             || line.starts_with('/')
             || line.starts_with("~/"))
-}
-
-/// Strips the box a TUI draws around a prompt, so the text inside can be read like any other
-/// line. Herdr's `strip_ansi` removes the colour, not the border glyphs.
-fn unbox(line: &str) -> String {
-    line.trim().trim_matches(is_chrome).trim().to_string()
-}
-
-fn is_chrome(c: char) -> bool {
-    matches!(
-        c,
-        '│' | '┃' | '║' | '|' | '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘'
-    ) || matches!(c, '─' | '━' | '═' | '-' | '·' | '⎯')
-}
-
-fn numbered(line: &str) -> Option<PendingOption> {
-    let body = line.trim_start_matches(['❯', '>', '➤', '*', ' ']).trim_start();
-    let digits: String = body.chars().take_while(char::is_ascii_digit).collect();
-    if digits.is_empty() || digits.len() > 2 {
-        return None;
-    }
-    let rest = &body[digits.len()..];
-    let label = rest.strip_prefix('.').or_else(|| rest.strip_prefix(')'))?.trim();
-    if label.is_empty() {
-        return None;
-    }
-    Some(PendingOption {
-        key: digits,
-        label: label.to_string(),
-    })
 }
 
 #[cfg(test)]

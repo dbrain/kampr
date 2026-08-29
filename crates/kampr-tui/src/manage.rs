@@ -268,8 +268,25 @@ impl Manage {
             ClosePane => pane.map(|at| close(at, "pane")),
             RenamePane => pane.map(|at| rename(at, "pane", entry.and_then(|e| e.label.clone()), Empty::Null)),
             NewWorktree => self.worktrees(herd),
+            FleetRun => Some(self.fleet_run(herd)),
             _ => None,
         }
+    }
+
+    /// One command, on every node that is online right now.
+    ///
+    /// The op leaves here **unexpanded** — one `fleet.run` with a `command` and no `node` — and
+    /// `kampr_client::fleet::fan_out` turns it into one op per host at the moment it is sent. The
+    /// count in the hint is therefore what the operator was told, and the expansion is what
+    /// actually happens; they are read from the same herd one keystroke apart.
+    fn fleet_run(&self, herd: &Herd) -> Next {
+        Next::Ask(Ask {
+            prompt: format!("Run what on all {} online nodes?", online(herd)),
+            hint: "no shell: `;` and `&&` are arguments — ask for `sh -c '…'` if you mean one".into(),
+            op: json!({ "op": "fleet.run" }),
+            field: "command",
+            empty: Empty::Refuse,
+        })
     }
 
     /// Everything the wire carries, in one list, because the keymap has eleven binds and the
@@ -627,6 +644,13 @@ impl Manage {
         self.outcome = None;
         self.inflight = Some((name, Instant::now()));
         Progress::Send(op)
+    }
+
+    /// An op this client refused before it ever reached a node, said the same way a node's own
+    /// refusal is said.
+    pub fn refused(&mut self, op: &str, why: &str) {
+        self.inflight = None;
+        self.outcome = Some((format!("{op}: {why}"), Instant::now()));
     }
 
     fn ack(&mut self, ack: &Managed) {
@@ -1001,4 +1025,8 @@ fn title_of(action: Action) -> String {
         _ => "manage",
     }
     .to_string()
+}
+
+fn online(herd: &Herd) -> usize {
+    herd.nodes.iter().filter(|n| n.online).count()
 }

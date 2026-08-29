@@ -320,9 +320,16 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
     val status = statusOf(pane)
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
     val shape = RoundedCornerShape(tokens.radii.lg)
+    val manage = LocalManage.current
     Surface(
         modifier
-            .action("Open ${paneSpoken(pane, now)}", onClick, shape)
+            .paneActions(pane.id)
+            .action(
+                "Open ${paneSpoken(pane, now)}",
+                onClick,
+                shape,
+                onLongClick = if (manage.enabled) ({ manage.openActions(pane.id) }) else null,
+            )
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
@@ -354,17 +361,20 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
     val status = statusOf(pane)
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
     val shape = RoundedCornerShape(tokens.radii.sm)
+    val manage = LocalManage.current
     Row(
         Modifier
             .fillMaxWidth()
             .let { if (active) it.background(tokens.color.raise, shape) else it }
             .touchable(LANDSCAPE_TOUCH)
+            .paneActions(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
                 onClick,
                 shape,
                 role = Role.Tab,
                 selected = active,
+                onLongClick = if (manage.enabled) ({ manage.openActions(pane.id) }) else null,
             )
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

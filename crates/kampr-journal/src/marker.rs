@@ -15,8 +15,11 @@ pub struct SessionMarker {
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub name_source: Option<String>,
-    /// What the harness last said about itself. Whether it tracks a running session or is stamped
-    /// once has not been measured, so nothing here decides a pane's agent status from it.
+    /// What the harness last said about itself: `busy`, `shell`, `idle` or `waiting`, rewritten
+    /// **in place** within ~100 ms of every transition, so it tracks a live session rather than
+    /// being stamped once. An `IN_MODIFY` watch on this file is therefore a push feed for a
+    /// pane's agent status — stronger than a screen scrape, which cannot see a pane whose
+    /// harness has stopped writing to the terminal.
     pub status: Option<String>,
     pub transcript: Option<PathBuf>,
 }

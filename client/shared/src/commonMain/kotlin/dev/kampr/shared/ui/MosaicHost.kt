@@ -40,3 +40,20 @@ fun MosaicAction(target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val open = LocalMosaic.current ?: return
     GlyphAction(KamprIcons.mosaic, "Mosaic, several panes at once", Kampr.tokens.color.dim, target, modifier, onClick = open)
 }
+
+// The fleet board. Provided the same way the mosaic is, and absent rather than disabled where it
+// cannot work — a device that cannot manage cannot start a run.
+val LocalFleet: ProvidableCompositionLocal<(() -> Unit)?> = staticCompositionLocalOf { null }
+
+@Composable
+fun FleetAction(target: Dp = TOUCH, modifier: Modifier = Modifier) {
+    val open = LocalFleet.current ?: return
+    GlyphAction(
+        KamprIcons.fleet,
+        "Fleet, one command across the herd",
+        Kampr.tokens.color.dim,
+        target,
+        modifier,
+        onClick = open,
+    )
+}

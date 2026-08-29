@@ -287,6 +287,8 @@ static SECTIONS: &[Section] = &[
                 "prefix shift+h",
                 "the herd: every node, every pane, blocked first",
             ),
+            ("prefix shift+f", "the fleet board: every run, needs-you first"),
+            ("prefix shift+e", "run one command on every online node"),
             ("prefix b", "show or hide the sidebar"),
             ("prefix tab", "cycle the panes on screen"),
             ("prefix space", "back to the last pane"),

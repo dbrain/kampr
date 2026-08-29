@@ -1152,6 +1152,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
             true => command.map(|c| as_a_name(&c.line)),
             false => None,
         },
+        fleet: None,
         detail: inner.stream_fault(),
     }
 }

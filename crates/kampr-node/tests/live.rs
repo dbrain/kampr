@@ -4547,6 +4547,66 @@ async fn a_conversation_that_moved_while_the_pane_was_unwatched_is_still_taken_o
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
 }
 
+/// The same move, with the operator *looking at* the pane.
+///
+/// A `/clear` or a restart points the marker at a session whose transcript does not exist
+/// until a first message is sent — 0.1 s after a `/clear` and 2 min 42 s from launch,
+/// measured ([#259](docs/03-probe-log.md), #311). For that whole window this node has no
+/// conversation to send, and it used to send nothing at all: the previous session's turns
+/// stayed on the screen and took no new ones, which is the panel "showing old and not
+/// updating to new at all" seen from the node's end.
+///
+/// The mutation that must fail: take the retirement off the move and this hangs, holding a
+/// conversation the pane has already left.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_has_written_nothing_takes_the_previous_conversation_off_the_client() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("unwritten", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let turns = opening["turns"].as_array().expect("turns").clone();
+    assert_eq!(turns[0]["blocks"][0]["text"], "FIRST SESSION", "{opening}");
+    let stale: Vec<String> = turns
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    // The agent opens a session of its own and has not said anything on it yet. Nothing
+    // else about the pane moves — same pid, same `procStart`, same directory (#259).
+    fixture.announce(pid, "22222222-2222-4222-8222-222222222222");
+
+    retired(&mut socket, &pane, &stale).await;
+}
+
 /// The other half of the same gap, and the one that actually happens: the transcript **does not
 /// move** while the pane is unwatched, it just grows.
 ///
@@ -4855,6 +4915,34 @@ async fn a_page_a_reconnecting_client_could_not_have_been_told_about_replaces_wh
         after["fresh"], true,
         "the old conversation is still on this client and nothing has told it to let go: {after}"
     );
+}
+
+/// Waits for the client to be told to let go of every turn it holds. Unlike [`moved_to`]
+/// there is no conversation to move *to*: the session the pane is on has written nothing,
+/// and an empty screen is the honest answer for as long as that lasts.
+async fn retired(socket: &mut Socket, pane: &str, stale: &[String]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane || message["t"] != "convo.turn" {
+            continue;
+        }
+        let gone: Vec<String> = message["turns"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|t| t["blocks"].as_array().is_none_or(Vec::is_empty))
+            .filter_map(|t| t["id"].as_str())
+            .map(str::to_string)
+            .collect();
+        if stale.iter().all(|id| gone.contains(id)) {
+            return;
+        }
+    }
+    panic!("the previous conversation was never taken off the client");
 }
 
 /// Waits for the pane to move to the conversation whose only turn reads `text`, and answers with
