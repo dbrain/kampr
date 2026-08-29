@@ -322,13 +322,38 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         return;
                     }
                     let path = fresh.path().to_path_buf();
+                    // Which transcript a pane is being served, and on the strength of which
+                    // handle. Nothing recorded this: a pane served the *wrong* conversation left
+                    // no trace at all, so an operator who saw a stale panel could only argue
+                    // about it from file timestamps afterwards and never establish what the node
+                    // actually opened. The audit records that a pane was watched and not what
+                    // answered — the #233 shape, where every surface looks healthy and one of the
+                    // answers behind them is wrong.
+                    tracing::info!(
+                        pane = %global,
+                        transcript = %path.display(),
+                        handle = if now.identity.announced.is_some() { "session" } else { "cwd" },
+                        "conversation opened",
+                    );
                     opened = Some(path.clone());
                     *journal.lock().unwrap() = Some(fresh);
                     // The first read is the page the client is about to be sent, so it must not
                     // also arrive behind it as a revision.
                     let _ = drain(&journal).await;
                     match reopened(&journal, &global, showing_already.as_deref()) {
-                        Some(first) if wire.send(&first) => {}
+                        Some(first) if wire.send(&first) => {
+                            // The other half of the same blind spot: which shape went out, and how
+                            // much of it. A page and a revision are the difference between a
+                            // client drawing the conversation and a client merging into one it is
+                            // assumed to already have, and a pane reported as showing nothing has
+                            // no other way to be told apart from a pane sent nothing.
+                            let (kind, count) = match &first {
+                                ServerMsg::Convo { turns, .. } => ("page", turns.len()),
+                                ServerMsg::ConvoTurn { turns, .. } => ("revision", turns.len()),
+                                _ => ("other", 0),
+                            };
+                            tracing::info!(pane = %global, kind, turns = count, "conversation delivered");
+                        }
                         _ => return,
                     }
                     *held.lock().unwrap() = showing(&journal);

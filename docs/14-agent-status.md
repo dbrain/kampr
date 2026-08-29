@@ -263,6 +263,37 @@ Code Assist for individuals"*), so everything recorded about it is boot-time onl
 
 ---
 
+### What the pipeline actually costs — measured ([#361](./03-probe-log.md), [#362](./03-probe-log.md))
+
+The constants in `convo.rs` read far worse than the pump behaves, and the one number that *is* bad
+is not any of them.
+
+| | measured |
+|---|---|
+| `watch` → first page, 46 turns | **2 ms** median |
+| `watch` → first page, 4000 turns (9.3 MB) | **117 ms** median — the fold's first read |
+| new turn on disk → `convo.turn` on the wire | **209 ms** median, 398 ms worst — `POLL` and nothing else |
+
+Neither `POLL` nor `RESOLVE_EVERY` is on the first-page path: the pump enters its loop with
+`due = true`, so resolve, page and drain all run before a tick is awaited. **A warm conversation is
+not where latency lives.** These measure the node from file write to wire and exclude how long a
+harness takes to flush a record, which is upstream of everything here.
+
+**The cold path is a different story, and it has a defect.** With the watch sent before any
+transcript exists, the first page arrives at 2 s / 2 s / 4 s / 6 s for a transcript written at
+0.3 s / 1 s / 3 s / 5 s — and at **15 s** for one written at 7 s *or* at 11 s. `RETRY_EVERY` with
+`FAST_RETRIES` reads as a 10 s fast window and measures as 6 s, because at t≈0 the initial `due`
+resolve and `retry`'s own immediate first tick each burn a miss. So the ladder is 0, 0, 2, 4, 6 and
+then silent until `RESOLVE_EVERY`. **A transcript that materialises at 7 s costs 8 s of dead air —
+worse than one that materialises at 11 s**, which is the non-monotonicity. `recheck` consumes its
+immediate tick before the loop; `retry` does not, and that asymmetry is the bug.
+
+Not yet fixed: the one-line change is `retry.tick().await` beside `recheck`'s, which moves the
+quiet point to 8 s and the worst dead air to 5 s. It wants the measurement harness committed with
+it — a timing change with no guard is how the next one gets re-tuned by accident.
+
+---
+
 ## 5. Decisions taken
 
 - **Sidebar order is herdr's order: `blocked > done > working > idle > unknown`.** `done` is only
@@ -303,12 +334,12 @@ Code Assist for individuals"*), so everything recorded about it is boot-time onl
 
 ---
 
-## 6. Probe rows — appended as **#343–#360**
+## 6. Probe rows — appended as **#343–#362**
 
 No longer pending: the concurrent workstream landed, the log was clean, and these went in at the
 end of it. #343–#348 are the Claude surfaces, #349–#351 codex, #352–#353 agy, #354 gemini, and
 #355–#359 herdr's detection model, its report precedence and its session lifecycle; #360 is the
-refutation in §2. The tables
+refutation in §2, and **#361–#362** the pump's measured latency and the cold-start cliff. The tables
 below are kept only as the short form; the log is the record.
 
 | # | Claim | How | Result |
