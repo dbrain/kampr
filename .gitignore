@@ -2,6 +2,9 @@
 **/*.rs.bk
 __pycache__/
 
+# IDE
+/.idea/
+
 # Gradle / KMP — build output anywhere under client/
 **/build/
 .gradle/
