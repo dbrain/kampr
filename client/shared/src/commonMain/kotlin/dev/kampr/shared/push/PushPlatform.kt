@@ -47,6 +47,15 @@ interface PushPlatform {
     suspend fun unsubscribe(): String?
 
     suspend fun currentEndpoint(): String?
+
+    // A notification is a summary of the moment the node sent it. When this client can see the
+    // herd for itself the herd is fresher, so a prompt answered anywhere — at the desk, in the
+    // TUI, on another phone — comes down without waiting for a push to say so.
+    //
+    // It only ever takes one down. Re-posting a shrunken summary would mean reproducing the
+    // node's own title and body shaping in every client, and the resync push already does that
+    // from the one place that holds the questions.
+    fun reconcile(anyBlocked: Boolean)
 }
 
 expect fun createPushPlatform(): PushPlatform
@@ -59,4 +68,5 @@ class NoPush(private val why: PushCapability = PushCapability.Unsupported) : Pus
     override suspend fun subscribe(vapidKey: String): PushEnrolment? = null
     override suspend fun unsubscribe(): String? = null
     override suspend fun currentEndpoint(): String? = null
+    override fun reconcile(anyBlocked: Boolean) = Unit
 }

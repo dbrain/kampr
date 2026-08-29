@@ -59,10 +59,56 @@ own architecture doc calls this its known gap. It earns its keep most on Android
 hold the app long enough that a tap arrives before the tunnel is up: the body is all there is
 until then.
 
-**Simultaneous blocks are one notification.** A 900 ms collection window opens at the first block;
+**Simultaneous blocks are one notification.** A 900 ms collection window opens at the first change;
 everything that lands inside it goes into one payload, split per subscription so a device that
 muted one of three agents sees the other two rather than the whole batch or nothing. Three
 notifications racing at a phone is how the feature gets turned off.
+
+## The payload is the set, not the edge
+
+One tag, one notification id: whatever arrives last is the only thing on the screen. So a payload
+that names less than everything **silently unsays the rest** — and for as long as the node sent
+only rising edges, it did, twice:
+
+- A second agent blocking replaced the first one's notification and took it off the phone.
+- A prompt answered anywhere else — at the desk, in the TUI, on another phone — sat there until
+  somebody tapped it, because a falling edge was not an event anybody sent.
+
+`kampr_push::Change` carries the whole outstanding set, plus `fresh` and `cleared` — which decide
+only *whether it buzzes* and *who has to be told*. `watch_herd` emits on both edges and skips a
+herd rebuild that did not move the set, which is also what keeps the per-pane `pending` read off
+the three-second poll.
+
+| The device's set | What it gets | Urgency |
+|---|---|---|
+| Gained a pane | The whole set, alerting | `high` |
+| Shrank, still non-empty | The whole set, `alert: false` | `normal` |
+| Emptied | `count: 0` — the payload that takes the prompt down | `normal` |
+| Did not move | Nothing. A wake-up that repeats the screen buys nothing | — |
+
+**A resync corrects a prompt; it never conjures one.** Both clients check whether one is showing
+first: somebody who swiped the notification away has already dealt with it, and posting a quieter
+copy of what they dismissed is the app arguing with them.
+
+**The clear degrades rather than breaking.** Payload `v` is 2, and it is additive: a client that
+predates it reads `title` and `body` and shows the clear as an ordinary notification, which under
+the same tag *replaces* the stale prompt instead of leaving it. The degradation is a notification
+to dismiss, never a prompt that lies. Old Android APKs are the reason this matters — they are on
+real phones and they only ever read three fields.
+
+**The service worker shows the clear before closing it.** A browser is entitled to post its own
+"this site has been updated in the background" when a push displays nothing, and that notice is
+worse than the one it replaces because nobody here wrote it. Showing under the same tag replaces
+whatever is there, so the close that follows removes one entry rather than two. *Which* browsers
+do this, and after how many silent pushes, is **not measured on this rig** — the mitigation is
+unconditional precisely because the answer is unknown.
+
+**And the client takes its own prompt down.** A notification is a summary of the moment it was
+sent; a running client sees the herd first-hand and is fresher than any push. `AppState` reconciles
+on every herd update, guarded on `known` — an unloaded herd has no blocked panes either, and
+reconciling against it would take down the very notification whose tap opened the app. It only ever
+*removes*: rewriting a shrunken summary would mean reproducing the node's title and body shaping in
+every client, and the resync push already does that from the one place that holds the questions.
 
 ## Tiers — what is possible where
 
@@ -129,7 +175,8 @@ than assumed:
 3. On `onNewEndpoint`, POST the endpoint and the connector's own P-256/auth keys to
    `/api/push/subscribe` with `kind: "unifiedpush"` — the same body the browser sends.
 4. On `onMessage`, the payload is the same JSON `kampr-push` produces, already decrypted by the
-   connector. Render it, and open `pane` on a tap.
+   connector. Render it, and open `pane` on a tap — or, on `count: 0`, cancel the notification
+   instead of rendering anything.
 
 Until a distributor is installed there is nothing to register with, and the app says so rather
 than failing quietly. `createPushPlatform()` on Android returns `NoPush` today.
@@ -172,3 +219,8 @@ attached client it returns `shown: false, reason: "no_foreground_client"` (probe
 - **iOS.** The Home Screen detection and the A2HS prompt are written against the documented
   behaviour and have not been run on an iPhone. Nothing else in this repo can be, either.
 - **A public push endpoint under load.** One subscription, one node, one LAN.
+- **What a browser does with a push that displays nothing.** The `quench` idiom in `sw.js` is
+  written so the answer does not matter; the answer itself is unmeasured.
+- **The Android resync and clear on a real device.** `BlockedNotificationTest` asserts all three
+  paths against a real `NotificationManager`, but instrumented tests need a device and none was
+  available — the same gap as everything else in this section.

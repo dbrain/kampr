@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use kampr_auth::{PushRule, Role, Store};
 use kampr_node::push::Push;
-use kampr_push::{Blocked, Reach, Vapid};
+use kampr_push::{Blocked, Change, Reach, Vapid};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default)]
@@ -23,6 +23,7 @@ struct Received {
     content_encoding: String,
     authorizations: usize,
     ttl: String,
+    urgency: String,
     body_len: usize,
 }
 
@@ -59,6 +60,7 @@ async fn accept(
         authorizations: headers.get_all("authorization").iter().count(),
         content_encoding: header("content-encoding"),
         ttl: header("ttl"),
+        urgency: header("urgency"),
         body_len: body.len(),
     });
     if let Some(target) = service.redirect_to.lock().unwrap().clone() {
@@ -172,10 +174,10 @@ async fn two_panes_blocking_together_are_one_push_per_device() {
     let sent = push
         .deliver(
             &store,
-            vec![
+            &Change::fresh(vec![
                 blocked("w1:p1", "claude", "Run the tests?"),
                 blocked("w2:p1", "codex", "Apply the patch?"),
-            ],
+            ]),
         )
         .await;
 
@@ -195,8 +197,11 @@ async fn a_push_carries_a_vapid_authorization_and_an_encrypted_body() {
     let (store, push, _dir) = fixture().await;
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
-    push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
-        .await;
+    push.deliver(
+        &store,
+        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
+    )
+    .await;
 
     let received = stub.received();
     assert_eq!(received.len(), 1);
@@ -244,10 +249,10 @@ async fn a_muted_agent_drops_out_of_that_devices_notification_only() {
     let sent = push
         .deliver(
             &store,
-            vec![
+            &Change::fresh(vec![
                 blocked("w1:p1", "claude", "Run the tests?"),
                 blocked("w2:p1", "codex", "Apply the patch?"),
-            ],
+            ]),
         )
         .await;
     assert_eq!(sent, 2, "the phone still hears about the agent it did not mute");
@@ -266,7 +271,7 @@ async fn a_muted_agent_drops_out_of_that_devices_notification_only() {
         )
         .await
         .unwrap();
-    push.deliver(&store, vec![blocked("w2:p1", "codex", "Again?")])
+    push.deliver(&store, &Change::fresh(vec![blocked("w2:p1", "codex", "Again?")]))
         .await;
     let paths: Vec<String> = stub.received().into_iter().map(|r| r.path).collect();
     assert_eq!(
@@ -285,14 +290,20 @@ async fn revoking_a_device_stops_its_notifications() {
     let phone = enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
     assert_eq!(
-        push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
-            .await,
+        push.deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
+        )
+        .await,
         1
     );
     store.revoke_device(&phone, kampr_auth::now()).await.unwrap();
     assert_eq!(
-        push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
-            .await,
+        push.deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
+        )
+        .await,
         0
     );
     assert_eq!(stub.received().len(), 1);
@@ -308,8 +319,11 @@ async fn a_gone_endpoint_is_deleted_rather_than_retried_forever() {
     stub.service.gone.lock().unwrap().push("/push/phone".to_string());
 
     assert_eq!(
-        push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
-            .await,
+        push.deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
+        )
+        .await,
         0
     );
     assert!(
@@ -329,8 +343,11 @@ async fn a_node_with_no_vapid_key_sends_nothing() {
     assert!(!push.available());
     assert_eq!(push.public_key(), None);
     assert_eq!(
-        push.deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
-            .await,
+        push.deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
+        )
+        .await,
         0
     );
     assert!(stub.received().is_empty());
@@ -349,7 +366,10 @@ async fn a_push_endpoint_that_redirects_never_reaches_what_it_redirects_to() {
     enrol(&store, "phone", &format!("{}/push/phone", endpoint.base)).await;
 
     let sent = push
-        .deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
+        .deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
+        )
         .await;
 
     assert_eq!(sent, 0, "a 302 is not a delivery");
@@ -370,12 +390,114 @@ async fn a_push_endpoint_addressed_inside_this_node_is_never_dialled() {
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
     let sent = push
-        .deliver(&store, vec![blocked("w1:p1", "claude", "Run the tests?")])
+        .deliver(
+            &store,
+            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
+        )
         .await;
 
     assert_eq!(sent, 0);
     assert!(
         stub.received().is_empty(),
         "a loopback endpoint is not a push service"
+    );
+}
+
+/// The defect end to end: a prompt answered anywhere else has to leave the phone.
+///
+/// The stub cannot decrypt, so what is asserted is the *second POST* — without it there is no
+/// payload on the wire at all, and nothing the phone could act on.
+#[tokio::test]
+async fn a_pane_answered_elsewhere_sends_the_device_a_second_push_that_takes_the_prompt_down() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+
+    push.deliver(
+        &store,
+        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
+    )
+    .await;
+    let sent = push
+        .deliver(&store, &Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]))
+        .await;
+
+    assert_eq!(sent, 1, "the device that was told has to be told it is over");
+    let received = stub.received();
+    assert_eq!(received.len(), 2);
+    assert!(
+        received[1].body_len > 100,
+        "the clear is an encrypted payload, not a bare ping the worker cannot read: {}",
+        received[1].body_len
+    );
+    assert_eq!(
+        received[1].urgency, "normal",
+        "a phone is not woken from sleep to be told there is less waiting"
+    );
+}
+
+/// And the clear is addressed by the same rules as everything else. A device that muted the pane
+/// never saw the prompt, so there is nothing on its screen to take down.
+#[tokio::test]
+async fn a_device_that_muted_the_answered_pane_is_not_woken_to_be_told_it_was_answered() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    let phone = enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+    enrol(&store, "laptop", &format!("{}/push/laptop", stub.base)).await;
+    store
+        .set_push_rule(
+            &phone,
+            &PushRule {
+                pane_id: "01J/w1:p1".into(),
+                muted: true,
+                snooze_until: None,
+            },
+            kampr_auth::now(),
+        )
+        .await
+        .unwrap();
+
+    let sent = push
+        .deliver(&store, &Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]))
+        .await;
+
+    assert_eq!(sent, 1);
+    let paths: Vec<String> = stub.received().into_iter().map(|r| r.path).collect();
+    assert_eq!(paths, ["/push/laptop"]);
+}
+
+/// A second agent blocking used to take the first one off the phone: the payload named the edge,
+/// and one tag made it replace everything before it. The alert still fires, and the older block is
+/// still in the payload.
+#[tokio::test]
+async fn a_second_agent_blocking_still_alerts_and_still_carries_the_first() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+
+    push.deliver(
+        &store,
+        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
+    )
+    .await;
+    let change = Change {
+        outstanding: vec![
+            blocked("w1:p1", "claude", "Run the tests?"),
+            blocked("w2:p1", "codex", "Apply the patch?"),
+        ],
+        fresh: ["01J/w2:p1".to_string()].into_iter().collect(),
+        cleared: Default::default(),
+    };
+    assert_eq!(push.deliver(&store, &change).await, 1);
+
+    let received = stub.received();
+    assert_eq!(received.len(), 2);
+    assert_eq!(
+        received[1].urgency, "high",
+        "a new agent blocking is still worth a phone waking up for"
+    );
+    assert!(
+        received[1].body_len > received[0].body_len,
+        "two panes is a longer payload than one: the first block is still named"
     );
 }

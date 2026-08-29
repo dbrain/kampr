@@ -27,12 +27,24 @@ class KamprPushService : PushService() {
         // undecryptable one is a stranger writing on the lock screen.
         if (!message.decrypted) return
         val note = runCatching { JSONObject(message.content.decodeToString()) }.getOrNull()
-        postBlockedNotification(
-            applicationContext,
-            note?.text("title") ?: "An agent needs you",
-            note?.text("body") ?: "Open Kampr to see which",
-            note?.text("pane"),
-        )
+        val title = note?.text("title") ?: "An agent needs you"
+        val body = note?.text("body") ?: "Open Kampr to see which"
+        val pane = note?.text("pane")
+        // Nothing outstanding: every prompt this device was shown has been answered somewhere
+        // else — at the desk, in the TUI, on another phone. Taking it down is the whole point of
+        // the payload, and it is the one case that shows nothing at all.
+        //
+        // A payload with no `count` is a v1 node's, and v1 only ever sent news. `optInt` cannot
+        // tell an absent field from a zero, so the field is read as text.
+        if (note?.text("count") == "0") {
+            clearBlockedNotification(applicationContext)
+            return
+        }
+        // Likewise `alert`: absent means v1, and v1 was always news.
+        when (note?.optBoolean("alert", true) != false) {
+            true -> postBlockedNotification(applicationContext, title, body, pane)
+            false -> postBlockedResync(applicationContext, title, body, pane)
+        }
     }
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {

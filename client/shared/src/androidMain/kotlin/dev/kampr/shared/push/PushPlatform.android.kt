@@ -1,6 +1,7 @@
 package dev.kampr.shared.push
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -135,6 +136,11 @@ private class UnifiedPushPlatform(private val context: Context) : PushPlatform {
     }
 
     override suspend fun currentEndpoint(): String? = UnifiedPushEndpoints.saved(context)?.endpoint
+
+    override fun reconcile(anyBlocked: Boolean) {
+        if (anyBlocked) return
+        context.getSystemService(NotificationManager::class.java)?.cancel(BLOCKED_NOTIFICATION_ID)
+    }
 
     private fun notificationsAllowed(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||

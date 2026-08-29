@@ -44,10 +44,19 @@ pub struct Notification {
     /// Where a tap goes. The single-pane case opens that pane; a batch opens the triage list.
     pub pane: Option<String>,
     pub panes: Vec<Blocked>,
+    /// Whether this is news. **A notification is a summary of now, not an edge**, so one is also
+    /// sent when the outstanding set *shrinks* — and buzzing a phone to tell it there is less
+    /// waiting is how the feature gets turned off. A client that does not know this field treats
+    /// the payload as an ordinary notification, which is the old behaviour and is not wrong.
+    pub alert: bool,
 }
 
 pub const TAG: &str = "kampr.blocked";
-pub const VERSION: u32 = 1;
+
+/// v2 added [`Notification::alert`] and `count: 0`. A worker that predates it shows the clear as
+/// an ordinary notification under the same tag, which *replaces* the stale prompt rather than
+/// leaving it — the degradation is a notification to dismiss, never a prompt that lies.
+pub const VERSION: u32 = 2;
 
 /// A body is a notification's whole content on a locked phone, and a question cut mid-word is
 /// worse than a short one. Push services also cap the encrypted payload at 4096 bytes, which this
@@ -59,6 +68,34 @@ impl Notification {
     /// batch of edits at once is one event to a human, and three notifications racing each other
     /// is how a phone gets muted.
     pub fn batch(panes: Vec<Blocked>) -> Option<Self> {
+        Self::build(panes, true)
+    }
+
+    /// The same summary, without the buzz: what a device is sent when a pane it was told about
+    /// stopped being blocked. It names everything *still* outstanding for that device, so the
+    /// answered one leaves the shade and the rest stay named.
+    ///
+    /// Nothing outstanding is a notification too — the one that says so and carries `count: 0`,
+    /// which is how a client is told to take the prompt down. `batch` returns `None` for an empty
+    /// set because an empty *alert* is nothing; an empty *resync* is the whole point.
+    pub fn resync(panes: Vec<Blocked>) -> Self {
+        Self::build(panes, false).unwrap_or_else(Self::clear)
+    }
+
+    fn clear() -> Self {
+        Self {
+            v: VERSION,
+            title: "Answered elsewhere".to_string(),
+            body: "Nothing is waiting on you now".to_string(),
+            tag: TAG.to_string(),
+            count: 0,
+            pane: None,
+            panes: Vec::new(),
+            alert: false,
+        }
+    }
+
+    fn build(panes: Vec<Blocked>, alert: bool) -> Option<Self> {
         let first = panes.first()?;
         let (title, body) = match panes.len() {
             1 => (
@@ -89,6 +126,7 @@ impl Notification {
             count: panes.len(),
             pane: (panes.len() == 1).then(|| first.pane.clone()),
             panes,
+            alert,
         })
     }
 }
@@ -220,6 +258,51 @@ mod tests {
     #[test]
     fn nothing_blocked_is_no_notification_rather_than_an_empty_one() {
         assert!(Notification::batch(Vec::new()).is_none());
+    }
+
+    /// The gap this feature closes. A prompt answered at the desk left the phone showing it until
+    /// somebody tapped it, because the node only ever sent rising edges. Nothing outstanding is a
+    /// payload now, and `count: 0` is what tells a client to take the prompt down.
+    #[test]
+    fn nothing_outstanding_is_the_notification_that_takes_the_prompt_down() {
+        let clear = Notification::resync(Vec::new());
+        assert_eq!(clear.count, 0);
+        assert!(clear.panes.is_empty());
+        assert_eq!(clear.pane, None);
+        assert!(!clear.alert);
+        assert_eq!(clear.tag, TAG, "it has to replace the prompt it is clearing");
+        assert!(
+            !clear.title.is_empty() && !clear.body.is_empty(),
+            "a worker older than v2 shows whatever arrives, so an empty title is a blank prompt"
+        );
+    }
+
+    /// Answering one of three must leave the other two named rather than clearing the lot — and
+    /// must not buzz, because there is less waiting than there was.
+    #[test]
+    fn answering_one_of_three_resyncs_to_the_two_that_are_left_without_alerting() {
+        let note = Notification::resync(vec![
+            blocked("w2:p1", "codex", Some("Apply the patch?")),
+            blocked("w3:p1", "claude", None),
+        ]);
+        assert_eq!(note.count, 2);
+        assert_eq!(note.title, "2 agents need you");
+        assert!(note.body.contains("Apply the patch?"), "{}", note.body);
+        assert!(!note.alert);
+    }
+
+    /// The two constructors differ in exactly one field. A resync that shaped its body differently
+    /// would make the shade flicker between two renderings of the same herd.
+    #[test]
+    fn a_resync_and_an_alert_render_the_same_herd_identically() {
+        let panes = vec![blocked("w1:p1", "claude", Some("Proceed?"))];
+        let alerting = Notification::batch(panes.clone()).unwrap();
+        let quiet = Notification::resync(panes);
+        assert!(alerting.alert);
+        assert!(!quiet.alert);
+        assert_eq!(alerting.title, quiet.title);
+        assert_eq!(alerting.body, quiet.body);
+        assert_eq!(alerting.pane, quiet.pane);
     }
 
     #[test]

@@ -3,6 +3,7 @@ package dev.kampr.shared.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.Enrolment
@@ -116,6 +117,10 @@ class AppState(
     val store: KamprStore = KamprStore(),
     val prefs: Prefs = createPrefs(),
     private val derived: Endpoint? = defaultEndpoint(),
+    // The service worker outlives every page and cannot read where the token is kept, so it is
+    // handed over on the way past. Without it a push arrives, warms nothing, and the tap that
+    // follows loads from cold.
+    val push: PushPlatform = createPushPlatform(),
 ) {
     val connection = KamprConnection(scope, store)
 
@@ -133,11 +138,6 @@ class AppState(
             else -> held.value
         }
     }
-
-    // The service worker outlives every page and cannot read where the token is kept, so it is
-    // handed over on the way past. Without it a push arrives, warms nothing, and the tap that
-    // follows loads from cold.
-    val push: PushPlatform = createPushPlatform()
 
     var theme: ThemeSpec by mutableStateOf(themeOf(prefs.get(KEY_THEME)))
         private set
@@ -461,10 +461,23 @@ class AppState(
         go(Screen.Herd)
     }
 
+    // A notification the node sent is a summary of the moment it sent it. This client sees the
+    // herd move first-hand, so a prompt answered anywhere else comes down here without waiting for
+    // a push to say so — which is the case the node cannot help with at all when the phone was
+    // asleep and the answer happened at the desk.
+    //
+    // `known` is the guard that matters: an unloaded herd has no blocked panes either, and
+    // reconciling against it would take down the very notification whose tap opened the app.
+    private fun reconcileNotifications(herd: Herd) {
+        if (!herd.known) return
+        push.reconcile(store.blocked().isNotEmpty())
+    }
+
     // Last in the class on purpose: an Unconfined collector runs its first emission inside the
     // constructor, and `adoptRememberedView` reads `screen`.
     init {
         scope.launch { store.prefs.collect { adoptRememberedView() } }
+        scope.launch { store.herd.collect { reconcileNotifications(it) } }
     }
 }
 

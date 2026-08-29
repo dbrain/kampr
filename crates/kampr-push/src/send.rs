@@ -102,7 +102,13 @@ impl Sender {
         let mut builder = WebPushMessageBuilder::new(&info);
         builder.set_payload(ContentEncoding::Aes128Gcm, &payload);
         builder.set_ttl(TTL_SECONDS);
-        builder.set_urgency(Urgency::High);
+        // A summary that says there is *less* waiting is worth delivering and not worth spending
+        // a sleeping phone's radio on: a push service is allowed to hold a normal-urgency message
+        // until the device is next awake, which is exactly when a stale prompt would be read.
+        builder.set_urgency(match note.alert {
+            true => Urgency::High,
+            false => Urgency::Normal,
+        });
         match self.vapid.sign(&info) {
             Ok(signature) => builder.set_vapid_signature(signature),
             Err(e) => {

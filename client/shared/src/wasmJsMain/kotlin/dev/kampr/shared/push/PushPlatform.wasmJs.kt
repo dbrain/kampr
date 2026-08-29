@@ -109,6 +109,23 @@ private fun jsEndpoint(): Promise<JsString?> = js(
     """
 )
 
+// The page and the worker post under the same tag, so the page can take down what the worker put
+// up. `getNotifications` is scoped to this registration, so nothing else on the device is touched.
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun jsClearBlocked(): Unit = js(
+    """
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.getRegistration('/').then(function (registration) {
+        if (!registration) return;
+        registration.getNotifications({ tag: 'kampr.blocked' }).then(function (shown) {
+          shown.forEach(function (one) { one.close(); });
+        }).catch(function () {});
+      }).catch(function () {});
+    })()
+    """
+)
+
 private class BrowserPush : PushPlatform {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -142,6 +159,10 @@ private class BrowserPush : PushPlatform {
 
     override suspend fun currentEndpoint(): String? =
         runCatching { jsEndpoint().await() }.getOrNull()?.toString()
+
+    override fun reconcile(anyBlocked: Boolean) {
+        if (!anyBlocked) jsClearBlocked()
+    }
 }
 
 private fun kotlinx.serialization.json.JsonPrimitive.contentOrNull(): String? =

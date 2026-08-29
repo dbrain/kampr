@@ -14,6 +14,10 @@ const STORE = 'auth';
 
 // Notifications are tagged, so the newest replaces the last rather than stacking a column of
 // stale prompts on a phone that was away. Must match `kampr_push::note::TAG`.
+//
+// One tag is also why the payload has to be the whole outstanding set rather than the pane that
+// just changed: whatever arrives last is the only thing on the screen, so a payload that names
+// less than everything silently unsays the rest.
 const TAG = 'kampr.blocked';
 
 // The only two URLs this worker caches or serves. Anything else goes straight to the network.
@@ -111,14 +115,36 @@ async function handlePush(data) {
     note = { title: 'An agent needs you', body: 'Open Kampr to see which', panes: [] };
   }
 
+  // A payload with no `alert` is a v1 node's, and v1 only ever sent news.
+  const alert = note.alert !== false;
+  const tag = note.tag || TAG;
+
+  // Nothing outstanding: the node is saying the prompt on this screen has been answered somewhere
+  // else. That is the whole point of the resync, and there is nothing to warm for it.
+  if (note.count === 0) {
+    await quench(note, tag);
+    return;
+  }
+
+  // A resync corrects a prompt; it never conjures one. Somebody who swiped the notification away
+  // has already dealt with it, and re-posting a quieter copy of what they dismissed is the app
+  // arguing with them.
+  if (!alert && (await self.registration.getNotifications({ tag })).length === 0) {
+    await quench(note, tag);
+    return;
+  }
+
   // Warm first, then show. The phone is about to be tapped, and these are a few kilobytes against
   // a notification the user has not finished reading.
   await warm(note);
 
   await self.registration.showNotification(note.title, {
     body: note.body || '',
-    tag: note.tag || TAG,
-    renotify: true,
+    tag,
+    // Both off for a resync: a phone that buzzes to report *less* waiting is a phone that gets
+    // muted, and that is the failure this whole feature is trying not to cause.
+    renotify: alert,
+    silent: !alert,
     icon: '/icons/kampr-192.png',
     badge: '/icons/kampr-192.png',
     timestamp: Date.now(),
@@ -127,6 +153,26 @@ async function handlePush(data) {
       count: note.count || (note.panes || []).length || 1,
     },
   });
+}
+
+// Takes the prompt down.
+//
+// It shows one before closing it, and that is deliberate: a browser is entitled to post its own
+// "this site has been updated in the background" when a push displays nothing, and that notice is
+// worse than the one it replaces because nobody here wrote it. Showing under the same tag replaces
+// whatever is there, so the close that follows removes one entry rather than two — and if the
+// close ever loses its race, what is left standing is the node's own current summary.
+async function quench(note, tag) {
+  try {
+    await self.registration.showNotification(note.title, {
+      body: note.body || '',
+      tag,
+      silent: true,
+    });
+  } catch (_) {
+  }
+  const showing = await self.registration.getNotifications({ tag });
+  showing.forEach((shown) => shown.close());
 }
 
 // Findings §3.11: a reconnect costs exactly one full frame and a full grid is ~4 KB, so
