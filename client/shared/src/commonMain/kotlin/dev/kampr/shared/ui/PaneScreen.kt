@@ -135,11 +135,11 @@ private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
 // is doing, what the keyboard is doing, what the agent is doing. Emitted as siblings so the row
 // that hosts them decides how they lay out.
 @Composable
-private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?) {
+private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView) {
     val tokens = Kampr.tokens
     if (gone != null) GoneBadge(gone)
     if (info?.detail != null) StreamBadge()
-    if (pane.stale) StaleBadge()
+    if (pane.stale) StaleBadge(shown)
     if (pane.quiet) QuietBadge()
     if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
     if (readOnly) {
@@ -229,7 +229,7 @@ fun PaneScreenMobile(
                     // It is also where the held slot costs nothing to look at — on the transcript
                     // the gap merges into the whitespace the geometry line already trails.
                     ZoomSlot(pane, surfaces, shown)
-                    PaneMarks(pane, info, readOnly, gone)
+                    PaneMarks(pane, info, readOnly, gone, shown)
                     NewAction(pane.id)
                     PaneManageAction(pane.id)
                     // Landscape has no second row to hang these off, and an agent pane opens in
@@ -261,7 +261,7 @@ fun PaneScreenMobile(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PaneMarks(pane, info, readOnly, gone)
+                    PaneMarks(pane, info, readOnly, gone, shown)
                     // Left of the switch, which is the ask, but after the badges rather than ahead
                     // of them: the held slot has to sit somewhere, and leading the row it indents
                     // every badge off the margin the line above starts at whenever the transcript
@@ -325,9 +325,17 @@ private fun ViewSwitch(view: PaneView, onView: (PaneView) -> Unit, modifier: Mod
 // A frame that has stopped arriving is a fact about what is on the screen, and the eye gets it
 // from a badge that a reader had no way to hear.
 @Composable
-private fun StaleBadge() {
+private fun StaleBadge(shown: PaneView) {
     val tokens = Kampr.tokens
-    Box(Modifier.announce("Stale — this pane has stopped sending frames, showing the last grid")) {
+    // Named for the surface that is up. The grid says it a second way by washing out, and a
+    // transcript says it no other way at all: a reader cannot date a message by looking at it, so
+    // the badge is the whole signal and it may not be about a terminal nobody has open.
+    val holding = when (shown) {
+        PaneView.Terminal -> "showing the last grid"
+        PaneView.Conversation -> "showing the last transcript that arrived"
+        PaneView.Split -> "showing the last of both that arrived"
+    }
+    Box(Modifier.announce("Stale — this pane has stopped sending frames, $holding")) {
         StatusBadge("Stale", tokens.color.working, tokens.color.surface)
     }
 }
@@ -487,7 +495,7 @@ fun PaneScreenDesktop(
             }
             if (gone != null) GoneBadge(gone)
             if (info?.detail != null) StreamBadge()
-            if (pane.stale) StaleBadge()
+            if (pane.stale) StaleBadge(shown)
             if (pane.quiet) QuietBadge()
             if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
             StatusChip(info)

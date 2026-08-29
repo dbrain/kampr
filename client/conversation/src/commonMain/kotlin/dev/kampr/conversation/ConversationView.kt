@@ -30,6 +30,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.Layout
@@ -335,6 +336,12 @@ fun ConversationView(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
+                            // The grid draws its ground back over itself at 0.45 when frames stop
+                            // (`TerminalView`), and the transcript used to draw an hour-old message
+                            // exactly like a live one — the badge in the header was the whole
+                            // signal on the one surface a reader cannot date by looking at it.
+                            // Same wash from the other side, so the two surfaces fade alike.
+                            .alpha(if (pane.stale) 0.55f else 1f)
                             .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
                             .onSizeChanged { viewport = it.height },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(

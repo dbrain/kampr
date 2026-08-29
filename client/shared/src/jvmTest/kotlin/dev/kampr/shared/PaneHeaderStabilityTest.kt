@@ -154,6 +154,12 @@ private fun SemanticsNode.collect(into: MutableList<Pair<String, Rect>>) {
 private fun SkikoComposeUiTest.headerBounds(): List<Pair<String, Rect>> =
     mutableListOf<Pair<String, Rect>>().also { onRoot(useUnmergedTree = true).fetchSemanticsNode().collect(it) }
 
+// Compared by the part of a description before its dash. A badge is allowed to name the surface it
+// is about — the stale one says "the last grid" over a terminal and "the last transcript that
+// arrived" over a transcript — and that is a different sentence about the same badge in the same
+// place, which is the opposite of the reflow this measures. The rect is compared whole.
+private fun key(label: String) = label.substringBefore(" — ")
+
 @OptIn(ExperimentalTestApi::class)
 private fun SkikoComposeUiTest.zooms(): Int =
     onAllNodesWithContentDescription(ZOOM).fetchSemanticsNodes().size
@@ -190,11 +196,11 @@ class PaneHeaderStabilityTest {
                 "${board.name}: measured a header with no view switcher in it",
             )
             terminal.zip(conversation)
-                .filter { (was, now) -> was != now }
+                .filter { (was, now) -> key(was.first) != key(now.first) || was.second != now.second }
                 .map { (was, now) -> "${board.name}: $was became $now" }
                 .ifEmpty {
                     if (terminal.size == conversation.size) emptyList()
-                    else listOf("${board.name}: the header lost ${terminal.map { it.first } - conversation.map { it.first }.toSet()}")
+                    else listOf("${board.name}: the header lost ${terminal.map { key(it.first) } - conversation.map { key(it.first) }.toSet()}")
                 }
         }
         assertEquals(emptyList(), moved, "the pane header reflowed when the pane changed view")

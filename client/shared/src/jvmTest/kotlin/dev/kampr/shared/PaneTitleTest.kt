@@ -56,6 +56,7 @@ private class Header(
     val readOnly: Boolean = false,
     val stale: Boolean = false,
     val unsent: Int = 0,
+    val view: PaneView = PaneView.Terminal,
 )
 
 @OptIn(ExperimentalTestApi::class)
@@ -71,7 +72,7 @@ private fun ComposeUiTest.header(case: Header) {
                             repeat(case.unsent) { _ -> it.noteUndelivered() }
                         },
                         info = case.info,
-                        view = PaneView.Terminal,
+                        view = case.view,
                         surfaces = BlankSurfaces,
                         landscape = width > height,
                         readOnly = case.readOnly,
@@ -143,6 +144,24 @@ class PaneTitleTest {
             onNodeWithContentDescription("Back to the herd").assertExists()
             onNodeWithContentDescription("Terminal view").assertExists()
             onNodeWithContentDescription("Conversation view").assertExists()
+        }
+    }
+
+    // The badge is the only thing that says the picture stopped, and it used to say it about the
+    // grid whichever surface was up — so the transcript, which is the one a reader cannot date by
+    // looking at it, was told it was a stale terminal.
+    @Test
+    fun theStaleBadgeNamesTheSurfaceTheReaderIsLookingAt() {
+        for ((view, said) in listOf(
+            PaneView.Terminal to "showing the last grid",
+            PaneView.Conversation to "showing the last transcript that arrived",
+        )) {
+            runComposeUiTest {
+                header(Header("stale on $view", PHONE_480, stale = true, view = view))
+                onNodeWithContentDescription(
+                    "Stale — this pane has stopped sending frames, $said",
+                ).assertExists()
+            }
         }
     }
 }
