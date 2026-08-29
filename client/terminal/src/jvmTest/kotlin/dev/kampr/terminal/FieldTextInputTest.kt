@@ -22,9 +22,12 @@ import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.FieldTextInput
 import dev.kampr.terminal.input.InputSink
+import dev.kampr.terminal.input.Latch
+import dev.kampr.terminal.input.active
 import dev.kampr.terminal.input.Latches
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private const val TAG = "pane-input"
@@ -44,11 +47,11 @@ private class Typed : PaneIo {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.field(): Typed {
+private fun ComposeUiTest.field(latches: Latches = Latches()): Typed {
     val io = Typed()
     setContent {
         val session = remember { PaneSession(PANE).also { it.openKeyboard() } }
-        val sink = remember { InputSink(PANE, io, Latches()) }
+        val sink = remember { InputSink(PANE, io, latches) }
         FieldTextInput(session, sink, enabled = true, modifier = Modifier.testTag(TAG))
     }
     waitForIdle()
@@ -195,5 +198,30 @@ class FieldTextInputTest {
         mainClock.autoAdvance = true
         waitForIdle()
         assertEquals("x", io.all)
+    }
+
+    // The report: alt+enter opens a new line in an agent's prompt box on a desktop keyboard, and
+    // on a phone the same chord sent the message instead. A soft keyboard delivers its action key
+    // as a real key event carrying no modifier state of its own, and this path read only the
+    // hardware modifiers — so an Alt armed on the key row was dropped on the one chord that needed
+    // it, while the row's own keys carried it perfectly well through `InputSink.press`.
+    @Test
+    fun an_armed_alt_rides_the_enter_a_soft_keyboard_sends() = runComposeUiTest {
+        val latches = Latches()
+        val io = field(latches)
+
+        onNodeWithTag(TAG).performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(Esc.ENTER, io.sent.last(), "an unmodified enter is still a bare return")
+
+        latches.tap(Latch.Alt)
+        onNodeWithTag(TAG).performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(
+            Esc.ESCAPE + Esc.ENTER,
+            io.sent.last(),
+            "an armed alt has to reach the keystroke the operator armed it for",
+        )
+        assertFalse(latches.alt.active(), "and it is spent on that keystroke, not left standing")
     }
 }

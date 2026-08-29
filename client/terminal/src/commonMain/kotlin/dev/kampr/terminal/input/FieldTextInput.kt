@@ -140,13 +140,23 @@ private fun sequenceFor(key: Key): String? = when (key) {
     else -> null
 }
 
+// **A soft keyboard delivers its action key as a real key event and carries no modifier state with
+// it.** So a latch armed on the key row was dropped on exactly the chord that needs one — alt+enter,
+// which is how an agent's prompt box takes a newline, and which submitted the message instead. The
+// special keys therefore ride the latches here the way the row's own caps already ride them through
+// `InputSink.press`.
+//
+// Characters are deliberately left on the hardware modifiers alone: `InputSink.type` owns the IME's
+// character path and decorates them there, and reading the latch in both places would spend it on a
+// keystroke that has not been sent yet.
 private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
-    val ctrl = event.isCtrlPressed
-    val alt = event.isAltPressed
-    val shift = event.isShiftPressed
+    val ctrl = event.isCtrlPressed || sink.latches.ctrl.active()
+    val alt = event.isAltPressed || sink.latches.alt.active()
+    val shift = event.isShiftPressed || sink.latches.shift.active()
     val function = functionKeys.indexOf(event.key)
     if (function >= 0) {
+        sink.latches.consume()
         sink.raw(Esc.modified(Esc.function(function + 1), ctrl, alt, shift))
         return true
     }
@@ -159,18 +169,19 @@ private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Boolean {
         } else {
             mapped
         }
+        sink.latches.consume()
         sink.raw(payload)
         return true
     }
-    if (!ctrl && !alt) return false
+    if (!event.isCtrlPressed && !event.isAltPressed) return false
     val code = event.utf16CodePoint
     if (code in 1..0xFFFF) {
         val ch = code.toChar()
-        val body = if (ctrl) Esc.control(ch) else ch.toString()
+        val body = if (event.isCtrlPressed) Esc.control(ch) else ch.toString()
         if (body != null) {
-            sink.raw(if (alt) Esc.ESCAPE + body else body)
+            sink.raw(if (event.isAltPressed) Esc.ESCAPE + body else body)
             return true
         }
     }
-    return ctrl
+    return event.isCtrlPressed
 }
