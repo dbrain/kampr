@@ -429,6 +429,17 @@ a device*, and none of them constrain a device afterwards.
 **Kampr does not defend the herd from its own agents.** An agent you started has whatever access you
 gave it.
 
+**Nor from anything else running as your uid, and the harnesses widen what that is worth.** A live
+Claude Code session listens on `/run/user/<uid>/cc-socks/<pid>.sock` and accepts
+`{"type":"user", …}` from any process that can open it, with **no authentication on Linux** — the
+directory's 0700 mode is the whole control (#348). So a same-uid process does not merely read
+files: it can put words in a running agent's mouth and have them acted on. That socket is the
+harness's, not Kampr's, and it exists whether or not a node is installed — but it belongs here,
+because "another process as you" is a meaningfully larger adversary on a machine running agents
+than on one that is not. It is also why [§3.5](#35-another-uid-on-the-same-host) is the boundary
+worth holding: *another* uid is defended, the same uid is not, and the gap between them is wider
+than it used to be.
+
 **Kampr does not manage a front door.** It supplies its own TLS or trusts a proxy. It does not
 publish, supervise or tear down a tunnel, and it never will — that is a CLI contract it could not
 test.

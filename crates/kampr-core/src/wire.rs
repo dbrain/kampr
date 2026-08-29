@@ -232,18 +232,20 @@ pub struct PaneEntry {
     pub cmd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argv: Option<String>,
-    /// What the harness in this pane calls the session it is having.
+    /// What the session in this pane is called.
     ///
-    /// **Generated, and therefore beneath anything the operator set by hand.** `label` is herdr's
-    /// and is what somebody typed; this is what the harness derived for itself, and the naming
-    /// template takes the first of the two that resolves. A pane with a name of its own is
-    /// otherwise described by its working directory, which is the same word for every pane in a
-    /// repository.
+    /// **The same title the conversation surface resolves, at the same precedence**: a
+    /// `custom-title.json` the operator typed, then the `ai-title` the harness generated and keeps
+    /// rewriting, then a name — an `agent-name` record, or the marker's, and only where somebody
+    /// chose it. A name the harness derived for *itself* at session open — the working directory's
+    /// basename and two hex characters, `kampr-44`, `nameSource: "derived"` (#311) — is refused
+    /// here, so a pane with nothing better falls through the naming template to the workspace
+    /// label rather than showing a string that identifies nothing.
     ///
-    /// Cheap by construction: it is read from the session marker the pane's own harness writes
-    /// (#311), which is opened by pid. The richer titles a transcript carries — `ai-title`, and a
-    /// `custom-title.json` the operator typed — cost a whole-transcript read and ride the
-    /// conversation instead, where that read is already being paid for.
+    /// Still cheap, and that is what took work. The marker is opened by pid; the transcript is
+    /// folded incrementally against a byte cursor the node keeps per transcript, so a rebuild
+    /// costs the records the file has grown by rather than the whole-transcript read this field
+    /// used to leave to the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }

@@ -17,6 +17,8 @@ use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
+use crate::presence;
+use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
 use crate::summary::{count_lines, image_marker, marker_of, one_line, summarise};
@@ -88,6 +90,30 @@ impl JournalAdapter for CodexAdapter {
             SessionKind::Id => self.find_by_id(&session.value),
             SessionKind::Path => self.root.contain(&session.value),
         }
+    }
+
+    /// The thread whose writer lock this pane's `codex` holds.
+    ///
+    /// The lock files are empty, which is what made them look like nothing worth reading, but
+    /// each is `flock`ed from before the first prompt until the process dies — the same
+    /// kernel-held handle [`crate::agy`] uses, and stronger than a start time because the kernel
+    /// releases it on death. The files are never unlinked, so the directory is a list of threads
+    /// that have *ended* and only the lock table separates them.
+    ///
+    /// Two shapes this has to survive. `/new` takes a second lock without releasing the first, so
+    /// the newest lock file answers rather than refusing an ambiguous pair. And the holder is the
+    /// native binary the node wrapper spawns, not the wrapper the pane reports, so a pid that
+    /// holds nothing is asked about its children before the search gives up.
+    fn locate_by_process(&self, process: &PaneProcess) -> Result<PathBuf, JournalError> {
+        let locks = self.root.path().join("thread-writer-locks");
+        let id = presence::newest_holder(&locks, process.pid)
+            .or_else(|| {
+                crate::process::children(process.pid)
+                    .into_iter()
+                    .find_map(|child| presence::newest_holder(&locks, child))
+            })
+            .ok_or_else(|| JournalError::NotFound(process.pid.to_string()))?;
+        self.find_by_id(&id)
     }
 
     /// A rollout carries its working directory in the `session_meta` record it opens with

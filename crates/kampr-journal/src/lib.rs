@@ -11,6 +11,7 @@ pub mod facet;
 pub mod live;
 pub mod marker;
 pub mod model;
+pub mod presence;
 pub mod process;
 pub mod root;
 pub(crate) mod scan;

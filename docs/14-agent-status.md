@@ -84,26 +84,28 @@ defeat `moved()` and it fails.
 a 20 Hz alternating title the raw verdict oscillated every ~40 ms while the published status
 stayed pinned. Latency to the snapshot is **under 0.4 s** (median ~0.2 s).
 
-**So the blinking is not flapping — it is a label drop, and it is the #233 shape inside herdr.**
+**So the blinking is not flapping. It is also not a label drop — that reading was measured once,
+published here provisionally, and has since been refuted (#360).** What is real is sharper and
+worse:
 
-> *(Measured once, in one probe run, and **not** independently reproduced — a second reviewer
-> looked for a matching constant in the binary and found none. The **mechanism** is solid, since
-> the label is established to be the foreground process name; treat the **3.2 s** figure as
-> provisional until a row exists.)*
->
-> A child process holding the pane's foreground for **~3.2 s** makes herdr forget the agent —
-> `agent: null`, `agent_status: unknown` — while the agent process is alive and its working title
-> is still on screen. On re-acquiring the label, the `osc_title` **detection region is empty**,
-> because `pane.terminal_title` and the detection region are *different state*: the region is a
-> transient evidence buffer that only refills when the harness next writes a title. So herdr
-> falls back to `default_known_agent_idle_fallback` and confidently publishes **`idle`** until the
-> spinner next ticks — 3.5 s in the trace.
+> `pane.terminal_title` and the `osc_title` **detection region are different state**. The region
+> records only titles written *after* herdr attached the label — the boundary is 0.15–0.3 s past
+> `exec`, herdr's own detection tick — and it is **never backfilled**. A harness that titles
+> itself inside that window leaves herdr publishing `default_known_agent_idle_fallback → idle`
+> **indefinitely**, at a pane whose title on screen says working. Re-writing the byte-identical
+> title fixes it in under half a second.
 
-**A Claude pane running a long Bash tool call is a child holding the foreground.** That is the
-path into the freeze in §1: `pane_agent` goes `None`, `resolve` returns `None`, `release` fires
-without `withdraw`, and the conversation sits there taking no new turns until something else
-recovers it. This is why `moved()` must not retire on a blink, and why `idle` from herdr is
-**never evidence** that a harness is waiting — only that nothing matched.
+The refuted half, recorded so nobody re-derives it: a child holding the pane's foreground does
+**not** make herdr forget the agent. Measured to 20 s with the agent evicted from the foreground
+process group entirely, and over 300 s on a live Claude pane — where a Bash tool child is spawned
+into **its own** process group and never becomes the tty's foreground at all, so
+`foreground_processes` reads `['claude']` throughout. The three-second figure was real but
+belongs elsewhere: herdr holds `unknown` for **3.33 s** after a label attaches with nothing
+matching, before the idle fallback publishes (~0.35 s when a rule matches).
+
+**`moved()` is still load-bearing, for a corrected reason.** There are two genuine blinks — that
+3.33 s of `unknown`, and a single `idle` herdr emits as an agent exits — and a conversation
+withdrawn on either is a pane emptying itself while nothing is wrong.
 
 Two more rules of engagement, measured:
 
@@ -272,19 +274,42 @@ Code Assist for individuals"*), so everything recorded about it is boot-time onl
   op that destroys herdr's `done` marker; every read leaves it standing. Focus is a thing the
   operator presses, never a side effect of opening a view. Kampr already never focuses implicitly —
   every create op passes `focus: false` — so this writes down a discipline that already held.
+- **A pane is called what its transcript calls it.** The herd path now carries the session's real
+  title — `custom-title.json` before `ai-title` before `agent-name` — through an incremental fold
+  cached per transcript path and pruned per round like `Conversations`. Steady-state cost is
+  **1.9 us per agent pane per rebuild, flat from 2 KB to 29 MB**, beside the 34 us the marker on
+  the same pane already costs; the whole-file read happens once per transcript per node lifetime
+  (1.0 ms at this machine's median, 26 ms at its largest). That is the cost `wire.rs` refused to
+  pay *per rebuild*, and the cursor is what makes paying it once enough. No wire change: the
+  existing optional `PaneEntry.title` is simply filled better, so installed phones are unaffected.
+  This also removes the cost accepted below.
 - **Harness-derived session names are not shown.** `chosen_name` in `state.rs` drops a name whose
   `nameSource` is `auto`, `derived` or absent; all three are machines naming themselves. *Known
   cost:* two Claude panes in one workspace now render identically, where `kampr-44` vs `kampr-1f`
   at least distinguished them. The good names (`ai-title`, `agent-name`) exist in the transcript
   but cost a whole-transcript read per pane, which the herd path deliberately avoids. **Open.**
+- **Codex's writer lock is now the codex handle.** `presence` moved out of the `agy` module to
+  the crate root, `newest_holder` was added for codex's `/new` behaviour (#350), and
+  `CodexAdapter::locate_by_process` resolves the thread through `/proc/locks` and falls back to
+  the process's children, because the holder is the native binary rather than the node wrapper
+  that spawns it (#349). Two tests take a real `flock` against the real kernel.
+- **A harness's own status now outranks herdr's screen scrape.** `harness_status` in `state.rs`
+  maps `busy \| shell \| idle \| waiting` onto the herd's five and leaves a word it does not know
+  alone. It costs **nothing**: the marker was already being read once per pane per rebuild for the
+  title. `waiting`→`Blocked` is the state herdr structurally cannot see (#355), and the live test
+  asserts it against herdr saying `working`, so it fails if the override is removed.
 - **`state_change_seq` is noted, not wired.** It is a free global monotonic change counter on
   `agent.list`. Wiring it without a consumer would be dead code; it wants a purpose first.
 
 ---
 
-## 6. Probe rows to append (unnumbered — assign on append)
+## 6. Probe rows — appended as **#343–#360**
 
-Held here rather than appended because `docs/03-probe-log.md` is being appended to concurrently.
+No longer pending: the concurrent workstream landed, the log was clean, and these went in at the
+end of it. #343–#348 are the Claude surfaces, #349–#351 codex, #352–#353 agy, #354 gemini, and
+#355–#359 herdr's detection model, its report precedence and its session lifecycle; #360 is the
+refutation in §2. The tables
+below are kept only as the short form; the log is the record.
 
 | # | Claim | How | Result |
 |---|---|---|---|
@@ -303,8 +328,14 @@ agent-status probe report and belong beside these.
 
 - **The `cc-socks` protocol.** Framing, handshake, and whether an external process can subscribe
   to `notify_idle` with no configuration. If yes, layer 1 becomes push rather than poll.
-- **codex, agy and gemini**: what each publishes transparently for identity and for status.
-  Kampr's answer is only as good as its weakest adapter.
+- **agy's status is measured (#353) and deliberately not wired.** Three reasons, and they are the
+  "stable rather than clever" ones: the `steps.status` enum is **only partly mapped** — four
+  values observed out of an unknown number — it would mean opening another process's live SQLite
+  once per pane per rebuild where every other signal here is a file read, and the adapter surface
+  it would hang off is synchronous. Identity for agy already works through its presence lock.
+  Worth doing once the enum is fully mapped; not worth guessing at.
+- **gemini has no handle at all (#354)**, so it stays on herdr's label and the bounded directory
+  search, and should be *labelled* as the weakest rather than quietly treated as equal.
 - ~~**Whether to fork or merge with herdr.**~~ **Answered: do neither.** Herdr is forkable —
   `github.com/herdrdev/herdr`, Rust, and **relicensed from AGPL-3.0 to Apache-2.0 on 22 Jul
   2026**, which is what made it possible at all (AGPL §13 would have forced this MIT node to
@@ -331,6 +362,28 @@ agent-status probe report and belong beside these.
 - **Socket does not imply marker.** A Claude process spawned as a child of another
   (`CLAUDE_CODE_CHILD_SESSION`) gets a socket and a key file but **no `<pid>.json`**. Anything
   walking the registry must not assume the two go together.
-- **Background sessions have no pane.** `claude --bg` sessions are invisible to a pane-centric
-  herd model; `claude agents --json` sees them. Adopting layer 1 gets them for free *only* if the
-  herd model can hold an agent that is not a pane. Unresolved.
+### Background sessions have no pane — designed, deliberately not landed
+
+`claude --bg` sessions are separate Claude Code sessions with their own session ids, supervised by
+a daemon, with **no terminal pane at all**. Herdr will never see one; `claude agents --json` (#343)
+lists them and marks them with `kind`. The operator wants them visible.
+
+**Half of it is already precedented and easy.** `Provider` is a trait and `sessions.rs` already
+composes two implementations behind a `Composite` — the fleet workstream added `FleetProvider`
+beside the herdr one for exactly this reason, panes the node owns rather than panes herdr has. A
+third provider listing background sessions as entries under a `bg:<session-id>` local id follows
+that pattern, answers `owns` on the prefix, and returns nothing readable for `watch_pane` and
+`read_scrollback` — which is an existing, rendered state, not a new one.
+
+**The other half is the actual work, and it is why this is not landed here.** A background session
+is only worth showing for its *conversation*, and the conversation pump is herdr-shaped: `pane_of`
+builds its `Handle` from the herd model's `agent`/`cwd` plus a `Look` that resolves identity
+through `HerdrProvider`'s process pipeline. A session with no pane has no pipeline — its identity
+is the session id, which is already exact and needs none of that machinery. So making it work
+means giving the pump a second way to be told what conversation a pane is on, rather than always
+deriving one. That is a change to the most defect-prone code in this crate, landed at the same
+time as a new provider and a client that has never drawn a pane with no grid.
+
+Doing all three at once is how the defects in §1 got written. The order that keeps it honest:
+generalise the pump's identity source first, with tests, on the panes that already exist; then add
+the provider; then the client. Nothing here is blocked — it is sequenced.

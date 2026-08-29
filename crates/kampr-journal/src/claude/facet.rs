@@ -30,6 +30,23 @@ pub struct Fold {
 
 impl FacetFold for Fold {
     fn facets(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
+        self.advance(transcript);
+        Facets {
+            title: self.levels(transcript, marker).resolve(),
+            queued: self.queue.clone(),
+            mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
+            ..self.accumulated.clone()
+        }
+    }
+
+    fn titles(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Titles {
+        self.advance(transcript);
+        self.levels(transcript, marker)
+    }
+}
+
+impl Fold {
+    fn advance(&mut self, transcript: &Path) {
         let mut appended = Appended::open(transcript, self.cursor);
         if appended.restarted() {
             *self = Self::default();
@@ -38,22 +55,17 @@ impl FacetFold for Fold {
             self.push(&line);
         }
         self.cursor = appended.cursor();
+    }
 
+    fn levels(&self, transcript: &Path, marker: Option<&SessionMarker>) -> Titles {
         let mut titles = self.titles.clone();
         // The file beside the session is what the operator typed most recently, and the marker is
         // the live copy of a name the transcript only records as of its last write.
         titles.manual = manual_title(transcript).or(titles.manual);
         titles.named = marker.and_then(|m| m.name.clone()).or(titles.named);
-        Facets {
-            title: titles.resolve(),
-            queued: self.queue.clone(),
-            mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
-            ..self.accumulated.clone()
-        }
+        titles
     }
-}
 
-impl Fold {
     // Every one of these is rewritten as the session moves — 1165 `ai-title` records over the
     // twelve transcripts of one project here — so the last of each is the one it has now.
     fn push(&mut self, line: &str) {

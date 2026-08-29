@@ -606,10 +606,12 @@ fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {
 /// Whether the pane named a *different* session, rather than merely stopped naming the
 /// one it had.
 ///
-/// Herdr derives a pane's agent by scraping its screen (#75), so a blink in that leaves
-/// the handle with no identity for a tick — and a conversation withdrawn on every blink
-/// is its own defect, and a worse one than a dated view. Two names that disagree is the
-/// case this node is certain about.
+/// A pane's agent goes absent for real, and more than once: herdr holds `unknown` for
+/// **3.3 s** after a label attaches with nothing matching, and hands out one `idle` on
+/// the way down when an agent exits (#360). Either leaves this handle with no identity
+/// for a tick, and a conversation withdrawn on every one of those is its own defect —
+/// a worse one than a dated view. Two names that *disagree* is the case a node is
+/// certain about, and the only one worth acting on.
 fn moved(was: Option<&Handle>, now: &Handle) -> bool {
     let (Some(was), Some(now)) = (
         was.and_then(|h| h.identity.announced.as_ref()),
@@ -698,10 +700,10 @@ mod tests {
         }
     }
 
-    /// Herdr decides a pane is running an agent by scraping its screen (#75), so a
-    /// scrape that blinks is a handle that loses its identity for a tick and gets it
-    /// back. The pane has not gone anywhere, and a conversation that empties itself
-    /// while nothing is wrong is its own defect.
+    /// A pane's agent goes absent and comes back — herdr's 3.3 s of `unknown` after a
+    /// label attaches, and the single `idle` it emits as one exits (#360). The pane has
+    /// not gone anywhere, and a conversation that empties itself while nothing is wrong
+    /// is its own defect.
     #[test]
     fn a_pane_that_stops_naming_its_session_keeps_the_conversation_it_had() {
         let named = on("a");

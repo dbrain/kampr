@@ -208,10 +208,16 @@ impl Registry {
     /// Nothing from any other adapter: a pane with no harness, or one whose harness is not
     /// registered here, gets a fold that reads nothing rather than somebody else's facets.
     pub fn fold(&self, pane_agent: Option<&str>) -> FacetFeed {
+        FacetFeed::new(self.folder(pane_agent))
+    }
+
+    /// The same fold without the published-once comparison in front of it, for a caller that wants
+    /// the collection as it stands rather than a frame when it moves — the herd's pane titles.
+    pub fn folder(&self, pane_agent: Option<&str>) -> Box<dyn FacetFold> {
         let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
-            return FacetFeed::new(Box::new(Nothing));
+            return Box::new(Nothing);
         };
-        FacetFeed::new(adapter.fold().unwrap_or_else(|| Box::new(Whole(adapter.clone()))))
+        adapter.fold().unwrap_or_else(|| Box::new(Whole(adapter.clone())))
     }
 
     /// How to read the composer of a pane running `pane_agent`, for the harnesses whose composer

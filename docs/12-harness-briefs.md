@@ -2,8 +2,9 @@
 
 What the agent in a pane already writes down, and what Kampr does with it.
 
-Kampr reads a harness two ways today: herdr's screen-scrape says *whether* a pane is an agent, and
-the transcript on disk says *what it said*. Both are indirect, and every defect in this brief is
+Kampr reads a harness two ways today: herdr says *whether* a pane is an agent — by the foreground
+process's **name**, not by scraping, which is the half [#355](./03-probe-log.md) corrects — and the
+transcript on disk says *what it said*. Both are indirect, and every defect in this brief is
 downstream of that. The node runs on the pane's own machine as the pane's own user, and the
 harnesses have quietly grown a great deal of structured state beside their transcripts — session
 markers, subagent transcripts, per-record metadata — none of which Kampr opens.
@@ -48,9 +49,9 @@ in W0 before it belongs in code.
 | The phone does **not** double the top inset: with `safe.top = 48 dp`, `HerdPortrait`'s title lands at 67 dp — one inset plus its own 16 dp | composed it through `screenInset` and measured the title's bounds | **measured** |
 | The **Desktop** breakpoint does: `KamprApp.kt:304` applies `screenInset` and `HerdSidebar` adds `18.dp + safe.top` again | read both call sites | **read** |
 | `Theme.Kampr` is the platform `android:Theme.Material.NoActionBar` and sets opaque `statusBarColor`/`navigationBarColor`, which `enableEdgeToEdge()` expects to own | read `themes.xml` against `MainActivity.kt` | **read** |
-| Whether `sessions/<pid>.json`'s `status` tracks a live session or is written once | — | **guess, W0** |
+| `sessions/<pid>.json`'s `status` tracks a live session: `busy \| shell \| idle \| waiting` plus `waitingFor`, rewritten **in place** within ~100 ms of a transition | drift of `statusUpdatedAt` past `startedAt` on live sessions, and a fourth watched from creation ([#344](./03-probe-log.md)) | **measured** |
 | Whether the phone's offset is exactly a status bar, and whether the theme is what causes it | — | **guess, W10** |
-| What `messagingSocketPath` accepts, and whether `notify_idle` is usable from outside the harness | — | **guess, W0** |
+| `messagingSocketPath` speaks newline-delimited JSON one way, needs no auth on Linux, and `notify_idle` is a real one-shot subscription — but it **cannot report `waiting`**, so it is an accelerator and not the signal | connected to a throwaway session's socket and subscribed, then drove it to a dialog and back ([#346](./03-probe-log.md)) | **measured** |
 | Whether Codex and agy have equivalents of any of this | — | **guess, W0** |
 
 ---
@@ -95,10 +96,13 @@ once it landed; the log is 316 rows, gap-free.
 
 **Still open, and deliberately written down as open** rather than left to be rediscovered:
 
-- Whether `sessions/<pid>.json`'s `status` tracks a live session or is stamped once. This gates
-  whether W3 can *replace* herdr's screen-scraped `agent_status` or only supplement it.
-- What `messagingSocketPath` speaks, and whether `notify_idle` is reachable from outside the
-  harness. A much bigger door than the rest of this brief; do not walk through it on a guess.
+- ~~Whether `sessions/<pid>.json`'s `status` tracks a live session.~~ **Answered ([#344](./03-probe-log.md)): it tracks.**
+  W3 therefore *replaces* herdr's `agent_status` for a Claude pane rather than supplementing it,
+  and does so at no extra cost — the marker was already being read once per pane per rebuild.
+- ~~What `messagingSocketPath` speaks.~~ **Answered ([#346](./03-probe-log.md))**, and the door was
+  worth opening carefully: it works with no configuration, and it still is not the answer, because
+  the idle feed is wired off `idle|shell` and `busy` and a session blocked on input fires nothing.
+  The marker covers what it cannot, and is not behind a server-side kill switch ([#347](./03-probe-log.md)).
 - The same census against a Codex rollout and an agy transcript. W5's shape depends on it.
 - The procfs walk against a backgrounded job, a multi-member pipeline, and — the one that matters —
   a job that has already exited.
@@ -223,8 +227,10 @@ Then:
 - A pane with a marker and no transcript yet is an agent pane with an **empty** conversation, not a
   pane with no conversation. `has_conversation` needs a third state, or the client needs to stop
   treating "no turns yet" as "not an agent". Say which in the code; do not let the two answers drift.
-- The marker's `status` may be a better `agent_status` than herdr's screen-scrape — **gated on
-  W0's row**, because if it is stamped once it is worse than nothing.
+- The marker's `status` **is** a better `agent_status` than herdr's screen answer, and is now what a
+  pane reports: `harness_status` in `kampr-node/src/state.rs`. Ungated by [#344](./03-probe-log.md),
+  and sharpened by [#360](./03-probe-log.md) — herdr's evidence buffer never backfills, so it can
+  publish a confident `idle` indefinitely at a pane that is working.
 - `name`/`nameSource` feeds W5's naming.
 
 **Generalise, do not special-case.** This is a `JournalAdapter` capability — "which session is this

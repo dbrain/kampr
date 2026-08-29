@@ -4350,6 +4350,10 @@ impl Harnessed {
     /// What the harness publishes about itself, with the pid and `procStart` of the process that
     /// is really running — so a node that checks them against `/proc` is checking real values.
     fn announce(&self, pid: u32, id: &str) {
+        self.announce_status(pid, id, "idle");
+    }
+
+    fn announce_status(&self, pid: u32, id: &str, status: &str) {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("/proc stat");
         let start = stat[stat.rfind(") ").unwrap() + 2..]
             .split_whitespace()
@@ -4358,7 +4362,7 @@ impl Harnessed {
             .to_string();
         let record = json!({
             "pid": pid, "sessionId": id, "cwd": self.cwd, "procStart": start,
-            "version": "2.1.239", "kind": "interactive", "entrypoint": "cli", "status": "idle",
+            "version": "2.1.239", "kind": "interactive", "entrypoint": "cli", "status": status,
         });
         std::fs::write(self.session_file(pid), record.to_string()).unwrap();
     }
@@ -4561,6 +4565,69 @@ async fn a_conversation_that_moved_while_the_pane_was_unwatched_is_still_taken_o
     )
     .await;
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// Herdr decides a pane's agent status by scraping its screen (#75), and a pane blocked on a
+/// prompt looks exactly like a pane that has finished — so `blocked` is a state the scrape
+/// structurally cannot reach, and it answers `idle` for both.
+///
+/// The harness writes down what it is actually doing, in a file this node already opens once per
+/// pane per rebuild for the title. Asserted against herdr saying something *else*, on purpose: a
+/// test that only checked the status arrived would pass with the override removed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_harness_that_says_it_is_waiting_outranks_the_screen_that_says_it_is_working() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("waiting", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce_status(pid, "33333333-3333-4333-8333-333333333333", "waiting");
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "working" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    // The full herd arrives once and everything after it is a patch, so both carry panes.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut saw = String::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        let found = ["panes"]
+            .iter()
+            .map(|key| &message[key])
+            .chain([&message["changed"]["panes"], &message["added"]["panes"]])
+            .filter_map(|panes| panes.as_array())
+            .flat_map(|panes| panes.iter())
+            .find(|p| p["id"] == pane.as_str())
+            .and_then(|entry| entry["agent_status"].as_str())
+            .map(str::to_string);
+        let Some(entry) = found else {
+            continue;
+        };
+        saw = entry;
+        if saw == "blocked" {
+            return;
+        }
+    }
+    panic!("the pane never reported blocked; herdr's scrape won with {saw:?}");
 }
 
 /// The same move, with the operator *looking at* the pane.
@@ -5898,4 +5965,154 @@ async fn what_the_operator_left_in_the_panes_own_composer_reaches_the_phone_befo
         gone["text"].is_null(),
         "an emptied composer left the strip standing: {gone}",
     );
+}
+
+impl Harnessed {
+    /// The marker as the harness really writes it: `~/.claude/sessions/<pid>.json` carries the
+    /// name it derived at session open, `kampr-44`, with `nameSource: "derived"` (#311).
+    fn announce_named(&self, pid: u32, id: &str, name: &str, source: &str) {
+        self.announce(pid, id);
+        let path = self.session_file(pid);
+        let mut record: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        record["name"] = json!(name);
+        record["nameSource"] = json!(source);
+        std::fs::write(path, record.to_string()).unwrap();
+    }
+
+    /// A record kind the transcript carries and the marker never does. Claude rewrites `ai-title`
+    /// as the session goes, so a later one replaces an earlier one.
+    fn titled(&self, id: &str, title: &str) {
+        let record = json!({ "type": "ai-title", "aiTitle": title, "sessionId": id });
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.project.join(format!("{id}.jsonl")))
+            .unwrap();
+        std::io::Write::write_all(&mut file, format!("{record}\n").as_bytes()).unwrap();
+    }
+}
+
+/// The operator's report: two Claude panes in one workspace render identically, because the only
+/// name the herd path had was one the harness made up for itself — the cwd basename and two hex
+/// characters — and that one is dropped (#311) rather than shown.
+///
+/// The good name is in the transcript and always was. This drives the whole path: a real herdr, a
+/// real process in the pane, the marker the harness writes by pid, and an `ai-title` record on the
+/// transcript the pane's own process is on.
+///
+/// The mutation that must fail: take the transcript out of the title and this pane comes back
+/// with no title at all, because `kampr-44` is refused and nothing else is in hand.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_is_called_what_the_transcript_calls_it_rather_than_what_the_harness_made_up() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("titled", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let id = "44444444-4444-4444-8444-444444444444";
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce_named(pid, id, "kampr-44", "derived");
+    fixture.transcript(id, "A TURN", -60);
+    fixture.titled(id, "the width inference rewrite");
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    assert_eq!(
+        pane_title(&mut socket, &pane).await.as_deref(),
+        Some("the width inference rewrite"),
+        "the harness derived `kampr-44` for itself and the transcript holds the real name"
+    );
+}
+
+/// The precedence the conversation surface publishes, end to end on the herd path: a title the
+/// operator typed beside the session outranks the one the harness generated, and neither is
+/// displaced by the name it derived.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_title_the_operator_typed_outranks_the_one_the_harness_generated() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("typed", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let id = "55555555-5555-4555-8555-555555555555";
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce_named(pid, id, "kampr-55", "derived");
+    fixture.transcript(id, "A TURN", -60);
+    fixture.titled(id, "Inferring a pane's width");
+    let tree = fixture.project.join(id);
+    std::fs::create_dir_all(&tree).unwrap();
+    std::fs::write(
+        tree.join("custom-title.json"),
+        json!({ "customTitle": "the release" }).to_string(),
+    )
+    .unwrap();
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    assert_eq!(
+        pane_title(&mut socket, &pane).await.as_deref(),
+        Some("the release")
+    );
+}
+
+/// The full herd arrives once and everything after it is a patch, so a pane's title can land in
+/// any of the three.
+async fn pane_title(socket: &mut Socket, pane: &str) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut saw = None;
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        let found = [
+            &message["panes"],
+            &message["changed"]["panes"],
+            &message["added"]["panes"],
+        ]
+        .into_iter()
+        .filter_map(|panes| panes.as_array())
+        .flat_map(|panes| panes.iter())
+        .find(|p| p["id"] == pane);
+        let Some(entry) = found else {
+            continue;
+        };
+        saw = entry["title"].as_str().map(str::to_string);
+        if saw.is_some() {
+            return saw;
+        }
+    }
+    saw
 }

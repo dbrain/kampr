@@ -209,3 +209,111 @@ fn an_attached_image_is_named_rather_than_dropped() {
     let wire = serde_json::to_string(&turns).unwrap();
     assert!(!wire.contains("base64"), "{wire}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Identity: the thread a pid is on.
+// ---------------------------------------------------------------------------------------------
+
+use kampr_journal::PaneProcess;
+use std::fs::File;
+use std::path::Path;
+
+const HELD_THREAD: &str = "01a04b4e-d231-7d81-9fd8-971e2b0ca9d0";
+const SECOND_THREAD: &str = "01a04b61-71ac-7c42-9f0e-1d2b3c4d5e6f";
+
+/// A codex home holding a rollout and a writer lock for each id. The lock files are empty, which
+/// is what made them look like nothing worth reading — the kernel holds the meaning, not the file.
+fn locks_home(tag: &str, ids: &[&str]) -> common::ScratchDir {
+    let home = scratch_dir(tag);
+    std::fs::create_dir_all(home.join("thread-writer-locks")).unwrap();
+    let dir = home.join("sessions/2026/08/18");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = std::fs::read_to_string(codex_transcript()).unwrap();
+    for id in ids {
+        std::fs::write(
+            dir.join(format!("rollout-2026-08-18T14-11-36-{id}.jsonl")),
+            &source,
+        )
+        .unwrap();
+        File::create(home.join(format!("thread-writer-locks/{id}.lock"))).unwrap();
+    }
+    home
+}
+
+fn me() -> PaneProcess {
+    PaneProcess {
+        pid: std::process::id(),
+        start: None,
+        started: None,
+    }
+}
+
+fn located(home: &Path, process: &PaneProcess) -> Option<String> {
+    CodexAdapter::new(TranscriptRoot::new(home).unwrap())
+        .locate_by_process(process)
+        .ok()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+}
+
+fn hold(home: &Path, id: &str) -> File {
+    let lock = File::options()
+        .write(true)
+        .open(home.join(format!("thread-writer-locks/{id}.lock")))
+        .unwrap();
+    lock.lock().unwrap();
+    lock
+}
+
+/// Against the real kernel, with nothing mocked: this test process takes the same `flock` codex
+/// takes, and the adapter finds the thread through `/proc/locks`.
+///
+/// The adapter used to say codex published no process-to-thread map at all, on the strength of
+/// the lock files being empty — so it fell through to the directory search, which is a time bound
+/// and not an identity.
+#[test]
+fn the_thread_whose_writer_lock_a_pid_holds_is_the_one_served() {
+    let home = locks_home("codex-held", &[SECOND_THREAD, HELD_THREAD]);
+    assert_eq!(
+        located(&home, &me()),
+        None,
+        "two lock files and neither held: without this the test proves nothing"
+    );
+
+    let _lock = hold(&home, HELD_THREAD);
+
+    assert_eq!(
+        located(&home, &me()).as_deref(),
+        Some(format!("rollout-2026-08-18T14-11-36-{HELD_THREAD}.jsonl").as_str()),
+        "the file nobody holds is a thread that has already ended"
+    );
+    assert_eq!(
+        located(&home, &PaneProcess { pid: 1, ..me() }),
+        None,
+        "and the lock names one pid, not any pid"
+    );
+}
+
+/// **`/new` does not move a codex lock, it takes a second one and keeps the first** — measured,
+/// and the opposite of what `agy` does. A rule of "exactly one held lock or nothing" would refuse
+/// every codex session that has ever used `/new`, so the newest lock file is what answers.
+#[test]
+fn a_codex_process_that_has_opened_a_second_thread_is_on_the_newer_one() {
+    let home = locks_home("codex-new", &[HELD_THREAD]);
+    let _first = hold(&home, HELD_THREAD);
+    std::fs::create_dir_all(home.join("sessions/2026/08/18")).unwrap();
+    let source = std::fs::read_to_string(codex_transcript()).unwrap();
+    std::fs::write(
+        home.join(format!(
+            "sessions/2026/08/18/rollout-2026-08-18T14-11-36-{SECOND_THREAD}.jsonl"
+        )),
+        &source,
+    )
+    .unwrap();
+    File::create(home.join(format!("thread-writer-locks/{SECOND_THREAD}.lock"))).unwrap();
+    let _second = hold(&home, SECOND_THREAD);
+
+    assert_eq!(
+        located(&home, &me()).as_deref(),
+        Some(format!("rollout-2026-08-18T14-11-36-{SECOND_THREAD}.jsonl").as_str()),
+    );
+}

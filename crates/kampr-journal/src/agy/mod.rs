@@ -1,5 +1,5 @@
 mod facet;
-mod presence;
+use crate::presence;
 mod record;
 
 use std::collections::VecDeque;
@@ -21,7 +21,7 @@ use crate::tail::TranscriptParser;
 
 use record::{Record, ToolCall, arg, diff, exit_failed, request, result_body, summarise};
 
-pub use presence::{flocks, holder_from};
+pub use crate::presence::{flocks, holder_from};
 
 pub const AGENT: &str = "agy";
 

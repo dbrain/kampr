@@ -3,10 +3,10 @@ use crate::herd::HerdModel;
 use crate::sessions::{SessionNode, Sessions};
 use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
-use kampr_core::provider::PaneInfo;
+use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{NodeEntry, PaneEntry};
 use kampr_herdr::Herdr;
-use kampr_journal::{Harness, Registry as Journals, SessionMarker};
+use kampr_journal::{FacetFold, Harness, Registry as Journals, SessionMarker, Titles};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
@@ -304,6 +304,7 @@ async fn refresh_herd(
     let mut previous = Arc::new(HerdModel::default());
     let mut mesh = peers.subscribe();
     let conversations = Conversations::default();
+    let names = Names::default();
     loop {
         // Subscribed *before* the model is built. A viewer joining while `build_model` is still
         // running would otherwise be seen by neither this round nor the wait that follows it, and
@@ -311,7 +312,7 @@ async fn refresh_herd(
         let mut changes = session_changes(&sessions);
         let journal = journals.borrow().clone();
         let available = update.borrow_and_update().clone();
-        let mut model = build_model(&sessions, &journal, &conversations, available.as_deref()).await;
+        let mut model = build_model(&sessions, &journal, &conversations, &names, available.as_deref()).await;
         // One herd, whatever host a pane is on. A peer's own nodes arrive already marked `peer`
         // and stamped with the link's measured round trip, so a pane two hops away *looks* two
         // hops away rather than quietly lagging.
@@ -449,9 +450,9 @@ impl Conversations {
         session: &SessionNode,
         info: &PaneInfo,
         live: &mut HashSet<ConversationKey>,
-    ) -> bool {
+    ) -> Option<PathBuf> {
         if !journals.serves(info.agent.as_deref()) {
-            return false;
+            return None;
         }
         let announced = crate::convo::identity(journals, &session.provider, &info.pane_id).announced;
         let key = (
@@ -470,8 +471,8 @@ impl Conversations {
         );
         live.insert(key.clone());
         match self.seen.lock().unwrap().get(&key) {
-            Some(Resolved { path: Some(path), .. }) if path.is_file() => return true,
-            Some(Resolved { path: None, at }) if at.elapsed() < CONVERSATION_RETRY => return false,
+            Some(Resolved { path: Some(path), .. }) if path.is_file() => return Some(path.clone()),
+            Some(Resolved { path: None, at }) if at.elapsed() < CONVERSATION_RETRY => return None,
             _ => {}
         }
         let path = journals
@@ -482,15 +483,14 @@ impl Conversations {
                 &info.agent_harness,
             )
             .unwrap_or_default();
-        let found = path.is_some();
         self.seen.lock().unwrap().insert(
             key,
             Resolved {
-                path,
+                path: path.clone(),
                 at: Instant::now(),
             },
         );
-        found
+        path
     }
 
     /// Working directories churn and a node runs for weeks.
@@ -506,15 +506,70 @@ impl Conversations {
     }
 }
 
+/// A title fold per transcript, kept between rebuilds.
+///
+/// **The whole-transcript read is what this exists to avoid.** The good names a session has —
+/// `ai-title`, `agent-name`, and a `custom-title.json` the operator typed — are in the transcript
+/// and nowhere else, and reading one to the end costs 1.0 ms at this machine's median transcript
+/// (958 KB of 262) and 26 ms at its largest (29 MB). Paying that per pane per rebuild is what kept
+/// the herd off them, and a herd is rebuilt on every structural event. A fold holds its byte
+/// cursor, so every look after the first costs the records the file has grown by: **1.9 us**,
+/// flat, whatever the transcript's size — beside the 34 us the marker beside it already costs.
+///
+/// Keyed on the transcript path, and pruned the way [`Conversations`] is: a `/clear` opens a new
+/// file under a new session id (#259), so the entry for the old one is dropped on the first round
+/// that stops naming it rather than kept for the weeks a node runs.
+#[derive(Default)]
+struct Names {
+    folds: Mutex<HashMap<PathBuf, Box<dyn FacetFold>>>,
+}
+
+impl Names {
+    fn title(
+        &self,
+        journals: &Journals,
+        agent: Option<&str>,
+        transcript: &Path,
+        marker: Option<&SessionMarker>,
+        live: &mut HashSet<PathBuf>,
+    ) -> Option<String> {
+        live.insert(transcript.to_path_buf());
+        let mut folds = self.folds.lock().unwrap();
+        let fold = folds
+            .entry(transcript.to_path_buf())
+            .or_insert_with(|| journals.folder(agent));
+        best_name(fold.titles(transcript, None), marker)
+    }
+
+    fn keep(&self, live: &HashSet<PathBuf>) {
+        self.folds.lock().unwrap().retain(|path, _| live.contains(path));
+    }
+}
+
+/// The conversation surface's precedence with the herd's weakest level in place of its own.
+///
+/// Manual beats generated beats named, exactly as `convo.facets` publishes it — the marker is
+/// handed to the fold as `None` and its name substituted here, because the name a harness derived
+/// for itself is a real title on the conversation and is refused on the herd ([`chosen_name`],
+/// #311). Substituting rather than overriding is the point: a derived name that reached `named`
+/// would be resolved and shown wherever a session has no title yet, which is the machine name
+/// this path already decided not to say.
+fn best_name(mut titles: Titles, marker: Option<&SessionMarker>) -> Option<String> {
+    titles.named = marker.and_then(chosen_name).or(titles.named);
+    titles.resolve().map(|title| title.text)
+}
+
 async fn build_model(
     sessions: &Sessions,
     journals: &Journals,
     conversations: &Conversations,
+    names: &Names,
     update: Option<&str>,
 ) -> HerdModel {
     let mut nodes = Vec::new();
     let mut panes = Vec::new();
     let mut live = HashSet::new();
+    let mut titled = HashSet::new();
     for session in sessions.all() {
         let health = session.provider.health();
         nodes.push(NodeEntry {
@@ -540,22 +595,38 @@ async fn build_model(
         // offline and leaves the last-known panes standing rather than emptying the herd under a
         // client that is about to get them all back.
         for info in session.registry.list_panes().await.unwrap_or_default() {
-            let has_conversation = conversations.resolves(journals, &session, &info, &mut live);
+            let transcript = conversations.resolves(journals, &session, &info, &mut live);
+            let has_conversation = transcript.is_some();
             let watchers = session.registry.watcher_count(&info.pane_id);
             // The harness's own name for the session, off the marker it writes by pid (#311) —
             // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
             // affordable once per pane per rebuild.
-            let title = journals
-                .marker(&session.provider.pane_processes(&info.pane_id))
-                .and_then(chosen_name);
-            panes.push(
-                PaneEntry::new(&session.node_id, &info, has_conversation)
-                    .with_watchers(watchers)
-                    .with_title(title),
-            );
+            let marker = journals.marker(&session.provider.pane_processes(&info.pane_id));
+            // And the name the session actually goes by, off the transcript the pane is already
+            // known to be on — folded from the byte the last rebuild reached rather than read
+            // whole. A pane with no transcript yet has only what the marker says.
+            let title = transcript
+                .as_deref()
+                .and_then(|t| names.title(journals, info.agent.as_deref(), t, marker.as_ref(), &mut titled))
+                .or_else(|| marker.as_ref().and_then(chosen_name));
+            let mut entry = PaneEntry::new(&session.node_id, &info, has_conversation)
+                .with_watchers(watchers)
+                .with_title(title);
+            // The harness's own answer beats the screen. Herdr's status comes from regexes over
+            // a pane's rendered output (#355), and its evidence buffer only records titles
+            // written *after* it attached the label — never backfilled — so a harness that
+            // titles itself too early leaves herdr publishing `idle` indefinitely at a pane
+            // whose title says working (#360). `idle` from a scrape is never evidence, only the
+            // absence of a match. This costs nothing: the marker is already in hand for the
+            // title.
+            if let Some(status) = marker.as_ref().and_then(harness_status) {
+                entry.agent_status = status;
+            }
+            panes.push(entry);
         }
     }
     conversations.keep(&live);
+    names.keep(&titled);
     HerdModel { nodes, panes }
 }
 
@@ -568,6 +639,23 @@ async fn ping(herdr: &Herdr) -> Option<f64> {
         .map(|_| at.elapsed().as_secs_f64() * 1000.0)
 }
 
+/// What the harness says it is doing, mapped onto the herd's five.
+///
+/// `waiting` is the one worth having. Herdr can reach `blocked` — its manifests carry rules for
+/// it (#355) — but only by matching a regex against the screen, and its answer when nothing
+/// matches is `idle`, published with as much confidence as a match (#360). A harness saying so
+/// itself needs no prompt to be on screen and no rule to have been written for it. `shell` is
+/// idle with a background shell task, which is idle to anyone deciding where to look. A word
+/// this does not know leaves the pane's existing status alone rather than flattening it.
+fn harness_status(marker: &SessionMarker) -> Option<AgentStatus> {
+    match marker.status.as_deref()? {
+        "busy" => Some(AgentStatus::Working),
+        "waiting" => Some(AgentStatus::Blocked),
+        "idle" | "shell" => Some(AgentStatus::Idle),
+        _ => None,
+    }
+}
+
 /// The harness's own name for a session, when it is a name somebody chose.
 ///
 /// Claude derives one the moment a session opens — the working directory's basename
@@ -576,10 +664,10 @@ async fn ping(herdr: &Herdr) -> Option<f64> {
 /// the naming template *above* the workspace label the operator did choose. A name a
 /// person set is a different thing and still wins; `nameSource` is measured as `auto`,
 /// `derived` and absent (#311), and none of those is a person.
-fn chosen_name(marker: SessionMarker) -> Option<String> {
+fn chosen_name(marker: &SessionMarker) -> Option<String> {
     match marker.name_source.as_deref() {
         Some("auto" | "derived") | None => None,
-        Some(_) => marker.name,
+        Some(_) => marker.name.clone(),
     }
 }
 
@@ -602,15 +690,193 @@ mod tests {
 
     #[test]
     fn a_name_the_harness_derived_for_itself_is_not_what_the_pane_is_called() {
-        assert_eq!(chosen_name(named("kampr-44", Some("derived"))), None);
-        assert_eq!(chosen_name(named("kampr-1f", Some("auto"))), None);
-        assert_eq!(chosen_name(named("kampr-44", None)), None);
+        assert_eq!(chosen_name(&named("kampr-44", Some("derived"))), None);
+        assert_eq!(chosen_name(&named("kampr-1f", Some("auto"))), None);
+        assert_eq!(chosen_name(&named("kampr-44", None)), None);
+    }
+
+    fn saying(status: Option<&str>) -> SessionMarker {
+        SessionMarker {
+            status: status.map(str::to_string),
+            ..named("n", Some("derived"))
+        }
+    }
+
+    /// The state herdr cannot see: a pane blocked on a prompt and a pane that has finished look
+    /// identical on screen, so a scrape calls both idle.
+    #[test]
+    fn a_harness_that_says_it_is_waiting_is_blocked_rather_than_idle() {
+        assert_eq!(
+            harness_status(&saying(Some("waiting"))),
+            Some(AgentStatus::Blocked)
+        );
+        assert_eq!(harness_status(&saying(Some("busy"))), Some(AgentStatus::Working));
+        assert_eq!(harness_status(&saying(Some("idle"))), Some(AgentStatus::Idle));
+        assert_eq!(harness_status(&saying(Some("shell"))), Some(AgentStatus::Idle));
+    }
+
+    /// A word from a newer harness than this one leaves the pane as it was. Flattening an
+    /// unrecognised state to `Unknown` would throw away herdr's answer to keep our own silence.
+    #[test]
+    fn a_status_this_node_does_not_know_leaves_the_pane_alone() {
+        assert_eq!(harness_status(&saying(Some("compacting"))), None);
+        assert_eq!(harness_status(&saying(None)), None);
+    }
+
+    fn levels(manual: Option<&str>, generated: Option<&str>, named: Option<&str>) -> Titles {
+        Titles {
+            manual: manual.map(str::to_string),
+            generated: generated.map(str::to_string),
+            named: named.map(str::to_string),
+        }
+    }
+
+    /// The cost the herd used to accept for refusing `kampr-44`: two Claude panes in one workspace
+    /// fell through to the workspace label and rendered identically. The real name was in the
+    /// transcript all along.
+    #[test]
+    fn a_name_the_harness_derived_never_displaces_the_one_the_transcript_carries() {
+        let derived = named("kampr-44", Some("derived"));
+
+        assert_eq!(
+            best_name(
+                levels(None, Some("Inferring a pane's width"), None),
+                Some(&derived)
+            )
+            .as_deref(),
+            Some("Inferring a pane's width")
+        );
+        assert_eq!(
+            best_name(levels(None, None, Some("kampr-queue")), Some(&derived)).as_deref(),
+            Some("kampr-queue"),
+            "an `agent-name` off the transcript is a name too, and it outranks nothing at all"
+        );
+        assert_eq!(
+            best_name(Titles::default(), Some(&derived)),
+            None,
+            "and with nothing in the transcript the pane is still not called what it called itself"
+        );
+    }
+
+    /// The same order `convo.facets` publishes, so the herd and the conversation cannot disagree
+    /// about what a session is called.
+    #[test]
+    fn a_title_the_operator_typed_outranks_every_title_a_machine_made() {
+        let chosen = named("the release", Some("user"));
+
+        assert_eq!(
+            best_name(
+                levels(
+                    Some("the width inference rewrite"),
+                    Some("Inferring a pane's width"),
+                    Some("kampr-fb")
+                ),
+                Some(&chosen),
+            )
+            .as_deref(),
+            Some("the width inference rewrite")
+        );
+        assert_eq!(
+            best_name(
+                levels(None, Some("Inferring a pane's width"), None),
+                Some(&chosen)
+            )
+            .as_deref(),
+            Some("Inferring a pane's width"),
+            "a name is the weakest level even when a person set it, exactly as the conversation has it"
+        );
+        assert_eq!(
+            best_name(Titles::default(), Some(&chosen)).as_deref(),
+            Some("the release")
+        );
+        assert_eq!(best_name(Titles::default(), None), None);
+    }
+
+    /// The fold is handed no marker on purpose: its own weakest level is the marker's name
+    /// whatever that name is, and a `derived` one reaching it would be resolved and shown — the
+    /// machine name this path already refuses.
+    #[test]
+    fn a_name_the_harness_derived_does_not_reach_the_fold_as_the_session_title() {
+        let home = tempfile::tempdir().expect("a home");
+        let project = home.path().join(".claude/projects/-home-u-demo");
+        std::fs::create_dir_all(&project).expect("a project");
+        let transcript = project.join("3c9e7a10-0000-4000-8000-0000000000f3.jsonl");
+        std::fs::write(&transcript, "{\"type\":\"user\",\"uuid\":\"u1\"}\n").expect("a transcript");
+        let journals = kampr_journal::registry_from_home(home.path());
+
+        assert_eq!(
+            Names::default().title(
+                &journals,
+                Some("claude"),
+                &transcript,
+                Some(&named("kampr-44", Some("derived"))),
+                &mut HashSet::new(),
+            ),
+            None,
+            "an untitled session is not called what the harness called itself"
+        );
+        assert_eq!(
+            Names::default()
+                .title(
+                    &journals,
+                    Some("claude"),
+                    &transcript,
+                    Some(&named("the release", Some("user"))),
+                    &mut HashSet::new(),
+                )
+                .as_deref(),
+            Some("the release"),
+            "and a name a person set still lands, at the level the conversation puts it"
+        );
+    }
+
+    /// A node runs for weeks and a session ends. Every `/clear` opens a transcript under a new
+    /// session id (#259), so a cache keyed on the path collects one entry per session the machine
+    /// has ever had unless the round that stops naming one drops it.
+    #[test]
+    fn a_title_fold_for_a_transcript_no_pane_is_on_any_more_is_dropped() {
+        let home = tempfile::tempdir().expect("a home");
+        let project = home.path().join(".claude/projects/-home-u-demo");
+        std::fs::create_dir_all(&project).expect("a project");
+        let transcript = project.join("3c9e7a10-0000-4000-8000-0000000000f1.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"ai-title\",\"aiTitle\":\"the width inference rewrite\"}\n",
+        )
+        .expect("a transcript");
+        let journals = kampr_journal::registry_from_home(home.path());
+
+        let names = Names::default();
+        let mut live = HashSet::new();
+        for _ in 0..2 {
+            assert_eq!(
+                names
+                    .title(&journals, Some("claude"), &transcript, None, &mut live)
+                    .as_deref(),
+                Some("the width inference rewrite")
+            );
+        }
+        assert_eq!(
+            names.folds.lock().unwrap().len(),
+            1,
+            "two looks at one transcript are one fold, or the cursor would restart every rebuild"
+        );
+
+        names.keep(&live);
+        assert_eq!(names.folds.lock().unwrap().len(), 1);
+
+        names.keep(&HashSet::new());
+        assert_eq!(
+            names.folds.lock().unwrap().len(),
+            0,
+            "a round that named no transcript at all leaves nothing behind"
+        );
     }
 
     #[test]
     fn a_name_somebody_chose_is_still_what_the_pane_is_called() {
         assert_eq!(
-            chosen_name(named("the release", Some("user"))).as_deref(),
+            chosen_name(&named("the release", Some("user"))).as_deref(),
             Some("the release")
         );
     }

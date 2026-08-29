@@ -104,6 +104,32 @@ impl Harness {
     }
 }
 
+/// The direct children of `pid`, from procfs.
+///
+/// **A harness is not always the process a pane reports.** `codex` ships a node wrapper that
+/// spawns the native binary, and it is the native one that holds the thread's writer lock — so a
+/// handle keyed on the pane's own process finds nothing without looking one level down. Empty on
+/// a host that will not answer, which is the same as having no children as far as any caller is
+/// concerned.
+pub fn children(pid: u32) -> Vec<u32> {
+    let tasks = match std::fs::read_dir(format!("/proc/{pid}/task")) {
+        Ok(tasks) => tasks,
+        Err(_) => return Vec::new(),
+    };
+    let mut found = Vec::new();
+    for task in tasks.flatten() {
+        let Ok(list) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        for child in list.split_whitespace().filter_map(|c| c.parse().ok()) {
+            if !found.contains(&child) {
+                found.push(child);
+            }
+        }
+    }
+    found
+}
+
 /// Whether a transcript was still being written after `since`.
 ///
 /// The transcript's own newest RFC 3339 stamp is what answers this, with the file's modification

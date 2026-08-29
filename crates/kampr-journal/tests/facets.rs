@@ -537,3 +537,100 @@ fn a_harness_with_no_resumable_fold_reads_its_transcript_again_rather_than_going
         "the fallback costs what a whole-transcript read costs; it does not cost the facets"
     );
 }
+
+/// The herd path needs the levels apart, not the winner.
+///
+/// A pane entry is titled from the same transcript the conversation is, but its weakest level is
+/// a different string: the herd drops a name the harness derived for itself (#311) where the
+/// conversation keeps it. Handing back a resolved [`kampr_journal::Title`] would leave that
+/// caller unable to substitute anything without re-reading the file.
+#[test]
+fn a_fold_hands_back_the_title_levels_so_a_caller_can_replace_the_weakest() {
+    let mut registry = Registry::new();
+    registry.register(std::sync::Arc::new(claude()));
+    let mut fold = registry.folder(Some("claude"));
+
+    let titles = fold.titles(&facets_transcript(FACETS_TITLED), None);
+
+    assert_eq!(titles.manual.as_deref(), Some("the width inference rewrite"));
+    assert_eq!(titles.generated.as_deref(), Some("Inferring a pane's width"));
+    assert_eq!(titles.named.as_deref(), Some("kampr-fb"));
+    assert_eq!(
+        titles.resolve().expect("a title").text,
+        "the width inference rewrite",
+        "and resolving them is the same answer the conversation surface publishes"
+    );
+}
+
+#[test]
+fn a_harness_whose_fold_can_only_be_read_whole_still_says_which_level_its_title_came_from() {
+    let mut registry = Registry::new();
+    registry.register(std::sync::Arc::new(Unresumable(claude())));
+
+    let manual = registry
+        .folder(Some("unresumable"))
+        .titles(&facets_transcript(FACETS_TITLED), None);
+    assert_eq!(manual.manual.as_deref(), Some("the width inference rewrite"));
+    assert_eq!(manual.generated, None);
+
+    let generated = registry
+        .folder(Some("unresumable"))
+        .titles(&facets_transcript(FACETS_GENERATED), None);
+    assert_eq!(generated.manual, None);
+    assert_eq!(
+        generated.generated.as_deref(),
+        Some("Probe rows and measurements")
+    );
+
+    assert_eq!(
+        registry
+            .folder(None)
+            .titles(&facets_transcript(FACETS_TITLED), None),
+        kampr_journal::Titles::default(),
+        "a pane with no harness is titled by nothing rather than by somebody else's transcript"
+    );
+}
+
+/// The constraint the herd path exists to solve: the richer titles used to cost a whole-transcript
+/// read per pane per rebuild, and a node rebuilds its herd on every structural event.
+///
+/// Proved by poisoning what has already been read. The prefix is overwritten in place — same
+/// length, so nothing shrinks and the fold has no reason to restart — with a `custom-title`
+/// record that outranks every generated one. A fold that re-read the file would answer with the
+/// poison; one that reads only the growth cannot see it.
+#[test]
+fn a_second_look_at_a_title_reads_only_what_the_transcript_has_grown_by() {
+    let poison = r#"{"type":"custom-title","customTitle":"a whole-transcript read"}"#;
+    let first = pad_to(r#"{"type":"ai-title","aiTitle":"the first look"}"#, poison.len());
+    let scratch = scratch_claude("grown-by", &[]);
+    std::fs::write(&scratch.transcript, format!("{first}\n")).expect("a transcript");
+    let mut fold = scratch.journals.folder(Some("claude"));
+
+    assert_eq!(
+        fold.titles(&scratch.transcript, None).generated.as_deref(),
+        Some("the first look")
+    );
+
+    let mut body = std::fs::read(&scratch.transcript).expect("the transcript");
+    body[..poison.len()].copy_from_slice(poison.as_bytes());
+    body.extend_from_slice(br#"{"type":"ai-title","aiTitle":"the second look"}"#);
+    body.push(b'\n');
+    std::fs::write(&scratch.transcript, body).expect("the transcript, poisoned and grown");
+
+    let titles = fold.titles(&scratch.transcript, None);
+    assert_eq!(titles.generated.as_deref(), Some("the second look"));
+    assert_eq!(
+        titles.manual, None,
+        "the poisoned prefix was already behind the cursor, and a re-read would have found it"
+    );
+}
+
+/// JSON tolerates whitespace inside an object, so a record can be padded to a byte length without
+/// changing what it says.
+fn pad_to(record: &str, len: usize) -> String {
+    let mut padded = record.to_string();
+    while padded.len() < len {
+        padded.insert(padded.len() - 1, ' ');
+    }
+    padded
+}

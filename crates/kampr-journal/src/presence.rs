@@ -45,19 +45,51 @@ pub fn holder(presence: &Path, pid: u32) -> Option<String> {
 }
 
 pub fn holder_from(presence: &Path, pid: u32, table: impl FnMut() -> Option<String>) -> Option<String> {
-    let held = seen(table, pid)?;
-    if held.is_empty() {
-        return None;
+    let mut held = held_from(presence, pid, table).into_iter();
+    let one = held.next()?;
+    held.next().is_none().then_some(one)
+}
+
+/// The newest lock file in `dir` that `pid` holds.
+///
+/// **For a harness that keeps the lock it had.** `codex` takes a second writer lock on `/new`
+/// and never releases the first, so [`holder`]'s "exactly one or nothing" would refuse every
+/// session that has used it; the newest file is the thread it moved to. `agy` moves its lock
+/// instead and wants [`holder`], which refuses a shape it has never been measured producing.
+pub fn newest_holder(dir: &Path, pid: u32) -> Option<String> {
+    held(dir, pid).into_iter().next()
+}
+
+/// Every lock file in `dir` that `pid` holds, newest file first.
+pub fn held(dir: &Path, pid: u32) -> Vec<String> {
+    held_from(dir, pid, || std::fs::read_to_string(LOCK_TABLE).ok())
+}
+
+pub fn held_from(dir: &Path, pid: u32, table: impl FnMut() -> Option<String>) -> Vec<String> {
+    let Some(locks) = seen(table, pid) else {
+        return Vec::new();
+    };
+    if locks.is_empty() {
+        return Vec::new();
     }
-    let mut found = std::fs::read_dir(presence).ok()?.flatten().filter_map(|entry| {
-        let path = entry.path();
-        let name = path.file_name()?.to_str()?.strip_suffix(".lock")?.to_string();
-        let meta = entry.metadata().ok()?;
-        let (major, minor) = device(meta.dev());
-        held.contains(&(major, minor, meta.ino())).then_some(name)
-    });
-    let one = found.next()?;
-    found.next().is_none().then_some(one)
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(std::time::SystemTime, String)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?.strip_suffix(".lock")?.to_string();
+            let meta = entry.metadata().ok()?;
+            let (major, minor) = device(meta.dev());
+            locks
+                .contains(&(major, minor, meta.ino()))
+                .then(|| Some((meta.modified().ok()?, name)))
+                .flatten()
+        })
+        .collect();
+    found.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    found.into_iter().map(|(_, name)| name).collect()
 }
 
 /// How many reads of the lock table a lock has to stay out of before it is believed absent. Two

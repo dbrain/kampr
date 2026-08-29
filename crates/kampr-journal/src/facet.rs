@@ -125,6 +125,34 @@ pub struct Compaction {
 /// grown by rather than the whole file.
 pub trait FacetFold: Send {
     fn facets(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets;
+
+    /// The title levels alone, unresolved.
+    ///
+    /// **For the caller whose weakest level is a different string.** A pane entry in the herd is
+    /// titled off the same transcript the conversation is, but it refuses a name the harness
+    /// derived for itself (#311) where the conversation keeps it — and a resolved [`Title`] gives
+    /// it no way to substitute one without reading the file again. It is also the cheaper half:
+    /// [`Self::facets`] clones a session's every timing and compaction to answer, and a title
+    /// needs none of them.
+    ///
+    /// The default reads the whole collection and puts the winner back on the level it came from,
+    /// which is what a fold with no cheaper path can honestly say.
+    fn titles(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Titles {
+        match self.facets(transcript, marker).title {
+            Some(Title {
+                text,
+                source: TitleSource::Manual,
+            }) => Titles {
+                manual: Some(text),
+                ..Titles::default()
+            },
+            Some(Title { text, .. }) => Titles {
+                generated: Some(text),
+                ..Titles::default()
+            },
+            None => Titles::default(),
+        }
+    }
 }
 
 /// A [`FacetFold`] and what was last published off it.
