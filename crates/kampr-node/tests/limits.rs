@@ -307,14 +307,19 @@ async fn only_so_many_mesh_handshakes_run_at_once() {
 }
 
 /// tungstenite will hand a 64 MiB message to whatever is reading, and `dispatch` parses every one
-/// into a `serde_json::Value`. The largest legitimate client message is a few kilobytes.
+/// into a `serde_json::Value`.
+///
+/// The ceiling is the size of the largest paste the client is allowed to offer — 8 MiB of file,
+/// base64'd — and not a byte more, so 32 MiB is well past it on any arithmetic. It used to be
+/// 1 MiB, which refused most attachments as if they were an attack
+/// (`a_paste_the_size_of_a_photograph_crosses_the_socket_rather_than_closing_it`).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_message_larger_than_the_protocol_needs_closes_the_socket() {
     let h = Harness::start(|_| {}).await;
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
-    let giant = json!({ "t": "prefs", "pane": "x", "pad": "a".repeat(2 * 1024 * 1024) });
-    // The node may reset the connection before the whole 2 MiB has been written, which refuses the
+    let giant = json!({ "t": "prefs", "pane": "x", "pad": "a".repeat(32 * 1024 * 1024) });
+    // The node may reset the connection before the whole body has been written, which refuses the
     // message just as surely as reading it and closing does. Under load it usually does.
     let refused_mid_write = socket
         .send(tungstenite::Message::text(giant.to_string()))
@@ -322,7 +327,7 @@ async fn a_message_larger_than_the_protocol_needs_closes_the_socket() {
         .is_err();
     assert!(
         refused_mid_write || closed(&mut socket, 10).await,
-        "a 2 MiB message reached the JSON parser instead of being refused"
+        "a 32 MiB message reached the JSON parser instead of being refused"
     );
 }
 

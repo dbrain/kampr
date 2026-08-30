@@ -5844,6 +5844,71 @@ async fn a_paste_lands_on_the_node_and_its_path_is_typed_into_the_pane() {
     );
 }
 
+/// **A screenshot is not a few kilobytes, and the socket has to be able to carry one.**
+///
+/// Every other client message is small — a `prefs` blob is capped at 2 KiB — so the socket's
+/// message ceiling was set at 1 MiB to keep a stranger from handing the JSON parser something
+/// enormous. `paste` is the one message that is legitimately large: the client refuses at 8 MiB
+/// and says so on screen, and everything between the two ceilings was accepted by the client,
+/// encoded, sent, and then killed the connection. The client had already said "sent", because
+/// there is no acknowledgement for a paste — so an attachment simply never arrived and nothing
+/// anywhere said why.
+///
+/// 2 MiB is a phone photograph, and above the old ceiling by enough that no rounding reaches it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paste_the_size_of_a_photograph_crosses_the_socket_rather_than_closing_it() {
+    let h = harness!("paste-big");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+
+    let mut body = b"\x89PNG\r\n\x1a\n".to_vec();
+    body.resize(2 * 1024 * 1024, b'k');
+    send(
+        &mut socket,
+        json!({
+            "t": "paste",
+            "pane": pane,
+            "b64": base64::engine::general_purpose::STANDARD.encode(&body),
+            "name": "photo",
+        }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut typed: Option<String> = None;
+    while tokio::time::Instant::now() < deadline && typed.is_none() {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+            continue;
+        }
+        let painted = message.to_string();
+        if let Some(at) = painted.find("photo-") {
+            typed = Some(painted[at..].chars().take(64).collect());
+        }
+    }
+    typed.expect("a 2 MiB paste never reached the pane");
+
+    let dir = h.node.state_dir.join("pastes");
+    let written: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("no paste directory at {dir:?}: {e}"))
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(written.len(), 1, "expected one pasted file in {dir:?}");
+    assert_eq!(
+        std::fs::read(&written[0]).expect("the pasted file").len(),
+        body.len(),
+        "the bytes on disk are not the bytes that were sent"
+    );
+}
+
 /// **A conversation must not be torn down because the agent went from busy to idle.**
 ///
 /// The pump decides a conversation has moved by comparing what identifies the pane's session, and

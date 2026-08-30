@@ -19,6 +19,7 @@ pub mod manage;
 pub mod mesh;
 pub mod outbox;
 pub mod paste;
+pub mod pasted;
 pub mod pending;
 pub mod push;
 pub mod relay;

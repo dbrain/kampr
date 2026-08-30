@@ -1,5 +1,8 @@
 package dev.kampr.shared.platform
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -20,3 +23,10 @@ actual suspend fun pickFile(): PickedFile? = withContext(Dispatchers.IO) {
         PickedFile(file.name, URLConnection.guessContentTypeFromName(file.name), bytes)
     }.getOrNull()
 }
+
+// AWT has no paste event: a desktop's clipboard can only be read when something asks, and nothing
+// here is told that a paste happened. The chooser above is the whole of the desktop's answer.
+actual suspend fun pastedFile(): PickedFile? = null
+
+@Composable
+actual fun Modifier.acceptsPastedFiles(): Modifier = this

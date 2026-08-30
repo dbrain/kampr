@@ -95,7 +95,7 @@ impl Locator {
     pub fn decode(id: &str) -> Result<Self, JournalError> {
         match Source::decode(id)? {
             Source::Record(locator) => Ok(locator),
-            Source::File(_) | Source::Diff(_) => Err(refuse()),
+            Source::File(_) | Source::Diff(_) | Source::Paste(_) => Err(refuse()),
         }
     }
 }
@@ -108,6 +108,16 @@ const FILE_TAG: &str = "file";
 
 /// The same path, asked about rather than read: what `git` says has changed in it since HEAD.
 const DIFF_TAG: &str = "diff";
+
+/// A file the **node itself** wrote, out of a paste a client sent it.
+///
+/// The third two-field form, and the only one of them that is not gated as typing is. A `file` id
+/// names any path on the machine and nothing minted it, which is why it is answered only for a
+/// device that may type; this one can only ever name a file directly inside the node's own pastes
+/// directory, put there minutes ago by a client, and the node checks that before it reads a byte.
+/// Looking at a screenshot somebody pasted into an agent session is reading — the same argument
+/// that lets a read-only device fetch a record's attachment.
+const PASTE_TAG: &str = "paste";
 
 /// A plain path on the node's filesystem, with no transcript behind it and no working directory
 /// to resolve against.
@@ -232,6 +242,8 @@ pub enum Source {
     /// and for the same reason: it reads a path on the node, and a device that can type into a
     /// terminal can already run `git diff` there.
     Diff(FileRef),
+    /// One of this node's own pastes, and nothing else — see [`PASTE_TAG`].
+    Paste(FileRef),
 }
 
 impl Source {
@@ -240,6 +252,7 @@ impl Source {
             Self::Record(locator) => locator.encode(),
             Self::File(file) => file.encode(),
             Self::Diff(file) => file.encode_as(DIFF_TAG),
+            Self::Paste(file) => file.encode_as(PASTE_TAG),
         }
     }
 
@@ -260,6 +273,7 @@ impl Source {
             })),
             [tag, path] if *tag == FILE_TAG && !path.is_empty() => Ok(Self::File(FileRef::new(*path))),
             [tag, path] if *tag == DIFF_TAG && !path.is_empty() => Ok(Self::Diff(FileRef::new(*path))),
+            [tag, path] if *tag == PASTE_TAG && !path.is_empty() => Ok(Self::Paste(FileRef::new(*path))),
             _ => Err(refuse()),
         }
     }

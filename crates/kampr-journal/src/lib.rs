@@ -37,6 +37,7 @@ pub use model::{Attachment, Block, Page, Role, ToolState, Turn, TurnKind};
 pub use process::{Harness, PaneProcess};
 pub use root::TranscriptRoot;
 pub use sub::SubRef;
+pub use summary::marker_of;
 pub use tail::{FileJournal, Journal, TranscriptParser};
 
 /// Registers whichever harnesses have a transcript root on this machine. A missing root is not

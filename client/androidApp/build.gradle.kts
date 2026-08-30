@@ -230,6 +230,12 @@ dependencies {
     implementation(libs.compose.foundation)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    // The one question about a paste on Android that no host test can reach: whether the platform
+    // routes a real clipboard image to `contentReceiver` (#369). It needs a device and a Compose
+    // tree, so it needs the instrumented harness.
+    androidTestImplementation(libs.compose.ui.test)
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
 
 // `./gradlew :androidApp:publishToKobup`. The helper reads .kobup.json and version.properties

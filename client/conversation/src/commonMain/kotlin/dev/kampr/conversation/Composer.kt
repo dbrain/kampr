@@ -12,11 +12,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -31,10 +32,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.platform.LocalHardKeyboard
+import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.GlyphTarget
@@ -101,19 +102,33 @@ fun Composer(
     // and switching to the terminal view is exactly what takes this out of the composition — so a
     // half-written reply was lost to a glance at the pane it was about. The caret goes to the end,
     // which is where somebody returning to their own sentence wants it.
-    var value by remember { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
+    //
+    // A plain `remember` and **not** `rememberTextFieldState`, whose store is `rememberSaveable`:
+    // this composable is not keyed by pane, so a saved buffer restored into it is the previous
+    // pane's half-written reply appearing in this one's box.
+    val value = remember { TextFieldState(draft, TextRange(draft.length)) }
+    // **Reported inside the edit, and it has to be.** The two other places to put this are both a
+    // frame late — a `snapshotFlow` in a `LaunchedEffect` and a `SideEffect` on composition alike
+    // — and the frame they are late by is the one where the operator switches to the terminal,
+    // taking this composable and its unreported draft out of the composition. That is the loss
+    // this seam exists to prevent, so the report happens where the old `onValueChange` did.
+    //
+    // An input transformation does not see `state.edit`, which is deliberate elsewhere
+    // (`FieldTextInput`) and is why the three edits this file makes report for themselves.
+    val report = remember(onDraft) { InputTransformation { onDraft(asCharSequence().toString()) } }
+    val typed = value.text.toString()
     // A fixed radius and not `pill`, which is 999 dp and therefore always half the height of
     // whatever it is put on. That reads as a chip on one line of reply and as an oval by four,
     // which is the shape this box spends most of its life in. The send button beside it keeps the
     // pill, because a circle is what it is meant to be at any size.
     val field = RoundedCornerShape(tokens.radii.lg)
-    val ready = enabled && value.text.isNotBlank()
+    val ready = enabled && typed.isNotBlank()
     val hard = LocalHardKeyboard.current
 
     fun submit() {
         if (!ready) return
-        onSend(value.text.trimEnd())
-        value = TextFieldValue()
+        onSend(typed.trimEnd())
+        value.clearText()
         onDraft("")
     }
 
@@ -121,9 +136,12 @@ fun Composer(
     // shift and return inserts a line on its own and alt and return inserts nothing at all. Doing
     // both here is what makes the two modifiers the same key to whoever is holding one.
     fun newline() {
-        val at = value.selection
-        value = TextFieldValue(value.text.replaceRange(at.min, at.max, "\n"), TextRange(at.min + 1))
-        onDraft(value.text)
+        value.edit {
+            val at = selection.min
+            replace(selection.min, selection.max, "\n")
+            placeCursorBeforeCharAt(at + 1)
+        }
+        onDraft(value.text.toString())
     }
 
     // Return sends, and a modifier with it writes the second line — which is what every agent CLI
@@ -155,13 +173,25 @@ fun Composer(
     // this box before the pane is asked to let go of them — so the worst a mistimed press can cost
     // is a paste back, and the pane's own harness has an undo for it besides.
     fun takeOver(line: DeskLine) {
-        val merged = line.text + value.text
-        value = TextFieldValue(merged, TextRange(merged.length))
-        onDraft(merged)
+        value.edit {
+            replace(0, 0, line.text)
+            placeCursorBeforeCharAt(length)
+        }
+        onDraft(value.text.toString())
         onTakeOver(line)
     }
 
-    Column(modifier.fillMaxWidth().background(tokens.color.bar).edgeTop().readingOrder(1f)) {
+    // On the whole column rather than on the field: a `contentReceiver` on a parent serves every
+    // text field under it, and it is a drag-and-drop target in its own right, so a file dropped
+    // anywhere on the reply bar lands the same way a pasted one does.
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(tokens.color.bar)
+            .acceptsPastedFiles()
+            .edgeTop()
+            .readingOrder(1f)
+    ) {
         DeskStrip(desk, agent, enabled, { desk?.let(::takeOver) })
         HandoverLine(handover, agent)
         Row(
@@ -196,7 +226,7 @@ fun Composer(
                     .edge(tokens.card, field)
                     .padding(horizontal = FIELD_INSET_X, vertical = FIELD_INSET_Y),
             ) {
-                if (value.text.isEmpty()) {
+                if (typed.isEmpty()) {
                     KText(
                         if (enabled) "Reply to ${agent ?: "the agent"}…" else "read-only device",
                         tokens.type.body,
@@ -204,12 +234,9 @@ fun Composer(
                     )
                 }
                 BasicTextField(
-                    value = value,
-                    onValueChange = {
-                        value = it
-                        onDraft(it.text)
-                    },
+                    state = value,
                     enabled = enabled,
+                    inputTransformation = report,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 96.dp)

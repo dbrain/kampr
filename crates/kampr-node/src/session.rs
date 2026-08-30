@@ -620,6 +620,7 @@ impl Session {
                 .or_insert_with(convo::held)
                 .clone();
             tasks.push(tokio::spawn(convo::pump_convo(ConvoCtx {
+                state_dir: self.node.state_dir.clone(),
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
                 herd: self.node.subscribe_herd(),
@@ -729,7 +730,12 @@ impl Session {
                 .error(ErrorCode::NotFound, "this pane has no conversation", Some(pane));
             return;
         };
-        match self.node.journals().open_sub(id, &transcript) {
+        match self
+            .node
+            .journals()
+            .open_sub(id, &transcript)
+            .map(|opened| crate::pasted::Shown::over(opened, &self.node.state_dir))
+        {
             Ok(mut journal) => {
                 if journal.poll().is_err() {
                     self.wire

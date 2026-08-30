@@ -1,0 +1,52 @@
+{
+  "browser": "Chrome/151.0.7922.137",
+  "seeded": {
+    "text": "ok",
+    "image": "DataError: Failed to execute 'write' on 'Clipboard': Failed to read or decode ClipboardItemData for type image/png.",
+    "copyCommand": "refused"
+  },
+  "readings": {
+    "editable": {
+      "activeElement": "editable/-",
+      "seen": [
+        {
+          "target": "editable",
+          "composed": true,
+          "phase": 1,
+          "kinds": [
+            "string:text/plain"
+          ],
+          "files": 0
+        }
+      ]
+    },
+    "bare": {
+      "activeElement": "bare/-",
+      "seen": [
+        {
+          "target": "bare",
+          "composed": true,
+          "phase": 1,
+          "kinds": [
+            "string:text/plain"
+          ],
+          "files": 0
+        }
+      ]
+    },
+    "shadow": {
+      "activeElement": "host/CANVAS",
+      "seen": [
+        {
+          "target": "host",
+          "composed": true,
+          "phase": 1,
+          "kinds": [
+            "string:text/plain"
+          ],
+          "files": 0
+        }
+      ]
+    }
+  }
+}

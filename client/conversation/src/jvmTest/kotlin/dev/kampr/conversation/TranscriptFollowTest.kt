@@ -27,6 +27,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
@@ -299,9 +301,16 @@ class TranscriptFollowTest {
         onAllNodesWithContentDescription(TO_END).assertCountEquals(0)
     }
 
+    // **Not "the only scrollable on the screen"**, which it stopped being when the reply box
+    // became a `TextFieldState` field: that one publishes a scroll action of its own, so the
+    // selector matched two nodes and injected touch into neither. The transcript is the scrollable
+    // that is a *list of turns*, and a collection is what says so.
+    private fun ComposeUiTest.transcript() =
+        onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo))
+
     private fun ComposeUiTest.scrollBack() {
         repeat(2) {
-            onNode(hasScrollAction()).performTouchInput {
+            transcript().performTouchInput {
                 down(centerLeft + Offset(4f, 0f))
                 repeat(8) { moveBy(Offset(0f, 60f)) }
                 up()

@@ -43,6 +43,7 @@ import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.platform.filePickAvailable
+import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
@@ -153,6 +154,13 @@ fun TerminalView(
     // write — and that error is quiet everywhere else by design, so this is the only place on this
     // surface it can be said.
     LaunchedEffect(pane.refusal) { session.handover = handoverAfter(session.handover, pane.refusal) }
+    // The same handover as the attach button's, reached by the gesture a desk actually uses. A
+    // clipboard with no file on it never gets here, so ctrl+v of ordinary text still goes to the
+    // pane the way it always has.
+    PastedFiles(!io.readOnly) { picked ->
+        session.handover = Handover.Going(handoverName(picked))
+        session.handover = handoverOf(pane, io, picked)
+    }
 
     val stillness = LocalReduceMotion.current
     var cursorOn by remember { mutableStateOf(true) }

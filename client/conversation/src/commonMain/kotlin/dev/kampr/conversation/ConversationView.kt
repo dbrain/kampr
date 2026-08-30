@@ -46,6 +46,7 @@ import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.platform.PickedFile
 import dev.kampr.shared.platform.filePickAvailable
+import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
@@ -150,6 +151,10 @@ fun ConversationView(
     // write — and that error is quiet everywhere else by design, so this is the only place it can
     // be said.
     LaunchedEffect(pane.refusal) { handover = handoverAfter(handover, pane.refusal) }
+    // The same handover as the attach button's, reached by the gesture a desk actually uses. A
+    // clipboard with no file on it never gets here, so pasting words into the reply box is
+    // untouched.
+    PastedFiles(!io.readOnly) { picked -> handover = handoverOf(pane, io, picked) }
     val stillness = LocalReduceMotion.current
     LaunchedEffect(hits, focus) {
         val target = hits.getOrNull(focus) ?: return@LaunchedEffect

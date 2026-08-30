@@ -1,6 +1,10 @@
 [versions]
 kotlin = "2.4.10"
 compose = "1.11.1"
+# The androidx Compose that Compose Multiplatform above resolves to. Only one artifact needs it by
+# name: `ui-test-manifest` has no multiplatform variant, and without it an instrumented Compose test
+# has no Activity to launch into. Check it against `:androidApp:dependencies` when `compose` moves.
+androidxCompose = "1.11.2"
 agp = "9.3.1"
 ktor = "3.5.2"
 coroutines = "1.11.0"
@@ -23,6 +27,8 @@ compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", v
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
+compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version.ref = "androidxCompose" }
 kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinx-browser" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }

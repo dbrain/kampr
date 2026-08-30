@@ -84,6 +84,26 @@ pub fn serve_diff(file: &FileRef, home: &Path) -> Response {
     }
 }
 
+/// The bytes of one of this node's own pastes, and nothing else.
+///
+/// **The containment check is the whole of the gate.** A `paste` id is answered for a read-only
+/// device — looking at a screenshot somebody pasted into an agent session is reading — which is
+/// only safe while the id cannot name anything but a file this node wrote out of a client's paste.
+/// Both paths are canonicalised before they are compared, so a `..` in the id and a symlink out of
+/// the directory are the same refusal as a path that was never in it. A file directly *in* the
+/// directory: nothing writes a subdirectory there, so a nested path is a path nothing minted.
+pub fn serve_paste(file: &FileRef, pastes: &Path) -> Response {
+    let (Ok(dir), Ok(path)) = (std::fs::canonicalize(pastes), std::fs::canonicalize(&file.path)) else {
+        return missing();
+    };
+    if path.parent() != Some(dir.as_path()) {
+        return missing();
+    }
+    // The home is only what a leading `~/` resolves against and a path this node minted is
+    // absolute, so there is nothing here for one to expand.
+    respond(FileRef::new(path).fetch(Path::new("")))
+}
+
 fn respond(found: Result<Fetched, JournalError>) -> Response {
     match found {
         Ok(found) => body(found),

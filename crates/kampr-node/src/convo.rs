@@ -201,6 +201,9 @@ type Describe = Box<dyn Fn(&str) -> Option<SessionMarker> + Send>;
 
 pub struct ConvoCtx {
     pub journals: Arc<Journals>,
+    /// This node's own, and the only reason the pump needs it: `pastes/` under it is what tells a
+    /// path in the operator's own turn from a path they typed (`pasted::Shown`).
+    pub state_dir: PathBuf,
     pub panes: Arc<PaneRegistry>,
     pub herd: watch::Receiver<Arc<HerdModel>>,
     pub identity: Look,
@@ -221,6 +224,7 @@ pub struct ConvoCtx {
 pub async fn pump_convo(ctx: ConvoCtx) {
     let ConvoCtx {
         journals,
+        state_dir,
         panes,
         mut herd,
         identity,
@@ -305,7 +309,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 
         if due && opened.is_none() {
             due = false;
-            match resolve(&journals, &now) {
+            match resolve(&journals, &state_dir, &now) {
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
@@ -456,7 +460,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             _ = retry.tick(), if opened.is_none() && misses < FAST_RETRIES => due = true,
             _ = recheck.tick() => {
-                let latest = resolve(&journals, &now);
+                let latest = resolve(&journals, &state_dir, &now);
                 if latest.as_deref().map(Journal::path) != opened.as_deref() {
                     opened = None;
                     release(&journal, &held);
@@ -540,8 +544,8 @@ fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str, look: &Look, lo
     Handle { agent, cwd, identity }
 }
 
-fn resolve(journals: &Journals, handle: &Handle) -> Option<Box<dyn Journal>> {
-    journals
+fn resolve(journals: &Journals, state_dir: &Path, handle: &Handle) -> Option<Box<dyn Journal>> {
+    let opened = journals
         .open(
             handle.agent.as_deref(),
             handle.identity.announced.as_ref(),
@@ -549,7 +553,10 @@ fn resolve(journals: &Journals, handle: &Handle) -> Option<Box<dyn Journal>> {
             &handle.identity.harness,
         )
         .ok()
-        .flatten()
+        .flatten()?;
+    // Wrapped here rather than at each send: every turn this pane will ever put on the wire comes
+    // out of this journal, so a paste shown on one path and not another is not expressible.
+    Some(crate::pasted::Shown::over(opened, state_dir))
 }
 
 /// Lets go of the open transcript and records what the client is left holding from it.

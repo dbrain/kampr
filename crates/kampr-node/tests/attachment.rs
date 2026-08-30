@@ -593,6 +593,49 @@ async fn a_read_only_device_is_still_answered_for_a_record_id() {
     );
 }
 
+/// **A paste is a third form, and it deliberately carries the record gate rather than the path
+/// one.** It names a file inside this node's own pastes directory or it names nothing, which the
+/// route proves before it reads a byte — so a device you half-trust with a screen may look at the
+/// screenshot somebody pasted, and the same device asking for the same file under a `file` id is
+/// still refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_device_may_see_a_paste_and_still_may_not_read_the_path_it_sits_at() {
+    let h = Harness::start().await;
+    let pastes = h.node.state_dir.join("pastes");
+    std::fs::create_dir_all(&pastes).expect("a pastes directory");
+    let path = pastes.join("shot-1756.png");
+    std::fs::write(&path, png_bytes()).expect("a pasted file");
+    let pane = format!("{}/w1:p1", h.node.node_id());
+    let readonly = format!("Bearer {}", h.token_for(Role::Readonly).await);
+
+    let pasted = kampr_journal::Source::Paste(FileRef::new(&path)).encode();
+    let response = h
+        .get_raw(
+            &format!("/api/attachment/{pane}/{pasted}"),
+            &[("Authorization", readonly.as_str())],
+        )
+        .await;
+    let head = String::from_utf8_lossy(&response[..response.len().min(400)]).to_string();
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "a read-only device was refused its own pane's paste: {head}"
+    );
+    assert!(head.contains("content-type: image/png"), "{head}");
+    assert!(response.ends_with(&png_bytes()));
+
+    let as_a_path = FileRef::new(&path).encode();
+    let status = h
+        .get(
+            &format!("/api/attachment/{pane}/{as_a_path}"),
+            &[("Authorization", readonly.as_str())],
+        )
+        .await;
+    assert!(
+        status.contains("403"),
+        "the paste form must not have loosened the path form: {status}"
+    );
+}
+
 /// What the ceiling actually costs the local route, which is the measurement behind not splitting
 /// this into a streamed second path (probe #258). Run it with `--nocapture` to read the numbers.
 #[tokio::test(flavor = "multi_thread")]

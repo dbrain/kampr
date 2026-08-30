@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>where a paste lands</title>
+<body>
+<div id="editable" contenteditable="true" style="width:200px;height:40px;border:1px solid #000">edit me</div>
+<canvas id="bare" tabindex="0" width="200" height="60" style="border:1px solid #00f"></canvas>
+<div id="host"></div>
+<script>
+// The Kampr shape: Compose renders into a shadow root and the canvas inside it carries
+// tabindex="0" (probe #307). Whether a clipboard event crosses that boundary is half the question.
+const root = document.getElementById('host').attachShadow({ mode: 'open' });
+const shadowCanvas = document.createElement('canvas');
+shadowCanvas.setAttribute('tabindex', '0');
+shadowCanvas.width = 200; shadowCanvas.height = 60;
+shadowCanvas.style.border = '1px solid #0a0';
+root.appendChild(shadowCanvas);
+window.__shadowCanvas = shadowCanvas;
+
+window.__seen = [];
+window.addEventListener('paste', function (event) {
+  const data = event.clipboardData;
+  const kinds = [];
+  if (data) for (let i = 0; i < data.items.length; i++) kinds.push(data.items[i].kind + ':' + data.items[i].type);
+  window.__seen.push({
+    target: event.target && (event.target.id || event.target.tagName),
+    composed: event.composed,
+    phase: event.eventPhase,
+    kinds: kinds,
+    files: data ? data.files.length : -1,
+  });
+}, true);
+
+window.__focus = function (which) {
+  window.__seen = [];
+  const node = which === 'shadow' ? shadowCanvas : document.getElementById(which);
+  node.focus();
+  const active = document.activeElement;
+  return (active && (active.id || active.tagName)) + '/' +
+    (active && active.shadowRoot && active.shadowRoot.activeElement
+      ? active.shadowRoot.activeElement.tagName : '-');
+};
+</script>
+</body>

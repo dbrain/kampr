@@ -49,10 +49,18 @@ const CSP: &str = "default-src 'self'; \
 
 const TOKEN_PROTOCOL: &str = "kampr.token.";
 
-/// The largest client message the node will read. The wire protocol's biggest legitimate one is a
-/// `prefs` blob, capped at 2 KiB by the store; tungstenite's own default is 64 MiB, and every
-/// message is parsed into a `serde_json::Value` before anything looks at what it is.
-const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// The largest client message the node will read.
+///
+/// Every message but one is small — a `prefs` blob is capped at 2 KiB by the store — and
+/// tungstenite's own default of 64 MiB is a `serde_json::Value` a stranger can ask this node to
+/// build. The exception is `paste`, which carries a file the operator chose, and it is the reason
+/// this may not simply be a round number: the client refuses at [`kampr_journal::attach::MAX_BYTES`]
+/// and *says so on screen*, so everything under that must fit through here. A 1 MiB ceiling meant
+/// every attachment between the two was encoded, sent, and killed the socket mid-write — with the
+/// composer already reading "sent", because a paste has no acknowledgement to withdraw.
+///
+/// Base64 is four bytes for every three, and the envelope around it is a pane id and a filename.
+const MAX_MESSAGE_BYTES: usize = (kampr_journal::attach::MAX_BYTES as usize).div_ceil(3) * 4 + 64 * 1024;
 
 /// The same bound for `/mesh`, which cannot be the same number.
 ///
@@ -617,6 +625,14 @@ async fn attachment(
         Ok(kampr_journal::Source::Diff(file)) => Some((file, true)),
         _ => None,
     };
+    // **Deliberately not a path form.** A `paste` id names a file inside this node's own pastes
+    // directory or it names nothing at all, and `serve_paste` proves that before it reads a byte —
+    // so it carries the *record* gate rather than the typing one, and the device that may only
+    // look can look at the screenshot somebody pasted.
+    let pasted = match kampr_journal::Source::decode(&id) {
+        Ok(kampr_journal::Source::Paste(file)) => Some(file),
+        _ => None,
+    };
     if path_form.is_some()
         && let Some(response) = auth.refused(&node, "api.attachment.path")
     {
@@ -632,6 +648,10 @@ async fn attachment(
     // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
     // of megabytes of synchronous reads on a tokio worker for a request any device may make.
     let served = tokio::task::spawn_blocking(move || {
+        if let Some(file) = pasted {
+            let dir = node.state_dir.join("pastes");
+            return Some(attach::serve_paste(&file, &dir));
+        }
         if let Some((file, diff)) = path_form {
             let home = node.config.journal_home();
             return Some(match diff {
