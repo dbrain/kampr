@@ -11,6 +11,9 @@ coroutines = "1.11.0"
 serialization = "1.11.0"
 kotlinx-browser = "0.5.0"
 androidx-activityCompose = "1.13.0"
+# The dispatcher Compose's BackHandler registers into. Only the test needs it by name: it stands in
+# for the window so a test can press the device back button. Pinned to what `ui-backhandler` resolves.
+navigationevent = "1.0.1"
 android-compileSdk = "37"
 android-minSdk = "26"
 android-targetSdk = "37"
@@ -25,6 +28,7 @@ zxing = "3.5.4"
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
+compose-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "compose" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
 compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose" }
@@ -35,6 +39,7 @@ kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
+navigationevent = { module = "androidx.navigationevent:navigationevent", version.ref = "navigationevent" }
 androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-testJunit" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-testRunner" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }

@@ -45,6 +45,7 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.ui)
+            implementation(libs.compose.ui.backhandler)
             implementation(libs.compose.components.resources)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
@@ -60,6 +61,7 @@ kotlin {
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.ui.test)
+            implementation(libs.navigationevent)
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)

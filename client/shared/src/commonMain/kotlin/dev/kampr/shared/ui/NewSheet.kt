@@ -20,7 +20,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.paneTitle
@@ -61,6 +63,7 @@ object NoAgentArgs : AgentArgs {
     override fun remember(kind: String, text: String?) = Unit
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun NewSheet(
     breakpoint: Breakpoint,
@@ -199,6 +202,11 @@ fun NewSheet(
         Step.Node -> "" to null
     }
 
+    // Deeper than the sheet's own handler in `SystemBack`, so this is the one that answers while
+    // a step is open: back walks the sheet's ladder before it closes the sheet.
+    val stepBack = { step = Step.Menu; refusal = null }
+    BackHandler(enabled = step != Step.Menu, onBack = stepBack)
+
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader(
             title = when (step) {
@@ -210,7 +218,7 @@ fun NewSheet(
                 Step.Node -> "Machine"
             },
             subtitle = listOfNotNull("on ${node.name}", pane?.workspace).joinToString(" · "),
-            onBack = if (step == Step.Menu) null else ({ step = Step.Menu; refusal = null }),
+            onBack = if (step == Step.Menu) null else stepBack,
             onClose = onDismiss,
             compact = breakpoint == Breakpoint.Landscape,
         )

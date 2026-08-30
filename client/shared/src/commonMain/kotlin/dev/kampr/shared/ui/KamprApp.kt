@@ -270,6 +270,8 @@ internal fun AppScaffold(
         }
     }
 
+    SystemBack(state, breakpoint)
+
     fun answer(paneId: String, key: String) {
         state.connection.send(ClientMsg.Answer(paneId, key))
     }

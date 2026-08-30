@@ -7,6 +7,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventDispatcherOwner
+import androidx.navigationevent.NavigationEventInput
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
@@ -61,4 +64,28 @@ object AllowManage : ManageIo {
     override val enabled = true
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) = Unit
+}
+
+// The window's own back button, as Android delivers it: a tap with no predictive drag in front of
+// it. `claimed` is the signal the platform itself acts on — with nothing in the composition
+// claiming back, the gesture goes straight past the app and finishes the activity, which is the
+// whole of the report this harness exists for.
+private class BackButton : NavigationEventInput() {
+    var claimed = false
+        private set
+
+    override fun onHasEnabledHandlersChanged(hasEnabledHandlers: Boolean) {
+        claimed = hasEnabledHandlers
+    }
+
+    fun press() = dispatchOnBackCompleted()
+}
+
+class SystemBackWindow : NavigationEventDispatcherOwner {
+    override val navigationEventDispatcher = NavigationEventDispatcher()
+    private val button = BackButton().also { navigationEventDispatcher.addInput(it) }
+
+    val claimed: Boolean get() = button.claimed
+
+    fun press() = button.press()
 }
