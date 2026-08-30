@@ -44,6 +44,7 @@ fun SelectionLayer(
     onAnchor: (Offset) -> Unit,
     onHead: (Offset) -> Unit,
     onCopy: () -> Unit,
+    onPaste: (() -> Unit)?,
     onBlock: () -> Unit,
     block: Boolean,
 ) {
@@ -74,6 +75,21 @@ fun SelectionLayer(
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             KText("Copy", tokens.type.buttonSmall, tokens.color.text)
+        }
+        // The terminal's context menu is this pill, and paste is what a long press on a terminal is
+        // for. Absent rather than present-and-refusing on a read-only device, like every other
+        // write affordance. It is not about the selection — a terminal has nothing to replace —
+        // so it sits beside Copy rather than acting on what Copy would take.
+        if (onPaste != null) {
+            Box(
+                Modifier
+                    .touchable()
+                    .action("Paste the clipboard into the pane", onPaste)
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                KText("Paste", tokens.type.buttonSmall, tokens.color.text)
+            }
         }
         Box(
             Modifier

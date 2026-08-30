@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersPhrase
+import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.platform.filePickAvailable
 import dev.kampr.shared.platform.PastedFiles
@@ -145,6 +146,9 @@ fun TerminalView(
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
     @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
+    // Reading is the direction that deprecated clipboard cannot do: its wasm actual is a hard-coded
+    // null, so a Paste wired to it would be a button that silently does nothing on the web.
+    val readClipboard = LocalClipboardText.current
     val uris = LocalUriHandler.current
     val view = session.view
     val ground = palette.background(pane.styles[0])
@@ -557,6 +561,26 @@ fun TerminalView(
                 onCopy = {
                     clipboard.setText(AnnotatedString(logical.copy(selection)))
                     view.selection = null
+                },
+                // Bracketed by `InputSink.paste`, so a multi-line paste reaches a shell as one
+                // block rather than executing line by line (#9), and inspected by the guard on the
+                // way past like anything else that arrives carrying its own Enter. The pill goes
+                // first: the read is what raises Android's clipboard notice, and leaving the pill
+                // up under it reads as a press that did nothing.
+                onPaste = if (io.readOnly) {
+                    null
+                } else {
+                    {
+                        view.selection = null
+                        scope.launch {
+                            val text = readClipboard()
+                            if (text.isNullOrEmpty()) {
+                                session.handover = Handover.Refused("Nothing on the clipboard to paste.")
+                            } else {
+                                sink.paste(text)
+                            }
+                        }
+                    }
                 },
                 onBlock = {
                     view.blockSelect = !view.blockSelect
