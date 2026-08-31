@@ -5,6 +5,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
@@ -29,7 +30,22 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import dev.kampr.terminal.PaneSession
+import kotlinx.coroutines.flow.drop
 
+// What the buffer is *for*, beyond never being empty: a soft keyboard reads the line back out of
+// it — the composing region, the suggestion strip and the correction it will type if the operator
+// accepts one all come from what it can see in front of the cursor. So it has to follow the pane's
+// line rather than only ever grow. It did only ever grow: the key path consumes a backspace, so
+// the pane lost a character and the editor kept it, and Gboard went on offering a correction to a
+// word that had not been on the pane for three keystrokes.
+//
+// Two rules keep them in step, and both write through `state.edit`, which the input transformation
+// does not see — so nothing here is ever typed at the pane. A backspace takes one character off.
+// Anything else that reaches the pane without passing through this buffer — the Enter that ran the
+// command, an escape, an arrow, a cap on the key row, a paste — puts it back to bare padding,
+// because the caret has moved off the line the buffer was mirroring and no part of it is true any
+// more.
+//
 // A run of spaces kept in front of the cursor so the field is never empty. A soft keyboard chooses
 // between a key event and a deletion for backspace depending on whether it can see anything there,
 // and only one of the two ever carried a payload; with padding both do, and the key path consumes
@@ -71,6 +87,16 @@ fun FieldTextInput(
     val state = rememberTextFieldState(PAD, TextRange(PAD_LENGTH))
     val diff = remember(sink) { DiffToPane(sink) }
 
+    // Only when there is a line to let go of. Re-seeding the field is the one write here the IME
+    // did not ask for, it costs a `restartInput`, and a restarted Gboard drops to its letters page
+    // and abandons any keystroke in flight on the connection — so an arrow pressed at an empty
+    // prompt, which is most of them, must not pay for one.
+    val letGo = { if (state.text.toString() != PAD) state.setTextAndPlaceCursorAtEnd(PAD) }
+
+    LaunchedEffect(sink, state) {
+        snapshotFlow { sink.offField }.drop(1).collect { letGo() }
+    }
+
     // Focus alone does not raise the IME on Android; the controller is what actually shows it.
     LaunchedEffect(session.focusRequests, session.keyboardOpen, enabled) {
         if (enabled && session.keyboardOpen) {
@@ -91,7 +117,27 @@ fun FieldTextInput(
         state = state,
         modifier = modifier
             .focusRequester(focus)
-            .onPreviewKeyEvent { event -> enabled && handleKeyEvent(event, sink) },
+            .onPreviewKeyEvent { event ->
+                if (!enabled) {
+                    false
+                } else {
+                    when (handleKeyEvent(event, sink)) {
+                        null -> false
+                        Echo.Erase -> {
+                            state.edit {
+                                if (length > 0) replace(length - 1, length, "")
+                                placeCursorAtEnd()
+                            }
+                            true
+                        }
+                        Echo.Drop -> {
+                            letGo()
+                            true
+                        }
+                        Echo.Kept -> true
+                    }
+                }
+            },
         enabled = enabled,
         inputTransformation = diff,
         lineLimits = TextFieldLineLimits.SingleLine,
@@ -140,6 +186,11 @@ private fun sequenceFor(key: Key): String? = when (key) {
     else -> null
 }
 
+// What the buffer owes the keystroke that was just handled: `Erase` one character, `Drop` the line
+// it was mirroring, `Kept` for a key that was consumed and sent nothing. `null` is the event this
+// file did not take, which the field is then free to apply itself.
+private enum class Echo { Erase, Drop, Kept }
+
 // **A soft keyboard delivers its action key as a real key event and carries no modifier state with
 // it.** So a latch armed on the key row was dropped on exactly the chord that needs one — alt+enter,
 // which is how an agent's prompt box takes a newline, and which submitted the message instead. The
@@ -149,8 +200,8 @@ private fun sequenceFor(key: Key): String? = when (key) {
 // Characters are deliberately left on the hardware modifiers alone: `InputSink.type` owns the IME's
 // character path and decorates them there, and reading the latch in both places would spend it on a
 // keystroke that has not been sent yet.
-private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Boolean {
-    if (event.type != KeyEventType.KeyDown) return false
+private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Echo? {
+    if (event.type != KeyEventType.KeyDown) return null
     val ctrl = event.isCtrlPressed || sink.latches.ctrl.active()
     val alt = event.isAltPressed || sink.latches.alt.active()
     val shift = event.isShiftPressed || sink.latches.shift.active()
@@ -158,7 +209,7 @@ private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Boolean {
     if (function >= 0) {
         sink.latches.consume()
         sink.raw(Esc.modified(Esc.function(function + 1), ctrl, alt, shift))
-        return true
+        return Echo.Drop
     }
     val mapped = sequenceFor(event.key)
     if (mapped != null) {
@@ -171,17 +222,17 @@ private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Boolean {
         }
         sink.latches.consume()
         sink.raw(payload)
-        return true
+        return if (event.key == Key.Backspace && !ctrl && !alt) Echo.Erase else Echo.Drop
     }
-    if (!event.isCtrlPressed && !event.isAltPressed) return false
+    if (!event.isCtrlPressed && !event.isAltPressed) return null
     val code = event.utf16CodePoint
     if (code in 1..0xFFFF) {
         val ch = code.toChar()
         val body = if (event.isCtrlPressed) Esc.control(ch) else ch.toString()
         if (body != null) {
             sink.raw(if (event.isAltPressed) Esc.ESCAPE + body else body)
-            return true
+            return Echo.Drop
         }
     }
-    return event.isCtrlPressed
+    return if (event.isCtrlPressed) Echo.Kept else null
 }

@@ -26,10 +26,23 @@ import kotlin.math.roundToInt
 
 private val HANDLE = 22.dp
 
+private const val MARGIN = 4f
+
+// Placed at a cell's own pixel, and then held inside the box it is drawn in. A selection near the
+// right-hand edge puts its start column most of a screen across, and the pill is as wide as three
+// buttons: unclamped it hung 182 dp of itself past a 411 dp phone, so the one affordance a long
+// press exists to offer was off the screen exactly where a right thumb lands. The handles are held
+// by the same arithmetic — one that cannot be touched cannot be dragged.
 private fun Modifier.atPixels(x: Float, y: Float) = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
+    fun hold(at: Float, size: Int, room: Int, bounded: Boolean): Int {
+        if (!bounded) return at.roundToInt()
+        return at.coerceIn(MARGIN, (room - size - MARGIN).coerceAtLeast(MARGIN)).roundToInt()
+    }
+    val left = hold(x, placeable.width, constraints.maxWidth, constraints.hasBoundedWidth)
+    val top = hold(y, placeable.height, constraints.maxHeight, constraints.hasBoundedHeight)
     layout(placeable.width, placeable.height) {
-        placeable.place(x.roundToInt(), y.roundToInt())
+        placeable.place(left, top)
     }
 }
 
@@ -59,10 +72,9 @@ fun SelectionLayer(
     Handle(startX, startY, accent, "Selection start handle", onAnchor)
     Handle(endX, endY - cellHeight, accent, "Selection end handle", onHead)
 
-    val pillY = (startY - 46f).coerceAtLeast(4f)
     Row(
         Modifier
-            .atPixels(startX.coerceAtLeast(4f), pillY)
+            .atPixels(startX, startY - 46f)
             .background(tokens.color.raise, RoundedCornerShape(tokens.radii.md))
             .edge(tokens.card, RoundedCornerShape(tokens.radii.md)),
         horizontalArrangement = Arrangement.spacedBy(2.dp),

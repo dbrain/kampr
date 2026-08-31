@@ -9,8 +9,7 @@ const val FONT_ITALIC = 2
 const val FONT_UNDERLINE = 4
 const val FONT_STRIKE = 8
 
-// Style ids resolve to packed ARGB once per table growth rather than per cell per frame.
-// The wire table is append-only, so a size change is the only trigger it can have.
+// Style ids resolve to packed ARGB once per table move rather than per cell per frame.
 class ResolvedStyles(private val palette: TerminalPalette) {
     var fg = IntArray(1)
         private set
@@ -19,17 +18,18 @@ class ResolvedStyles(private val palette: TerminalPalette) {
     var fontKey = IntArray(1)
         private set
 
-    private var resolved = -1
+    private var seen = -1
 
     val defaultBg: Int get() = bg[0]
 
     fun sync(table: StyleTable) {
-        if (table.size == resolved) return
-        resolved = table.size
-        fg = IntArray(resolved)
-        bg = IntArray(resolved)
-        fontKey = IntArray(resolved)
-        for (id in 0 until resolved) {
+        if (table.version == seen) return
+        seen = table.version
+        val size = table.size
+        fg = IntArray(size)
+        bg = IntArray(size)
+        fontKey = IntArray(size)
+        for (id in 0 until size) {
             val style = table[id]
             fg[id] = palette.foreground(style).toArgb()
             bg[id] = palette.background(style).toArgb()

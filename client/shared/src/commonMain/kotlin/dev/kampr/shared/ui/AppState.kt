@@ -36,6 +36,7 @@ import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.Wire
+import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -449,7 +450,7 @@ class AppState(
     private fun defaultViewOf(paneId: String): PaneView {
         if (!compact) return PaneView.Terminal
         val pane = store.herd.value.panes.firstOrNull { it.id == paneId } ?: return PaneView.Terminal
-        return when (pane.converses || pane.hasConversation) {
+        return when (pane.talks) {
             true -> PaneView.Conversation
             false -> PaneView.Terminal
         }

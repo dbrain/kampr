@@ -59,15 +59,20 @@ private val LINES = listOf(
     "dbrain@comingclean ~/dev/kampr $ rm -rf build",
 )
 
-private class GridIo(private val conversation: Boolean, private val watchers: Int? = null) : PaneIo {
+private class GridIo(
+    private val conversation: Boolean,
+    private val watchers: Int? = null,
+    private val converses: Boolean = false,
+) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     var shown: dev.kampr.shared.ui.PaneView? = null
     override fun send(msg: ClientMsg) { sent += msg }
     override fun prefs(paneId: String) = PanePrefs()
     override fun info(paneId: String) = PaneInfo(
         id = GRID_PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
-        cwd = "~/dev/kampr", agent = if (conversation) "claude" else null,
+        cwd = "~/dev/kampr", agent = if (conversation || converses) "claude" else null,
         agentStatus = "idle", cols = 62, rows = 24, hasConversation = conversation, watchers = watchers,
+        converses = converses,
     )
     override fun show(view: dev.kampr.shared.ui.PaneView) { shown = view }
 }
@@ -132,6 +137,18 @@ class GridAccessibilityTest {
     @Test
     fun aPaneWithATranscriptPointsAtIt() = runComposeUiTest {
         val io = GridIo(conversation = true)
+        setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
+        onNodeWithContentDescription("Conversation view of this pane is ordinary text", substring = true)
+            .assertExists()
+    }
+
+    // The same two halves the view itself is gated on: a harness that opened a minute ago has an
+    // adapter and no transcript, and pointing a reader at the conversation only once the first
+    // record lands leaves them with no way to know the surface is there — the tab is already on
+    // screen and a tab is what they cannot see.
+    @Test
+    fun aPaneWhoseAgentHasNotSaidAnythingYetStillPointsAtTheConversation() = runComposeUiTest {
+        val io = GridIo(conversation = false, converses = true)
         setContent { Themed(io) { TerminalView(gridPane(), PaneSession(GRID_PANE), io) } }
         onNodeWithContentDescription("Conversation view of this pane is ordinary text", substring = true)
             .assertExists()

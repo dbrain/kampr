@@ -60,6 +60,7 @@ import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.SizeMode
+import dev.kampr.shared.wire.talks
 import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.file.handoverAfter
@@ -363,7 +364,7 @@ fun TerminalView(
 
         val visibleRows = (paint.contentHeight / metrics.height).toInt().coerceAtLeast(1)
         val info = io.info(pane.id)
-        val transcript = info?.hasConversation == true
+        val transcript = info.talks
         val gridSummary = buildString {
             append("Terminal grid, $cols columns by ${rows.liveRows} rows")
             append(", cursor on row ${pane.cursor.row + 1}, column ${pane.cursor.col + 1}")

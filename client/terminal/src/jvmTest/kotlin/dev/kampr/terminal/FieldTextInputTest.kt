@@ -22,6 +22,7 @@ import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.FieldTextInput
 import dev.kampr.terminal.input.InputSink
+import dev.kampr.terminal.input.KeyCap
 import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.active
 import dev.kampr.terminal.input.Latches
@@ -47,15 +48,18 @@ private class Typed : PaneIo {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.field(latches: Latches = Latches()): Typed {
+private fun ComposeUiTest.field(latches: Latches = Latches()): Typed = rig(latches).first
+
+@OptIn(ExperimentalTestApi::class)
+private fun ComposeUiTest.rig(latches: Latches = Latches()): Pair<Typed, InputSink> {
     val io = Typed()
+    val sink = InputSink(PANE, io, latches)
     setContent {
         val session = remember { PaneSession(PANE).also { it.openKeyboard() } }
-        val sink = remember { InputSink(PANE, io, latches) }
         FieldTextInput(session, sink, enabled = true, modifier = Modifier.testTag(TAG))
     }
     waitForIdle()
-    return io
+    return io to sink
 }
 
 @OptIn(ExperimentalTestApi::class)
@@ -124,7 +128,57 @@ class FieldTextInputTest {
         onNodeWithTag(TAG).performKeyInput { pressKey(Key.Backspace) }
         waitForIdle()
         assertEquals(Esc.BACKSPACE, io.all)
-        assertEquals(before, buffer(), "the key event must not also delete from the buffer")
+        assertEquals(
+            before.length - 1,
+            buffer().length,
+            "one keystroke is one character: the buffer either kept a character the pane deleted " +
+                "or deleted two for one press",
+        )
+    }
+
+    // The report: *"backspacing deletes from terminal but keyboard autocomplete keeps the mistyped
+    // text"*. This buffer is where the IME reads the line back out of — its composing region, its
+    // suggestion strip and its correction all come from it — and it only ever grew: the key path
+    // consumes the backspace so the pane loses a character and the editor does not. Accepting the
+    // suggestion then types a correction to a word that has not been on the pane for three
+    // keystrokes. So the buffer follows the line: a character off for a backspace, and back to
+    // bare padding for anything that ends the line or moves the caret off it.
+    @Test
+    fun a_backspace_takes_the_character_off_the_editor_the_keyboard_is_reading() = runComposeUiTest {
+        val io = field()
+        onNodeWithTag(TAG).performTextInput("helo")
+        val typed = buffer()
+        io.sent.clear()
+        onNodeWithTag(TAG).performKeyInput { pressKey(Key.Backspace) }
+        waitForIdle()
+        assertEquals(Esc.BACKSPACE, io.all, "and still exactly one backspace on the wire")
+        assertEquals(
+            typed.dropLast(1),
+            buffer(),
+            "the keyboard is still autocompleting a word the pane no longer holds",
+        )
+    }
+
+    @Test
+    fun the_enter_that_ran_the_command_leaves_no_line_behind_in_the_editor() = runComposeUiTest {
+        field()
+        onNodeWithTag(TAG).performTextInput("cargo test")
+        onNodeWithTag(TAG).performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertFalse("cargo test" in buffer(), "the command the pane has already run is still the editor's line")
+        assertTrue(buffer().isNotEmpty(), "and an empty field has nothing for the next backspace to delete")
+    }
+
+    // The key row does not pass through this field at all — `InputSink.press` writes straight to
+    // the pane — so a cap that moves the caret leaves the editor holding a line that is no longer
+    // under it.
+    @Test
+    fun a_cap_pressed_on_the_key_row_is_a_line_the_editor_no_longer_holds() = runComposeUiTest {
+        val (_, sink) = rig()
+        onNodeWithTag(TAG).performTextInput("sttaus")
+        runOnUiThread { sink.press(KeyCap("\u2190", send = Esc.LEFT, csi = true)) }
+        waitForIdle()
+        assertFalse("sttaus" in buffer(), "the caret moved off the word and the keyboard was not told")
     }
 
     @Test

@@ -150,6 +150,14 @@ data class PaneInfo(
     val fleet: FleetInfo? = null,
 )
 
+// "This pane can be talked to as a conversation", read off both halves. Both move during a session
+// and in both directions, so it is asked on every composition rather than at open. Every surface
+// that decides whether the conversation exists — the tab, the default view, the reply box, and what
+// the grid tells a screen reader — asks this one question, because they had drifted apart: a
+// harness that had opened and not yet been prompted was given a tab by one of them and told by
+// another that this node could not read it.
+val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation)
+
 // One option a prompt declared for itself.
 @Serializable
 data class QuestionOption(val key: String, val label: String)

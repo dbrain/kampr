@@ -1,5 +1,8 @@
 package dev.kampr.terminal.input
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.terminal.guard.SubmitGuard
@@ -28,6 +31,18 @@ class InputSink(
     val latches: Latches,
     private val guard: SubmitGuard? = null,
 ) {
+    // Every byte that reaches the pane without passing through the IME's own buffer: a cap on the
+    // key row, a paste, a submit the guard held and then let go. The hidden field mirrors the
+    // pane's input line so a soft keyboard can read it back and correct against it, and after one
+    // of these it no longer does — so it is told to let go of the line rather than to go on
+    // offering a word for a caret that has moved.
+    var offField by mutableStateOf(0)
+        private set
+
+    private fun elsewhere() {
+        offField++
+    }
+
     private fun emit(text: String) {
         if (text.isEmpty()) return
         io.send(ClientMsg.InputText(paneId, text))
@@ -60,12 +75,16 @@ class InputSink(
         if (!guard.hold(guard.commandLine() + typed, rest, paste = false)) emit(rest)
     }
 
-    fun confirmed(payload: String) = emit(payload)
+    fun confirmed(payload: String) {
+        elsewhere()
+        emit(payload)
+    }
 
     // Probe #9: pane.send_text writes raw bytes with no bracketed-paste framing of its own, so a
     // multi-line paste would execute line by line in a shell unless Kampr brackets it here.
     fun paste(text: String) {
         if (text.isEmpty()) return
+        elsewhere()
         raw(PASTE_START + text + PASTE_END)
     }
 
@@ -79,6 +98,7 @@ class InputSink(
             decorate(cap.send, ctrl, alt, shift)
         }
         latches.consume()
+        elsewhere()
         raw(payload)
     }
 

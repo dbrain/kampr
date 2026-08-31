@@ -41,14 +41,7 @@ import dev.kampr.shared.platform.keyRowNeeded
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
-
-// `has_conversation` is the node saying a transcript resolves for this pane, not that the pane is
-// an agent — a freshly started `claude` reports false until its journal appears. It moves during a
-// session in both directions, so it is read on every composition rather than at open.
-// The adapter half, not the transcript half: a session that has only just started has no file on
-// disk yet and is the one most worth being able to answer.
-private val PaneInfo?.talks: Boolean
-    get() = this?.let { it.converses || it.hasConversation } == true
+import dev.kampr.shared.wire.talks
 
 // What is actually rendered, against what was asked for. A remembered preference, a deep link and
 // the desktop's own Split default all outlive the transcript that justified them, and the pane they

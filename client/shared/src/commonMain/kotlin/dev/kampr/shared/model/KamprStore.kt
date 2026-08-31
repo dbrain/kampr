@@ -154,6 +154,11 @@ class KamprStore {
         when (msg) {
             is ServerMsg.Hello -> {
                 _hello.value = msg
+                // A greeting is a socket this client has not spoken on before, and pen ids are
+                // only ever promised for the life of one. Every grid on screen is repainted from
+                // this connection's own `grid.reset`; until one arrives the ids they hold name
+                // nothing, and the default ground is the honest answer for a pen nobody has sent.
+                styles.reset()
                 Snapshot.withMutableSnapshot {
                     role = msg.role
                     roleNote = null

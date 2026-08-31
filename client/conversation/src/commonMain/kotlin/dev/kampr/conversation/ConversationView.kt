@@ -69,6 +69,7 @@ import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.talks
 import kotlin.io.encoding.Base64
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -92,7 +93,13 @@ fun ConversationView(
     val tokens = Kampr.tokens
     val io = LocalPaneIo.current
 
-    if (info != null && !info.hasConversation) {
+    // `converses` is the node saying it serves this harness's transcripts at all; `hasConversation`
+    // is whether it has read one yet. An agent that was launched a moment ago and has not been
+    // prompted answers yes and no, and reading only the second told the operator this node had no
+    // adapter for the harness — under a tab that is only there because it has one. Nothing needs
+    // passing through and reattaching: a reply is a write to the pane's own PTY, and the transcript
+    // catches up the moment the harness writes its first record.
+    if (info != null && !info.talks) {
         AbsentConversation(info, modifier) { io.show(PaneView.Terminal) }
         return
     }
@@ -331,7 +338,11 @@ fun ConversationView(
                 Box(Modifier.fillMaxSize()) {
                     if (turns.isEmpty()) {
                         KText(
-                            "waiting for the transcript",
+                            if (info?.hasConversation == false) {
+                                "nothing written down yet \u2014 what you send is what starts it"
+                            } else {
+                                "waiting for the transcript"
+                            },
                             tokens.type.caption,
                             tokens.color.mute,
                             Modifier.align(Alignment.Center),

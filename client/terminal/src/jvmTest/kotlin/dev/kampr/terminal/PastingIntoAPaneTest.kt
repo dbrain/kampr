@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
@@ -26,10 +28,14 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+private val WIDTH = 411.dp
+
 private const val PASTE_START = "\u001b[200~"
 private const val PASTE_END = "\u001b[201~"
 
 private const val PASTE = "Paste the clipboard into the pane"
+private const val COPY = "Copy the selection"
+private const val BLOCK = "Select by column instead of by line"
 
 private class Recording(override val readOnly: Boolean = false) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
@@ -53,7 +59,7 @@ class PastingIntoAPaneTest {
                 LocalPaneIo provides io,
                 LocalClipboardText provides clipboard,
             ) {
-                Box(Modifier.size(411.dp, 914.dp)) {
+                Box(Modifier.size(WIDTH, 914.dp)) {
                     Box(Modifier.fillMaxSize()) { TerminalView(Phone.shell(), session, io) }
                 }
             }
@@ -64,11 +70,12 @@ class PastingIntoAPaneTest {
 
     // The gesture from the report, not a selection set by hand: a press that stays still is what
     // raises the pill, and the pill is the only place a phone can ask for a paste.
-    private fun ComposeUiTest.longPressTheGrid() {
+    private fun ComposeUiTest.longPressTheGrid(across: Float = 0.5f) {
         onNodeWithContentDescription("Terminal grid", substring = true).performTouchInput {
-            down(center)
+            val at = Offset(width * across, center.y)
+            down(at)
             advanceEventTime(900)
-            moveTo(center)
+            moveTo(at)
             up()
         }
         waitForIdle()
@@ -119,6 +126,30 @@ class PastingIntoAPaneTest {
         onNodeWithContentDescription("Nothing on the clipboard to paste.", substring = true).assertExists()
     }
 
+    // The report: "the paste from terminal when I long press on side of screen draws off screen".
+    // The pill is placed at the selection's own start column and was clamped at the left margin
+    // and nowhere else, so a press in the right-hand third put Copy on the screen and hung Paste
+    // and the mode toggle past its edge — the one affordance a long press exists to offer, and it
+    // is unreachable exactly where a right-handed thumb lands.
+    @Test
+    fun aPillRaisedAtTheEdgeOfTheScreenIsStillOnTheScreen() = runComposeUiTest {
+        val io = Recording()
+        terminal(io) { "ls" }
+        longPressTheGrid(across = 0.97f)
+
+        val pill = onNodeWithContentDescription(BLOCK).getUnclippedBoundsInRoot()
+        assertTrue(pill.right <= WIDTH, "the pill's last button ends at ${pill.right}, past the ${WIDTH} screen")
+        assertTrue(pill.left >= 0.dp, "and the pill was pushed off the other edge instead")
+    }
+
+    @Test
+    fun aPillRaisedAtTheFirstColumnKeepsItsLeftEdge() = runComposeUiTest {
+        val io = Recording()
+        terminal(io) { "ls" }
+        longPressTheGrid(across = 0.01f)
+        assertTrue(onNodeWithContentDescription(COPY).getUnclippedBoundsInRoot().left >= 0.dp)
+    }
+
     // Absent, not present-and-refusing, like every other write affordance on this surface.
     @Test
     fun aReadOnlyDeviceIsOfferedNoPasteAtAll() = runComposeUiTest {
@@ -126,7 +157,7 @@ class PastingIntoAPaneTest {
         terminal(io) { "rm -rf /" }
         longPressTheGrid()
 
-        onNodeWithContentDescription("Copy the selection").assertExists()
+        onNodeWithContentDescription(COPY).assertExists()
         assertEquals(
             0,
             onAllNodesWithContentDescription(PASTE).fetchSemanticsNodes().size,

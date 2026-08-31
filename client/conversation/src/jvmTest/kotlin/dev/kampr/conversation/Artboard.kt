@@ -70,7 +70,12 @@ fun runPane(): PaneState {
     return store.pane(PANE_ID)
 }
 
-fun demoInfo(agent: String? = "claude", conversation: Boolean = true, status: String = "blocked") = PaneInfo(
+fun demoInfo(
+    agent: String? = "claude",
+    conversation: Boolean = true,
+    status: String = "blocked",
+    converses: Boolean = false,
+) = PaneInfo(
     id = PANE_ID,
     nodeId = "01JNODE",
     workspace = "kampr",
@@ -81,6 +86,7 @@ fun demoInfo(agent: String? = "claude", conversation: Boolean = true, status: St
     cols = 74,
     rows = 30,
     hasConversation = conversation,
+    converses = converses,
 )
 
 // Compose resources resolve fonts asynchronously, which a headless render never waits for, so
