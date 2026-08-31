@@ -1,16 +1,14 @@
 package dev.kampr.terminal
 
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.Run
@@ -19,16 +17,11 @@ import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-@OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.caretTop(pane: PaneState, session: PaneSession): Dp {
-    val probe = session.grid
-    val index = pane.scrollback.historyRows + pane.cursor.row
-    return with(density) { (probe.originY + index * probe.cellHeight).toDp() }
-}
+private val PHONE_WIDTH = 411.dp
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.stripTop(): Dp =
-    onNodeWithContentDescription("Review this pane row by row").getUnclippedBoundsInRoot().top
+private fun ComposeUiTest.caretTop(pane: PaneState, session: PaneSession): Dp =
+    rowTop(pane, session, pane.cursor.row)
 
 // The report, verbatim: "still can't see what im typing on the terminal (but i can see letters
 // show up on the desktop looking at the terminal)". The keystrokes reach the PTY; the row they
@@ -122,6 +115,40 @@ class CaretVisibilityTest {
                 top >= Phone.HEADER && top <= stripTop(),
                 "the caret moved to the bottom of the grid and the surface stayed on the banner: " +
                     "the row it is on is at $top, of a strip starting at ${stripTop()}",
+            )
+        }
+    }
+
+    // The same rule on the other axis, and it was gated on the wrong question. A pane at a zoom
+    // the operator picked overflows sideways as well as downwards, and the sideways chase asked
+    // whether the surface sat at scroll *zero* — which stopped being where a follower rests at
+    // #175, and stopped being it for good with the caret band. So on every pane that overflows
+    // both axes, which is the ordinary phone case with the keyboard up, the caret could sit two
+    // screen widths off the right edge and typing never brought it back.
+    @Test
+    fun theCaretStaysOnScreenSidewaysWhenTheGridOverflowsBothAxes() {
+        runComposeUiTest {
+            val pane = Phone.shell(rows = 40, caretRow = 2)
+            val session = PaneSession(Phone.PANE)
+            val bars = phoneTerminal(pane, session, io = ReadableIo)
+            bars.value = Phone.KEYBOARD
+            waitForIdle()
+            pane.applyPatch(
+                ServerMsg.GridPatch(
+                    pane = Phone.PANE,
+                    rows = listOf(RowDiff(2, listOf(Run(0, "$ " + "x".repeat(88))))),
+                    cursor = Cursor(90, 2, true),
+                    links = emptyList(),
+                ),
+            )
+            waitForIdle()
+            assertTrue(session.view.minPanX < 0f, "the grid has to overrun the window sideways")
+            assertTrue(session.view.minScroll > 0f, "and downwards, or the old gate would have held")
+            val left = caretLeft(pane, session)
+            assertTrue(
+                left >= 0.dp && left <= PHONE_WIDTH,
+                "the column being typed into is at $left, off a ${PHONE_WIDTH} window — every " +
+                    "character typed lands where nothing can see it",
             )
         }
     }

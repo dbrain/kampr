@@ -3,7 +3,7 @@ package dev.kampr.terminal
 import dev.kampr.terminal.view.PaintRect
 import dev.kampr.terminal.view.defaultZoom
 import dev.kampr.terminal.view.followCursorPan
-import dev.kampr.terminal.view.caretFloor
+import dev.kampr.terminal.view.caretBand
 import dev.kampr.terminal.view.terminalGeometry
 import dev.kampr.terminal.view.TerminalViewState
 import dev.kampr.terminal.view.zoomPresets
@@ -48,7 +48,6 @@ class GeometryTest {
         val geometry = terminalGeometry(paint, 94, 40, CELL_W, CELL_H, panX = 0f, scrollY = 0f)
         val lastRowBottom = geometry.originY + 40 * CELL_H
         close(lastRowBottom, paint.contentBottom)
-        assertTrue(geometry.pinned)
     }
 
     @Test
@@ -103,9 +102,9 @@ class GeometryTest {
     @Test
     fun aPaneOpensOnTheCaretWhenItWouldOtherwiseOpenOnBlankTail() {
         val paint = phone()
-        val pinnedOnly = caretFloor(paint, totalRows = 34, cursorIndex = 33, cellHeight = 21f)
+        val pinnedOnly = caretBand(paint, totalRows = 34, cursorIndex = 33, cellHeight = 21f).floor
         close(pinnedOnly, 0f)
-        val caretHigh = caretFloor(paint, totalRows = 34, cursorIndex = 4, cellHeight = 21f)
+        val caretHigh = caretBand(paint, totalRows = 34, cursorIndex = 4, cellHeight = 21f).floor
         assertTrue(caretHigh > 0f, "a caret above the fold has to pull the surface down")
         val geometry = terminalGeometry(paint, 94, 34, CELL_W, 21f, 0f, caretHigh)
         val caretTop = geometry.originY + 4 * 21f
@@ -122,10 +121,10 @@ class GeometryTest {
         val roomy = PaintRect(width = 390f, height = 1600f, insetTop = 108f, insetBottom = 130f)
         val keyboard = PaintRect(width = 390f, height = 560f, insetTop = 108f, insetBottom = 130f)
         for (caret in listOf(0, 3, 20, 39)) {
-            close(caretFloor(roomy, totalRows = 40, cursorIndex = caret, cellHeight = cell), 0f)
+            close(caretBand(roomy, totalRows = 40, cursorIndex = caret, cellHeight = cell).floor, 0f)
         }
         for (caret in listOf(0, 3, 20)) {
-            val floor = caretFloor(keyboard, totalRows = 40, cursorIndex = caret, cellHeight = cell)
+            val floor = caretBand(keyboard, totalRows = 40, cursorIndex = caret, cellHeight = cell).floor
             assertTrue(floor > 0f, "caret $caret has to be pulled into a rectangle that cannot hold the grid")
             val geometry = terminalGeometry(keyboard, 94, 40, CELL_W, cell, 0f, floor)
             val top = geometry.originY + caret * cell
@@ -136,7 +135,7 @@ class GeometryTest {
         }
         // The caret already near the bottom of the grid is the case the old rule got right, and it
         // has to stay right: nothing is pulled that does not need pulling.
-        close(caretFloor(keyboard, totalRows = 40, cursorIndex = 39, cellHeight = cell), 0f)
+        close(caretBand(keyboard, totalRows = 40, cursorIndex = 39, cellHeight = cell).floor, 0f)
     }
 
     @Test
@@ -184,7 +183,7 @@ class GeometryTest {
         val paint = phone()
         val view = TerminalViewState()
         view.maxScroll = 10_000f
-        view.scrollY = 600f
+        view.scrollBy(0f, 600f)
         val parked = 10
 
         val before = terminalGeometry(paint, 94, 100, CELL_W, CELL_H, 0f, view.scrollY)
@@ -209,7 +208,7 @@ class GeometryTest {
     // lines a full screen earlier and none of the new stuff. typing in the terminal doesn't appear
     // on the app either."
     //
-    // The live edge is not scroll zero. `caretFloor` holds the surface off the bottom of the grid
+    // The live edge is not scroll zero. `caretBand` holds the surface off the bottom of the grid
     // by however far the caret sits above it (#175), so a reader riding the edge of a shell pane
     // rests at a *positive* scrollY — and the carry read that as "parked in history" and moved
     // them by everything that arrived. Nothing brings them back: the floor does not change when
@@ -222,6 +221,35 @@ class GeometryTest {
         view.scrollY = view.minScroll
         view.carryHistory(400, CELL_H)
         close(view.scrollY, view.minScroll)
+    }
+
+    // And the same reader anywhere else the caret is still on screen. The floor is a minimum, so a
+    // surface that only ever rests on it hands the viewport to the caret; the surface rests inside
+    // the band instead, which puts a reader riding the live edge at a scrollY that is not the floor
+    // and never was. Reading that as "parked in history" carries them off the output they are
+    // watching by everything the pane writes — the same defect as #175, one rule further along.
+    @Test
+    fun aReaderRestingAnywhereInTheBandIsNotCarriedByHistoryArriving() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.minScroll = 0f
+        view.scrollY = 9 * CELL_H
+        view.carryHistory(400, CELL_H)
+        close(view.scrollY, 9 * CELL_H)
+    }
+
+    // And the reader it is actually for, who is told apart by their hand and not by where they
+    // ended up: history arriving under someone parked in it has to move them with it, or the rows
+    // they are reading slide up the screen by everything the pane writes.
+    @Test
+    fun aReaderWhoTookTheViewportIsStillCarriedByHistoryArriving() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.minScroll = 0f
+        view.scrollBy(0f, 9 * CELL_H)
+        assertTrue(!view.following, "a hand nine rows off the floor has left the live edge")
+        view.carryHistory(400, CELL_H)
+        close(view.scrollY, 409 * CELL_H)
     }
 
     // The report, verbatim: "scroll direction on terminal screen is reversed, i need to swipe up

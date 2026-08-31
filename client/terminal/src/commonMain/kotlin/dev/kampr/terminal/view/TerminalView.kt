@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -263,13 +264,26 @@ fun TerminalView(
         // because the two things that move it — the caret, and the height of the rectangle the
         // keyboard leaves behind — both move long after the first paint. Placing it once is why
         // raising the keyboard took the prompt off the top and left the operator typing blind.
-        val floor = caretFloor(paint, rows.total, rows.historyRows + pane.cursor.row, metrics.height)
-        view.minScroll = floor
-        // Review positions the viewport from the row being read and reaches rows this floor holds
-        // off, so it is the one surface the floor does not govern.
-        LaunchedEffect(floor, review.active, view.following) {
+        val band = caretBand(paint, rows.total, rows.historyRows + pane.cursor.row, metrics.height)
+        view.minScroll = band.floor
+        var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
+        if (placedCell != metrics.height) {
+            placedCell = metrics.height
+            view.placeOnFloor(band.floor)
+        }
+        // A reader who is following stays exactly where they are for as long as the caret is on
+        // screen, and is moved the least the band allows when it is not. A reader who has scrolled
+        // away keeps the floor only, which is what brings the caret back when they type into it.
+        //
+        // Review positions the viewport from the row being read and reaches rows the band holds
+        // off, so it is the one surface the band does not govern.
+        LaunchedEffect(band, review.active, view.following) {
             if (review.active) return@LaunchedEffect
-            view.scrollY = if (view.following) floor else max(view.scrollY, floor)
+            view.scrollY = if (view.following) {
+                view.scrollY.coerceIn(band.floor, band.ceiling)
+            } else {
+                max(view.scrollY, band.floor)
+            }
         }
 
         val edgeLabel = historyEdgeLabel(reviewSurface())
@@ -296,8 +310,12 @@ fun TerminalView(
             if (shift != 0f) view.scrollY = (view.scrollY + shift).coerceIn(0f, view.maxScroll)
         }
 
-        LaunchedEffect(pane.cursor, view.followCursor, geometry.pinned) {
-            if (view.followCursor && geometry.pinned && !view.pinching) {
+        // Asked of `following`, not of scroll zero. Scroll zero is the bottom of the surface and
+        // stopped being where a follower rests at #175; the caret band moved it again. A pane at a
+        // zoom the operator picked overflows both axes, and gating this on the bottom left the
+        // caret two screen widths off the right edge with no frame able to bring it back (#380).
+        LaunchedEffect(pane.cursor, view.followCursor, view.following) {
+            if (view.followCursor && view.following && !view.pinching) {
                 view.chaseCursor(
                     followCursorPan(
                         view.panX, geometry.minPanX, pane.cursor.col, metrics.width, paint.width,

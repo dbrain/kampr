@@ -9,6 +9,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,14 @@ import dev.kampr.terminal.view.TerminalView
 internal object HushIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit
     override fun prefs(paneId: String) = PanePrefs()
+}
+
+// A zoom the operator picked, returned the way the node returns one. It matters because the
+// fit-to-width default a test pane opens at never overflows sideways, and a pane the operator has
+// made readable overflows *both* axes — which is the ordinary phone case and its own set of rules.
+internal object ReadableIo : PaneIo {
+    override fun send(msg: ClientMsg) = Unit
+    override fun prefs(paneId: String) = PanePrefs(mapOf("zoom" to "1.2"))
 }
 
 // A 1080x2400 phone, and a herdr pane as the node actually serves one. Named rather than inlined
@@ -107,3 +117,30 @@ internal fun ComposeUiTest.phoneTerminal(
     waitForIdle()
     return bars
 }
+
+// Where a row of the live grid lands on the screen, and the two edges it has to land between: the
+// header the pane screen draws over the surface, and the chrome strip along the bottom. Rows run
+// under both — the surface paints the whole viewport — so "on screen" means inside the content
+// rectangle, not inside the window.
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.caretLeft(pane: PaneState, session: PaneSession): Dp =
+    with(density) { (session.grid.originX + pane.cursor.col * session.grid.cellWidth).toDp() }
+
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.rowTop(pane: PaneState, session: PaneSession, row: Int): Dp {
+    val probe = session.grid
+    val index = pane.scrollback.historyRows + row
+    return with(density) { (probe.originY + index * probe.cellHeight).toDp() }
+}
+
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.rowBottom(pane: PaneState, session: PaneSession, row: Int): Dp =
+    rowTop(pane, session, row) + with(density) { session.grid.cellHeight.toDp() }
+
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.stripTop(): Dp =
+    onNodeWithContentDescription("Review this pane row by row").getUnclippedBoundsInRoot().top
+
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.onScreen(pane: PaneState, session: PaneSession, row: Int): Boolean =
+    rowTop(pane, session, row) >= Phone.HEADER && rowBottom(pane, session, row) <= stripTop()

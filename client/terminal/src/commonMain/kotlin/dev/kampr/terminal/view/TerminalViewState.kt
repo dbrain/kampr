@@ -49,13 +49,13 @@ class TerminalViewState {
 
     // The bottom of the grid is not the bottom of the surface a reader is allowed to rest on: on a
     // grid taller than the viewport, resting there hides the caret and everything typed into it.
-    // `TerminalGeometry.caretFloor` is what this holds, and it is zero whenever the grid fits.
+    // `CaretBand.floor` is what this holds, and it is zero whenever the grid fits.
     var minScroll = 0f
 
     // Whether the viewport is riding the live edge rather than parked somewhere a reader put it.
-    // The edge moves both ways — an agent draws its banner with the caret still at the top of the
-    // grid and moves it to the input box a frame later — so following has to mean "sits at the
-    // floor", not "never went below it".
+    // A hand is the only thing that sets it: the surface itself rests anywhere in the caret band
+    // while it follows, so its position is no longer the answer to "is this a reader's viewport" —
+    // where the reader's hand last let go is.
     var following by mutableStateOf(true)
         private set
 
@@ -78,17 +78,32 @@ class TerminalViewState {
     var scrolled = false
         private set
 
-    // The live edge is not scroll zero. `caretFloor` holds the surface off the bottom of the grid
-    // by however far the caret sits above it, so a reader riding the edge of a shell pane rests at
-    // a positive scrollY — which is the one thing every "am I at the edge" test here has to ask
-    // about, and the reason they all ask it through this.
+    // The live edge is not scroll zero. The floor holds the surface off the bottom of the grid by
+    // however far the caret sits above it, so a hand that lets go at the edge of a shell pane lets
+    // go at a positive scrollY — which is what every "did they land on the edge" test here has to
+    // ask about, and the reason they all ask it through this.
     private val atLiveEdge: Boolean get() = scrollY <= minScroll + FOLLOW_SLACK
+
+    // A change of cell size invalidates every distance across this surface, and the opening one is
+    // measured twice: the first composition lays out at the placeholder 13sp and the font re-probe
+    // corrects it a few frames later — on a 90-row pane, from 18 pixels a row to 10 (#380). Nothing about
+    // the scroll taken against the first is worth carrying into the second, and the floor is not a
+    // linear function of the cell, so a follower is placed again rather than scaled or clamped. A
+    // reader who has taken the viewport keeps what they took.
+    fun placeOnFloor(floor: Float) {
+        if (following) scrollY = floor
+    }
 
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
     // scrollY is measured from that bottom — so standing still means moving with it. A reader
     // pinned to the bottom is pinned deliberately and must not be carried off it.
+    //
+    // Asked of `following` rather than of the position, because a surface that is following rests
+    // anywhere in the caret band and a positive scrollY is no longer evidence of a hand. Reading
+    // it as one carried a follower off the output it was following, which is #175 again by a
+    // different route (#380).
     fun carryHistory(rowsAdded: Int, cellHeight: Float) {
-        if (rowsAdded == 0 || atLiveEdge) return
+        if (rowsAdded == 0 || following) return
         scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
     }
 

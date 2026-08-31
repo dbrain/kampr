@@ -29,9 +29,7 @@ data class TerminalGeometry(
     val minPanX: Float,
     val surfaceHeight: Float,
     val gridWidth: Float,
-) {
-    val pinned: Boolean get() = scrollY <= 0.5f
-}
+)
 
 fun terminalGeometry(
     paint: PaintRect,
@@ -107,29 +105,38 @@ fun defaultZoom(
     cellHeight = baseCellHeight,
 ).zoom
 
-// The floor under the whole surface: the least scroll that leaves the caret inside the content
-// rectangle, and zero whenever the grid already fits.
+// Where the surface may rest while it is following: the band of scroll values that leave the
+// caret inside the content rectangle, floor first.
 //
-// Pinning the bottom of the grid to the bottom of the rectangle is right only while the grid fits.
-// A herdr pane is as tall as the desktop made it, the caret sits wherever the shell left it — near
-// the top of a freshly started one — and the rectangle is shorter than the grid the moment the
-// keyboard is up. Bottom-pinning then shows the blank tail and takes the caret, the prompt, and
-// every character being typed off the top with it.
+// The floor is the least such scroll, and zero whenever the grid already fits. Pinning the bottom
+// of the grid to the bottom of the rectangle is right only while it does. A herdr pane is as tall
+// as the desktop made it, the caret sits wherever the shell left it — near the top of a freshly
+// started one — and the rectangle is shorter than the grid the moment the keyboard is up.
+// Bottom-pinning then shows the blank tail and takes the caret, the prompt, and every character
+// being typed off the top with it.
 //
-// Least, not a comfortable resting place: any larger scroll moves the caret further down and shows
-// fewer of the rows *below* it, which is where an agent draws its footer.
-fun caretFloor(
+// **A band rather than a point, because the floor is a minimum and not a place.** Resting exactly
+// on it hands the caret the viewport: every frame that moves the caret moves the surface by the
+// whole distance, in both directions. That is what an in-place redraw does several times a second
+// — a `docker compose pull` walks the caret to the top of its block, rewrites every line and
+// returns — and the operator watched the output they were reading swing off the screen and back
+// seven rows at a time (#380).
+// Inside the band nothing moves; outside it the surface moves the least it can, which is what
+// keeping the caret on screen actually asks for.
+data class CaretBand(val floor: Float, val ceiling: Float)
+
+fun caretBand(
     paint: PaintRect,
     totalRows: Int,
     cursorIndex: Int,
     cellHeight: Float,
-): Float {
+): CaretBand {
     val surfaceHeight = totalRows * cellHeight
     val maxScroll = max(0f, surfaceHeight - paint.contentHeight)
-    if (maxScroll <= 0f) return 0f
+    if (maxScroll <= 0f) return CaretBand(0f, 0f)
     val pinnedTop = paint.contentBottom - surfaceHeight + cursorIndex * cellHeight
-    if (pinnedTop >= paint.insetTop) return 0f
-    return (paint.insetTop - pinnedTop).coerceIn(0f, maxScroll)
+    val floor = (paint.insetTop - pinnedTop).coerceIn(0f, maxScroll)
+    return CaretBand(floor, (paint.contentBottom - cellHeight - pinnedTop).coerceIn(floor, maxScroll))
 }
 
 private const val READABLE_SP = 15f
