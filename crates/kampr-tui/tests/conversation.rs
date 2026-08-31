@@ -657,9 +657,13 @@ impl Conn {
     }
 
     fn greet(&self, panes: Value) {
+        self.greet_as(panes, "full");
+    }
+
+    fn greet_as(&self, panes: Value, role: &str) {
         self.send(json!({
             "t": "hello", "protocol": 1, "node_id": "01JNODE", "node_name": "comingclean",
-            "build": "0.1.29", "role": "full",
+            "build": "0.1.29", "role": role,
             "caps": { "push": false, "scrollback": true, "conversation": true, "manage": true }
         }));
         self.send(json!({
@@ -832,13 +836,16 @@ async fn until<T>(
     panic!("the event never arrived");
 }
 
+/// `converses` is the adapter half and `has_conversation` the transcript half. A node serving the
+/// claude and codex adapters answers the first for any agent pane, including one whose transcript
+/// has not been written yet.
 fn entry(id: &str, agent: Option<&str>, status: &str, conversation: bool) -> Value {
     json!({
         "id": id, "node_id": "01JNODE",
         "workspace_id": "01JNODE/w1", "tab_id": "01JNODE/w1:t1",
         "workspace": "herdr", "tab": "1", "cwd": "/home/dbrain/dev/kampr",
         "agent": agent, "agent_status": status, "rows": 4, "cols": 12,
-        "has_conversation": conversation
+        "has_conversation": conversation, "converses": agent.is_some() || conversation
     })
 }
 
@@ -864,20 +871,29 @@ fn app(client: &Arc<Client>) -> App {
     app
 }
 
+/// **The conversation is a view the operator asks for, not one a pane opens on.** `prefix shift+v`
+/// is the whole of it, and every test below that is about the transcript rather than about which
+/// view a fresh client picks says so for itself.
+fn showing_conversation(client: &Arc<Client>) -> App {
+    let mut app = app(client);
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    app
+}
+
+/// **Every pane opens on its terminal, transcript or no transcript.** This used to open an agent
+/// pane on its conversation, which is right for a phone — the terminal is unusable at that size —
+/// and wrong for somebody who typed `kampr` into a shell and expected herdr's shape back. The
+/// conversation is one keystroke away and the choice sticks per pane, which is where it belongs.
 #[tokio::test]
-async fn an_agent_pane_opens_on_its_conversation_and_a_shell_pane_opens_on_the_terminal() {
+async fn a_pane_opens_on_its_terminal_and_the_conversation_is_one_keystroke_away() {
     let mut fake = Fake::start().await;
     let client = Arc::new(fake.client());
     let mut events = client.events();
-    let conn = fake.accept().await;
+    let mut conn = fake.accept().await;
     conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = app(&client);
-
-    // ADR 0005: a CLI that only ever draws grids opens every agent pane on the wrong view.
-    let before = painted(&mut app, 110, 24);
-    assert!(before.contains("waiting for the first frame"), "{before}");
-
     app.convo.absorb(&page(
         PANE,
         true,
@@ -886,12 +902,26 @@ async fn an_agent_pane_opens_on_its_conversation_and_a_shell_pane_opens_on_the_t
         json!([turn("t_1", "assistant", None, md("six, and they are"))]),
     ));
 
-    let after = painted(&mut app, 110, 24);
+    // A transcript has landed and the pane is still showing its terminal.
+    let opened = painted(&mut app, 110, 24);
     assert!(
-        after.contains("six, and they are"),
-        "the pane opened on the conversation with no prompting:\n{after}"
+        opened.contains("waiting for the first frame"),
+        "an agent pane opens on its terminal like every other pane:\n{opened}"
     );
-    assert!(!after.contains("waiting for the first frame"), "{after}");
+    assert!(!opened.contains("six, and they are"), "{opened}");
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    let asked = painted(&mut app, 110, 24);
+    assert!(
+        asked.contains("six, and they are"),
+        "and `prefix shift+v` is the whole of getting there:\n{asked}"
+    );
+
+    // The choice follows the operator between machines rather than being re-guessed per client.
+    let prefs = conn.sent("prefs").await;
+    assert_eq!(prefs["pane"], json!(PANE));
+    assert_eq!(prefs["prefs"]["view"], json!("conversation"));
 }
 
 #[tokio::test]
@@ -917,7 +947,7 @@ async fn a_blocked_agent_is_one_keystroke_from_its_question_and_its_answer() {
     let mut conn = fake.accept().await;
     conn.greet(json!([entry(PANE, Some("claude"), "blocked", true)]));
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
-    let mut app = app(&client);
+    let mut app = showing_conversation(&client);
 
     conn.send(json!({
         "t": "pending", "pane": PANE, "question": "Do you want to make this edit?",
@@ -968,7 +998,7 @@ async fn a_key_the_conversation_consumed_reaches_neither_the_pty_nor_the_ring() 
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     conn.send(grid_reset(PANE));
     until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
-    let mut app = app(&client);
+    let mut app = showing_conversation(&client);
     app.convo.absorb(&page(
         PANE,
         true,
@@ -1005,6 +1035,9 @@ async fn a_question_does_not_survive_the_socket_that_carried_it() {
     let mut app = app(&client);
     conn.greet(json!([entry(PANE, Some("claude"), "blocked", true)]));
     pump(&mut app, &mut events, |e| matches!(e, Event::Prefs { .. })).await;
+    // After the greet: there is no pane to switch the view of before one has been named.
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
     conn.send(json!({
         "t": "pending", "pane": PANE, "question": "Do you want to make this edit?",
         "options": [{ "key": "1", "label": "Yes" }], "source": "screen"
@@ -1135,6 +1168,8 @@ async fn an_image_does_not_outlive_the_view_that_drew_it() {
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = App::new(client.clone(), Options::default(), kitty(&session));
     app.refocus();
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
     app.convo.absorb(&page(
         PANE,
         true,
@@ -1162,6 +1197,8 @@ async fn swapping_a_pane_to_its_terminal_takes_its_pictures_with_it() {
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = App::new(client.clone(), Options::default(), kitty(&session));
     app.refocus();
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
     app.convo.absorb(&page(
         PANE,
         true,
@@ -1197,6 +1234,8 @@ async fn an_attachment_this_terminal_will_not_draw_says_how_big_it_is_and_offers
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = App::new(client.clone(), Options::default(), kitty(&session));
     app.refocus();
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
     app.convo.absorb(&page(
         PANE,
         true,
@@ -1252,6 +1291,8 @@ async fn a_path_in_a_tool_call_is_offered_to_a_writer_and_never_to_a_readonly_de
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = App::new(client.clone(), Options::default(), kitty(&session));
     app.refocus();
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
     let tool = json!([{ "b": "tool", "name": "Read", "state": "done",
                         "summary": "wrote /tmp/hero-mock.png" }]);
     app.convo.absorb(&page(
@@ -1352,5 +1393,235 @@ fn what_the_operator_left_at_the_desk_is_shown_before_a_reply_joins_onto_it() {
     assert!(
         !cleared.contains("half a sentence"),
         "and it comes down when the pane's line is emptied:\n{cleared}"
+    );
+}
+
+/// **A session that has only just started is the one you most want to talk to**, and for the whole
+/// gap between `claude` opening and its first prompt landing there is no transcript on disk. The
+/// conversation used to be unreachable for exactly that window — the view fell through to the
+/// terminal and said nothing about why — so the adapter half of the question is what the view is
+/// offered on, and the empty transcript says so in its own words.
+#[tokio::test]
+async fn a_fresh_agent_opens_its_conversation_before_a_transcript_exists() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    // An adapter, and nothing written yet.
+    conn.greet(json!([entry(PANE, Some("claude"), "working", false)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+
+    assert!(!app.convo.has(PANE), "nothing has been written yet");
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        screen.contains("nothing in this transcript yet"),
+        "the conversation opens and says it is empty:\n{screen}"
+    );
+    assert!(
+        !screen.contains("waiting for the first frame"),
+        "and it is the conversation, not the terminal it used to fall through to:\n{screen}"
+    );
+}
+
+/// A shell pane has no adapter, so there is nothing to fall back to and the toggle leaves it where
+/// it was rather than drawing an empty transcript over a working terminal.
+#[tokio::test]
+async fn a_shell_pane_stays_on_its_terminal_however_hard_the_view_is_toggled() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, None, "unknown", false)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("waiting for the first frame"), "{screen}");
+    assert!(!screen.contains("nothing in this transcript yet"), "{screen}");
+}
+
+// ---- the reply box ----------------------------------------------------------------------------
+
+/// **Typing at a conversation used to go straight into the agent's PTY, blind.** It worked, and
+/// there was no box, no echo and no send affordance to say where the characters had gone — so the
+/// operator's reading of it, "there's no clear way on how to enter a message", was exactly right
+/// about a surface that was in fact typing every keystroke into the agent as it arrived.
+#[tokio::test]
+async fn a_reply_is_composed_in_a_box_and_sent_whole_rather_than_typed_into_the_pty_as_it_is_written() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn("t_1", "assistant", None, md("what shall I do?"))]),
+    ));
+    let opened = painted(&mut app, 110, 24);
+    assert!(
+        opened.contains("type a reply"),
+        "the box is on screen before anything is typed:\n{opened}"
+    );
+    let _ = conn.heard().await;
+
+    for c in "ship it".chars() {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let typing = painted(&mut app, 110, 24);
+    assert!(typing.contains("ship it"), "the draft is echoed:\n{typing}");
+    let mid = conn.heard().await;
+    assert!(
+        !mid.iter().any(|f| f["t"] == json!("input")),
+        "not one character reached the agent while it was being written: {mid:?}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let sent: Vec<Value> = conn
+        .heard()
+        .await
+        .into_iter()
+        .filter(|f| f["t"] == json!("input"))
+        .collect();
+    // The text, then the carriage return, as two messages — so a harness that debounces sees the
+    // words settle before the newline that submits them.
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert_eq!(sent[0]["text"], json!("ship it"));
+    assert_eq!(sent[1]["text"], json!("\r"));
+    assert!(
+        !painted(&mut app, 110, 24).contains("ship it"),
+        "and the box is empty again"
+    );
+}
+
+/// **A prompt's keys are the prompt's only while the box is empty.** `1` at a blocked agent is the
+/// answer to the question on screen; `1` in the middle of a sentence somebody is writing is a
+/// character. The old surface could not tell the two apart and always chose the prompt, so a reply
+/// beginning with an offered key answered a question instead of being typed.
+#[tokio::test]
+async fn an_offered_key_answers_a_question_only_until_the_operator_starts_writing() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "blocked", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    conn.send(json!({
+        "t": "pending", "pane": PANE, "question": "Do you want to make this edit?",
+        "options": [{ "key": "1", "label": "Yes" }, { "key": "2", "label": "No" }],
+        "source": "screen"
+    }));
+    let pending = until(&mut events, |e| match e {
+        Event::Pending(p) => Some(Event::Pending(p)),
+        _ => None,
+    })
+    .await;
+    app.convo.absorb(&pending);
+    painted(&mut app, 110, 24);
+    let _ = conn.heard().await;
+
+    // An empty box: the question has the keyboard, which is the one thing this client can do that
+    // a herdr at the desk cannot.
+    app.key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    let answered = conn.heard().await;
+    assert!(
+        answered
+            .iter()
+            .any(|f| f["t"] == json!("answer") && f["key"] == json!("1")),
+        "an offered key answers the question: {answered:?}"
+    );
+
+    // A draft, and now the same key is a character in it and nothing is answered.
+    app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    let _ = conn.heard().await;
+    app.key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    let typed = conn.heard().await;
+    assert!(
+        !typed.iter().any(|f| f["t"] == json!("answer")),
+        "a key in the middle of a sentence is not an answer: {typed:?}"
+    );
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        screen.contains("no1"),
+        "it is a character in the draft:\n{screen}"
+    );
+}
+
+/// A read-only device cannot type, and the box says so rather than swallowing a reply that will
+/// never arrive.
+#[tokio::test]
+async fn a_read_only_device_is_told_the_box_is_not_for_it() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet_as(json!([entry(PANE, Some("claude"), "working", true)]), "readonly");
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+
+    // No box at all: the chrome's own borrowed row is where a read-only device is told, and a
+    // reply box drawn under it would only be painted over by it.
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("readonly"), "{screen}");
+    assert!(!screen.contains("type a reply"), "{screen}");
+    let _ = conn.heard().await;
+
+    for c in "hello".chars() {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let frames = conn.heard().await;
+    assert!(
+        !frames.iter().any(|f| f["t"] == json!("input")),
+        "nothing was written: {frames:?}"
+    );
+}
+
+/// **The chrome borrows the pane's last row, and the reply box lives on it.** A terminal can lose
+/// a row of scrollback to a footer for a moment and nothing is hurt; an input affordance cannot —
+/// covered, it is simply not there, which is the same complaint the view started with. So the
+/// conversation ends one row short of the screen's bottom and the box sits above the borrowed row.
+/// The terminal view is untouched and still reaches the last line, which is the whole point of it.
+#[tokio::test]
+async fn the_reply_box_is_not_painted_over_by_the_row_the_chrome_borrows() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn("t_1", "assistant", None, md("what shall I do?"))]),
+    ));
+
+    // A dead socket is a standing tenant of the borrowed row rather than a passing one, so it is
+    // the case that used to hide the box for as long as it lasted.
+    conn.close();
+    until(&mut events, |e| {
+        matches!(e, Event::Disconnected { .. }).then_some(())
+    })
+    .await;
+
+    let screen = painted(&mut app, 110, 24);
+    let lines: Vec<&str> = screen.lines().collect();
+    assert!(
+        lines[23].contains("disconnected"),
+        "the chrome has the last row:\n{screen}"
+    );
+    assert!(
+        lines[22].contains("type a reply"),
+        "and the box is on the row above it, not underneath it:\n{screen}"
     );
 }

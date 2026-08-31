@@ -123,7 +123,13 @@ data class PaneInfo(
     val cols: Int? = null,
     val rows: Int = 24,
     @SerialName("scrollback_rows") val scrollbackRows: Int = 0,
+    // The two halves of "can this pane be talked to as a conversation". `hasConversation` is the
+    // transcript half — a `convo.load` will answer with a page rather than `not_found` — and
+    // `converses` is the adapter half, true from the moment the harness opens. A client offers the
+    // view on the second and expects content on the first; gating the view on the transcript hid
+    // the conversation for the whole gap between a session starting and its first prompt.
     @SerialName("has_conversation") val hasConversation: Boolean = false,
+    val converses: Boolean = false,
     // Clients currently watching this pane, omitted when it is 0 or 1. A hub holds one watch for
     // every client behind it, so this can undercount a relayed pane and never overcounts.
     val watchers: Int? = null,

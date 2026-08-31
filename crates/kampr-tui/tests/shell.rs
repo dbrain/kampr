@@ -217,9 +217,11 @@ async fn a_role_frame_removes_the_write_affordances_mid_connection() {
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = app(&client);
 
+    // The strip's `+`, which is where the write affordance lives now that no hint bar is drawn
+    // in the pane keymap (#374).
     let full = painted(&mut app, 100, 20);
     assert!(
-        full.contains("^b c new"),
+        full.lines().next().is_some_and(|strip| strip.contains(" + ")),
         "a full device is offered the writes:\n{full}"
     );
     assert!(!full.contains("readonly"));
@@ -231,7 +233,7 @@ async fn a_role_frame_removes_the_write_affordances_mid_connection() {
 
     let after = painted(&mut app, 100, 20);
     assert!(
-        !after.contains("^b c new"),
+        after.lines().next().is_some_and(|strip| !strip.contains(" + ")),
         "a read-only device draws no write affordances:\n{after}"
     );
     assert!(after.contains("readonly"), "and says so:\n{after}");
@@ -496,8 +498,10 @@ async fn the_navigator_walks_the_sidebar_and_leaves_the_panes_on_screen() {
         screen.contains("NAVIGATE the sidebar"),
         "the modal footer says what is being navigated:\n{screen}"
     );
+    // The pane's own surface, not its border: a lone pane is flush now (#375), so a box is no
+    // longer proof that anything was drawn.
     assert!(
-        screen.contains('\u{250c}'),
+        screen.contains("waiting for the first frame"),
         "the pane the operator was reading is still drawn:\n{screen}"
     );
 }
@@ -739,5 +743,263 @@ async fn a_terminal_too_narrow_for_a_sidebar_navigates_the_herd_instead() {
     assert!(
         !screen.contains('\u{250c}'),
         "and it fell back to the herd, which is drawn at any width:\n{screen}"
+    );
+}
+
+/// A grid of `rows` lines, each naming its own index, so an assertion can say which line of the
+/// pane landed on which line of the screen.
+fn numbered(pane: &str, rows: u16) -> Value {
+    json!({
+        "t": "grid.reset", "pane": pane, "cols": 12, "rows": rows,
+        "rows_data": (0..rows).map(|r| json!({ "row": r, "runs": [{ "s": 0, "x": format!("row{r}") }] }))
+            .collect::<Vec<_>>(),
+        "cursor": { "col": 0, "row": 0, "visible": false },
+        "links": []
+    })
+}
+
+#[tokio::test]
+async fn the_pane_owns_every_row_below_the_strip_because_nothing_is_reserved_at_the_bottom() {
+    // herdr reserves no row: at a 100x30 client the pane's own `tput lines` is 29 and the prompt
+    // sits on the last one (#373). Kampr spent two of them on a status line and a hint bar that
+    // herdr draws in no mode at all (#374), and a third and fourth on a border with nothing on
+    // the other side of it (#375).
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 11));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    // 12 rows: one strip, eleven pane. A grid of eleven rows fits exactly.
+    let screen = painted(&mut app, 60, 12);
+    let lines: Vec<&str> = screen.lines().collect();
+    assert_eq!(lines.len(), 12, "{screen}");
+    assert!(
+        lines[11].starts_with("row10"),
+        "the last row of the screen is the last row of the pane:\n{screen}"
+    );
+    assert!(
+        lines[1].starts_with("row0"),
+        "and the first row under the strip is the pane's first:\n{screen}"
+    );
+    assert!(
+        !screen.contains("^b ? help"),
+        "herdr draws no hint bar in its pane keymap and neither does kampr:\n{screen}"
+    );
+}
+
+#[tokio::test]
+async fn a_lone_pane_has_no_border_and_a_second_pane_brings_one_back() {
+    // #375: herdr's box appears only once there are two panes to separate.
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 3));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let alone = painted(&mut app, 60, 12);
+    assert!(
+        !alone.contains('┌') && !alone.contains('└'),
+        "one pane is flush, with no box around it:\n{alone}"
+    );
+    // A grid shorter than its box sits at the bottom of it, as a shell's own screen does — so
+    // the row that proves the border is gone is the last one, hard against the screen's edge.
+    assert!(
+        alone.lines().nth(11).is_some_and(|l| l.starts_with("row2")),
+        "and its last row is hard against the screen's bottom:\n{alone}"
+    );
+
+    // A second pane on the same tab is kampr's mosaic, and now there is something to separate.
+    let mut beside = pane("01JNODE/w1:p2", "herdr", None, "idle");
+    beside["id"] = json!("01JNODE/w1:p2");
+    conn.send(json!({
+        "t": "herd",
+        "nodes": [node("01JNODE", "comingclean", true)],
+        "panes": [pane("01JNODE/w1:p1", "herdr", None, "idle"), beside]
+    }));
+    until(&mut events, |e| matches!(e, Event::Herd).then_some(())).await;
+
+    let split = painted(&mut app, 60, 12);
+    assert!(
+        split.contains('┌') && split.contains('└'),
+        "two panes are boxed:\n{split}"
+    );
+}
+
+#[tokio::test]
+async fn the_prefix_footer_borrows_the_pane_s_last_row_and_hands_it_straight_back() {
+    // #374: herdr's PREFIX/COPY/RESIZE footers paint over live pane content and vanish with the
+    // mode. A row that is reserved for them is a row the pane never gets.
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 11));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let before = painted(&mut app, 60, 12);
+    assert!(
+        before.lines().nth(11).is_some_and(|l| l.starts_with("row10")),
+        "{before}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    let held = painted(&mut app, 60, 12);
+    assert!(
+        held.lines().nth(11).is_some_and(|l| l.contains("PREFIX")),
+        "the footer paints over the pane's own last row:\n{held}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let after = painted(&mut app, 60, 12);
+    assert!(
+        after.lines().nth(11).is_some_and(|l| l.starts_with("row10")),
+        "and the row goes back to the pane:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn the_bottom_row_says_what_is_wrong_and_is_otherwise_the_pane_s() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 11));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let quiet = painted(&mut app, 60, 12);
+    assert!(
+        quiet.lines().nth(11).is_some_and(|l| l.starts_with("row10")),
+        "nothing to say, so the row is the pane's:\n{quiet}"
+    );
+
+    // A demotion is worth a row: it changes what every key does.
+    conn.send(json!({ "t": "role", "role": "readonly" }));
+    until(&mut events, |e| matches!(e, Event::Role(_)).then_some(())).await;
+    let demoted = painted(&mut app, 60, 12);
+    assert!(
+        demoted.lines().nth(11).is_some_and(|l| l.contains("readonly")),
+        "a read-only device says so on the borrowed row:\n{demoted}"
+    );
+
+    // **A note is joined to what is standing, never substituted for it.** Something passing —
+    // "sent", "copied 5 characters" — arriving must not be the reason the operator stops being
+    // told the socket is down or that this device cannot type.
+    app.note("something passing");
+    let both = painted(&mut app, 60, 12);
+    let row = both.lines().nth(11).unwrap_or_default();
+    assert!(
+        row.contains("readonly") && row.contains("something passing"),
+        "the standing state survives the note:\n{both}"
+    );
+}
+
+/// **The fit ladder explains itself once, when it climbs.** Its report is long — *"rung 3 · crop
+/// and pan · rung 2 was not tried — this terminal did not answer CSI 14t"* — and it used to be a
+/// standing tenant of the chrome, which on any pane wider than the window meant it was on screen
+/// for ever. The borrowed row is for departures from steady state, and a ladder that settled some
+/// minutes ago is not one; the pan window beside it says the pane is cropped in eight characters.
+#[tokio::test]
+async fn the_fit_ladders_explanation_is_raised_when_it_climbs_and_does_not_camp_on_the_row() {
+    struct Headless(u16, u16);
+    impl kampr_tui::render::fit::Display for Headless {
+        fn cells(&mut self) -> Option<(u16, u16)> {
+            Some((self.0, self.1))
+        }
+        fn host(&mut self) -> Option<String> {
+            Some("headless".into())
+        }
+        fn largest(&mut self) -> Option<(u16, u16)> {
+            Some((320, 90))
+        }
+        fn request(&mut self, _cols: u16, _rows: u16) {}
+        fn settle(&mut self, _was: (u16, u16)) -> Option<(u16, u16)> {
+            None
+        }
+    }
+
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 4));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    // Nothing has climbed yet, and the pane is drawn without a word about ladders.
+    let before = painted(&mut app, 60, 12);
+    assert!(!before.contains("rung"), "{before}");
+
+    // A pane far wider than the window, against a terminal that refuses to grow (#291).
+    app.fit(
+        &mut Headless(60, 12),
+        kampr_tui::render::fit::Need { cols: 200, rows: 4 },
+        kampr_tui::render::fit::Chrome::default(),
+    );
+    let climbed = painted(&mut app, 60, 12);
+    assert!(
+        climbed.contains("crop and pan"),
+        "the ladder says what it did, when it does it:\n{climbed}"
+    );
+
+    // And it is a note rather than a standing fact, so anything else with something to say takes
+    // the row from it — which a permanent tenant could never allow.
+    app.note("something else entirely");
+    let after = painted(&mut app, 60, 12);
+    assert!(
+        after.contains("something else entirely") && !after.contains("crop and pan"),
+        "the ladder is not still camped on the row:\n{after}"
+    );
+
+    // Rung 1 is not news. A wide terminal opening on a pane that fits says nothing about ladders,
+    // which is most launches.
+    let mut fresh = App::new(client.clone(), Options::default(), Images::default());
+    fresh.refocus();
+    fresh.fit(
+        &mut Headless(200, 60),
+        kampr_tui::render::fit::Need { cols: 80, rows: 24 },
+        kampr_tui::render::fit::Chrome::default(),
+    );
+    let quiet = painted(&mut fresh, 200, 60);
+    assert!(
+        !quiet.contains("rung"),
+        "the ordinary case announces nothing:\n{}",
+        quiet.lines().next_back().unwrap_or_default()
     );
 }

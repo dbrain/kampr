@@ -113,6 +113,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                                                      // cols: ABSENT until measured — see below
                "scrollback_rows": 0,                 // 0 = no ring (alt screen) or unsafe to read
                "has_conversation": true,             // a transcript for this pane resolves on disk
+               "converses": true,                    // this node has an adapter for this harness
                "watchers": 2,                        // ABSENT below 2 — see below
                "detail": "…",                        // ABSENT when it has a picture — see below
                "cmd": "cargo",                       // the foreground job's name — ABSENT far more often than not
@@ -207,6 +208,15 @@ adapter".** A `claude` started a minute ago has written nothing yet, and a pane 
 conversation it could not produce opened on a blank Conversation view whose `convo.load` answered
 `not_found`. It can still never outrun `hello.caps.conversation`: a node with no adapter for a
 harness resolves nothing for it.
+
+**`converses` is the other half — "this node has an adapter for what this pane is running" — and
+it is what a client offers the view on.** The two are separate questions and a client needs both.
+Deriving `has_conversation` from the harness promised a page that did not exist; gating the *view*
+on `has_conversation` cost the opposite mistake, hiding the conversation for the whole gap between
+a session opening and its first prompt landing — which is exactly the session somebody is about to
+talk to. So: offer the view on `converses`, expect content on `has_conversation`, and draw an empty
+transcript that says it is empty in between. Additive and defaulted `false`, so a client that has
+never heard of it falls back to `has_conversation` and behaves as it did.
 
 **`watchers` is how many viewers the node is streaming this pane to, and it is omitted at 0 and
 at 1.** A phone and the person at the desk could type into the same terminal with no sign of each

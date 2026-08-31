@@ -3718,11 +3718,19 @@ fn session_state(caps: &Value, name: &str) -> Option<bool> {
     caps["sessions"].as_array()?.iter().find(|s| s["name"] == name)?["running"].as_bool()
 }
 
+/// **The two halves of the question, and why a pane needs both.**
+///
 /// `has_conversation` promised a transcript and delivered `not_found`: it was derived from the
-/// pane's *harness*, so a `claude` started a minute ago — the pane the New sheet creates, opening
-/// on the Conversation view by default — advertised a conversation nothing could load.
+/// pane's *harness*, so a `claude` started a minute ago advertised a conversation nothing could
+/// load. Deriving it from the file on disk fixed that and cost the other half — for the whole gap
+/// between a session opening and its first prompt landing, a client had no way to *offer* the
+/// conversation at all, so a fresh agent could only be talked to through its grid.
+///
+/// So the entry carries both. `converses` is the adapter half — this node could serve a
+/// conversation for this harness — and it is what a client offers the view on. `has_conversation`
+/// stays the transcript half, and it is what says whether `convo.load` will answer with anything.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_freshly_started_agent_claims_no_conversation_until_one_exists() {
+async fn a_freshly_started_agent_offers_its_conversation_before_a_transcript_exists() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
     let home_path = home.path().display().to_string();
@@ -3744,15 +3752,23 @@ async fn a_freshly_started_agent_claims_no_conversation_until_one_exists() {
 
     // Give the herd every chance to make the claim before it is disproved.
     let mut claimed = false;
+    let mut offered = false;
     for _ in 0..24 {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if let Some(entry) = h.node.herd().pane(&pane) {
-            claimed |= serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+            let entry = serde_json::to_value(entry).unwrap();
+            claimed |= entry["has_conversation"] == true;
+            offered |= entry["converses"] == true;
         }
     }
     assert!(
         !claimed,
         "the pane advertised a conversation that convo.load answers not_found for"
+    );
+    assert!(
+        offered,
+        "a claude with an adapter and no transcript yet is still a pane a client may open the \
+         conversation on — this is the whole gap between a session starting and its first prompt"
     );
 
     send(

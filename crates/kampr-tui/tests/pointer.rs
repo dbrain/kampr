@@ -913,6 +913,10 @@ async fn a_blocked_agents_option_chip_answers_it_and_the_herd_view_opens_a_pane(
     until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
     let mut app = App::new(client.clone(), Options::default(), Images::default());
     app.refocus();
+    // The chips are the conversation's surface. A pane opens on its terminal now, where a prompt
+    // is answered by typing the key into the PTY exactly as it is at the desk.
+    app.key(key(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(key(KeyCode::Char('V'), KeyModifiers::SHIFT));
     conn.send(json!({
         "t": "pending", "pane": "01JNODE/w1:p1", "question": "Do you want to make this edit?",
         "options": [{ "key": "1", "label": "Yes" }, { "key": "2", "label": "No" }],
@@ -1301,4 +1305,57 @@ async fn a_read_only_device_and_a_node_without_manage_get_no_menu_from_the_right
             "{role}/manage={manage} opened a menu it cannot use:\n{screen}"
         );
     }
+}
+
+/// **A selection stops at the pane it began in.** herdr grabs the mouse exactly as kampr does
+/// (#376), so in both clients the host terminal's own select-and-copy is gone and this is the
+/// selection the operator has; a drag that walked out of the pane and kept taking cells would put
+/// the sidebar's own rows, or the pane beside it, into the clipboard. Two panes side by side is
+/// kampr's mosaic — the arrangement herdr structurally cannot draw — and it is where a drag is
+/// most likely to leave one box and land in another.
+#[tokio::test]
+async fn a_drag_that_leaves_its_pane_takes_nothing_from_whatever_it_landed_on() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([
+            measured("01JNODE/w1:p1", "t1", 20),
+            measured("01JNODE/w1:p2", "t1", 20)
+        ]),
+        json!({}),
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    for pane in ["01JNODE/w1:p1", "01JNODE/w1:p2"] {
+        conn.send(wide(pane, 20));
+    }
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = App::new(client.clone(), Options::default(), Images::default());
+    app.refocus();
+    painted(&mut app, 100, 12);
+    let _ = conn.heard().await;
+
+    assert_eq!(app.layout.panes.len(), 2, "two panes are on screen");
+    let here = app.layout.panes[0].placement.expect("a live grid").grid;
+    let beside = app.layout.panes[1].placement.expect("a live grid").grid;
+    assert!(beside.x > here.x, "the second pane is to the right");
+
+    // Down inside the first pane, then out of it entirely — across the gutter and into the
+    // second pane's own grid, which is as far out of the box as a drag on this screen can get.
+    for event in [
+        down(here.x, here.y),
+        drag(here.x + 3, here.y),
+        drag(beside.x + 5, beside.y),
+        up(beside.x + 5, beside.y),
+    ] {
+        let click = app.mouse.hit(event, &app.layout, Role::Full);
+        app.clicked(click);
+    }
+
+    let screen = painted(&mut app, 100, 12);
+    assert!(
+        screen.contains("copied 4 characters"),
+        "the four cells inside the pane, and not one past its edge:\n{screen}"
+    );
 }

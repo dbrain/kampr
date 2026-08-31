@@ -67,6 +67,30 @@ private const val HERD = """
         "updated_at":"2026-08-21T13:44:02Z"}]}
 """
 
+private const val SHELL = "01JNODE/w5:p1"
+private const val FRESH = "01JNODE/w6:p1"
+
+// A shell with no harness at all, and a `claude` that opened a minute ago: an adapter, and no
+// transcript written yet. `converses` is what separates the second from the first.
+private const val MIXED = """
+    {"t":"herd",
+     "nodes":[{"id":"01JNODE","name":"comingclean","kind":"local","online":true,
+               "herdr_version":"0.8.2","build":"0.1.0+abc1234"}],
+     "panes":[
+       {"id":"01JNODE/w3:p1","node_id":"01JNODE","workspace":"kampr","tab":"1",
+        "cwd":"/home/dbrain/dev/kampr","agent":"claude","agent_status":"idle",
+        "cols":94,"rows":40,"scrollback_rows":0,"has_conversation":true,"converses":true,
+        "updated_at":"2026-08-21T13:44:02Z"},
+       {"id":"01JNODE/w5:p1","node_id":"01JNODE","workspace":"shell","tab":"1",
+        "cwd":"/home/dbrain","agent_status":"unknown",
+        "cols":94,"rows":40,"scrollback_rows":900,"has_conversation":false,"converses":false,
+        "updated_at":"2026-08-21T13:44:02Z"},
+       {"id":"01JNODE/w6:p1","node_id":"01JNODE","workspace":"fresh","tab":"1",
+        "cwd":"/home/dbrain/dev/kampr","agent":"claude","agent_status":"working",
+        "cols":94,"rows":40,"scrollback_rows":0,"has_conversation":false,"converses":true,
+        "updated_at":"2026-08-21T13:44:02Z"}]}
+"""
+
 // The greeting's third frame when this device has never chosen anything, which the node sends
 // whether or not it holds a row.
 private const val NO_PREFS = """{"t":"prefs","panes":{}}"""
@@ -176,6 +200,66 @@ class PaneMemoryTest {
             assertEquals(CLAUDE to PaneView.Conversation, opened(app))
             app.openPane(CODEX)
             assertEquals(CODEX to PaneView.Terminal, opened(app), "the memory is per pane")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // **The size of the screen is the only thing that moves the default.** A phone showing a
+    // 213-column grid on a 411 dp screen is the complaint this product was built to answer, and a
+    // desktop or a CLI is not: both open on the terminal, because that is what somebody who
+    // reached for a terminal client asked for.
+    @Test
+    fun aPhoneOpensATalkingPaneOnItsConversationAndADesktopOpensTheSamePaneOnItsTerminal() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(CLAUDE)
+            assertEquals(CLAUDE to PaneView.Conversation, opened(app), "the grid is unusable at this size")
+
+            app.compact = false
+            app.openPane(CODEX)
+            app.openPane(CLAUDE)
+            assertEquals(CLAUDE to PaneView.Terminal, opened(app), "a desktop opens the terminal")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun aPhoneStillOpensAShellPaneOnItsTerminalBecauseThereIsNoConversationToOpen() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(SHELL)
+            assertEquals(SHELL to PaneView.Terminal, opened(app))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // A session that opened a minute ago has an adapter and no transcript file, and it is exactly
+    // the one somebody is about to talk to. Gating on `has_conversation` hid the conversation for
+    // the whole of that gap.
+    @Test
+    fun aSessionWithNoTranscriptYetStillOpensOnItsConversation() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(FRESH)
+            assertEquals(FRESH to PaneView.Conversation, opened(app))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun aChoiceThisDeviceMadeStillBeatsTheSizeOfItsScreen() {
+        val (app, scope) = state(MIXED, remembering(CLAUDE to PaneView.Terminal))
+        try {
+            app.compact = true
+            app.openPane(CLAUDE)
+            assertEquals(CLAUDE to PaneView.Terminal, opened(app), "the operator's own choice wins")
         } finally {
             scope.cancel()
         }
@@ -315,6 +399,8 @@ class PaneSwitchOrderTest {
 
     private fun ComposeUiTest.leftEdgeOf(label: String): Float =
         onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot.left
+
+
 }
 
 private const val NOW = 1_787_000_000_000.0

@@ -183,8 +183,23 @@ pub struct PaneEntry {
     pub rows: u16,
     #[serde(default)]
     pub scrollback_rows: u32,
+    /// **The transcript half**: a transcript for this pane resolves on disk *right now*, so
+    /// `convo.load` will answer with a page rather than `not_found`.
     #[serde(default)]
     pub has_conversation: bool,
+    /// **The adapter half**: this node knows how to read the harness this pane is running, so a
+    /// conversation is a view a client may offer — whether or not anything has been written yet.
+    ///
+    /// The two are not the same question and a client needs both. A `claude` that opened a minute
+    /// ago has an adapter and no file, and for the whole of that gap `has_conversation` is the
+    /// wrong thing to gate a view on: it hides the conversation from exactly the session somebody
+    /// is about to start talking to. Deriving `has_conversation` from the harness instead is the
+    /// bug this pair replaced — it promised a page that answered `not_found`.
+    ///
+    /// Additive: a client that has never heard of the field falls back to `has_conversation` and
+    /// behaves as it did.
+    #[serde(default)]
+    pub converses: bool,
     /// How many viewers this node is streaming the pane to, when it is more than one — so a client
     /// can say the pane is **open** somewhere else. It says nothing about typing: a viewer is
     /// somebody who has the pane on screen, not somebody at the keys. Absent for nought and for
@@ -327,6 +342,7 @@ impl PaneEntry {
             rows: p.rows,
             scrollback_rows: p.scrollback_rows,
             has_conversation,
+            converses: has_conversation,
             watchers: None,
             updated_at: None,
             detail: p.detail.clone(),
@@ -341,6 +357,13 @@ impl PaneEntry {
     /// the wire document another.
     pub fn with_watchers(mut self, watchers: usize) -> Self {
         self.watchers = (watchers > 1).then_some(watchers as u32);
+        self
+    }
+
+    /// A transcript always implies an adapter — nothing else could have resolved one — so this
+    /// only ever widens what `new` derived.
+    pub fn with_converses(mut self, converses: bool) -> Self {
+        self.converses = self.converses || converses;
         self
     }
 

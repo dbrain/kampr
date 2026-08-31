@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -238,6 +239,10 @@ internal fun AppScaffold(
     } else {
         null
     }
+
+    // The window is what knows the size, and `openPane` is reached from taps all over the app —
+    // so the flag lives on the state rather than being threaded through every call site.
+    SideEffect { state.compact = breakpoint != Breakpoint.Desktop }
 
     LaunchedEffect(breakpoint, herd.known, deepLink) {
         val target = when (deepLink?.screen) {

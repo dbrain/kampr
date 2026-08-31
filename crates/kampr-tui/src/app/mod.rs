@@ -104,6 +104,7 @@ pub struct App {
     pub mouse: Mouse,
     pub images: Images,
     pub convo: Convo,
+    pub composer: crate::convo::Composer,
     pub layout: Layout,
     focus: Option<String>,
     last: Option<String>,
@@ -157,6 +158,7 @@ impl App {
             mouse: Mouse::new(),
             images,
             convo: Convo::new(),
+            composer: crate::convo::Composer::default(),
             layout: Layout::default(),
             focus: None,
             last: None,
@@ -403,8 +405,7 @@ impl App {
     }
 
     /// The per-pane view choice lives in `prefs`, so it follows the operator between machines.
-    /// A pane with none opens on the conversation when it has one (ADR 0005) and on the terminal
-    /// otherwise.
+    /// A pane with none opens on the **terminal**, whatever it is running.
     pub fn adopt_prefs(&mut self) {
         let stored: Vec<(String, String)> = {
             let state = self.client.state();
@@ -435,12 +436,12 @@ impl App {
         }
     }
 
+    /// **The terminal is what a terminal client opens on.** This used to open an agent pane on its
+    /// conversation, which is what a phone wants and not what somebody who typed `kampr` into a
+    /// shell does: a client that answers a terminal with a transcript is a worse herdr. The
+    /// conversation is one keystroke away — `prefix shift+v` — and the choice sticks per pane.
     pub fn view(&self, pane: &str) -> View {
-        match self.views.get(pane) {
-            Some(view) => *view,
-            None if self.convo.has(pane) => View::Conversation,
-            None => View::Terminal,
-        }
+        self.views.get(pane).copied().unwrap_or(View::Terminal)
     }
 
     /// The panes on screen: every pane of the focused pane's tab, which is kampr's own mosaic —
@@ -532,7 +533,20 @@ impl App {
             return;
         }
         self.fitted = Some((need, size));
-        self.rung = Some(fit::climb(display, need, chrome, self.options.resize));
+        let rung = fit::climb(display, need, chrome, self.options.resize);
+        // **Said when it happens, not for ever after.** The ladder climbs once per pane geometry
+        // and terminal size, and its report is a long sentence about why a pane is being cropped —
+        // as a standing tenant of the borrowed row that put it on screen permanently for any pane
+        // wider than the window. The pan window says the same thing in eight characters and is the
+        // one that stays.
+        //
+        // Rung 1 is not news. It is the ordinary case, it says nothing the operator cannot see, and
+        // announcing it would mean every launch on a wide terminal opens with a sentence about
+        // ladders — noise on the one row this client just spent four rows buying back.
+        if rung != fit::Rung::Fits {
+            self.note(rung.report());
+        }
+        self.rung = Some(rung);
     }
 }
 

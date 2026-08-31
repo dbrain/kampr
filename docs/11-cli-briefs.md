@@ -136,11 +136,31 @@ branch as the dim subtitle herdr already puts there.
  laptop          ○ offline   │ │ ~/…/website master   ││                    │
      4 panes · seen 13:44    │ └──────────────────────┘└────────────────────┘
  agents           grouped    │
- ◐ herdr                     │ comingclean/herdr:1 · claude · 93×40 · ⇱ 120→93
+ ◐ herdr                     │
    working · claude          │
- ⚑ web-dashboard             │ ^b ? help  ^b w sidebar  ^b ⇧h herd  ^b q detach
+ ⚑ web-dashboard             │
    blocked · claude          │
 ```
+
+**Nothing is reserved at the bottom, and there is no hint bar.** This is measured, not taste: at a
+100x30 client herdr's pane reports `tput lines` **29** — every row below the tab strip — with the
+shell prompt on the last one (#373), and it draws no footer at all in its pane keymap. Its PREFIX,
+COPY and RESIZE footers paint *over* live pane content and vanish with the mode (#374). Kampr spent
+two rows on a permanent status line and a permanent `^b ? help` bar, and two more on a border around
+a lone pane that herdr does not draw (#375) — four of thirty, on chrome herdr does without.
+
+So: `[tab strip][panes]`, and the pane's own last row is **borrowed**. A mode's binds win it while a
+mode is open; a note wins it for the five seconds it lives, because `prefix [ y` raises "copied 5
+characters" *inside* copy mode and a footer that wins outright swallows the answer to the key just
+pressed; below that it carries only **departures from steady state** — company, a pan window, a
+scroll off the live rows, a link offered, a dead socket, a read-only device. The facts that are
+always true of a pane are not departures: the pane's name, its host and its directory ride on the
+tab strip's empty right half, which costs no row and answers the question herdr never has to
+(*which machine am I typing into*).
+
+**A lone pane has no border.** The box appears when there are two panes to separate, as herdr's
+does. A `pane.rename` on a flush pane lands on the strip's identity line, which is why that line
+leads with the pane's own name.
 
 **Both sidebar sections already exist as models — render them, do not design them.**
 
@@ -354,9 +374,22 @@ is already in `text` — which is exactly what a client that ignores `att` shows
 **Owns** the conversation view and the pending strip. Independent of W3 — a different renderer over
 the same socket.
 
-This is the largest gap in the first draft of this document, and it is not optional: **an agent pane
-opens on the conversation, not the grid** ([ADR 0005](./adr/0005-structure-comes-from-the-transcript.md)).
-A CLI that only ever draws grids is a CLI that opens every agent pane on the wrong view.
+This is the largest gap in the first draft of this document, and it is not optional — but the
+default moved, and the reason is worth keeping. It used to be *an agent pane opens on the
+conversation, not the grid*: right for a phone, where a 94-column grid is unreadable, and wrong for
+somebody who typed `kampr` into a terminal and got a transcript back. **In the CLI every pane opens
+on its terminal and the conversation is `prefix shift+v` away**, remembered per pane; the screen
+size picks the default in the Compose clients and nowhere else
+([ADR 0005](./adr/0005-structure-comes-from-the-transcript.md), superseded bullet).
+
+**The conversation has a reply box.** Without one, every key typed at the view fell straight through
+to the agent's PTY — it worked, and there was no box, no echo and no send affordance to say so,
+which is what made *"there's no clear way on how to enter a message"* the right complaint about a
+surface that was in fact typing every character into the agent as it arrived. `Composer.kt` is the
+contract: enter sends, alt+enter writes a second line, and a reply goes as the text and then `\r` as
+**two** messages so a harness that debounces sees the words settle before the newline. A prompt's
+offered keys are the prompt's only while the box is **empty** — once there is a draft, `1` is a
+character somebody is writing, not an answer to a question behind it.
 
 - `convo` / `convo.turn` carry turns of `md` | `code` | `tool` | `diff` blocks. Markdown is passed
   through verbatim **for the client to render** — so tables stay tables, which is the entire reason
@@ -367,7 +400,9 @@ A CLI that only ever draws grids is a CLI that opens every agent pane on the wro
   wire doc in full before writing the merge.
 - `convo.load` pages backwards; `cursor` **absent** is not the same as `more: false`.
 - `has_conversation` means a transcript resolves, not that this harness has an adapter, and it can
-  never outrun `hello.caps.conversation`.
+  never outrun `hello.caps.conversation`. **`converses` is the adapter half, and it is what the view
+  is offered on** — a session that opened a minute ago has no file yet and is the one most worth
+  being able to answer, so it gets a conversation that says it is empty rather than no conversation.
 
 **`pending` is what makes the triage list pay off.** A prompt waiting on a blocked agent arrives as
 `{"t":"pending", question, options[], source}` and is answered with `{"t":"answer", pane, key}`.

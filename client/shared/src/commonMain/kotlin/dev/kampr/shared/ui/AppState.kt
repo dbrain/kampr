@@ -431,10 +431,28 @@ class AppState(
     // the observe stream paints one either way, and every live Claude pane reports zero because
     // the harness clears the scrollback when it takes the screen (#30, #231). So that branch was
     // spending the operator's own choice on a guess about a pane with something to show regardless.
+    // Whether this client is drawing at phone size. Set by the composable that knows the window,
+    // and the only thing that moves the default view: a 213-column grid on a 411 dp screen is not
+    // a terminal anybody can use, and a conversation is. On a desktop — and in the CLI, which made
+    // the same change for the same reason — the terminal is what a terminal client opens on.
+    var compact: Boolean = false
+
     fun openPane(paneId: String, prefer: PaneView? = null) {
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
         awaitingRemembered = prefer == null && remembered == null
-        go(Screen.Pane(paneId, prefer ?: remembered ?: PaneView.Terminal))
+        go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId)))
+    }
+
+    // The operator's own choice always wins; this is only what a pane nobody has chosen for opens
+    // on. `converses` rather than `hasConversation`: a session that opened a minute ago has an
+    // adapter and no transcript file, and it is exactly the one somebody is about to talk to.
+    private fun defaultViewOf(paneId: String): PaneView {
+        if (!compact) return PaneView.Terminal
+        val pane = store.herd.value.panes.firstOrNull { it.id == paneId } ?: return PaneView.Terminal
+        return when (pane.converses || pane.hasConversation) {
+            true -> PaneView.Conversation
+            false -> PaneView.Terminal
+        }
     }
 
     private fun adoptRememberedView() {

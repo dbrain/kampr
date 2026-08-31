@@ -87,9 +87,13 @@ impl App {
         }
     }
 
-    /// The conversation surface gets the keyboard before the pane does, and the pending strip
-    /// gets it before the conversation: answering a blocked agent on another host from the
-    /// sidebar is the one thing this client can do that a herdr at the desk cannot.
+    /// The conversation surface gets the keyboard before the pane does, and this is the order it
+    /// hands it on in: a pending prompt, then the transcript's own scrolling, then the reply box.
+    ///
+    /// **Nothing here falls through to the PTY.** It used to: a key the conversation did not claim
+    /// went straight to the pane, blind, with no box on screen to say where it had gone — which is
+    /// what made "there is no clear way to enter a message" the right complaint about a surface
+    /// that was in fact typing every character straight into the agent.
     fn conversation_key(&mut self, key: KeyEvent) -> bool {
         let Some(pane) = self.focus.clone() else {
             return false;
@@ -97,7 +101,10 @@ impl App {
         if self.view(&pane) != View::Conversation {
             return false;
         }
-        if let crossterm::event::KeyCode::Char(c) = key.code
+        // **A prompt's keys are only the prompt's while the box is empty.** Once there is a draft,
+        // `1` is a character somebody is writing and not an answer to a question behind it.
+        if self.composer.empty(&pane)
+            && let crossterm::event::KeyCode::Char(c) = key.code
             && let Some(offered) = self.convo.answer(&pane, c)
         {
             // Only the key that was offered. The node decides whether a submit key follows, per
@@ -105,19 +112,53 @@ impl App {
             self.client.answer(&pane, &offered);
             return true;
         }
-        // **Consumed is not the same as unhandled.** An arrow key the conversation took would
-        // otherwise fall through to the pane and land in the agent's PTY.
-        if self.convo.key(&pane, key) {
-            self.teardown();
-            return true;
+        // The transcript's own scrolling, which is a different surface from the pane's ring and
+        // from the box below it. Left and right are the box's, so they are not offered here.
+        if matches!(
+            key.code,
+            crossterm::event::KeyCode::Up
+                | crossterm::event::KeyCode::Down
+                | crossterm::event::KeyCode::PageUp
+                | crossterm::event::KeyCode::PageDown
+        ) {
+            if key.code == crossterm::event::KeyCode::PageUp
+                && let Some(before) = self.convo.load_more(&pane)
+            {
+                self.client.convo_load(&pane, Some(&before));
+                return true;
+            }
+            if self.convo.key(&pane, key) {
+                self.teardown();
+                return true;
+            }
         }
-        if key.code == crossterm::event::KeyCode::PageUp
-            && let Some(before) = self.convo.load_more(&pane)
-        {
-            self.client.convo_load(&pane, Some(&before));
-            return true;
+        match self.composer.key(&pane, key) {
+            crate::convo::Typed::Ignored => false,
+            crate::convo::Typed::Changed => true,
+            crate::convo::Typed::Send(text) => {
+                self.reply(&pane, &text);
+                true
+            }
         }
-        false
+    }
+
+    /// The text, then the carriage return, as **two** messages — so a harness that debounces sees
+    /// the words settle before the newline that submits them. `pane.send_text` writes raw bytes
+    /// with no framing (#9), which is why a multi-line reply is bracketed on its way out.
+    fn reply(&mut self, pane: &str, text: &str) {
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        let body = match text.contains('\n') {
+            true => crate::input::bracketed(text),
+            false => text.to_string(),
+        };
+        if !self.client.input(pane, &body) || !self.client.input(pane, "\r") {
+            self.note("not delivered — the socket is down");
+            return;
+        }
+        self.note("sent");
     }
 
     pub fn paste(&mut self, data: &str) {
@@ -328,10 +369,12 @@ impl App {
         let on = !self.mouse.passes_through(&pane);
         self.mouse.set_passthrough(&pane, on);
         self.client.write_prefs(&pane, serde_json::json!({ "mouse": on }));
-        self.note(match on {
-            true => "this pane is passing the mouse through",
-            false => "the mouse stays with kampr",
-        });
+        // Armed, the borrowed row carries `mouse → pane` for as long as it is armed, and a note
+        // saying the same thing for five seconds would only outrank it. Disarming has no standing
+        // indicator, so it is the half that still needs saying.
+        if !on {
+            self.note("the mouse stays with kampr");
+        }
     }
 
     /// **The selection, not the grid.** A whole-screen copy is not what `prefix [ y` means at a
@@ -377,9 +420,10 @@ impl App {
         // operator's.
         match link {
             Some(Link::Declared(url)) | Some(Link::Detected(url)) => {
-                match navigable(&url) {
-                    true => self.note(format!("{url} — prefix o opens it")),
-                    false => self.note(format!("{url} — not a web link; prefix o will not open it")),
+                // A navigable one is carried by `offered` on the borrowed row until it is
+                // replaced; only the refusal needs a note of its own.
+                if !navigable(&url) {
+                    self.note(format!("{url} — not a web link; prefix o will not open it"));
                 }
                 self.offered = Some(url);
             }

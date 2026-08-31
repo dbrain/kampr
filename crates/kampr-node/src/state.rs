@@ -610,6 +610,11 @@ async fn build_model(
                 .and_then(|t| names.title(journals, info.agent.as_deref(), t, marker.as_ref(), &mut titled))
                 .or_else(|| marker.as_ref().and_then(chosen_name));
             let mut entry = PaneEntry::new(&session.node_id, &info, has_conversation)
+                // The cheap half, and the one that is true from the moment the harness opens: a
+                // pane whose transcript has not been written yet is still a pane this node could
+                // serve a conversation for, and a client that waits for the file cannot offer the
+                // view to the session somebody is about to start talking to.
+                .with_converses(journals.serves(info.agent.as_deref()))
                 .with_watchers(watchers)
                 .with_title(title);
             // The harness's own answer beats the screen. Herdr's status comes from regexes over

@@ -56,9 +56,22 @@ that will not.
 conversation view comes from the harness's own transcript file. Neither is derived from the other,
 and structure is never inferred from a rendered grid.**
 
-- **The conversation view is the default for an agent pane that has an adapter.** An agent pane with
-  no adapter gets terminal view only, stated plainly. A shell pane has no conversation tab at all.
-  That rule is what keeps a 94-column grid off a phone screen in the common case.
+- **The conversation view is offered wherever the node has an adapter, and it is the default only
+  where the terminal is unusable.** ~~It is the default for an agent pane that has an adapter.~~
+  Superseded on 2026-08-31, on the operator's reading of the shipped clients: *"on mobile it
+  probably makes sense for conversation to be default — as terminal is hard to use, but on terminal,
+  terminal should probably be default."* A 94-column grid on a 411 dp screen is unreadable and the
+  transcript is the answer; the same grid in the terminal a person typed `kampr` into is the thing
+  they asked for, and answering it with a transcript is a worse herdr. So the **screen size** picks
+  the default — phone-sized Compose clients open a talking pane on its conversation, desktop Compose
+  and the CLI open the terminal — and the operator's own per-pane choice beats both. An agent pane
+  with no adapter gets terminal view only, stated plainly, and a shell pane has no conversation at
+  all.
+- **The view is offered on the adapter, not on the transcript.** `has_conversation` is "a file
+  resolves"; `converses` is "this node could read this harness", and it is true from the moment the
+  session opens. Gating the view on the first hid the conversation for the whole gap between a
+  session starting and its first prompt — the window in which somebody most wants to talk to it —
+  so a pane that `converses` opens a conversation that says it is empty until turns arrive.
 - **Adapters are keyed on Herdr's own `agent` string** (#38), and registered only if their root
   directory exists — so `caps.conversation` and a pane's `has_conversation` are answered from the
   same registry and a pane can never claim a conversation the node cannot serve.

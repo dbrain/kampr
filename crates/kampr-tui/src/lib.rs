@@ -313,6 +313,21 @@ static SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "the conversation — prefix shift+v opens one",
+        manage: false,
+        rows: &[
+            ("type", "writes in the reply box; nothing reaches the agent yet"),
+            ("enter", "sends what is in the box"),
+            ("alt+enter", "a second line"),
+            ("esc", "clears the box"),
+            ("up/down pgup/pgdn", "move the transcript, not the pane's ring"),
+            (
+                "1..9 on an empty box",
+                "answers the question a blocked agent is asking",
+            ),
+        ],
+    },
+    Section {
         title: "two panes at once — any node, any host",
         manage: false,
         rows: &[

@@ -109,23 +109,26 @@ impl App {
         } else {
             area
         };
-        let [strip, panes, status, footer] = Split::vertical([
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .areas(body);
-        layout.status = status;
-        layout.footer = footer;
+        let [strip, panes] = Split::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
+        // **The bottom row is the pane's, and it is only ever borrowed.** herdr reserves nothing
+        // below its tab strip — at a 100x30 client the pane's own `tput lines` is 29 and the shell
+        // prompt sits on the last one (#373) — and it draws no hint bar in the pane keymap at all;
+        // its PREFIX, COPY and RESIZE footers paint *over* live content and vanish with the mode
+        // (#374). A row reserved for them is a row the pane never gets, and kampr was spending two.
+        let borrowed = Rect {
+            y: panes.bottom().saturating_sub(1),
+            height: panes.height.min(1),
+            ..panes
+        };
+        layout.status = borrowed;
+        layout.footer = borrowed;
         self.draw_strip(frame, strip, &mut layout);
         match self.screen {
             Screen::Panes => self.draw_panes(frame, panes, &mut layout),
             Screen::Herd => self.draw_herd(frame, panes, &mut layout),
             Screen::Fleet => self.draw_fleet(frame, panes, &mut layout),
         }
-        self.draw_status(frame, status);
-        self.draw_footer(frame, footer);
+        self.draw_borrowed(frame, borrowed);
         if self.keybinds {
             self.draw_keybinds(frame, area);
         }
@@ -173,10 +176,49 @@ impl App {
         // A write affordance a read-only device cannot use is absent, not disabled.
         if self.writes() && self.client.state().caps().manage {
             spans.push(Span::styled(" + ", Style::default().fg(t.mute).bg(t.bar)));
+            x = x.saturating_add(3);
         }
+        // **Which machine am I typing into.** herdr never has to answer it — a herdr TUI attaches
+        // to exactly one server (ADR 0002) — and kampr always does, so the strip's empty right
+        // half carries the host and the pane's directory. It costs no row: the strip is already
+        // spent, and the pane below it keeps every line down to the last (#373).
+        //
+        // It leads with the pane's own name because a lone pane is flush and has no border title
+        // to carry it — a `pane.rename` would otherwise land nowhere the operator can see.
+        let here = self.focus.as_ref().and_then(|pane| {
+            let state = self.client.state();
+            let entry = state.herd.pane(pane)?;
+            let mut parts = vec![label(entry)];
+            if let Some(node) = state.herd.node(&entry.node_id) {
+                parts.push(node.name.clone());
+            }
+            if let Some(cwd) = entry.cwd.as_deref() {
+                parts.push(kampr_core::naming::home_relative(cwd).into_owned());
+            }
+            Some(format!("{} ", parts.join(" \u{b7} ")))
+        });
         Paragraph::new(Line::from(spans))
             .style(Style::default().bg(t.bar))
             .render(area, frame.buffer_mut());
+        // Right-aligned, and only where it does not reach the tabs: a truncated hostname is worse
+        // than none, and the tabs are the half that is navigable.
+        if let Some(here) = here {
+            let width = here.chars().count() as u16;
+            if area.width > x.saturating_add(width) {
+                Paragraph::new(Line::from(Span::styled(
+                    here,
+                    Style::default().fg(t.mute).bg(t.bar),
+                )))
+                .render(
+                    Rect {
+                        x: area.x + area.width - width,
+                        width,
+                        ..area
+                    },
+                    frame.buffer_mut(),
+                );
+            }
+        }
     }
 
     fn draw_panes(&mut self, frame: &mut Frame, area: Rect, layout: &mut Layout) {
@@ -209,9 +251,12 @@ impl App {
             n => (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect(),
         };
         let boxes = Split::horizontal(widths).split(area);
+        // #375: herdr's box appears only once there are two panes to separate. A lone pane is
+        // flush, and the 2 rows and 2 columns the border was costing go to the fit ladder.
+        let bordered = shown > 1;
         let mut caret = None;
         for (pane, rect) in mosaic.iter().zip(boxes.iter()) {
-            if let Some(at) = self.draw_pane(frame, *rect, pane, layout) {
+            if let Some(at) = self.draw_pane(frame, *rect, pane, bordered, layout) {
                 caret = Some(at);
             }
         }
@@ -227,6 +272,7 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         pane: &str,
+        bordered: bool,
         layout: &mut Layout,
     ) -> Option<ratatui::layout::Position> {
         let t = self.options.theme;
@@ -258,16 +304,19 @@ impl App {
             true => format!(" {title} · stale "),
             false => format!(" {title} "),
         };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border)
-            .title(Span::styled(
-                head,
-                Style::default()
-                    .fg(if focused { t.accent_hi } else { t.dim })
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .style(Style::default().bg(t.bg));
+        let block = match bordered {
+            true => Block::default()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title(Span::styled(
+                    head,
+                    Style::default()
+                        .fg(if focused { t.accent_hi } else { t.dim })
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .style(Style::default().bg(t.bg)),
+            false => Block::default().style(Style::default().bg(t.bg)),
+        };
         let inner = block.inner(area);
         block.render(area, frame.buffer_mut());
         if inner.width == 0 || inner.height == 0 {
@@ -290,11 +339,49 @@ impl App {
             layout.panes.push(placed);
             return None;
         }
-        if self.view(pane) == View::Conversation && self.convo.has(pane) {
+        // The **adapter** half, not the transcript half: a `claude` that opened a minute ago has
+        // no file on disk yet and is exactly the session somebody is about to talk to. A pane with
+        // no adapter at all has nothing to fall back to and keeps its terminal.
+        let converses = self
+            .client
+            .state()
+            .herd
+            .pane(pane)
+            .is_some_and(|entry| entry.converses);
+        if self.view(pane) == View::Conversation && (converses || self.convo.has(pane)) {
             let role = self.client.state().role;
+            // **The row the chrome borrows is not the box's to take.** A terminal can lose a line
+            // of scrollback to a footer for a moment and nothing is hurt; an input affordance
+            // cannot — painted over, it is simply not there, which is the complaint this view
+            // started with. So a conversation whose box reaches the bottom of the screen gives that
+            // row back and sits above it. The terminal view is untouched and still reaches the last
+            // line, which is the whole point of having taken the rows back.
+            let surface = match inner.bottom() == layout.status.bottom() && layout.status.height > 0 {
+                true => Rect {
+                    height: inner.height.saturating_sub(1),
+                    ..inner
+                },
+                false => inner,
+            };
+            // The box is the bottom of the surface and the transcript gets what is left. It is
+            // always drawn, empty or not: a conversation with no visible way to answer it is the
+            // whole of what was wrong with this view.
+            let wanted = self.composer.height(pane, surface.width, role.writes());
+            let rows = wanted.min(surface.height.saturating_sub(1));
+            let above = Rect {
+                height: surface.height - rows,
+                ..surface
+            };
+            let box_at = Rect {
+                y: surface.y + above.height,
+                height: rows,
+                ..surface
+            };
             let marks = self
                 .convo
-                .render(frame.buffer_mut(), inner, pane, &t, &mut self.images, role);
+                .render(frame.buffer_mut(), above, pane, &t, &mut self.images, role);
+            self.composer
+                .render(frame.buffer_mut(), box_at, pane, &t, role.writes());
             if let Some(pending) = self.convo.pending(pane) {
                 layout.chips.push(Chips {
                     pane: pane.to_string(),
@@ -483,47 +570,61 @@ impl App {
             .render(area, frame.buffer_mut());
     }
 
-    fn draw_status(&self, frame: &mut Frame, area: Rect) {
+    /// The row the pane lends back. **Silent unless there is something to say** — herdr's own
+    /// habit (#374), and the reason the pane below it reaches the last line of the screen.
+    ///
+    /// A mode wins it outright, because a keymap that has taken the keyboard is the one thing the
+    /// operator cannot discover by looking. Everything else here is a departure from steady state:
+    /// a scroll off the live rows, a pan, company, a socket that is down, a device that cannot
+    /// type. The facts that are *always* true of a pane — its name, its directory, its size — are
+    /// on the border's title where there is a border, and nowhere when a lone pane is flush.
+    fn draw_borrowed(&self, frame: &mut Frame, area: Rect) {
+        if area.height == 0 {
+            return;
+        }
         let t = self.options.theme;
+        let fresh =
+            (!self.note.is_empty() && self.noted.elapsed() < super::NOTE_LIFETIME).then(|| self.note.clone());
+        // An open panel's own instructions take the row outright; so do a mode's binds, **unless a
+        // note is fresh**. `prefix [ y` raises "copied 5 characters" *inside* copy mode, and a
+        // footer that always won would swallow the answer to the key just pressed. Nothing else
+        // takes it outright — a note is joined to whatever is standing rather than replacing it,
+        // because "sent" arriving must not be the reason the operator stops seeing `disconnected`.
+        if let Some(text) = self.manage.footer().or_else(|| match fresh.is_some() {
+            true => None,
+            false => self.router.footer().map(str::to_string),
+        }) {
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {text}"),
+                Style::default()
+                    .fg(t.on_accent)
+                    .bg(t.accent)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .style(Style::default().bg(t.accent))
+            .render(area, frame.buffer_mut());
+            return;
+        }
         let mut parts: Vec<String> = Vec::new();
         if let Some(pane) = &self.focus {
-            parts.push(pane.clone());
             let state = self.client.state();
-            if let Some(entry) = state.herd.pane(pane) {
-                if let Some(agent) = &entry.agent {
-                    parts.push(agent.clone());
-                }
-                // The status line is the one surface wide enough for a whole path, and a pane's
-                // directory is most of what says which pane it is. `~` because the node's own
-                // `$HOME` is not on the wire and never will be — see `naming::home_relative`.
-                if let Some(cwd) = &entry.cwd {
-                    parts.push(kampr_core::naming::home_relative(cwd).into_owned());
-                }
-                // Never derive geometry. The herd entry omits `cols` until something has
-                // measured it; `grid.reset` always carries the measurement, so the shadow is
-                // the second place a width can honestly come from — and the rect is neither.
-                let measured = entry
-                    .cols
-                    .or_else(|| state.pane(pane).map(|p| p.geometry().0).filter(|c| *c > 0));
-                match measured {
-                    Some(cols) => parts.push(format!("{cols}×{}", entry.rows)),
-                    None => parts.push(format!("?×{}", entry.rows)),
-                }
-                if let Some(watchers) = entry.watchers.filter(|w| *w > 1) {
-                    parts.push(format!("{watchers} watching"));
-                }
+            if let Some(watchers) = state.herd.pane(pane).and_then(|e| e.watchers).filter(|w| *w > 1) {
+                parts.push(format!("{watchers} watching"));
             }
             if let Some(held) = state.pane(pane) {
                 let (cols, _) = held.geometry();
                 let pan = self.pans.get(pane).copied().unwrap_or_default();
+                // Never derive the window from the rect: the border it does or does not have is
+                // the difference, and the placement is the only thing that knows (#68, #84, #230).
                 let shown = self
                     .layout
                     .pane(pane)
-                    .map(|placed| placed.rect.width.saturating_sub(2))
+                    .and_then(|placed| placed.placement)
+                    .map(|placement| placement.grid.width)
                     .unwrap_or(cols);
                 if shown < cols {
                     parts.push(format!(
-                        "⇱ {}–{}/{cols}",
+                        "\u{21f1} {}\u{2013}{}/{cols}",
                         pan.col + 1,
                         (pan.col + shown).min(cols)
                     ));
@@ -538,10 +639,7 @@ impl App {
             }
         }
         if let Some(url) = &self.offered {
-            parts.push(format!("link {url} · ^b o opens it"));
-        }
-        if let Some(rung) = &self.rung {
-            parts.push(rung.report());
+            parts.push(format!("link {url} \u{b7} ^b o opens it"));
         }
         if !self.client.state().connected {
             parts.push("disconnected".into());
@@ -549,45 +647,18 @@ impl App {
         if !self.writes() {
             parts.push("readonly".into());
         }
-        if !self.note.is_empty() && self.noted.elapsed() < super::NOTE_LIFETIME {
-            parts.push(self.note.clone());
+        if let Some(note) = fresh {
+            parts.push(note);
+        }
+        if parts.is_empty() {
+            return;
         }
         Paragraph::new(Line::from(Span::styled(
-            format!(" {}", parts.join(" · ")),
+            format!(" {}", parts.join(" \u{b7} ")),
             Style::default().fg(t.dim).bg(t.bar),
         )))
+        .style(Style::default().bg(t.bar))
         .render(area, frame.buffer_mut());
-    }
-
-    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
-        let t = self.options.theme;
-        let line = match self
-            .manage
-            .footer()
-            .or_else(|| self.router.footer().map(str::to_string))
-        {
-            Some(text) => Span::styled(
-                format!(" {text}"),
-                Style::default()
-                    .fg(t.on_accent)
-                    .bg(t.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            None => {
-                let mut hints = vec!["^b ? help", "^b w sidebar", "^b ⇧h herd", "^b q detach"];
-                if self.writes() && self.client.state().caps().manage {
-                    hints.insert(3, "^b c new");
-                    hints.insert(4, "^b , rename");
-                }
-                Span::styled(
-                    format!(" {}", hints.join("  ")),
-                    Style::default().fg(t.mute).bg(t.bar),
-                )
-            }
-        };
-        Paragraph::new(Line::from(line))
-            .style(Style::default().bg(t.bar))
-            .render(area, frame.buffer_mut());
     }
 
     /// **Sized to the terminal and scrollable.** It used to be `rows + 2` clamped to the screen

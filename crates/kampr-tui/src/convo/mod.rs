@@ -1,10 +1,14 @@
-//! W8 — the conversation view and the pending strip.
+//! W8 — the conversation view, the pending strip, and the reply box.
 //!
-//! An agent pane opens on the conversation rather than the grid (ADR 0005), so [`Convo::has`] is
-//! what the app asks before it picks a pane's default surface.
+//! A pane opens on its **terminal**; the conversation is a view the operator asks for with
+//! `prefix shift+v`, offered on the pane entry's `converses` — the adapter half of the question,
+//! true from the moment the harness opens rather than from the moment it first writes.
 
+mod composer;
 mod markdown;
 mod stamps;
+
+pub use composer::{Composer, Typed};
 
 use crate::image::{Attachment, Images};
 use crate::theme::Theme;
@@ -479,9 +483,11 @@ impl Convo {
         if area.width == 0 || area.height == 0 {
             return Marks::default();
         }
-        let Some(held) = self.panes.get_mut(pane) else {
-            return Marks::default();
-        };
+        // **Created on demand.** A pane whose harness this node has an adapter for may be opened
+        // on its conversation before anything has been written — the gap between a session
+        // starting and its first prompt — and an empty transcript that says so is the answer,
+        // not a fall-through to the grid.
+        let held = self.panes.entry(pane.to_string()).or_default();
         let mut strip = held
             .pending
             .as_ref()
