@@ -44,6 +44,9 @@ pub struct Node {
     /// Every node reached over a mesh link, and what this node remembers of the ones that
     /// dropped. Empty until somebody joins, which is most nodes.
     pub peers: Arc<Peers>,
+    /// What each pane's conversation last cost to open, kept for the next watcher of it. Empty on
+    /// a node nobody has opened a conversation on. See [`crate::warm`].
+    pub convo_warmth: Arc<crate::warm::ConvoWarmth>,
     /// Controllers held open on the operator's behalf by `pane.size`. Empty on every node that has
     /// never been asked to reshape a pane, which is nearly all of them.
     pub holds: Arc<crate::holds::PaneHolds>,
@@ -122,6 +125,7 @@ impl Node {
             config,
             sessions,
             peers,
+            convo_warmth: Arc::new(crate::warm::ConvoWarmth::default()),
             holds: Arc::new(crate::holds::PaneHolds::default()),
             auth,
             push,

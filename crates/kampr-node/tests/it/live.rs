@@ -6477,3 +6477,471 @@ async fn pane_title(socket: &mut Socket, pane: &str) -> Option<String> {
     }
     saw
 }
+
+/// Reopening a pane's conversation must not cost what opening it cost.
+///
+/// The grid beside it is warm — the registry holds a pane's stream across a re-watch by design
+/// (#252) — and the conversation was not: `watch` built a journal, `resolve` found the file,
+/// the first `poll` parsed the whole of it and the fold read it again, every single time. Measured
+/// on a 30.7 MB transcript, four rounds against one pane: **1.99 s to the first conversation
+/// message and 0.86 s more for the facets, and every re-watch cost the same 1.9 s** (#409). That
+/// is what a reader saw as a conversation that had gone out of date and would not come back.
+///
+/// The ratio rather than a figure, because a live test that asserts a millisecond count asserts
+/// how loaded the machine was. A warm re-watch does no file work at all, so anything near the cold
+/// figure means the transcript was opened again.
+#[tokio::test(flavor = "multi_thread")]
+async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_parsing_it_again() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = "/tmp";
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = "9f1c0b2e-0000-4000-8000-0000000003f4";
+    let transcript = project.join(format!("{session}.jsonl"));
+
+    let home_path = home.path().display().to_string();
+    let h = harness!("warm", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let _ = until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    let pid = become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    // The marker a real Claude writes, so this measures the rung a real pane is resolved on: the
+    // pid names the session exactly, and the handle alone answers whether the transcript moved.
+    // Without it the pane falls back to the working directory, where every re-open has to re-derive
+    // the transcript and the figures below are a different claim (#412).
+    write_session_marker(home.path(), pid, session);
+    // Big enough that finding and parsing it is the whole cost, which is the case the report came
+    // from: a session that had been running for days.
+    let (body, _) = claude_transcript(cwd, 90_000);
+    // A prompt waiting on the harness, so the fold has something to say. Without it both rounds
+    // publish `{}` and the claim about what a warm fold hands a reader who has just arrived is
+    // untested — a fold answers the *difference*, and a warm one has usually not moved.
+    let queued = json!({
+        "type": "queue-operation", "operation": "enqueue",
+        "timestamp": "2026-08-28T02:10:59.658Z", "content": "and copy the config across"
+    });
+    std::fs::write(&transcript, format!("{body}{queued}\n")).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+
+    let cold = watch_a_conversation(&mut socket, &pane).await;
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let warm = watch_a_conversation(&mut socket, &pane).await;
+
+    assert!(
+        warm.turns > 0,
+        "the re-watch served no conversation at all, which is worse than serving it slowly",
+    );
+    assert!(
+        warm.took * 4 < cold.took,
+        "opening cost {:?} and reopening cost {:?} — the transcript was found and parsed again",
+        cold.took,
+        warm.took,
+    );
+    // A fold answers the *difference* since the last read, and a fold kept warm has usually not
+    // moved — so a client that has just arrived would be sent `{}` and draw nothing, which is the
+    // shape of the panel that showed a queued prompt to whoever asked first and to nobody after.
+    assert_eq!(
+        warm.facets, cold.facets,
+        "the reader who came back was sent different facets from the one who opened it",
+    );
+
+    // And the socket itself going away is the other half of it: a phone in a pocket drops the
+    // connection, and the session that held the pane goes with it. Warmth is the node's, not the
+    // session's, so what the phone reconnects onto is still the conversation it left.
+    drop(socket);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mut second = h.connect(&token).await;
+    let _ = until(&mut second, "hello", 10).await;
+    let reconnected = watch_a_conversation(&mut second, &pane).await;
+    assert!(
+        reconnected.took * 4 < cold.took,
+        "opening cost {:?} and reconnecting cost {:?} — a dropped socket threw the transcript away",
+        cold.took,
+        reconnected.took,
+    );
+}
+
+struct Served {
+    took: Duration,
+    turns: usize,
+    facets: Value,
+}
+
+/// Watches a pane's conversation and answers how long the node took to serve it, counting the
+/// facets that go with it: both are read off the transcript, and a client has neither until both
+/// have arrived. `convo` or `convo.turn`, because a client already holding this transcript is sent
+/// the revision rather than a page that would merge above what is on its screen.
+async fn watch_a_conversation(socket: &mut Socket, pane: &str) -> Served {
+    let started = std::time::Instant::now();
+    send(
+        socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    let mut turns = 0;
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        let tag = message["t"].as_str().unwrap_or("?").to_string();
+        if message["pane"] != pane {
+            continue;
+        }
+        if tag == "convo" || tag == "convo.turn" {
+            turns = message["turns"].as_array().map(Vec::len).unwrap_or(0);
+        }
+        if tag == "convo.facets" && turns > 0 {
+            return Served {
+                took: started.elapsed(),
+                turns,
+                facets: message["facets"].clone(),
+            };
+        }
+        seen.push(tag);
+    }
+    panic!("the node never served the conversation; saw {seen:?}");
+}
+
+/// A pane whose transcript moved while nobody was watching must not be handed the one it had.
+///
+/// Keeping the parse and the fold across a re-watch (#409) is what makes coming back to a pane
+/// instant, and it is also a way to be confidently wrong: the pump that inherits them has not
+/// asked which transcript this pane is on *now*. Every case a harness announces is caught by the
+/// handle — `/clear` mints a new session id and rewrites the pane's marker in place before the
+/// next prompt is submitted (#393) — but a harness that announces nothing is resolved by working
+/// directory, and there the handle is identical either side of a new transcript. That is the
+/// conversation showing one session while the terminal beside it shows another, which is the one
+/// thing worse than showing it slowly.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transcript_that_moved_while_nobody_watched_is_not_the_one_the_reader_comes_back_to() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = "/tmp";
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let home_path = home.path().display().to_string();
+    let h = harness!("moved", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let _ = until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    let before = project.join("9f1c0b2e-0000-4000-8000-00000000ab01.jsonl");
+    std::fs::write(&before, one_turn(cwd, "before", "the session the reader left")).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    assert_eq!(
+        opening["turns"][0]["id"], "before",
+        "the reader never saw the session they are about to leave: {opening}"
+    );
+
+    // Away, and the pane starts a new session under the same working directory and the same
+    // harness — which is what `/clear` leaves behind on a harness that publishes no marker.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let after = project.join("9f1c0b2e-0000-4000-8000-00000000ab02.jsonl");
+    std::fs::write(&after, one_turn(cwd, "after", "the session the pane is on now")).unwrap();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    let (drawn, retired) = until_conversation_ids(&mut socket, &pane, 25).await;
+    assert!(
+        drawn.contains(&"after".to_string()),
+        "the reader came back to the conversation the pane had left: drew {drawn:?}",
+    );
+    assert!(
+        !drawn.contains(&"before".to_string()),
+        "both sessions were drawn at once: {drawn:?}",
+    );
+    // A page merges by id, and the ids of another session's transcript match nothing — so the one
+    // on the screen has to be taken off before the new one lands, or they stack.
+    assert!(
+        retired.contains(&"before".to_string()),
+        "the session the pane had left was never taken off the client: retired {retired:?}",
+    );
+}
+
+fn one_turn(cwd: &str, uuid: &str, text: &str) -> String {
+    let at = time::OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    format!(
+        "{}\n",
+        json!({
+            "type": "user", "uuid": uuid, "cwd": cwd, "timestamp": at,
+            "message": { "content": text }
+        })
+    )
+}
+
+/// What the node draws on this pane and what it takes back off it, told apart the way a client
+/// tells them apart: a turn carrying no blocks is a retirement and is drawn as nothing.
+async fn until_conversation_ids(socket: &mut Socket, pane: &str, seconds: u64) -> (Vec<String>, Vec<String>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let (mut drawn, mut retired) = (Vec::new(), Vec::new());
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane || (message["t"] != "convo" && message["t"] != "convo.turn") {
+            continue;
+        }
+        for turn in message["turns"].as_array().into_iter().flatten() {
+            let Some(id) = turn["id"].as_str().map(str::to_string) else {
+                continue;
+            };
+            match turn["blocks"].as_array().is_some_and(|b| !b.is_empty()) {
+                true => drawn.push(id),
+                false => retired.push(id),
+            }
+        }
+        if !drawn.is_empty() {
+            return (drawn, retired);
+        }
+    }
+    (drawn, retired)
+}
+
+/// **A pane that is asking the operator something must not blank the message it is asking about.**
+///
+/// Claude publishes nothing about a pending request until after it is answered (probe #42), so
+/// while a pane is blocked the transcript is frozen and the screen is the only source there is.
+/// The pump withdrew the live preview the moment the pane stopped `working` — so an agent that
+/// wrote a message and then asked about it made that message *disappear* from the conversation,
+/// while the terminal beside it went on showing both. The operator is then being asked to approve
+/// something the conversation has stopped describing (#410).
+///
+/// `blocked` is not `idle`. A turn the operator interrupts really does leave half-written text on
+/// the screen for ever and is right to be withdrawn; a turn waiting on an answer is the harness
+/// having stopped on purpose, with the message still on the screen under it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_message_a_pane_is_asking_about_stays_on_the_conversation_while_it_asks() {
+    let (h, mut socket, pane, local, _home) = an_agent_pane_with_a_transcript("asking").await;
+
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "working" }),
+        )
+        .await;
+    // The agent writes, a paint at a time. A preview is a block the node has watched *move*, so a
+    // message that arrives all at once is not one.
+    for said in [
+        "I am about to remove",
+        "I am about to remove the old migration file,",
+        "I am about to remove the old migration file, which cannot be undone.",
+    ] {
+        paint_harness_screen(&mut socket, &pane, &format!("\u{25cf} {said}\\n\\n\u{276f} \\n")).await;
+    }
+    let (writing, _) = live_preview(&mut socket, &pane, 3).await;
+    assert_eq!(
+        writing.as_deref(),
+        Some("I am about to remove the old migration file, which cannot be undone."),
+        "the conversation never showed the message the pane was writing, so this proves nothing",
+    );
+
+    // And then it asks. The message is still on the screen, above the dialog.
+    paint_harness_screen(
+        &mut socket,
+        &pane,
+        "\u{25cf} I am about to remove the old migration file, which cannot be undone.\\n\\n\
+         Do you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n\\n\u{276f} \\n",
+    )
+    .await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
+        )
+        .await;
+    let (_, retired) = live_preview(&mut socket, &pane, 5).await;
+    assert!(
+        !retired,
+        "the pane asked a question and the conversation took away the message it was asking about",
+    );
+}
+
+/// The same gap reached from the other side, which is the one a phone reaches it from: a push says
+/// an agent is blocked, and the pane is opened *already* asking. Nothing has been watched moving,
+/// the transcript is frozen, and the conversation opens on a question with no message above it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_opened_while_it_is_already_asking_still_says_what_it_is_asking_about() {
+    let (h, mut socket, pane, local, _home) = an_agent_pane_with_a_transcript("asked").await;
+
+    paint_harness_screen(
+        &mut socket,
+        &pane,
+        "\u{25cf} I am about to remove the old migration file, which cannot be undone.\\n\\n\
+         Do you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n\\n\u{276f} \\n",
+    )
+    .await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
+        )
+        .await;
+
+    let (shown, _) = live_preview(&mut socket, &pane, 8).await;
+    assert_eq!(
+        shown.as_deref(),
+        Some("I am about to remove the old migration file, which cannot be undone."),
+        "the conversation opened on a question with no message above it",
+    );
+}
+
+/// A watched agent pane with a transcript open on it, which is where both of the above start.
+async fn an_agent_pane_with_a_transcript(
+    tag: &'static str,
+) -> (Harness, Socket, String, String, tempfile::TempDir) {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = "/tmp";
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join(format!("9f1c0b2e-0000-4000-8000-0000000{:05x}.jsonl", tag.len()));
+
+    let home_path = home.path().display().to_string();
+    let h = match Harness::start_with(tag, |c: &mut Config| c.journals.home = home_path).await {
+        Some(h) => h,
+        None => panic!("no herdr on PATH"),
+    };
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let _ = until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    let (body, _) = claude_transcript(cwd, 3);
+    std::fs::write(&transcript, &body).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    let _ = until_pane(&mut socket, "convo", &pane, 25).await;
+    (h, socket, pane, local, home)
+}
+
+/// Paints a harness-shaped screen through the pane's own tty, so the node's emulator sees exactly
+/// what herdr would put there. One `printf` on one shell line: a command with real newlines in it
+/// is read line by line and every line after the first becomes its own prompt.
+async fn paint_harness_screen(socket: &mut Socket, pane: &str, body: &str) {
+    send(
+        socket,
+        json!({ "t": "input", "pane": pane, "text": format!("clear; printf '%b' '{body}'\n") }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+}
+
+/// What the live preview is showing on this pane, and whether it was ever taken away.
+async fn live_preview(socket: &mut Socket, pane: &str, seconds: u64) -> (Option<String>, bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let (mut shown, mut retired) = (None, false);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if message["pane"] != pane || message["t"] != "convo.turn" {
+            continue;
+        }
+        for turn in message["turns"].as_array().into_iter().flatten() {
+            if turn["id"] != "live" {
+                continue;
+            }
+            match turn["blocks"].as_array().is_some_and(|b| !b.is_empty()) {
+                true => shown = Some(turn["blocks"][0]["text"].as_str().unwrap_or("?").to_string()),
+                // Sticky. A preview withdrawn and re-published a poll later is a message that
+                // blinked out of the conversation, and a reader watching it happen learns not to
+                // trust the surface — which is the whole complaint.
+                false => retired = true,
+            }
+        }
+    }
+    (shown, retired)
+}
+
+/// `~/.claude/sessions/<pid>.json`, the map a harness publishes from its own process to its own
+/// session. `procStart` is left out on purpose: a marker that records none is owned by whatever
+/// pid it is named after, which is what a test wants and what `PaneProcess::owns` already says.
+fn write_session_marker(home: &Path, pid: u32, session: &str) {
+    let sessions = home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        json!({ "sessionId": session, "cwd": "/tmp", "status": "idle" }).to_string(),
+    )
+    .unwrap();
+}

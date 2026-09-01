@@ -94,6 +94,18 @@ node. [ADR 0003](./docs/adr/0003-the-client-contract-is-a-cell-grid.md).
 **Agent panes default to a conversation view built from the harness's own transcript**, because a
 markdown table cannot be recovered from a rendered grid, and because that view reflows natively so
 the common case never shows a 94-column grid on a phone.
+**The conversation is kept warm the way the grid is.** The registry pins a pane's stream across a
+re-watch by design (#252), so a reader returning to a pane reattaches to a live emulator; the
+transcript had no equivalent and was found, parsed and folded from cold on every `watch`. On a
+30.7 MB transcript that was **1.99 s to the first conversation message and 0.86 s more for the
+facets, on the first open and on every re-watch alike** — which is what a reader saw as a
+conversation that had gone out of date and would not come back (#394, #409). The parse and the fold
+now live on the **node**, not the session, so a phone coming out of a pocket onto a fresh socket
+finds them too. They are *taken* by the watcher that holds the pane and handed back when its handle
+drops: a journal answers what changed since the last read, so two pumps sharing one would each get
+half of it, and exactly one may ever hold it. Four panes' worth is kept — the widest mosaic a phone
+draws — and a conversation that never opened is not worth a place.
+
 [ADR 0005](./docs/adr/0005-structure-comes-from-the-transcript.md).
 
 ## 3. Deployment model

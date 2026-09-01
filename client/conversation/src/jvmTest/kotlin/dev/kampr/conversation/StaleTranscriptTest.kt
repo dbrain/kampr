@@ -20,9 +20,12 @@ import kotlin.test.assertTrue
 
 private fun said(id: String, role: String, text: String) = Turn(id, role, null, listOf(Block.Md(text)))
 
-// The grid draws its own ground back over itself when frames stop, and the transcript did nothing
-// at all — on the one surface whose age a reader cannot judge by looking at it, because a message
-// from an hour ago is drawn exactly like a message from a second ago.
+// A transcript nobody is still sending has to say so, and the first answer to that was an alpha
+// over the whole list. The operator read the wash as a claim about the words rather than about the
+// connection — *"we're showing greyed out text in conversation when it's done and read"* — and
+// they were right to: those turns were read off the transcript and every one of them is exactly
+// what the agent said. The doubt is about what comes *after* them, so the notice is a line at the
+// foot of what was read and the words above it keep their own colour.
 //
 // Measured rather than eyeballed. "Ink" is how far a pixel stands off the ground, summed over the
 // render; a wash is that sum falling. Counting it rather than sampling a point keeps the test off
@@ -72,19 +75,15 @@ class StaleTranscriptTest {
     }
 
     @Test
-    fun aTranscriptNobodyIsStillSendingIsDrawnFadedRatherThanAsIfItWereLive() {
+    fun aTranscriptNobodyIsStillSendingKeepsItsColourAndAddsALineRatherThanLosingContrast() {
         val live = ink(stale = false, name = "live")
         val stale = ink(stale = true, name = "stale")
         assertTrue(live > 0, "the live transcript painted nothing off the ground, so this probe proves nothing")
         val ratio = stale.toDouble() / live.toDouble()
         assertTrue(
-            ratio < 0.9,
-            "a stale transcript was drawn at ${"%.2f".format(ratio)} of a live one's contrast — " +
-                "the reader cannot tell it stopped arriving",
-        )
-        assertTrue(
-            ratio > 0.2,
-            "a stale transcript faded to ${"%.2f".format(ratio)} of a live one — that is not readable",
+            ratio > 1.0,
+            "a transcript that stopped arriving was drawn at ${"%.2f".format(ratio)} of a live one's " +
+                "contrast — the words a reader can trust were faded to warn about the words that are absent",
         )
     }
 }

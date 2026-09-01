@@ -173,6 +173,16 @@ impl FacetFeed {
         }
     }
 
+    /// What this feed last published, for a reader who was not there when it did.
+    ///
+    /// [`moved`](Self::moved) answers the *difference*, which is all a client following the pane
+    /// needs and is nothing at all to a client that has just arrived — a fold kept warm across a
+    /// re-watch (#409) has usually not moved since, so the delta is empty and the facets are still
+    /// on the screen of whoever asked first.
+    pub fn last(&self) -> Facets {
+        self.last.clone()
+    }
+
     /// The facets as they are now, or `None` when nothing has moved since the last call. The first
     /// call answers `None` for a harness with nothing to say, which is the same message as the
     /// `{}` it would otherwise have sent.

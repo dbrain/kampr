@@ -214,7 +214,12 @@ pub struct Watch {
 }
 
 impl Watch {
-    pub fn observe(&mut self, preview: Option<Turn>) -> Change {
+    /// `asking` is whether the pane is waiting on the operator, and it changes what a *static*
+    /// block means. On a working pane an unchanging block is a notice that never became a message
+    /// and is not worth publishing. On a pane that is asking, the harness has stopped writing on
+    /// purpose — the message is finished, it is still on the screen above the question, and the
+    /// record that would replace it is not coming until the question is answered (#42, #410).
+    pub fn observe(&mut self, preview: Option<Turn>, asking: bool) -> Change {
         let Some(turn) = preview else {
             return self.stop();
         };
@@ -225,7 +230,7 @@ impl Watch {
         let moving = self.seen.as_deref().is_some_and(|seen| advanced(seen, &text));
         let static_block = self.seen.as_deref() == Some(text.as_str());
         self.seen = Some(text.clone());
-        if !moving {
+        if !moving && !(asking && static_block) {
             // Unchanged, so still whatever it was — a one-line notice that never becomes a
             // message, or a published message that has stopped growing and is waiting for its
             // record. Anything else is a block this has never watched move, and whatever is on

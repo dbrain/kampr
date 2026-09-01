@@ -51,6 +51,46 @@ pub fn open() -> Open {
     Arc::new(Mutex::new(None))
 }
 
+/// Everything one pane's conversation cost to find, parse and fold, kept past the pump that did
+/// it so that coming back to a pane is not doing it again. See [`crate::warm`] for why it is the
+/// node that keeps this and not the session.
+///
+/// The pump owns this for as long as it runs. It is deliberately the whole of what an open costs
+/// and nothing that merely describes one: `opened` and `handle` are what say the transcript below
+/// is still the right transcript, and without them a warm pump would page the conversation of a
+/// session the pane has since left.
+pub struct Warm {
+    pub journal: Open,
+    pub opened: Option<PathBuf>,
+    pub handle: Option<Handle>,
+    pub facets: Option<FacetFeed>,
+}
+
+impl Warm {
+    /// Nothing here was ever opened, so there is nothing here to keep.
+    pub fn cold(&self) -> bool {
+        self.opened.is_none()
+    }
+
+    /// The transcript went away, moved, or was never found: whatever was parsed off it is not this
+    /// pane's conversation any more.
+    fn forget(&mut self) {
+        self.opened = None;
+        self.facets = None;
+    }
+}
+
+pub type Warmth = Arc<Mutex<Warm>>;
+
+pub fn warmth() -> Warmth {
+    Arc::new(Mutex::new(Warm {
+        journal: open(),
+        opened: None,
+        handle: None,
+        facets: None,
+    }))
+}
+
 /// The transcript this client is holding turns from, and their ids.
 ///
 /// **Kept by the client rather than by the pump, because the two have different lifetimes.** A
@@ -186,7 +226,7 @@ fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>) -> Option<Se
 /// working directory, and the session inside them. A change to any of the three is a different
 /// transcript, and the one the client is holding has to be taken off the screen.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Handle {
+pub struct Handle {
     agent: Option<String>,
     cwd: Option<String>,
     identity: Identity,
@@ -211,7 +251,9 @@ pub struct ConvoCtx {
     pub wire: Arc<Wire>,
     pub global: String,
     pub local: String,
-    pub journal: Open,
+    /// Everything this pane's conversation last cost to open, which on a re-watch is everything
+    /// this pump does not have to do again.
+    pub warm: Warmth,
     pub held: Held,
     pub followed: Followed,
 }
@@ -232,10 +274,11 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         wire,
         global,
         local,
-        journal,
+        warm,
         held,
         followed,
     } = ctx;
+    let journal = warm.lock().unwrap().journal.clone();
 
     let mut follow = tokio::time::interval(POLL);
     follow.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -248,19 +291,34 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut live_poll = tokio::time::interval(LIVE_POLL);
     live_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    let mut opened: Option<PathBuf> = None;
-    let mut handle: Option<Handle> = None;
+    // Where the pump before this one got to, which on a re-watch is a transcript already found,
+    // already parsed and already folded (#409). A cold pane answers `None` to both and everything
+    // below runs exactly as it did.
+    let (mut opened, mut handle) = {
+        let warm = warm.lock().unwrap();
+        (warm.opened.clone(), warm.handle.clone())
+    };
+    // The conversation still has to be *sent*: this pump has shown this client nothing, and the
+    // resolve below is the only thing that would have. One shot, and only while the handle it was
+    // kept under is still the handle the pane is on.
+    let mut inherited = opened.is_some();
     let mut due = true;
     let mut misses = 0u32;
     let mut live = Watch::default();
     let mut was_working = false;
-    let mut facets: Option<FacetFeed> = None;
     let mut desk = ComposerFeed::default();
     let mut composer: Option<ComposerReader> = None;
 
     loop {
         let now = pane_of(&herd, &global, &identity, &local);
-        let working = status_of(&herd, &global) == AgentStatus::Working;
+        let status = status_of(&herd, &global);
+        let working = status == AgentStatus::Working;
+        // A pane waiting on the operator is not a pane that has stopped. The transcript is frozen
+        // for as long as it waits (#42), so its screen is the only account of the message it is
+        // asking about — and withdrawing the preview there took that message off the conversation
+        // at the one moment the operator needed it (#410).
+        let asking = status == AgentStatus::Blocked;
+        let live_now = working || asking;
         // A turn that ends without the status moving is covered by the transcript catching up,
         // but a turn the operator interrupts leaves its half-written text on the screen forever —
         // so leaving `working` withdraws whatever is showing.
@@ -268,7 +326,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // The transcript is read first, and in this order deliberately: the harness writes the
         // record and *then* goes idle, so withdrawing before that read leaves the client with
         // neither the preview nor its replacement for as long as the follow tick takes to notice.
-        if (!working || opened.is_none()) && live.showing() {
+        if (!live_now || opened.is_none()) && live.showing() {
             if !flush(&journal, &wire, &global, &held).await {
                 return;
             }
@@ -284,7 +342,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             let elsewhere = moved(handle.as_ref(), &now);
             handle = Some(now.clone());
             opened = None;
+            inherited = false;
             release(&journal, &held);
+            {
+                let mut warm = warm.lock().unwrap();
+                warm.handle = handle.clone();
+                warm.forget();
+            }
             // The pane named a *different* session, so what the client is holding
             // belongs to the one before it — and the replacement does not exist for
             // as long as it takes to send a first message (#259, #311). Waiting for
@@ -296,6 +360,25 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             due = true;
             misses = 0;
             composer = journals.composer(now.agent.as_deref());
+        }
+
+        // **An inherited transcript is only this pane's if the pane still resolves to it** — and
+        // that is only in doubt where the handle cannot answer. A harness that names its session
+        // has already been compared above: `/clear` mints a new id and rewrites the pane's marker
+        // in place before the next prompt is submitted (#393), so the handle moved and took the
+        // transcript with it. A harness that names nothing is resolved by *working directory*,
+        // where a new transcript leaves the handle identical — and serving the old one would be
+        // the conversation showing one session while the terminal beside it shows another.
+        //
+        // Asked only there, because asking is not free: re-deriving from a directory reads the
+        // head and the tail of every candidate in it, measured at **290 ms** against the 55 ms the
+        // whole warm re-open otherwise costs (#412).
+        if inherited && now.identity.announced.is_none() && opened != located(&journals, &now) {
+            inherited = false;
+            opened = None;
+            release(&journal, &held);
+            warm.lock().unwrap().forget();
+            due = true;
         }
 
         // A pane starting a turn is about to have a transcript whether or not it had one before,
@@ -313,18 +396,6 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
-                    // What the client is holding *of this transcript*, when this node knows. A
-                    // page for a transcript it is already showing merges into it; every other
-                    // page replaces it. Read before [`withdraw`], which takes the record.
-                    let showing_already = held
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .filter(|(path, _)| path == fresh.path())
-                        .map(|(_, ids)| ids.clone());
-                    if !withdraw(&wire, &global, &held, fresh.path()) {
-                        return;
-                    }
                     let path = fresh.path().to_path_buf();
                     // Which transcript a pane is being served, and on the strength of which
                     // handle. Nothing recorded this: a pane served the *wrong* conversation left
@@ -340,44 +411,45 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         "conversation opened",
                     );
                     opened = Some(path.clone());
+                    inherited = false;
                     *journal.lock().unwrap() = Some(fresh);
-                    // The first read is the page the client is about to be sent, so it must not
-                    // also arrive behind it as a revision.
-                    let _ = drain(&journal).await;
-                    match reopened(&journal, &global, showing_already.as_deref()) {
-                        Some(first) if wire.send(&first) => {
-                            // The other half of the same blind spot: which shape went out, and how
-                            // much of it. A page and a revision are the difference between a
-                            // client drawing the conversation and a client merging into one it is
-                            // assumed to already have, and a pane reported as showing nothing has
-                            // no other way to be told apart from a pane sent nothing.
-                            let (kind, count) = match &first {
-                                ServerMsg::Convo { turns, .. } => ("page", turns.len()),
-                                ServerMsg::ConvoTurn { turns, .. } => ("revision", turns.len()),
-                                _ => ("other", 0),
-                            };
-                            tracing::info!(pane = %global, kind, turns = count, "conversation delivered");
-                        }
-                        _ => return,
-                    }
-                    *held.lock().unwrap() = showing(&journal);
-                    // Off the executor: the fold's first read is the whole transcript (154 ms
-                    // for 29.4 MB), which is a cost a conversation opening can carry and a poll
-                    // cannot. The fold is kept, so every read after this one costs the records
-                    // the transcript has grown by. A harness with nothing to say sends `{}` and
-                    // the client draws nothing, so there is no case worth suppressing here.
-                    facets = Some(journals.fold(now.agent.as_deref()));
-                    let opening = refold(&mut facets, &path, describe(&local))
+                    warm.lock().unwrap().opened = opened.clone();
+                    if !deliver(&journal, &wire, &global, &held, &path).await
+                        || !publish_facets(
+                            &warm,
+                            &journals,
+                            &wire,
+                            &global,
+                            &path,
+                            now.agent.as_deref(),
+                            describe(&local),
+                        )
                         .await
-                        .unwrap_or_default();
-                    if !wire.send(&ServerMsg::ConvoFacets {
-                        pane: global.clone(),
-                        facets: opening,
-                    }) {
+                    {
                         return;
                     }
                 }
             }
+        }
+
+        // A pump that inherited an open transcript has done none of the above, so nothing has put
+        // the conversation on this client's socket. The reader gets it now — off a parse and a
+        // fold that already exist, which is the whole of what warmth buys.
+        if std::mem::take(&mut inherited)
+            && let Some(path) = opened.clone()
+            && (!deliver(&journal, &wire, &global, &held, &path).await
+                || !publish_facets(
+                    &warm,
+                    &journals,
+                    &wire,
+                    &global,
+                    &path,
+                    now.agent.as_deref(),
+                    describe(&local),
+                )
+                .await)
+        {
+            return;
         }
 
         tokio::select! {
@@ -410,6 +482,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
                         opened = None;
                         release(&journal, &held);
+                        warm.lock().unwrap().forget();
                         due = true;
                     }
                 }
@@ -420,7 +493,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 // carries has moved — a `convo.facets` every 400 ms per pane would be a frame for
                 // nothing.
                 if let Some(path) = opened.clone()
-                    && let Some(moved) = refold(&mut facets, &path, describe(&local)).await
+                    && let Some(moved) = refold(&warm, &path, describe(&local)).await
                     && !wire.send(&ServerMsg::ConvoFacets { pane: global.clone(), facets: moved })
                 {
                     return;
@@ -445,12 +518,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // A preview is the one thing on this socket that can be dropped without loss: the
             // record behind it is still coming, and a client that is already behind does not want
             // a fifth revision of a message it has not drawn yet.
-            _ = live_poll.tick(), if working && opened.is_some() && !wire.outbox().congested() => {
+            _ = live_poll.tick(), if live_now && opened.is_some() && !wire.outbox().congested() => {
                 let change = match panes.screen(&local) {
                     Some(screen) => {
                         let borrowed: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
                         let seen = journal.lock().unwrap().as_ref().and_then(|j| j.preview(&borrowed));
-                        live.observe(seen)
+                        live.observe(seen, asking)
                     }
                     None => live.stop(),
                 };
@@ -464,6 +537,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 if latest.as_deref().map(Journal::path) != opened.as_deref() {
                     opened = None;
                     release(&journal, &held);
+                    warm.lock().unwrap().forget();
                 }
                 due = true;
             }
@@ -474,6 +548,98 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
         }
     }
+}
+
+/// Puts the open transcript on this client's socket: whatever it has grown by since the last read,
+/// and then the conversation itself.
+///
+/// One path, because a pump that had to find and parse the file and a pump that inherited one
+/// already parsed differ in what it *cost* and in nothing about what the reader is owed. A warm
+/// pump that skipped this would sit on a socket that had been sent no conversation at all.
+async fn deliver(journal: &Open, wire: &Wire, pane: &str, held: &Held, transcript: &Path) -> bool {
+    // What the client is holding *of this transcript*, when this node knows. A page for a
+    // transcript it is already showing merges into it; every other page replaces it. Read before
+    // [`withdraw`], which takes the record.
+    let showing_already = held
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(path, _)| path == transcript)
+        .map(|(_, ids)| ids.clone());
+    if !withdraw(wire, pane, held, transcript) {
+        return false;
+    }
+    // The first read is the page the client is about to be sent, so it must not also arrive behind
+    // it as a revision. On a warm pump it is the handful of records written while nobody was
+    // watching; on a cold one it is the whole file.
+    let _ = drain(journal).await;
+    match reopened(journal, pane, showing_already.as_deref()) {
+        Some(first) if wire.send(&first) => {
+            // The other half of the same blind spot: which shape went out, and how much of it. A
+            // page and a revision are the difference between a client drawing the conversation and
+            // a client merging into one it is assumed to already have, and a pane reported as
+            // showing nothing has no other way to be told apart from a pane sent nothing.
+            let (kind, count) = match &first {
+                ServerMsg::Convo { turns, .. } => ("page", turns.len()),
+                ServerMsg::ConvoTurn { turns, .. } => ("revision", turns.len()),
+                _ => ("other", 0),
+            };
+            tracing::info!(pane = %pane, kind, turns = count, "conversation delivered");
+        }
+        _ => return false,
+    }
+    *held.lock().unwrap() = showing(journal);
+    true
+}
+
+/// The facets that go with the conversation just delivered.
+///
+/// Off the executor: the fold's first read is the whole transcript (154 ms for 29.4 MB), which is
+/// a cost a conversation opening can carry and a poll cannot. The fold is kept — across a
+/// re-watch as well as across a tick (#409) — so every read after the first costs the records the
+/// transcript has grown by.
+///
+/// A fold that has not moved answers nothing, which is the right answer to the client that has
+/// been following it and the wrong one to a client that has just arrived: it has never seen these
+/// facets. So an opening publishes what the fold last had when it has nothing newer. A harness
+/// with nothing to say sends `{}` and the client draws nothing, so there is no case to suppress.
+async fn publish_facets(
+    warm: &Warmth,
+    journals: &Journals,
+    wire: &Wire,
+    pane: &str,
+    transcript: &Path,
+    agent: Option<&str>,
+    marker: Option<SessionMarker>,
+) -> bool {
+    // Absent on a cold open, and absent on a pump aborted while the fold was out on its blocking
+    // read — which is the one way warmth can lose it, and a pane that then published no facets for
+    // the rest of its life would be a worse bug than the one this fixes.
+    let cold = {
+        let mut warm = warm.lock().unwrap();
+        match warm.facets.is_none() {
+            true => {
+                warm.facets = Some(journals.fold(agent));
+                true
+            }
+            false => false,
+        }
+    };
+    let opening = match refold(warm, transcript, marker).await {
+        Some(moved) => moved,
+        None if cold => Facets::default(),
+        None => warm
+            .lock()
+            .unwrap()
+            .facets
+            .as_ref()
+            .map(FacetFeed::last)
+            .unwrap_or_default(),
+    };
+    wire.send(&ServerMsg::ConvoFacets {
+        pane: pane.to_string(),
+        facets: opening,
+    })
 }
 
 /// Sends whatever the transcript has grown by, if anything. A read that fails is left to the
@@ -542,6 +708,23 @@ fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str, look: &Look, lo
         false => Identity::default(),
     };
     Handle { agent, cwd, identity }
+}
+
+/// Which transcript this pane resolves to *now*, without opening it.
+///
+/// The same ladder [`resolve`] walks and none of the work: a marker read or a directory listing,
+/// no parse and no fold. That is what makes it cheap enough to ask before trusting an inherited
+/// one.
+fn located(journals: &Journals, handle: &Handle) -> Option<PathBuf> {
+    journals
+        .locate(
+            handle.agent.as_deref(),
+            handle.identity.announced.as_ref(),
+            handle.cwd.as_deref().map(Path::new),
+            &handle.identity.harness,
+        )
+        .ok()
+        .flatten()
 }
 
 fn resolve(journals: &Journals, state_dir: &Path, handle: &Handle) -> Option<Box<dyn Journal>> {
@@ -687,12 +870,8 @@ async fn drain_sub(followed: &Followed) -> Option<(String, Vec<Turn>)> {
 /// A fold whose blocking task did not come back is dropped rather than replaced with a fresh one
 /// that would silently re-send everything: the next resolve builds one, and until then this pane
 /// publishes no facets rather than the wrong ones.
-async fn refold(
-    feed: &mut Option<FacetFeed>,
-    transcript: &Path,
-    marker: Option<SessionMarker>,
-) -> Option<Facets> {
-    let mut held = feed.take()?;
+async fn refold(warm: &Warmth, transcript: &Path, marker: Option<SessionMarker>) -> Option<Facets> {
+    let mut held = warm.lock().unwrap().facets.take()?;
     let transcript = transcript.to_path_buf();
     let (held, moved) = tokio::task::spawn_blocking(move || {
         let moved = held.moved(&transcript, marker.as_ref());
@@ -700,7 +879,7 @@ async fn refold(
     })
     .await
     .ok()?;
-    *feed = Some(held);
+    warm.lock().unwrap().facets = Some(held);
     moved
 }
 

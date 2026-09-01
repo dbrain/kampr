@@ -261,6 +261,10 @@ struct PaneHandle {
     scrollback: bool,
     conversation: bool,
     convo: convo::Open,
+    /// What this pane's conversation cost to open, on loan from the node for as long as this
+    /// handle holds the pane and handed back when it drops. See [`crate::warm`].
+    warm: convo::Warmth,
+    warmth: Arc<crate::warm::ConvoWarmth>,
     /// The launched conversation this client has open on the pane, followed while it has it.
     followed: convo::Followed,
     _hold: Option<Hold>,
@@ -336,9 +340,17 @@ impl PaneHandle {
 
 /// Same reason as the writer guard: a session that is cancelled rather than closed must not leave
 /// pane pumps running against a socket nobody is reading.
+///
+/// And the conversation goes back to the node on the way out, so that the next watcher of this
+/// pane — this client returning to it, or the same client on the socket it opens after a
+/// reconnect — is served off a parse and a fold that already exist (#409). Synchronously, and
+/// before this returns, because the re-watch that wants it is the very next thing the session
+/// does: `hand_over` drops the handle it is replacing and takes the pane's warmth back one line
+/// later.
 impl Drop for PaneHandle {
     fn drop(&mut self) {
         self.stop();
+        self.warmth.put(&self.pane, self.warm.clone());
     }
 }
 
@@ -607,7 +619,11 @@ impl Session {
             local: local.clone(),
             scrollback,
         }))];
-        let convo = convo::open();
+        // Taken from the node rather than made here: on a re-watch this is the transcript already
+        // found, already parsed and already folded, and taking it is what makes it this handle's
+        // alone until it drops (#409).
+        let warm = self.node.convo_warmth.take(pane);
+        let convo = warm.lock().unwrap().journal.clone();
         let followed = convo::followed();
         if conversation {
             let provider = session.provider.clone();
@@ -629,7 +645,7 @@ impl Session {
                 wire: self.wire.clone(),
                 global: pane.to_string(),
                 local,
-                journal: convo.clone(),
+                warm: warm.clone(),
                 held,
                 followed: followed.clone(),
             })));
@@ -643,6 +659,8 @@ impl Session {
                 scrollback,
                 conversation,
                 convo,
+                warm,
+                warmth: self.node.convo_warmth.clone(),
                 followed,
                 _hold: hold,
             },
@@ -688,8 +706,10 @@ impl Session {
                 scrollback,
                 conversation,
                 convo: convo::open(),
-                // A pane on another host is followed by the node that owns it; this side only
-                // relays, so there is nothing here to poll.
+                // A pane on another host is followed by the node that owns it — this side only
+                // relays, so there is nothing here to poll and nothing to keep warm.
+                warm: convo::warmth(),
+                warmth: self.node.convo_warmth.clone(),
                 followed: convo::followed(),
                 _hold: hold,
             },
@@ -1907,6 +1927,8 @@ mod tests {
                     scrollback: false,
                     conversation: false,
                     convo: convo::open(),
+                    warm: convo::warmth(),
+                    warmth: Arc::new(crate::warm::ConvoWarmth::default()),
                     followed: convo::followed(),
                     _hold: hold,
                 },

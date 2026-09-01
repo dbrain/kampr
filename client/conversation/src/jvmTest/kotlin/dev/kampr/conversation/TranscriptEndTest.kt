@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -89,6 +90,30 @@ class TranscriptEndTest {
             end.bottom <= screen.bottom,
             "the last line of the transcript ends at ${end.bottom} of ${screen.bottom}",
         )
+    }
+
+    // The line that says how far this device has read is an item of its own and it arrives *after*
+    // the open — the moment the socket drops, or the reader leaves the pane and comes back. A lazy
+    // list anchors on its first visible item, so an item added at the foot is the shape that puts
+    // the foot below the fold and leaves it there.
+    @Test
+    fun theLineAppearingCarriesTheReaderToTheNewEnd() = runComposeUiTest {
+        val (store, pane) = paneWithATallLastTurn()
+        setContent { Screen { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) } }
+        waitForIdle()
+        assertTrue(
+            onAllNodesWithText("read up to here", substring = true).fetchSemanticsNodes().isEmpty(),
+            "the transcript said it was catching up before anything had gone wrong",
+        )
+        store.noteConversationUnconfirmed(PANE_ID)
+        waitForIdle()
+        assertTrue(
+            onAllNodesWithText("read up to here", substring = true).fetchSemanticsNodes().isNotEmpty(),
+            "the socket dropped and the transcript never said how far it had read",
+        )
+        // Displayed, not merely composed: a lazy list keeps items either side of the fold, and a
+        // notice pushed under it is exactly the case this guards.
+        onNodeWithText("read up to here", substring = true).assertIsDisplayed()
     }
 
     // The same open, on a transcript the node is still paging: `more` puts a loading row above

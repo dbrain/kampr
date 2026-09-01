@@ -119,19 +119,17 @@ class SubConversation(val handle: String) {
         loaded = true
     }
 
-    // What the conversation has grown by since it was opened — replaced by id, and otherwise
-    // **appended**.
+    // What the conversation has grown by since it was opened, anchored against what is drawn and
+    // otherwise filed **below** it.
     //
-    // Not the page's merge. A page runs *backwards* and files what the reader does not hold above
-    // what they do; a transcript that is still being written runs forwards, and the same merge put
-    // the newest step at the top, above turns the agent took before it. That is the pane's own
-    // `convo` / `convo.turn` distinction, and a launched conversation has both halves for the same
-    // reason.
+    // Not the page's fallback. A page runs *backwards* and files an unplaceable turn above what
+    // the reader holds; a transcript that is still being written runs forwards, and the same
+    // fallback put the newest step at the top, above turns the agent took before it. That is the
+    // pane's own `convo` / `convo.turn` distinction, and a launched conversation has both halves
+    // for the same reason — including the half that reaches back past the window the reader was
+    // given, which is what filed old turns under new ones (#411).
     fun apply(turns: List<Turn>) {
-        for (turn in turns) {
-            val at = this.turns.indexOfFirst { it.id == turn.id }
-            if (at >= 0) this.turns[at] = turn else this.turns.add(turn)
-        }
+        mergeTurns(this.turns, turns, Unanchored.Below)
         loaded = true
     }
 }
@@ -150,7 +148,17 @@ class SubConversation(val handle: String) {
 //
 // Prepending is still what happens when the page and the conversation share nothing, which is the
 // older-page case the rule was written for and the only case where position is a guess.
-fun mergeTurns(into: MutableList<Turn>, page: List<Turn>) {
+// Where turns the message carries and the client has never seen go when there is nothing in it to
+// anchor them against.
+//
+// Anchoring is the ordinary case and it is the same on both routes: an unrecognised turn belongs
+// immediately before the next turn the message names that *is* recognised, because a message lists
+// its turns in the transcript's own order. Only a message with no landmark in it at all has to be
+// placed as a whole, and the two routes want opposite ends — `convo.load` reaches backwards for
+// older turns, and the tail of a watched pane is newer.
+enum class Unanchored { Above, Below }
+
+fun mergeTurns(into: MutableList<Turn>, page: List<Turn>, unanchored: Unanchored = Unanchored.Above) {
     var after = -1
     val waiting = mutableListOf<Turn>()
     for (turn in page) {
@@ -167,8 +175,15 @@ fun mergeTurns(into: MutableList<Turn>, page: List<Turn>) {
             waiting.clear()
         }
     }
-    if (waiting.isNotEmpty()) into.addAll(if (after < 0) 0 else after + 1, waiting)
+    if (waiting.isEmpty()) return
+    val at = when {
+        after >= 0 -> after + 1
+        unanchored == Unanchored.Above -> 0
+        else -> into.size
+    }
+    into.addAll(at, waiting)
 }
+
 
 class PaneState(val id: String, val styles: StyleTable) {
     val cells = CellBuffer(80, 24)
@@ -350,10 +365,12 @@ class PaneState(val id: String, val styles: StyleTable) {
             revision++
             return
         }
-        for (turn in msg.turns) {
-            val at = turns.indexOfFirst { it.id == turn.id }
-            if (at >= 0) turns[at] = turn else turns.add(turn)
-        }
+        // **Not an append.** A revision is what a re-watch is served, and the node's page runs
+        // back past its own bound to the question that opens the reply it landed in — so a
+        // revision routinely names turns older than the window this client is holding. Filed at
+        // the end, those became the newest thing on a view that pins to its own end, and the
+        // reader was left looking at a message from an hour before (#411).
+        mergeTurns(turns, msg.turns, Unanchored.Below)
         revision++
     }
 

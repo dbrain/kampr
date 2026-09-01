@@ -30,7 +30,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.Layout
@@ -141,8 +140,19 @@ fun ConversationView(
     val working = info != null && statusOf(info) == AgentStatus.Working
     val newest = (rows.lastOrNull { it is TranscriptRow.Head } as? TranscriptRow.Head)?.reply
     val tail = newest?.takeIf { working || it.live }
+    // What a reader is looking at, when it is not the conversation as it stands. The grid beside
+    // this reattaches to a stream the registry held open, so it is current the moment the pane
+    // opens; the transcript has to be resolved, folded and paged first, and what is on screen
+    // until then is a memory (#393).
+    val catchingUp = catchingUp(
+        LocalConnectionStatus.current,
+        confirmed = pane.convoConfirmed && !pane.stale,
+        drawn = rows.isNotEmpty(),
+    )
     // The progress line is an item of its own, so the end of the list is one past the last row
-    // whenever it is showing — and the end of the list is what "follow the end" aims at.
+    // whenever it is showing — and the end of the list is what "follow the end" aims at. The
+    // read-up-to line below it needs no place here: the aim is `Int.MAX_VALUE` into whichever item
+    // it names, so it clamps to the foot of the content whatever is standing there.
     val trailing = if (tail == null) 0 else 1
     // The progress line is a piece of the newest reply's box, and it is at the foot of the
     // transcript rather than at the head of that reply because the transcript follows its own end:
@@ -337,15 +347,6 @@ fun ConversationView(
             }, transcript = {
         SelectionContainer(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
-                    // What a reader is looking at, when it is not the conversation as it stands.
-                    // The grid beside this reattaches to a stream the registry held open, so it is
-                    // current the moment the pane opens; the transcript has to be resolved, folded
-                    // and paged first, and what is on screen until then is a memory (#393).
-                    val catchingUp = catchingUp(
-                        LocalConnectionStatus.current,
-                        pane.convoConfirmed,
-                        drawn = turns.isNotEmpty(),
-                    )
                     if (turns.isEmpty()) {
                         KText(
                             if (info?.hasConversation == false) {
@@ -362,12 +363,6 @@ fun ConversationView(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            // The grid draws its ground back over itself at 0.45 when frames stop
-                            // (`TerminalView`), and the transcript used to draw an hour-old message
-                            // exactly like a live one — the badge in the header was the whole
-                            // signal on the one surface a reader cannot date by looking at it.
-                            // Same wash from the other side, so the two surfaces fade alike.
-                            .alpha(if (pane.stale || catchingUp != null) 0.55f else 1f)
                             .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
                             .onSizeChanged { viewport = it.height },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -398,16 +393,10 @@ fun ConversationView(
                                 attachments = attachments, now = now, agent = info?.agent, clock = clock,
                             )
                         }
-                    }
-                    // Above everything the transcript draws, including the pinned header, because
-                    // it is about all of it: what is underneath is a reading or it is a memory, and
-                    // a reader has to know which before they read a word of it.
-                    catchingUp?.let { said ->
-                        DisableSelection {
-                            CatchingUpStrip(
-                                said,
-                                Modifier.align(Alignment.TopStart).background(tokens.color.surface),
-                            )
+                        catchingUp?.let { said ->
+                            item(key = "read-up-to") {
+                                DisableSelection { CatchingUpLine(said) }
+                            }
                         }
                     }
                     // The header of whatever the reader is standing in the middle of, pinned where

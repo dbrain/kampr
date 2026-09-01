@@ -322,9 +322,9 @@ fn only_a_block_that_grows_earns_a_preview() {
             seen.is_some(),
             "{name}: the reader does find a block here — the growth rule is what refuses it"
         );
-        assert_eq!(watch.observe(seen.clone()), kampr_journal::Change::Held);
+        assert_eq!(watch.observe(seen.clone(), false), kampr_journal::Change::Held);
         assert_eq!(
-            watch.observe(seen),
+            watch.observe(seen, false),
             kampr_journal::Change::Held,
             "{name}: still the same line a poll later, so still not an answer"
         );
@@ -335,16 +335,48 @@ fn only_a_block_that_grows_earns_a_preview() {
     let late = screen("claude-streaming");
     let mut watch = kampr_journal::Watch::default();
     assert_eq!(
-        watch.observe(journal.preview(&lines(&early))),
+        watch.observe(journal.preview(&lines(&early)), false),
         kampr_journal::Change::Held,
         "the first sighting is not yet proof of a message"
     );
-    let grown = watch.observe(journal.preview(&lines(&late)));
+    let grown = watch.observe(journal.preview(&lines(&late)), false);
     let kampr_journal::Change::Show(turn) = grown else {
         panic!("the same message, longer, is a message: {grown:?}");
     };
     assert!(md(&turn).contains("Printable text goes through width resolution"));
     assert!(watch.showing());
+}
+
+/// The same rule, on a pane that is *asking*. A block that has stopped growing is a notice on a
+/// working pane and is refused; on a pane waiting for an answer it is the finished message the
+/// question is about, and the record that would replace it does not exist until the question is
+/// answered (#42). Refusing it there is what opened a conversation on a question with nothing
+/// above it (#410).
+#[test]
+fn a_block_that_has_stopped_growing_is_the_message_a_pane_is_asking_about() {
+    let adapter = claude();
+    let journal = upto(&adapter, "claude-notes", 12);
+    let text = screen("claude-streaming");
+    let mut watch = kampr_journal::Watch::default();
+
+    assert_eq!(
+        watch.observe(journal.preview(&lines(&text)), true),
+        kampr_journal::Change::Held,
+        "one sighting is not yet a block that is standing there",
+    );
+    let standing = watch.observe(journal.preview(&lines(&text)), true);
+    let kampr_journal::Change::Show(turn) = standing else {
+        panic!("the same block a poll later is the message on the screen: {standing:?}");
+    };
+    assert!(md(&turn).contains("Printable text goes through width resolution"));
+    assert!(watch.showing());
+
+    // And it is published once. A question sits on a screen for minutes and the block under it
+    // does not move; a frame per poll for a message nobody is writing is what `Held` exists for.
+    assert_eq!(
+        watch.observe(journal.preview(&lines(&text)), true),
+        kampr_journal::Change::Held,
+    );
 }
 
 /// The preview is withdrawn under its own id, so a client that matches by id and replaces has a
@@ -356,18 +388,18 @@ fn the_preview_is_withdrawn_when_the_transcript_takes_over() {
     let mut watch = kampr_journal::Watch::default();
     let before = upto(&adapter, "claude-notes", 16);
     let earlier = screen("claude-streaming-after-tool-earlier");
-    watch.observe(before.preview(&lines(&earlier)));
-    let shown = watch.observe(before.preview(&lines(&text)));
+    watch.observe(before.preview(&lines(&earlier)), false);
+    let shown = watch.observe(before.preview(&lines(&text)), false);
     assert!(matches!(shown, kampr_journal::Change::Show(_)));
 
     let after = upto(&adapter, "claude-notes", 17);
     assert_eq!(
-        watch.observe(after.preview(&lines(&text))),
+        watch.observe(after.preview(&lines(&text)), false),
         kampr_journal::Change::Retire
     );
     assert!(!watch.showing());
     assert_eq!(
-        watch.observe(after.preview(&lines(&text))),
+        watch.observe(after.preview(&lines(&text)), false),
         kampr_journal::Change::Held,
         "withdrawn once, not once per poll"
     );
@@ -405,8 +437,8 @@ fn a_message_that_outgrows_the_pane_keeps_streaming_while_it_slides() {
         "and it moved by sliding, not by extending — which is the whole point"
     );
 
-    assert_eq!(watch.observe(Some(a)), kampr_journal::Change::Held);
-    let moved = watch.observe(Some(b));
+    assert_eq!(watch.observe(Some(a), false), kampr_journal::Change::Held);
+    let moved = watch.observe(Some(b), false);
     assert!(
         matches!(moved, kampr_journal::Change::Show(_)),
         "a slide is the same message still being written: {moved:?}"
@@ -414,7 +446,7 @@ fn a_message_that_outgrows_the_pane_keeps_streaming_while_it_slides() {
 
     let after = upto(&adapter, "claude-vt320", 2);
     assert_eq!(
-        watch.observe(after.preview(&lines(&second))),
+        watch.observe(after.preview(&lines(&second)), false),
         kampr_journal::Change::Retire,
         "and it still yields the moment the record lands"
     );
@@ -546,11 +578,11 @@ fn an_agy_block_earns_its_preview_by_growing() {
     );
 
     assert_eq!(
-        watch.observe(Some(early)),
+        watch.observe(Some(early), false),
         kampr_journal::Change::Held,
         "the first sighting is not yet proof of a message"
     );
-    let grown = watch.observe(Some(late));
+    let grown = watch.observe(Some(late), false);
     let kampr_journal::Change::Show(turn) = grown else {
         panic!("the same message, longer, is a message: {grown:?}");
     };
