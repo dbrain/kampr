@@ -319,6 +319,23 @@ point — letting go of a measurement can only ever widen the stream, never crop
 out. This is the one place in the system that reasons from evidence rather than from a reported
 number, and it is worth understanding before touching it.
 
+**There is exactly one width the node does not have to infer, and it is the one it commanded.**
+`pane.size` claims the PTY and puts a geometry on it, so afterwards the column count is known
+rather than deduced — and until the node adopted it, a resize was invisible to every client for as
+long as the pane happened to draw no wrap. Herdr *reflows* the screen when the PTY moves, so a
+shell with a wrapped line still on it re-proves its own width on the next poll and looks fine; a
+full-screen agent draws a grid of rows that each end where they end, the walk measures nothing at
+all, and the proof taken before the resize stands for its whole twenty readings. That was the
+report — *"match this view works, but it doesn't horizontally update until a message goes
+through, so typing a prompt ends up typing off the visible cols"*. So `pane.size` hands the width
+it applied to `HerdrProvider::resized`, which records it as a proof and wakes every running width
+probe at once instead of leaving it to the 3 s interval. It is recorded only where the size is
+known to have taken — a held controller *is* the geometry (#18), and the `once` mode's
+`viewport_rows` check is the only evidence there is that an attached desk did not take it straight
+back (#19, #306). Nothing about this claims a pane or reshapes one; it is what the node *believes*
+after an op the operator confirmed, and the ordinary machinery above goes on correcting it from
+the next wrap onwards.
+
 The **rows** are the same trap with an easier answer, and it was got wrong for longer. A `down`
 split halves the rect's height and leaves the PTY at the height it already had (#205), and
 `observe --rows` crops to the top of the screen rather than following it down (#206) — so a stream

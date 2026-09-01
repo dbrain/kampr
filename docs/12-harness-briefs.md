@@ -171,6 +171,37 @@ The link is exact: an `Agent` tool's `toolUseResult` carries `agentId`, and `age
 file. `agent-<id>.meta.json` beside it gives `agentType` and `description` — the card's header,
 with nothing parsed.
 
+**But the result is not the only way in, and against Claude Code 2.1.252 it is not always a way in
+at all.** Measured, and the reason the ingest has two mint points rather than one:
+
+| Measured against 2.1.252 | Number |
+|---|---|
+| `run_in_background: true` writes its result **at launch** — `status: "async_launched"`, `agentId`, `outputFile` | 12–585 ms after its own `tool_use`; completion arrives ~117 s later as a separate `queue-operation` |
+| Of the operator's whole archive, launches that are `async_launched` | 176 of 177 |
+| `run_in_background: false` (new in 2.1.252) writes **no result at all**, and its `tool_use` input carries no `agentId` | for 65–146 s |
+| `agent-<id>.meta.json` is written at launch, carrying `{agentType, description, toolUseId, spawnDepth}` | +12 to +20 ms after the `tool_use` record; 4 of 4 synchronous launches, distinct `toolUseId` per agent under three concurrent launches |
+| The subagent's own `.jsonl` appears after the record that names it, and grows continuously | +3 to +5 ms; 8 595 → 25 842 bytes over 85 s |
+| **The result record beats its own transcript to disk** | +0.101 s and +0.777 s, two runs |
+| Metas born late — all of them asynchronous launches, none synchronous; never rewritten (inode, size, mtime, ctime unchanged for a whole agent life) | 15% of the archive, 229 s to 11 030 s. No mechanism established |
+
+Three consequences, and all three are in the code:
+
+1. **A handle may not be conditioned on the file being there.** `settle` runs once per
+   `tool_use_id`, from one call site, with no retry — so a poll landing in the sub-second window
+   between the result and the transcript used to drop the card for the life of the session.
+   `SubRef` is a *name*; it is resolved through `TranscriptRoot::contain` at **open** time, which
+   canonicalises and so refuses until the file exists. A transcript 100 ms late and one that is
+   never coming are the same thing at mint time, and only the second is worth refusing — so the
+   card is minted either way and the refusal happens where it can be answered honestly.
+2. **A synchronous launch is minted from `agent-<id>.meta.json`'s own `toolUseId`**, at the
+   `tool_use` record, because there is nothing else for two minutes and those two minutes are the
+   whole of the time somebody would want to watch. Matching is on `toolUseId` and **never** on
+   file-creation order: three launches in flight at once each wrote their own meta, and ordering
+   would be a guess dressed as a rule.
+3. **The meta stays non-load-bearing for the asynchronous path.** A 15% tail of async metas is born
+   minutes to hours late; one that is not there yields no card at the call and `agentId` mints one
+   at the result exactly as before. One `tool_use_id` is one card — whichever end minted it.
+
 The shape:
 
 - The tool card for an `Agent` call carries the agent's type and description instead of the generic
@@ -181,6 +212,8 @@ The shape:
   own, so the shape must nest rather than assume one level.
 - It is **live**. The file is appended to while the agent runs, and `FileJournal` already tails a
   growing file. A running subagent's card shows its latest step; a finished one shows its result.
+  Live of a sub already open was the easy half; the *way in* is the half that was measured wrong,
+  and the table above is why.
 - `status` off the parent's `toolUseResult` (`async_launched`, and whatever the completion
   notification carries) is what the card's state comes from, not a guess from the file's mtime.
 
@@ -594,7 +627,7 @@ plan with no account of itself is how "what already exists" tables go stale — 
 |---|---|---|
 | **W0** | Done | Rows **#309-#320**; the log is 320 rows, gap-free. #320 corrects #312's own parenthetical |
 | **W1** | Done | `page_before` reaches back to the question. Red first, at `a12` with the prompt gone |
-| **W2** | Done | `Block::Sub`, `Registry::open_sub`, the `convo.sub` verb, `SubCard` and a nesting `SubConversationView`. A sub page never reaches `pane.turns` — mutation-checked, 3 tests fail if it does |
+| **W2** | Done | `Block::Sub`, `Registry::open_sub`, the `convo.sub` verb, `SubCard` and a nesting `SubConversationView`. A sub page never reaches `pane.turns` — mutation-checked, 3 tests fail if it does. **Reopened and closed again against 2.1.252**: the card is now minted at the `tool_use` from `agent-<id>.meta.json`'s `toolUseId` as well as at the result from `agentId`, and neither mint asks whether the transcript is on disk yet — restoring the `is_file()` gate fails 3 tests, removing the call-time mint fails 2, removing the one-card-per-call guard fails 3 |
 | **W3** | Done | Marker matched on pid, wired into `convo::identity`. Fixed a real bug found on the way: under ble.sh a scraped `claude` pane resolved to `Harness::Absent` and got no conversation at all |
 | **W4** | Done | `error.node`, written test-first against a real herdr; `saidOutLoud` decides loudness on the client, where the pane on screen is known. The words are kept on the pane rather than dropped |
 | **W5** | Done | `Facets` collected per harness, and `title` wired from marker to sidebar where the naming template renders it. Measured `queue-operation` to have four operations, not two. `convo.facets` is sent when a conversation opens and **again whenever the facets move**: the fold is resumable — it is fed the records the transcript has grown by — and the pump republishes only on a change. Live-tested with a prompt queued mid-turn, which is the shape the operator reported. Both surfaces draw the queue: `QueuedTurn.kt` in the app and `convo::QUEUED` in the terminal, each naming it *queued* rather than as the operator, because the queue is the pane's and a prompt in it may have been typed at the desk |

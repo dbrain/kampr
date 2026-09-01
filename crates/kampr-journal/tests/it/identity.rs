@@ -19,7 +19,6 @@
 //! transcript in this directory" answered `ab4daea8` to a pane that had just started its own
 //! session, and `8ae22034` to a pane whose agent had been quit and restarted.
 
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

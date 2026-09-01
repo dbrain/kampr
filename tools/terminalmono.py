@@ -70,13 +70,18 @@ ALIAS = {
     0x2011: 0x002D,  # non-breaking hyphen
     0x202F: 0x0020,  # narrow no-break space
     0x2003: 0x0020,  # em space — one cell, like every other cell
+    0x2705: 0x2713,  # ✅ as ✓ and ❌ as ✗: the emoji-presentation twins of a check and a
+    0x274C: 0x2717,  # ballot X, and no monochrome donor on any build machine carries either —
+                     # Noto Sans Symbols 2 stops short of the emoji dingbats and Noto Color Emoji
+                     # is CBDT bitmaps with no outline to cut. Aliasing is also the only path that
+                     # keeps the weight, so a bold pane gets a bold tick
 }
 
 # Everything an agent harness draws that JetBrains Mono NL does not carry and that is not in the
 # lattice. Measured: #270.
 CUT_IN = [
-    0x21B3, 0x21B9, 0x21C4, 0x2153, 0x2154, 0x207F, 0x2315, 0x2460, 0x2461, 0x2462,
-    0x2463, 0x2464, 0x2465, 0x2699, 0x27FA, 0x29C9, 0x1F5BC, 0x1F6E1,
+    0x21B3, 0x21B9, 0x21C4, 0x21F1, 0x2153, 0x2154, 0x207F, 0x2315, 0x2460, 0x2461, 0x2462,
+    0x2463, 0x2464, 0x2465, 0x2691, 0x2699, 0x27FA, 0x29C9, 0x1F5BC, 0x1F6E1,
 ]
 
 

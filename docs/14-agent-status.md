@@ -301,10 +301,20 @@ it — a timing change with no guard is how the next one gets re-tuned by accide
   so it is news where `working` is not. Landed in both surfaces (`sidebar.rs::rank` and
   `Herd.kt::statusRank`) with a test each, because two clients that order one herd differently are
   two different products — the defect `9a52a3e` fixed.
-- **`pane.focus` is now named in rule 3.** It is not a resize and not a read, but it is the **only**
-  op that destroys herdr's `done` marker; every read leaves it standing. Focus is a thing the
-  operator presses, never a side effect of opening a view. Kampr already never focuses implicitly —
-  every create op passes `focus: false` — so this writes down a discipline that already held.
+- **Focus is now named in rule 3.** It is not a resize and not a read, but it is the **only** thing
+  that destroys herdr's `done` marker; every read leaves it standing. Not `pane.focus` alone:
+  `tab.focus` and `workspace.focus` destroy it exactly as `pane.focus` does, because what herdr
+  answers to is *the pane becoming the session-focused pane*, however it got there — and Kampr's
+  `focus` manage op routes all three (`manage.rs`). Focus is a thing the operator presses, never a
+  side effect of opening a view. Kampr already never focuses implicitly — every create op passes
+  `focus: false` — so this writes down a discipline that already held.
+- **A marker saying `idle` may not demote `done`.** The harness outranking the screen is right for
+  every word but this one: a finished Claude session writes `status: "idle"` at the same moment
+  herdr synthesises `done` for the same pane, and `done` is that `idle` plus the half the marker
+  never knew — nobody has looked yet. `state.rs::settled_status` keeps `done` under an `idle` or
+  `shell` marker and lets every other word through, `busy` included: a pane that has started again
+  is not one waiting to be read. The symptom was a finished agent rendering grey with the status
+  mark suppressed — *"when an agent is done done … doesn't show anything, just goes grey"*.
 - **A pane is called what its transcript calls it.** The herd path now carries the session's real
   title — `custom-title.json` before `ai-title` before `agent-name` — through an incremental fold
   cached per transcript path and pruned per round like `Conversations`. Steady-state cost is

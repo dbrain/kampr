@@ -4,7 +4,6 @@
 //! strands them is a suite that quietly fills it: a full run used to leave thousands behind,
 //! gigabytes of them, until an unrelated crate started failing with `Disk quota exceeded`.
 
-
 use crate::common;
 use crate::common::scratch_dir;
 

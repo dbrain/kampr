@@ -4,7 +4,6 @@
 //! miscounts one line's terminator hands the next marker a record that no longer parses — or,
 //! worse, one that does.
 
-
 use std::io::Write;
 
 use crate::common::*;

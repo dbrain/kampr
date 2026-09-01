@@ -351,6 +351,9 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                 if (!quiet) StatusMark(status, 8.dp)
                 KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
             }
+            // The gesture is the shortcut and this is the way in. Without it the herd list was the
+            // one surface with pane actions on it and nothing a finger could press to reach them.
+            PaneManageAction(pane.id, LANDSCAPE_TOUCH)
         }
     }
 }
@@ -392,6 +395,9 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
         }
         WatchersTag(othersWatching(pane))
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
+        // The landscape floor rather than the full 44: the sidebar is 296 dp wide and every dp
+        // this takes comes off the pane's own name.
+        PaneManageAction(pane.id, LANDSCAPE_TOUCH)
     }
 }
 

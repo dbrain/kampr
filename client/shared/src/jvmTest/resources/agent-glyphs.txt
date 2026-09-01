@@ -10,9 +10,14 @@
 #   * 163 Claude Code transcripts under ~/.claude/projects (490M characters)
 #   * 14 codex sessions and 56 gemini sessions (118M characters)
 #
-# Kept: non-ASCII, exactly one column wide, and not a letter of a script. That is the class the
-# face is built for. Script letters (CJK, Hangul, Devanagari) and two-column glyphs are out of
-# scope by design and go down the fallback path probe #214 built for them.
+# Kept: non-ASCII and not a letter of a script. Script letters (CJK, Hangul, Devanagari) are out
+# of scope by design and go down the fallback path probe #214 built for them.
+#
+# Two columns is NOT a reason to leave one out, and #270's one-column filter is what hid the four
+# rows below it. #214 built a way to *position* a wide glyph across the two cells it owns; it did
+# not build a way to supply one, and in a browser there is nothing behind Skia to supply it. On a
+# second pass over the same corpora (320 files, 775M characters) U+2705 was the single most common
+# missing codepoint anywhere in them, and the operator screenshotted it as tofu in a real pane.
 #
 # A harness BINARY is not a usable instrument and was rejected: its non-ASCII is dominated by
 # embedded Unicode character-property tables (NKo, Syriac, Armenian) that never reach a screen.
@@ -67,6 +72,7 @@ U+21B9  ↹  LEFTWARDS ARROW TO BAR OVER RIGHTWARDS ARROW TO BAR
 U+21C4  ⇄  RIGHTWARDS ARROW OVER LEFTWARDS ARROW
 U+21D2  ⇒  RIGHTWARDS DOUBLE ARROW
 U+21E7  ⇧  UPWARDS WHITE ARROW
+U+21F1  ⇱  NORTH WEST ARROW TO CORNER
 U+2208  ∈  ELEMENT OF
 U+2212  −  MINUS SIGN
 U+2229  ∩  INTERSECTION
@@ -135,8 +141,10 @@ U+25CB  ○  WHITE CIRCLE
 U+25CF  ●  BLACK CIRCLE
 U+25EF  ◯  LARGE CIRCLE
 U+2605  ★  BLACK STAR
+U+2691  ⚑  BLACK FLAG
 U+2699  ⚙  GEAR
 U+26A0  ⚠  WARNING SIGN
+U+2705  ✅  WHITE HEAVY CHECK MARK
 U+2713  ✓  CHECK MARK
 U+2714  ✔  HEAVY CHECK MARK
 U+2715  ✕  MULTIPLICATION X
@@ -147,6 +155,7 @@ U+2733  ✳  EIGHT SPOKED ASTERISK
 U+2736  ✶  SIX POINTED BLACK STAR
 U+273B  ✻  TEARDROP-SPOKED ASTERISK
 U+273D  ✽  HEAVY TEARDROP-SPOKED ASTERISK
+U+274C  ❌  CROSS MARK
 U+2764  ❤  HEAVY BLACK HEART
 U+276F  ❯  HEAVY RIGHT-POINTING ANGLE QUOTATION MARK ORNAMENT
 U+279C  ➜  HEAVY ROUND-TIPPED RIGHTWARDS ARROW

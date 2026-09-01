@@ -1,4 +1,3 @@
-
 use crate::common::*;
 use kampr_journal::{ClaudeAdapter, CodexAdapter, JournalAdapter, JournalError, SessionRef, TranscriptRoot};
 

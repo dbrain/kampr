@@ -21,6 +21,7 @@ import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.createInstallPrompt
 import dev.kampr.shared.net.defaultEndpoint
 import dev.kampr.shared.net.deviceName
+import dev.kampr.shared.model.SeenDone
 import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.platform.createPrefs
 import dev.kampr.shared.push.PushPlatform
@@ -110,6 +111,7 @@ private const val KEY_TOKEN = "token"
 private const val KEY_DEVICE = "device"
 private const val KEY_RECENT = "endpoints"
 private const val KEY_AGENT_ARGS = "agent.args."
+private const val KEY_RAIL = "sidebar.collapsed"
 
 private const val RECENT_ADDRESSES = 5
 
@@ -155,6 +157,16 @@ class AppState(
 
     var sheet: Sheet? by mutableStateOf(null)
         private set
+
+    // Survives a reload because the browser is where this client is most often left open: an
+    // operator who collapsed the sidebar to read a pane has not asked for it back on every refresh.
+    var sidebarCollapsed: Boolean by mutableStateOf(prefs.get(KEY_RAIL) == "1")
+        private set
+
+    fun collapseSidebar(collapsed: Boolean) {
+        sidebarCollapsed = collapsed
+        prefs.set(KEY_RAIL, if (collapsed) "1" else null)
+    }
 
     // The one thing that lets this device recognise itself in a list of devices, so it does not
     // offer to revoke the connection it is speaking over.
@@ -438,7 +450,12 @@ class AppState(
     // the same change for the same reason — the terminal is what a terminal client opens on.
     var compact: Boolean = false
 
+    // Opening the pane is what marks its `done` read. It is the only trigger, and it is local:
+    // clearing herdr's own marker would take a focus op, which is the operator's press.
+    val seenDone = SeenDone(prefs)
+
     fun openPane(paneId: String, prefer: PaneView? = null) {
+        seenDone.saw(store.paneInfo(paneId))
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
         awaitingRemembered = prefer == null && remembered == null
         go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId)))

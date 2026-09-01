@@ -1,4 +1,3 @@
-
 use crate::common::*;
 use kampr_journal::{AgyAdapter, CodexAdapter, Facets, JournalAdapter, TranscriptRoot};
 

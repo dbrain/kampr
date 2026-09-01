@@ -54,11 +54,13 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    by rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
    looking at.
 
-   **Nor may Kampr focus one.** `pane.focus` is not a resize, and it is not a read: it is the
-   only op that destroys herdr's `done` marker — the state herdr synthesises for a pane that
-   finished `working`→`idle` while *unfocused*, which is the operator's unread flag. Every read
-   leaves it standing; focus alone clears it. So focus is a thing the operator presses, never a
-   side effect of opening a view, and every create op passes `focus: false`.
+   **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is the only thing
+   that destroys herdr's `done` marker — the state herdr synthesises for a pane that finished
+   `working`→`idle` while *unfocused*, which is the operator's unread flag. `pane.focus`,
+   `tab.focus` and `workspace.focus` all clear it, because the rule is "whatever makes the pane
+   the session-focused pane", and Kampr's `focus` manage op routes all three. Every read leaves it
+   standing. So focus is a thing the operator presses, never a side effect of opening a view, and
+   every create op passes `focus: false`.
 
    A pane Kampr **created for a job of its own** is Kampr's: a short-lived TTY it spawned, ran a
    command in, and will tear down. It may be given a geometry at creation and while Kampr holds it,

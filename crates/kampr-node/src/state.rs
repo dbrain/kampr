@@ -624,9 +624,7 @@ async fn build_model(
             // whose title says working (#360). `idle` from a scrape is never evidence, only the
             // absence of a match. This costs nothing: the marker is already in hand for the
             // title.
-            if let Some(status) = marker.as_ref().and_then(harness_status) {
-                entry.agent_status = status;
-            }
+            entry.agent_status = settled_status(entry.agent_status, marker.as_ref());
             panes.push(entry);
         }
     }
@@ -642,6 +640,25 @@ async fn ping(herdr: &Herdr) -> Option<f64> {
         .await
         .ok()
         .map(|_| at.elapsed().as_secs_f64() * 1000.0)
+}
+
+/// The pane's status once the harness has had its say.
+///
+/// `done` is the one word the marker cannot correct. Herdr synthesises it for a pane that
+/// finished `working`→`idle` while **unfocused** (#357) — the operator's unread flag — and a
+/// finished Claude session writes `idle` at that same moment. The two agree: `done` *is* `idle`,
+/// plus the half the marker never knew. Taking the marker's word here throws the unread flag
+/// away, and `Idle` renders grey with no status mark at all, which is what "when an agent is done
+/// done it doesn't show anything" looked like from a phone.
+///
+/// Every other word still wins, `busy` over `done` included — a pane that has started again is
+/// not one waiting to be read.
+fn settled_status(seen: AgentStatus, marker: Option<&SessionMarker>) -> AgentStatus {
+    match marker.and_then(harness_status) {
+        Some(AgentStatus::Idle) if seen == AgentStatus::Done => AgentStatus::Done,
+        Some(status) => status,
+        None => seen,
+    }
 }
 
 /// What the harness says it is doing, mapped onto the herd's five.
@@ -718,6 +735,38 @@ mod tests {
         assert_eq!(harness_status(&saying(Some("busy"))), Some(AgentStatus::Working));
         assert_eq!(harness_status(&saying(Some("idle"))), Some(AgentStatus::Idle));
         assert_eq!(harness_status(&saying(Some("shell"))), Some(AgentStatus::Idle));
+    }
+
+    /// Herdr's `done` is `idle` with the half a marker cannot see: nobody has looked yet. The
+    /// harness has nothing to correct there, and demoting it takes the operator's unread flag off
+    /// a pane that just finished.
+    #[test]
+    fn a_harness_saying_idle_does_not_take_the_unread_flag_off_a_pane_that_finished() {
+        for word in ["idle", "shell"] {
+            assert_eq!(
+                settled_status(AgentStatus::Done, Some(&saying(Some(word)))),
+                AgentStatus::Done
+            );
+        }
+        assert_eq!(
+            settled_status(AgentStatus::Working, Some(&saying(Some("idle")))),
+            AgentStatus::Idle,
+            "the screen is still the thing a harness saying `idle` is there to correct"
+        );
+        assert_eq!(
+            settled_status(AgentStatus::Done, Some(&saying(Some("busy")))),
+            AgentStatus::Working,
+            "a pane that has started again is not one waiting to be read"
+        );
+        assert_eq!(
+            settled_status(AgentStatus::Done, Some(&saying(Some("waiting")))),
+            AgentStatus::Blocked
+        );
+        assert_eq!(
+            settled_status(AgentStatus::Done, Some(&saying(Some("compacting")))),
+            AgentStatus::Done
+        );
+        assert_eq!(settled_status(AgentStatus::Done, None), AgentStatus::Done);
     }
 
     /// A word from a newer harness than this one leaves the pane as it was. Flattening an

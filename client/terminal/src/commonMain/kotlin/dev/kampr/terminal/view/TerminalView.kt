@@ -240,10 +240,13 @@ fun TerminalView(
         // zoom taken against it sticks for the life of the pane.
         // insetTop arrives a frame late — the chrome above this surface has to be laid out before
         // it can be measured — and a scroll clamped against the guess stays clamped there.
-        LaunchedEffect(pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored) {
+        LaunchedEffect(
+            pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored, breakpoint,
+        ) {
             if (!pane.painted || view.chosen || view.scrolled) return@LaunchedEffect
             val fill = defaultZoom(
                 paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
+                ceiling = if (breakpoint == Breakpoint.Desktop) 1f else Float.MAX_VALUE,
             )
             if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(fill)
         }

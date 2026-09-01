@@ -5,7 +5,6 @@
 //! was read or written. Both files the harness writes are kept side by side, byte for byte and
 //! whole, because the difference between them is the reason one of them is the one opened.
 
-
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;

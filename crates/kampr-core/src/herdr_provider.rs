@@ -203,6 +203,10 @@ struct Inner {
     /// Panes with a live stream. The sweep reads it to pick its cadence and waits on it, so the
     /// first watcher speeds the herd up without waiting out the slow interval it is parked in.
     watching: watch::Sender<usize>,
+    /// Bumped whenever a pane's PTY was moved by an op of this node's own, so a running width
+    /// probe re-measures at once rather than at the far end of its interval. Node-wide because
+    /// the probe is per-stream and a resize is rare; the cost of a spurious wake is one read.
+    resized: watch::Sender<u64>,
     /// Why no pane on this node can be streamed, once a spawn has proved it.
     ///
     /// **Node-scoped because the fault is.** `Observer::spawn` failing is the configured binary
@@ -427,6 +431,7 @@ impl HerdrProvider {
             desk_agents: DeskAgents::new(),
             probed: AtomicBool::new(false),
             watching: watch::channel(0).0,
+            resized: watch::channel(0).0,
             stream_fault: Mutex::new(None),
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
@@ -487,6 +492,36 @@ impl HerdrProvider {
 
     pub fn watch_health(&self) -> watch::Receiver<Health> {
         self.inner.health.subscribe()
+    }
+
+    /// Adopts the width a `pane.size` just put on a pane, and re-measures every running stream.
+    ///
+    /// **This resizes nothing.** It is what the node believes *after* an op the operator confirmed
+    /// has already moved the PTY, and it is the one width in the system that was not inferred: a
+    /// wrap is the only evidence the socket API offers (#84), so a pane with nothing wrapped on it
+    /// — every full-screen agent — went on being streamed at the width proved before the resize
+    /// until something printed a long enough line. Herdr reflows what is on the screen, so a shell
+    /// pane re-proved itself within a poll and an agent's pane never did.
+    ///
+    /// Callers must have established that the size actually took. On an attached pane the desk
+    /// takes its geometry straight back (#19), and recording a width the PTY does not have is the
+    /// plausible-looking success this project has paid for before (#233).
+    pub fn resized(&self, pane_id: &str, cols: u16) {
+        let Some((rect, _)) = self.inner.snapshot.borrow().geometry(pane_id) else {
+            return;
+        };
+        let rect = rect as u16;
+        let mut widths = self.inner.widths.lock().unwrap();
+        let entry = widths.entry(pane_id.to_string()).or_default();
+        if entry.rect != rect {
+            *entry = Measured {
+                rect,
+                ..Measured::default()
+            };
+        }
+        entry.proof = Some(Proof { cols, unconfirmed: 0 });
+        drop(widths);
+        self.inner.resized.send_modify(|n| *n += 1);
     }
 
     /// `None` until herdr has answered once — an unknown version rather than a fabricated one.
@@ -1478,8 +1513,19 @@ async fn probe_width(inner: Arc<Inner>, pane_id: String, rect: u16, tx: watch::S
     let mut poll = tokio::time::interval(inner.config.width_poll);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     poll.tick().await;
+    let mut resized = inner.resized.subscribe();
     loop {
-        poll.tick().await;
+        // The interval is what notices content outgrowing the stream; the bump is `pane.size`
+        // saying the PTY moved under it, which nothing else in herdr announces (probe #68) and
+        // which the operator is about to type into.
+        tokio::select! {
+            _ = poll.tick() => {}
+            changed = resized.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
         let cols = inner.observe_cols(&pane_id, rect).await;
         if tx.send(cols).is_err() {
             return;

@@ -526,6 +526,36 @@ async fn until_panes_added(socket: &mut Socket, seconds: u64) -> Value {
     panic!("no herd.patch added a pane; saw {seen:?}");
 }
 
+/// The pane's `agent_status` as the herd puts it on the wire, waited for rather than sampled: the
+/// full herd arrives once and everything after it is a patch, so both carry panes, and a rebuild
+/// the node has not run yet is not a status it refused.
+async fn until_status(socket: &mut Socket, pane: &str, want: &str, seconds: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut saw = String::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        let found = ["panes"]
+            .iter()
+            .map(|key| &message[key])
+            .chain([&message["changed"]["panes"], &message["added"]["panes"]])
+            .filter_map(|panes| panes.as_array())
+            .flat_map(|panes| panes.iter())
+            .find(|p| p["id"] == pane)
+            .and_then(|entry| entry["agent_status"].as_str())
+            .map(str::to_string);
+        let Some(entry) = found else {
+            continue;
+        };
+        saw = entry;
+        if saw == want {
+            return;
+        }
+    }
+    panic!("{pane} never reached {want} on the wire; it settled at {saw:?}");
+}
+
 async fn send(socket: &mut Socket, value: Value) {
     socket
         .send(tungstenite::Message::text(value.to_string()))
@@ -2427,6 +2457,84 @@ async fn an_even_width_pane_of_wide_glyphs_keeps_the_width_its_wrap_proved() {
     );
 }
 
+/// The one op that reshapes a pane knows the width it asked for, and until it said so the node
+/// went on streaming the pane at the width it had *inferred* — a measurement only a wrap can
+/// repeat (probe #84). A full-screen agent draws no wrap, so nothing re-proved the new width and
+/// every client went on laying out the old one until the agent printed a message long enough to
+/// wrap. That is the report: "match this view works, but it doesn't horizontally update until a
+/// message goes through, so typing a prompt ends up typing off the visible cols."
+///
+/// **The screen is cleared before the resize on purpose.** Herdr reflows what is already on the
+/// pane when the PTY moves, so a pane with a wrapped line still on it re-proves its own width on
+/// the very next poll and would pass this test with the defect restored. A cleared prompt is what
+/// the width walk sees on an agent's screen: nothing to measure, and a stale proof standing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resized_pane_is_streamed_at_the_width_it_was_given_before_anything_wraps_again() {
+    let h = harness!("sizedcols");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    for line in ["exec /bin/sh\n", "PS1='$ '\n"] {
+        typed(&h._session, &local, line).await;
+    }
+    typed(&h._session, &local, "clear; printf '%.0s#' $(seq 1 400); echo\n").await;
+    let before = filled_width(&h._session, &local).await;
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    await_grid_at(&mut socket, &pane, before).await;
+
+    // Now take the wrap away. What is left is a prompt no set of rows rebuilds and no line that
+    // spans two of them, which is exactly the reading that measures nothing.
+    typed(&h._session, &local, "clear\n").await;
+    let wider = before + 24;
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": wider, "rows": 40 }),
+    )
+    .await;
+
+    // The ack and the grid are collected in one pass: the width the node adopts is pushed the
+    // moment the resize lands, so it can arrive either side of the ack.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut ack = None;
+    let mut widths = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "managed" && message["op"] == "pane.size" {
+            ack = Some(message);
+            continue;
+        }
+        if message["t"] == "grid.reset" && message["pane"] == pane {
+            widths.push(message["cols"].as_u64().unwrap_or(0) as u16);
+            if widths.last() == Some(&wider) {
+                break;
+            }
+        }
+    }
+    let ack = ack.expect("no managed ack for pane.size");
+    assert_eq!(ack["ok"], json!(true), "{ack}");
+
+    // The clause the whole test turns on: nothing on this pane has wrapped since the resize, so
+    // the only thing that could have carried the new width is the resize itself.
+    let widest = widest_rendered_row(&h._session, &local).await;
+    assert!(
+        widest < before,
+        "the pane printed a {widest}-column row, which re-proves its own width and makes this \
+         test worthless"
+    );
+    assert!(
+        widths.contains(&wider),
+        "a pane resized to {wider} columns was still streamed at {widths:?}"
+    );
+}
+
 async fn typed(session: &Session, pane: &str, text: &str) {
     session
         .call("pane.send_text", json!({ "pane_id": pane, "text": text }))
@@ -4292,6 +4400,70 @@ async fn until_live(socket: &mut Socket, pane: &str, seconds: u64) -> Option<Val
     None
 }
 
+async fn report(session: &Session, pane: &str, state: &str) {
+    session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": pane, "agent": "claude", "source": "kampr-test", "state": state }),
+        )
+        .await;
+}
+
+/// Herdr's own answer for the pane, waited for — and the point of waiting is that it is the state
+/// every assertion below is *against*. A wire that says `done` proves nothing if herdr never
+/// synthesised one, and `done` is synthesised only on the `working`→`idle` edge (#357), so a
+/// second report that overtakes the first arms nothing at all.
+async fn herdr_says(session: &Session, pane: &str, want: &str) {
+    let mut saw = String::new();
+    for _ in 0..100 {
+        saw = session.call("pane.get", json!({ "pane_id": pane })).await["pane"]["agent_status"]
+            .as_str()
+            .expect("an agent_status")
+            .to_string();
+        if saw == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("herdr never said {want} about {pane}; it says {saw:?}");
+}
+
+/// The pane's status as the herd holds it *now*, rather than as some frame once carried it.
+///
+/// The socket is the honest level for "the client is told", and its sibling above uses it. It is
+/// the wrong level for a claim about which of two sources won, because a patch built before the
+/// state was armed says `working` for reasons that have nothing to do with `done`. The model is
+/// the newest answer there is, and it is the value the encoder serialises.
+async fn until_herd(h: &Harness, pane: &str, want: &str) {
+    let mut saw = String::new();
+    for _ in 0..150 {
+        saw = h
+            .node
+            .herd()
+            .pane(pane)
+            .map(|entry| serde_json::to_value(entry).unwrap()["agent_status"].to_string())
+            .unwrap_or_default();
+        if saw.trim_matches('"') == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the herd never called {pane} {want}; it says {saw}");
+}
+
+/// A rebuild, asked for by a read.
+///
+/// A marker changing on disk signals nothing — no herdr event, no provider revision — and the
+/// sweep behind it is `HERD_RECONCILE`, thirty seconds. The watcher count is the one thing a
+/// client can move that rebuilds the model on demand, and watching leaves herdr's own answer
+/// exactly where it was: every read does (#357).
+async fn pump(socket: &mut Socket, pane: &str) {
+    send(socket, json!({ "t": "watch", "pane": pane })).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    send(socket, json!({ "t": "unwatch", "pane": pane })).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+}
+
 /// One `claude`-shaped harness in a pane, and the session file it would have written.
 ///
 /// The process is real: a copy of `sleep` under the name the pane's harness has, run in the pane
@@ -4608,42 +4780,116 @@ async fn a_harness_that_says_it_is_waiting_outranks_the_screen_that_says_it_is_w
 
     let pid = fixture.start(&h._session, &local).await;
     fixture.announce_status(pid, "33333333-3333-4333-8333-333333333333", "waiting");
+    report(&h._session, &local, "working").await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until_status(&mut socket, &pane, "blocked", 30).await;
+}
+
+/// The operator's report: *"when an agent is done done — wasm desktop at least doesn't show
+/// anything, just goes grey."*
+///
+/// Herdr's `done` is a pane that finished `working`→`idle` while **unfocused** (#357) — the
+/// operator's unread flag — and a finished Claude session writes `status: "idle"` into its own
+/// marker at that same moment. Both are true; `done` is the one that also says nobody has looked.
+/// The harness outranking the screen turned that into a demotion, and `Idle` renders grey with no
+/// status mark at all, which is the "doesn't show anything".
+///
+/// The mutation that must fail: take the `done` arm off `settled_status` in `state.rs` and this
+/// hangs on `idle` for the full thirty seconds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_that_finished_unwatched_stays_done_when_its_harness_says_idle() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("done", |c: &mut Config| c.journals.home = home_path);
+    // `workspace.create` does not take the focus, so the harness's own `kampr` workspace keeps it
+    // and this pane is the unfocused one `done` needs. Nothing here focuses anything: `pane`,
+    // `tab` and `workspace` focus all destroy the marker under test.
     h._session
         .call(
-            "pane.report_agent",
-            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "working" }),
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
         )
         .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce_status(pid, "44444444-4444-4444-8444-444444444444", "idle");
+    report(&h._session, &local, "working").await;
+    herdr_says(&h._session, &local, "working").await;
+    report(&h._session, &local, "idle").await;
+    herdr_says(&h._session, &local, "done").await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until_status(&mut socket, &pane, "done", 30).await;
+}
+
+/// The three the harness still outranks, on one pane in sequence: `done` is the exception it may
+/// not correct, not the end of the override.
+///
+/// Every step moves the herd off the answer the step before it left, and every step's herdr state
+/// is confirmed with herdr *before* the assertion — a wire that says `working` proves nothing
+/// about `done` if herdr never synthesised one. The mutation that must fail: delete the override
+/// from `build_model` and the pane never leaves what herdr scraped — `done` at the second step
+/// and the third, `working` at the fourth.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_harness_still_outranks_the_screen_for_every_word_that_is_not_done() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("outranks", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+    let pid = fixture.start(&h._session, &local).await;
+    let session = "55555555-5555-4555-8555-555555555555";
 
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
     until(&mut socket, "hello", 10).await;
 
-    // The full herd arrives once and everything after it is a patch, so both carry panes.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut saw = String::new();
-    while tokio::time::Instant::now() < deadline {
-        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
-            continue;
-        };
-        let found = ["panes"]
-            .iter()
-            .map(|key| &message[key])
-            .chain([&message["changed"]["panes"], &message["added"]["panes"]])
-            .filter_map(|panes| panes.as_array())
-            .flat_map(|panes| panes.iter())
-            .find(|p| p["id"] == pane.as_str())
-            .and_then(|entry| entry["agent_status"].as_str())
-            .map(str::to_string);
-        let Some(entry) = found else {
-            continue;
-        };
-        saw = entry;
-        if saw == "blocked" {
-            return;
-        }
-    }
-    panic!("the pane never reported blocked; herdr's scrape won with {saw:?}");
+    // Nothing written down yet, so the herd carries herdr's own answer and nothing else.
+    report(&h._session, &local, "idle").await;
+    herdr_says(&h._session, &local, "idle").await;
+    until_herd(&h, &pane, "idle").await;
+
+    report(&h._session, &local, "working").await;
+    herdr_says(&h._session, &local, "working").await;
+    report(&h._session, &local, "idle").await;
+    herdr_says(&h._session, &local, "done").await;
+    until_herd(&h, &pane, "done").await;
+
+    // A pane that has started again is not one waiting to be read, whatever herdr synthesised.
+    fixture.announce_status(pid, session, "busy");
+    pump(&mut socket, &pane).await;
+    until_herd(&h, &pane, "working").await;
+
+    // And `waiting` is the word the scrape structurally cannot reach (#360), over `done` as over
+    // anything else herdr can publish.
+    fixture.announce_status(pid, session, "waiting");
+    pump(&mut socket, &pane).await;
+    until_herd(&h, &pane, "blocked").await;
+
+    // The half of the override that has nothing to do with `done`: a screen herdr reads as
+    // working, against a harness that says it has stopped.
+    report(&h._session, &local, "working").await;
+    herdr_says(&h._session, &local, "working").await;
+    fixture.announce_status(pid, session, "idle");
+    pump(&mut socket, &pane).await;
+    until_herd(&h, &pane, "idle").await;
 }
 
 /// The same move, with the operator *looking at* the pane.

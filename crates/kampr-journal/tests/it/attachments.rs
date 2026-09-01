@@ -4,7 +4,6 @@
 //! at the node from the network. The refusals below are the whole reason the id is a locator
 //! rather than a path.
 
-
 use crate::common::*;
 use kampr_journal::attach::{self, Att, Locator, MAX_BYTES};
 use kampr_journal::{Attachment, Block, JournalError, Registry, Turn};

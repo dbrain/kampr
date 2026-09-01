@@ -183,6 +183,9 @@ pub struct Manager<'a> {
     pub binary: &'a str,
     pub holds: &'a crate::holds::PaneHolds,
     pub fleet: &'a std::sync::Arc<kampr_fleet::FleetProvider>,
+    /// Told what `pane.size` put on a pane, so the streams stop reporting the width they inferred
+    /// before it. Nothing here reads a size back out of it and nothing here resizes through it.
+    pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -586,6 +589,9 @@ impl Manager<'_> {
         match mode {
             "hold" => {
                 self.holds.park(&pane, controller);
+                // A held controller *is* the pane's geometry until it lets go (#18), so there is
+                // nothing left to check: this is the width.
+                self.provider.resized(&pane, cols as u16);
                 Ok(json!({ "pane_id": pane, "cols": cols, "rows": rows, "held": true }))
             }
             _ => {
@@ -598,6 +604,13 @@ impl Manager<'_> {
                 // the reply says what it measured rather than echoing what was asked for.
                 let measured = self.viewport_rows(&pane).await;
                 let kept = measured == Some(u64::from(rows));
+                // Only what stuck. Rows are the half herdr reports honestly, so they are also the
+                // only evidence that the columns went with them: on an attached pane the desk
+                // takes the geometry back inside a second (#19), and adopting a width the PTY
+                // does not have would crop every client instead of the one that asked.
+                if kept {
+                    self.provider.resized(&pane, cols as u16);
+                }
                 Ok(json!({
                     "pane_id": pane, "cols": cols, "rows": rows,
                     "held": false, "kept": kept, "measured_rows": measured,

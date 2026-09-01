@@ -2,7 +2,7 @@ mod facet;
 mod record;
 mod subagent;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -224,6 +224,10 @@ pub struct ClaudeParser {
     launched: bool,
     store: TurnStore,
     tool_turns: HashMap<String, (String, usize)>,
+    metas: subagent::Metas,
+    /// The calls a card has already been minted for. One `tool_use_id` is one launch and one
+    /// handle, and both ends now mint: the meta at the call, the `agentId` at the result.
+    minted: HashSet<String>,
     seq: u64,
     origin: Option<Origin>,
     filed: Option<Filed>,
@@ -319,12 +323,25 @@ impl ClaudeParser {
             }),
             ContentBlock::ToolUse { id, name, input } => {
                 let at = turn.blocks.len();
+                let calling = self.calling(&id, &input);
                 turn.blocks.push(Block::Tool {
-                    summary: summarise(&input),
+                    summary: calling
+                        .as_ref()
+                        .and_then(|(_, found)| found.label())
+                        .or_else(|| summarise(&input)),
                     lines: None,
                     state: ToolState::Running,
                     name: name.clone(),
                 });
+                if let Some((handle, found)) = calling {
+                    self.minted.insert(id.clone());
+                    turn.blocks.push(Block::Sub {
+                        id: handle,
+                        kind: found.kind,
+                        title: found.title,
+                        depth: found.depth,
+                    });
+                }
                 if let Some(command) = input.get("command").and_then(Value::as_str) {
                     turn.blocks.push(Block::Code {
                         lang: Some("bash".into()),
@@ -351,13 +368,28 @@ impl ClaudeParser {
         }
     }
 
-    /// The handle a launched conversation is opened by, minted only once its transcript has been
-    /// found on disk — an `Agent` call is named by the `agentId` on its result rather than by the
-    /// tool's own name, which is a label.
+    /// The handle a launched conversation is opened by — an `Agent` call is named by the `agentId`
+    /// on its result rather than by the tool's own name, which is a label.
     fn launched(&self, result: &Value) -> Option<(String, subagent::Launched)> {
         let filed = self.filed.as_ref()?;
         let found = subagent::launched(&filed.transcript, result)?;
         let id = SubRef::new(AGENT, &filed.root, &found.transcript).encode();
+        Some((id, found))
+    }
+
+    /// The same handle a launch's own `toolUseId` names, at the moment of the call. A launch with
+    /// `run_in_background: false` writes no result for 65–146 s, so this is the only way to watch
+    /// one while it is working.
+    ///
+    /// `subagent_type` is what makes a call a launch, and it is checked to keep the directory
+    /// listing off every `Bash` and `Read` rather than to decide anything: a call that is not a
+    /// launch matches no `toolUseId` and would yield nothing anyway.
+    fn calling(&mut self, tool_use_id: &str, input: &Value) -> Option<(String, subagent::Launched)> {
+        input.get("subagent_type")?;
+        let filed = self.filed.as_ref()?;
+        let (transcript, root) = (filed.transcript.clone(), filed.root.clone());
+        let found = subagent::calling(&transcript, &mut self.metas, tool_use_id, input)?;
+        let id = SubRef::new(AGENT, &root, &found.transcript).encode();
         Some((id, found))
     }
 
@@ -373,7 +405,9 @@ impl ClaudeParser {
             return;
         };
         let patch = tool_use_result.and_then(unified_patch);
-        let launched = tool_use_result.and_then(|result| self.launched(result));
+        let launched = (!self.minted.contains(tool_use_id))
+            .then(|| tool_use_result.and_then(|result| self.launched(result)))
+            .flatten();
         let Some(turn) = self.store.revise(&target) else {
             return;
         };

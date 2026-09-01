@@ -1,7 +1,7 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.size
@@ -73,10 +73,15 @@ fun Modifier.action(
         if (selected != null) this.selected = selected
         if (state != null) stateDescription = state
     }
-    .clickable(enabled = enabled, onClick = onClick, onClickLabel = null)
-    .then(
-        if (onLongClick == null) Modifier
-        else Modifier.semantics { onLongClick(label = null) { onLongClick(); true } },
+    // One node owns the press: this one consumes it, so a long-press detector wrapped around a
+    // control is cancelled before it ever fires. `onLongClick` is a finger's gesture here or it is
+    // nothing — which is what it was, a TalkBack action with no pointer handling behind it.
+    .combinedClickable(
+        enabled = enabled,
+        onClickLabel = null,
+        onLongClickLabel = null,
+        onLongClick = onLongClick,
+        onClick = onClick,
     )
 
 // A control driven by a raw gesture detector — the key row's caps, the terminal grid — reaches a

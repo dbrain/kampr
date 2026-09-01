@@ -88,6 +88,12 @@ fun zoomPresets(paintWidth: Float, cols: Int, baseCellWidth: Float): ZoomPresets
 // space below the last row. The rows available to fill the height are history plus the live
 // viewport, because the space above a short grid carries history rather than nothing — on an
 // alt-screen pane with no ring this collapses back to max(fit-width, fit-height).
+//
+// `ceiling` is for the caller whose viewport is much bigger than the grid, which on a desktop is
+// the ordinary case: a fresh 40x12 pane in a 1624x1000 window fills to 3.6x, legible long before
+// it got there. It caps the magnification only — a grid too big for the viewport still shrinks —
+// and it belongs to the caller because it is a fact about the surface and not about the grid. A
+// phone has no room to spare: capping there letterboxes, which is what the max above prevents.
 fun defaultZoom(
     paint: PaintRect,
     cols: Int,
@@ -95,15 +101,19 @@ fun defaultZoom(
     historyRows: Int,
     baseCellWidth: Float,
     baseCellHeight: Float,
-): Float = surfaceGeometry(
-    viewportWidth = paint.width,
-    viewportHeight = paint.height,
-    cols = cols,
-    liveRows = liveRows + historyRows.coerceAtLeast(0),
-    historyRows = 0,
-    cellWidth = baseCellWidth,
-    cellHeight = baseCellHeight,
-).zoom
+    ceiling: Float = Float.MAX_VALUE,
+): Float = min(
+    ceiling,
+    surfaceGeometry(
+        viewportWidth = paint.width,
+        viewportHeight = paint.height,
+        cols = cols,
+        liveRows = liveRows + historyRows.coerceAtLeast(0),
+        historyRows = 0,
+        cellWidth = baseCellWidth,
+        cellHeight = baseCellHeight,
+    ).zoom,
+)
 
 // Where the surface may rest while it is following: the band of scroll values that leave the
 // caret inside the content rectangle, floor first.

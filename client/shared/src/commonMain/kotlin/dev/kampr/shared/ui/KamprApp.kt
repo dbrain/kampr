@@ -29,6 +29,7 @@ import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.gone
 import dev.kampr.shared.model.saidOutLoud
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.withoutReadDone
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.net.SetupStatus
@@ -215,7 +216,14 @@ internal fun AppScaffold(
 ) {
     val tokens = Kampr.tokens
     val safe = LocalSafeArea.current
-    val herd by state.store.herd.collectAsState()
+    val served by state.store.herd.collectAsState()
+    // One place, so the mark, the spoken status, the triage list and `paneOrder`'s rank all agree
+    // about a pane whose `done` the operator has already read.
+    val herd = served.withoutReadDone(state.seenDone)
+    // A pane id is never reissued, so a pane the herd has dropped is only growth in the set.
+    LaunchedEffect(served.panes.size, served.known) {
+        if (served.known) state.seenDone.keep(served.panes.mapTo(mutableSetOf()) { it.id })
+    }
     val hello by state.store.hello.collectAsState()
     val localRtt by state.store.localRttMs.collectAsState()
     val security = hello?.security ?: Security()
@@ -329,6 +337,8 @@ internal fun AppScaffold(
                             onOpenPane = { state.openPane(it) },
                             onSettings = { state.go(Screen.Setup) },
                             onResync = { state.connection.send(ClientMsg.Resync) },
+                            collapsed = state.sidebarCollapsed,
+                            onCollapsed = state::collapseSidebar,
                         )
                         ScreenBody(
                             Modifier.weight(1f).fillMaxSize(),

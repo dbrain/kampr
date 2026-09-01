@@ -7,7 +7,6 @@
 //! to the `.meta.json` beside each transcript, the `tool-results/` directory and
 //! `custom-title.json`.
 
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -162,27 +161,6 @@ fn a_handle_naming_a_transcript_this_session_never_launched_is_refused() {
     for rubbish in ["", "not-base64-at-all!!", &"A".repeat(9000)] {
         assert!(registry().open_sub(rubbish, &transcript()).is_err());
     }
-}
-
-/// The launch is real and the file is not there: an agent that has been asked for but has written
-/// nothing yet, or a transcript that has been cleaned up. A card that offers to open nothing is
-/// worse than one that does not offer, so no handle is minted — and the summary falls back to what
-/// the launching call itself said rather than to a kind invented for it.
-#[test]
-fn an_agent_call_whose_transcript_is_not_on_disk_offers_nothing_to_open() {
-    let mut scratch = scratch_claude("no-subagent", &agent_call("nowhere1234"));
-    let turns = scratch.turns();
-
-    assert!(launches(&turns).is_empty());
-    assert_eq!(
-        tool_blocks(&turns)[0],
-        &Block::Tool {
-            name: "Agent".into(),
-            summary: Some("Read the wire encoder".into()),
-            lines: Some(1),
-            state: ToolState::Done,
-        }
-    );
 }
 
 /// An `agentId` comes out of a transcript and is pasted into a filename, and the `agent-` prefix
@@ -351,4 +329,275 @@ fn step(uuid: &str, text: &str) -> String {
         "message": { "role": "assistant", "content": [{ "type": "text", "text": text }] }
     })
     .to_string()
+}
+
+const SUBAGENTS: &str = "projects/-home-u-demo/session/subagents";
+
+fn wrote_meta(root: &Path, agent_id: &str, kind: &str, description: &str, call: &str, depth: u32) {
+    let dir = root.join(SUBAGENTS);
+    std::fs::create_dir_all(&dir).expect("a subagents directory");
+    std::fs::write(
+        dir.join(format!("agent-{agent_id}.meta.json")),
+        serde_json::json!({
+            "agentType": kind,
+            "description": description,
+            "toolUseId": call,
+            "spawnDepth": depth,
+        })
+        .to_string(),
+    )
+    .expect("a meta");
+}
+
+fn wrote_transcript(root: &Path, agent_id: &str, text: &str) {
+    let dir = root.join(SUBAGENTS);
+    std::fs::create_dir_all(&dir).expect("a subagents directory");
+    std::fs::write(
+        dir.join(format!("agent-{agent_id}.jsonl")),
+        format!("{}\n", step("s1", text)),
+    )
+    .expect("a transcript");
+}
+
+/// One assistant record carrying an `Agent` call per `(tool_use_id, subagent_type, description)`,
+/// which is how three concurrent launches actually arrive.
+fn calls(specs: &[(&str, &str, &str)]) -> serde_json::Value {
+    let blocks: Vec<serde_json::Value> = specs
+        .iter()
+        .map(|(call, kind, description)| {
+            serde_json::json!({
+                "type": "tool_use", "id": call, "name": "Agent",
+                "input": { "subagent_type": kind, "description": description,
+                           "run_in_background": false,
+                           "prompt": "Read crates/kampr-core/src/wire.rs." }
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "type": "assistant", "uuid": "c1", "timestamp": "2026-08-27T09:00:04.000Z",
+        "message": { "content": blocks }
+    })
+}
+
+fn result(call: &str, agent_id: &str, description: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "user", "uuid": format!("r-{call}"), "timestamp": "2026-08-27T09:02:00.000Z",
+        "message": { "content": [
+            { "type": "tool_result", "tool_use_id": call, "content": "Agent result" }
+        ] },
+        "toolUseResult": { "agentId": agent_id, "description": description,
+                           "isAsync": true, "status": "async_launched" }
+    })
+}
+
+fn sub_of(block: &Block) -> (Option<&str>, Option<&str>, Option<u32>) {
+    match block {
+        Block::Sub {
+            kind, title, depth, ..
+        } => (kind.as_deref(), title.as_deref(), *depth),
+        other => panic!("expected a launch, got {other:?}"),
+    }
+}
+
+/// **The result record beats its own transcript to disk.** Measured at +0.101 s and +0.777 s on
+/// two async launches — and `settle` runs exactly once per `tool_use_id`, from the one call site
+/// in `ingest_block`, with no retry anywhere. So a poll landing inside that window used to drop
+/// the card for the whole life of the session: the operator's only way into the conversation,
+/// gone because a file was a tenth of a second late.
+#[test]
+fn a_launch_whose_transcript_has_not_landed_yet_still_mints_a_card_to_open() {
+    let mut scratch = scratch_claude("sub-race", &agent_call("4b7c9e21"));
+    let turns = scratch.turns();
+
+    let found = launches(&turns);
+    assert_eq!(
+        found.len(),
+        1,
+        "the transcript lands up to 0.8 s after the record that names it: {turns:?}"
+    );
+    assert_eq!(sub_of(found[0]).1, Some("Read the wire encoder"));
+}
+
+/// The handle is the file's name, not a proof it is there — `sub.rs` says so outright: *the
+/// transcript on disk is already the store*. Resolution happens at **open** time, through
+/// `TranscriptRoot::contain`, which canonicalises and so refuses until the file exists. A card
+/// minted a tenth of a second early therefore opens the moment the agent writes its first line.
+#[test]
+fn a_card_minted_before_its_transcript_landed_opens_it_the_moment_the_file_appears() {
+    let mut scratch = scratch_claude("sub-lands", &agent_call("4b7c9e21"));
+    let turns = scratch.turns();
+    let id = handle(launches(&turns)[0]).to_string();
+
+    assert!(
+        scratch.journals.open_sub(&id, &scratch.transcript).is_err(),
+        "a handle naming a file that is not there yet opens nothing"
+    );
+
+    wrote_transcript(&scratch.root, "4b7c9e21", LAUNCHED);
+
+    let mut sub = scratch
+        .journals
+        .open_sub(&id, &scratch.transcript)
+        .expect("the same handle, once the file it names exists");
+    assert!(md_texts(&drain(sub.as_mut())).contains(&LAUNCHED));
+}
+
+/// **A launch whose file never appears keeps its card, and the card refuses to open.** The two
+/// cases are indistinguishable at mint time — the transcript is 3–5 ms late or it is never
+/// coming — and only one of them is common, so the card is minted either way and the question is
+/// settled where it can be answered honestly: at open. A refusal the client already renders is a
+/// better answer than a card silently missing for the rest of the session.
+#[test]
+fn an_agent_call_whose_transcript_never_appears_offers_a_card_that_refuses_to_open() {
+    let mut scratch = scratch_claude("no-subagent", &agent_call("nowhere1234"));
+    let turns = scratch.turns();
+
+    let found = launches(&turns);
+    assert_eq!(found.len(), 1);
+    assert!(
+        scratch
+            .journals
+            .open_sub(handle(found[0]), &scratch.transcript)
+            .is_err(),
+        "there is nothing on disk for this handle to resolve to"
+    );
+    assert_eq!(
+        tool_blocks(&turns)[0],
+        &Block::Tool {
+            name: "Agent".into(),
+            summary: Some("Read the wire encoder".into()),
+            lines: Some(1),
+            state: ToolState::Done,
+        }
+    );
+}
+
+/// **A synchronous launch writes no result for 65–146 s**, and until 2.1.252 every launch was
+/// asynchronous so the result was the only way in. `agent-<id>.meta.json` lands 12–20 ms after
+/// the call and carries the `toolUseId` that made it — measured on 4 of 4 synchronous launches —
+/// so the card is minted from that instead, and the operator can watch the agent while it is
+/// still working rather than two minutes after it stopped.
+#[test]
+fn a_synchronous_launch_is_openable_from_the_meta_its_own_call_id_names() {
+    let mut scratch = scratch_claude(
+        "sub-sync",
+        &[calls(&[("toolu_sync", "Explore", "Map the manage op")])],
+    );
+    wrote_meta(
+        &scratch.root,
+        "5c1d0e33",
+        "Explore",
+        "Map the manage op",
+        "toolu_sync",
+        1,
+    );
+    wrote_transcript(&scratch.root, "5c1d0e33", LAUNCHED);
+    let turns = scratch.turns();
+
+    let found = launches(&turns);
+    assert_eq!(found.len(), 1, "no result has been written yet: {turns:?}");
+    assert_eq!(
+        sub_of(found[0]),
+        (Some("Explore"), Some("Map the manage op"), Some(1))
+    );
+    assert_eq!(
+        tool_blocks(&turns)[0],
+        &Block::Tool {
+            name: "Agent".into(),
+            summary: Some("Explore — Map the manage op".into()),
+            lines: None,
+            state: ToolState::Running,
+        },
+        "a launch still running is a running card, labelled off the meta"
+    );
+
+    let mut sub = scratch
+        .journals
+        .open_sub(handle(found[0]), &scratch.transcript)
+        .expect("the running agent's own transcript");
+    assert!(md_texts(&drain(sub.as_mut())).contains(&LAUNCHED));
+}
+
+/// The result arrives eventually and `settle` mints handles too. One `tool_use_id` is one launch
+/// and one card: a second `Block::Sub` would put the same conversation on the turn twice, and a
+/// client that opens the second gets a duplicate view of the first.
+#[test]
+fn a_card_minted_at_the_call_is_not_minted_again_when_the_result_arrives() {
+    let mut scratch = scratch_claude(
+        "sub-once",
+        &[
+            calls(&[("toolu_sync", "Explore", "Map the manage op")]),
+            result("toolu_sync", "5c1d0e33", "Map the manage op"),
+        ],
+    );
+    wrote_meta(
+        &scratch.root,
+        "5c1d0e33",
+        "Explore",
+        "Map the manage op",
+        "toolu_sync",
+        1,
+    );
+    wrote_transcript(&scratch.root, "5c1d0e33", LAUNCHED);
+    let turns = scratch.turns();
+
+    assert_eq!(launches(&turns).len(), 1, "one launch, one card: {turns:?}");
+    assert_eq!(
+        tool_blocks(&turns)[0],
+        &Block::Tool {
+            name: "Agent".into(),
+            summary: Some("Explore — Map the manage op".into()),
+            lines: Some(1),
+            state: ToolState::Done,
+        },
+        "the card minted early must still settle when its result lands"
+    );
+}
+
+/// **Three launches in flight at once each wrote their own meta with their own `toolUseId`.**
+/// File-creation order would have matched them by luck; the `toolUseId` is the harness's own
+/// answer to which call made which agent, and it is the only one this may use.
+#[test]
+fn concurrent_launches_get_their_own_cards_and_not_each_others() {
+    let mut scratch = scratch_claude(
+        "sub-concurrent",
+        &[calls(&[
+            ("toolu_a", "Explore", "the first question"),
+            ("toolu_b", "general-purpose", "the second question"),
+            ("toolu_c", "Plan", "the third question"),
+        ])],
+    );
+    for (agent, call, kind, description) in [
+        ("aaa11111", "toolu_a", "Explore", "the first question"),
+        ("bbb22222", "toolu_b", "general-purpose", "the second question"),
+        ("ccc33333", "toolu_c", "Plan", "the third question"),
+    ] {
+        wrote_meta(&scratch.root, agent, kind, description, call, 1);
+        wrote_transcript(&scratch.root, agent, description);
+    }
+    let turns = scratch.turns();
+
+    let found = launches(&turns);
+    assert_eq!(found.len(), 3, "{turns:?}");
+    assert_eq!(
+        found.iter().map(|b| sub_of(b)).collect::<Vec<_>>(),
+        [
+            (Some("Explore"), Some("the first question"), Some(1)),
+            (Some("general-purpose"), Some("the second question"), Some(1)),
+            (Some("Plan"), Some("the third question"), Some(1)),
+        ]
+    );
+    for (block, said) in found
+        .iter()
+        .zip(["the first question", "the second question", "the third question"])
+    {
+        let mut sub = scratch
+            .journals
+            .open_sub(handle(block), &scratch.transcript)
+            .expect("each card opens the agent it names");
+        assert!(
+            md_texts(&drain(sub.as_mut())).contains(&said),
+            "a card opened somebody else's agent"
+        );
+    }
 }

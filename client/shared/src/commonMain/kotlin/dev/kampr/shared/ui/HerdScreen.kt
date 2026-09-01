@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
@@ -215,11 +216,27 @@ fun HerdSidebar(
     onOpenPane: (String) -> Unit,
     onSettings: () -> Unit,
     onResync: () -> Unit = {},
+    collapsed: Boolean = false,
+    onCollapsed: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
     val groups = herd.groups()
     var listing by remember { mutableStateOf(false) }
+    if (collapsed) {
+        HerdRail(
+            herd = herd,
+            now = now,
+            activePaneId = activePaneId,
+            deviceName = deviceName,
+            deviceDetail = deviceDetail,
+            onOpenPane = onOpenPane,
+            onSettings = onSettings,
+            onExpand = { onCollapsed(false) },
+            modifier = modifier,
+        )
+        return
+    }
     Box(modifier.width(SIDEBAR_WIDTH).fillMaxHeight()) {
     Column(
             Modifier
@@ -228,16 +245,35 @@ fun HerdSidebar(
                 .readingOrder(-1f)
                 .edgeEnd(),
         ) {
+            // Two rows, because one will not hold them. The title, the machine pill and four
+            // 36 dp controls measure ~279 dp against the 260 this sidebar has inside its own
+            // padding, and `GlyphAction`'s `Modifier.size` coerces to the constraint it is
+            // handed — so the row did not overflow visibly, it silently gave the whole deficit
+            // to the last child and the + measured 0 x 0.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 18.dp, top = 18.dp, end = 18.dp, bottom = 14.dp),
+                    .padding(start = 18.dp, top = 14.dp, end = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NodeCountPill(herd.nodes.count { it.online }, connection, compact = true) { listing = true }
+                GlyphAction(
+                    KamprIcons.chevronLeft,
+                    "Collapse the sidebar",
+                    tokens.color.dim,
+                    LANDSCAPE_TOUCH,
+                ) { onCollapsed(true) }
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, top = 8.dp, end = 12.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NodeCountPill(herd.nodes.count { it.online }, connection, compact = true) { listing = true }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     MosaicAction(LANDSCAPE_TOUCH)
                     FleetAction(LANDSCAPE_TOUCH)
                     NewAction(target = LANDSCAPE_TOUCH)
@@ -304,4 +340,4 @@ fun HerdSidebar(
     }
 }
 
-private val SIDEBAR_WIDTH = 296.dp
+val SIDEBAR_WIDTH: Dp = 296.dp

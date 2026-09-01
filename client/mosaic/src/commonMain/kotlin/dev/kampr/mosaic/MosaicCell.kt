@@ -159,9 +159,10 @@ fun MosaicCell(
             // The surface is taller and wider than the cell by design, and a graphicsLayer does
             // not clip: without this a cell paints over its neighbour and over the chrome.
             .clipToBounds()
-            // Right-click only. A long press inside a cell is the grid's, exactly as it
-            // is on the pane screen, and the header carries the touch affordance.
-            .paneActions(pane.id, longPress = false)
+            // Right-click only, which is all `paneActions` is: a long press inside a cell is the
+            // grid's, exactly as it is on the pane screen, and the header carries the touch
+            // affordance. The cell claims no `onLongClick` of its own, which is the opt-out.
+            .paneActions(pane.id)
             // A drag needs to know where the cells actually landed, and only the layout does.
             .onGloballyPositioned {
                 val rect = it.boundsInWindow()

@@ -1,4 +1,3 @@
-
 use crate::common::*;
 use kampr_journal::{Block, FileJournal, Journal, Role, TurnKind};
 
