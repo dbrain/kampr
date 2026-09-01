@@ -46,7 +46,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
         // the reader a screen of scrolling to pass something they could not read either way. The
         // name is what tells them whether it is worth opening, which is the question the picture
         // itself could not answer at that size.
-        Surface(modifier.fillMaxWidth(), background = tokens.color.raise, radius = tokens.radii.md) {
+        Surface(modifier.fitContent(), background = tokens.color.raise, radius = tokens.radii.md) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -74,7 +74,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
         return
     }
 
-    Surface(modifier.fillMaxWidth(), radius = tokens.radii.md) {
+    Surface(modifier.fitContent(), radius = tokens.radii.md) {
         Column(
             Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),

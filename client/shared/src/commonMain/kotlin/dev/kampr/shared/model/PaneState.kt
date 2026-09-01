@@ -371,6 +371,17 @@ class PaneState(val id: String, val styles: StyleTable) {
         // the end, those became the newest thing on a view that pins to its own end, and the
         // reader was left looking at a message from an hour before (#411).
         mergeTurns(turns, msg.turns, Unanchored.Below)
+        // A pane that has moved to a session which has written nothing is withdrawn turn by turn,
+        // and what that leaves is a transcript with nothing drawable in it — but the cursor and
+        // the `more` flag it was paged under outlive the turns, and they name a transcript this
+        // pane is no longer on. The view then opens at the top of an empty list, offers "loading
+        // earlier turns" against them, and its `convo.load` is answered `not_found` by a node with
+        // no journal to page: the refusal an operator sees on the pane where they quit an agent
+        // and ran it again. A conversation with nothing left in it has no older half either.
+        if (turns.none { it.blocks.isNotEmpty() }) {
+            convoMore = false
+            convoCursor = null
+        }
         revision++
     }
 

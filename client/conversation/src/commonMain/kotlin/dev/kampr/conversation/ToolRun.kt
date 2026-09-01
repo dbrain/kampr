@@ -55,7 +55,7 @@ fun ToolRunCard(
     ).joinToString(", ")
     val held = "${tools.size} tool calls, ${names.joinToString(", ")}" +
         if (outcome.isEmpty()) "" else ", $outcome"
-    Surface(modifier.fillMaxWidth(), background = tokens.color.raise, radius = tokens.radii.md) {
+    Surface(modifier.fitContent(), background = tokens.color.raise, radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier

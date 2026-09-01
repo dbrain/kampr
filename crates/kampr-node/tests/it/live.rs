@@ -4986,6 +4986,75 @@ async fn a_session_that_has_written_nothing_takes_the_previous_conversation_off_
     retired(&mut socket, &pane, &stale).await;
 }
 
+/// The same window reached the way an operator actually reaches it: **quit the agent and run it
+/// again in the same terminal**, rather than `/clear`ing it in place.
+///
+/// The two look identical on the wire and are not. A `/clear` moves the announcement straight
+/// from one session to the next under one pid, so the node sees two names that disagree. A
+/// restart goes through a third state — the process is gone, nothing announces, and the pane
+/// names no session at all — and the rule that withdrew a conversation only when the *previous
+/// tick* named a different one saw `A -> none` and then `none -> B`, disagreed with neither, and
+/// left the first session's turns on the screen. The reader then had the panel from the run
+/// before, and the ask for older turns that a stale cursor still offered was answered
+/// `not_found`, which is the reported "no conversation open for this pane".
+///
+/// No transcript is written for the second session on purpose: that is the whole gap (#311), and
+/// a test that writes one is passed by [`deliver`]'s withdrawal instead of by the rule under test.
+///
+/// The mutation that must fail: compare the announcement against the previous handle rather than
+/// against the last session the pane was seen on, and this hangs.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_quit_and_run_again_takes_the_previous_conversation_off_the_client() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("rerun", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&h._session, &local).await;
+    fixture.announce(first, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let turns = opening["turns"].as_array().expect("turns").clone();
+    assert_eq!(turns[0]["blocks"][0]["text"], "FIRST SESSION", "{opening}");
+    let stale: Vec<String> = turns
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    // Ctrl-C, then `claude` again at the same prompt. Herdr goes on calling the pane `claude`
+    // across both, because its detection is a screen scrape.
+    fixture.stop(&h._session, &local, first).await;
+    let second = fixture.start(&h._session, &local).await;
+    assert_ne!(second, first);
+    fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+
+    retired(&mut socket, &pane, &stale).await;
+}
+
 /// The other half of the same gap, and the one that actually happens: the transcript **does not
 /// move** while the pane is unwatched, it just grows.
 ///

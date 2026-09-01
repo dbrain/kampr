@@ -85,10 +85,29 @@ pub fn is_consecutive_from_one(options: &[PendingOption]) -> bool {
             .all(|(i, o)| o.key == (i + 1).to_string())
 }
 
-/// Strips the box a TUI draws around a prompt. Herdr's `strip_ansi` removes the colour, not the
-/// border glyphs.
+/// Strips the box a TUI draws around a prompt, and everything a *second* panel painted on the same
+/// row.
+///
+/// Herdr's `strip_ansi` removes the colour, not the border glyphs, so the box has to come off
+/// here. Taking it off the two ends is not enough: a harness that draws two panels side by side
+/// puts both of them on one screen row, and `pane.read` hands back rows — so an option's label ran
+/// on through the border between the columns and into whatever stood next to it. The operator saw
+/// it as chips reading `Everything but prose │ │ run the tests │`.
+///
+/// The cut is at the first **box-drawing** glyph (U+2500–U+257F), which is a class no CLI puts
+/// inside a label. Deliberately not at ASCII `|`: a permission prompt's own option is routinely
+/// `Yes, and don't ask again for: curl -s https://example.com | head -3`, and cutting there would
+/// hide the half of the command that matters.
 pub fn unbox(line: &str) -> String {
-    line.trim().trim_matches(is_chrome).trim().to_string()
+    let trimmed = line.trim().trim_matches(is_chrome).trim();
+    match trimmed.find(is_column_rule) {
+        Some(at) => trimmed[..at].trim_end().to_string(),
+        None => trimmed.to_string(),
+    }
+}
+
+fn is_column_rule(c: char) -> bool {
+    ('\u{2500}'..='\u{257f}').contains(&c)
 }
 
 pub fn is_chrome(c: char) -> bool {
@@ -154,6 +173,29 @@ mod tests {
         let o = numbered_option("❯ 1. Yes, I trust this folder").expect("an option");
         assert_eq!(o.key, "1");
         assert_eq!(o.label, "Yes, I trust this folder");
+    }
+
+    #[test]
+    fn a_row_carrying_two_panels_ends_at_the_border_between_them() {
+        assert_eq!(
+            unbox("  2. Everything but prose     \u{2502} \u{2502} run the tests \u{2502} \u{2502}"),
+            "2. Everything but prose",
+        );
+        assert_eq!(
+            unbox("\u{276f} 1. Cards + tables   \u{250c}\u{2500}\u{2500}\u{2500}\u{2510} \u{2502} x"),
+            "\u{276f} 1. Cards + tables",
+        );
+    }
+
+    #[test]
+    fn a_pipe_inside_a_command_is_not_a_border() {
+        // The label a Bash permission prompt actually offers. Cutting at ASCII `|` would publish
+        // half a command as the whole of it.
+        let line = "\u{2502} 2. Yes, and don't ask again for: curl -s https://example.com | head -3 \u{2502}";
+        assert_eq!(
+            unbox(line),
+            "2. Yes, and don't ask again for: curl -s https://example.com | head -3",
+        );
     }
 
     #[test]

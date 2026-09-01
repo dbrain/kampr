@@ -58,7 +58,10 @@ fun ToolCard(
     // Lifted off the block it sits in rather than level with it. A call is a box inside the
     // reply's box, and `surface` is what that reply is already painted in — a card the same colour
     // as its own ground is not a card, it is a paragraph with a chevron on it.
-    Surface(modifier.fillMaxWidth(), background = tokens.color.raise, radius = tokens.radii.md) {
+    //
+    // As wide as what is in it (see [`fitContent`]): a call reading four words does not need the
+    // desktop column, and expanding one grows the card to whatever its output wants instead.
+    Surface(modifier.fitContent(), background = tokens.color.raise, radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier

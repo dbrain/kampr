@@ -462,6 +462,46 @@ mod tests {
         assert_eq!(detect(screen), None);
     }
 
+    /// The report, with the screen attached: *"that's our UI … we're parsing the Claude questions
+    /// into those chips/buttons"*, next to a shot of three chips whose labels ran on into a panel
+    /// standing beside them.
+    ///
+    /// A harness that draws two panels side by side puts both on the same screen *row*, and
+    /// `pane.read` hands back rows. Stripping the box from the two ends of a row left every glyph
+    /// in the middle of it, so an option's label was everything to its right — its own words, then
+    /// the border between the columns, then whatever the panel next door had painted on that line.
+    ///
+    /// Transcribed off the operator's screenshot: a question with three options down the left and
+    /// a preview of the focused one boxed on the right.
+    const CLAUDE_TWO_COLUMN_DIALOG: &str = concat!(
+        "\u{250c} Fit scope \u{2510}\n",
+        "\n",
+        "For the conversation view: which elements should shrink to fit their content instead of \
+         filling the turn frame?\n",
+        "\n",
+        "\u{276f} 1. Cards + tables         \u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}\n",
+        "     (Recommended)            \u{2502} \u{250c} you \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510} \u{2502}\n",
+        "  2. Everything but prose     \u{2502} \u{2502} run the tests \u{2502} \u{2502}\n",
+        "  3. Tables only              \u{2502} \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518} \u{2502}\n",
+        "                              \u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}\n",
+        "\n",
+        "Enter to select \u{b7} \u{2191}/\u{2193} to navigate \u{b7} Esc to cancel\n",
+    );
+
+    #[test]
+    fn a_panel_standing_beside_the_options_is_not_part_of_their_labels() {
+        let p = detect(CLAUDE_TWO_COLUMN_DIALOG).expect("the dialog was not read at all");
+        assert_eq!(
+            p.question,
+            "For the conversation view: which elements should shrink to fit their content instead \
+             of filling the turn frame?",
+        );
+        assert_eq!(
+            p.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(),
+            vec!["Cards + tables", "Everything but prose", "Tables only"],
+        );
+    }
+
     #[test]
     fn the_question_is_the_nearest_real_line_above_the_options() {
         let screen =

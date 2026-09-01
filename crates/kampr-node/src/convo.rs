@@ -302,6 +302,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     // resolve below is the only thing that would have. One shot, and only while the handle it was
     // kept under is still the handle the pane is on.
     let mut inherited = opened.is_some();
+    // The last session this pane was *seen* on, which is not the same as the last handle it had.
+    // An agent quit and run again in the same terminal passes through a tick that names nothing
+    // at all — the process is gone and there is no marker to read — so a rule comparing two
+    // neighbouring handles saw `A -> none` and then `none -> B`, was certain of neither, and left
+    // the first session's conversation on the screen for the reader to page and be refused.
+    let mut named = handle.as_ref().and_then(|h| h.identity.announced.clone());
     let mut due = true;
     let mut misses = 0u32;
     let mut live = Watch::default();
@@ -339,7 +345,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // restarted looks identical in every field but the process, which is why the process is
         // in the handle.
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
-            let elsewhere = moved(handle.as_ref(), &now);
+            let elsewhere = moved(named.as_ref(), now.identity.announced.as_ref());
+            if let Some(session) = now.identity.announced.clone() {
+                named = Some(session);
+            }
             handle = Some(now.clone());
             opened = None;
             inherited = false;
@@ -823,18 +832,16 @@ fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {
 ///
 /// A pane's agent goes absent for real, and more than once: herdr holds `unknown` for
 /// **3.3 s** after a label attaches with nothing matching, and hands out one `idle` on
-/// the way down when an agent exits (#360). Either leaves this handle with no identity
+/// the way down when an agent exits (#360). Either leaves the pane with no identity
 /// for a tick, and a conversation withdrawn on every one of those is its own defect —
 /// a worse one than a dated view. Two names that *disagree* is the case a node is
 /// certain about, and the only one worth acting on.
-fn moved(was: Option<&Handle>, now: &Handle) -> bool {
-    let (Some(was), Some(now)) = (
-        was.and_then(|h| h.identity.announced.as_ref()),
-        now.identity.announced.as_ref(),
-    ) else {
-        return false;
-    };
-    was != now
+///
+/// So `was` is the last name the pane was seen under and not the name it had a tick ago: an
+/// absence between the two is exactly the state a restarted agent passes through, and comparing
+/// across it is the difference between `/clear` and Ctrl-C followed by `claude`.
+fn moved(was: Option<&SessionRef>, now: Option<&SessionRef>) -> bool {
+    matches!((was, now), (Some(was), Some(now)) if was != now)
 }
 
 /// Whatever the followed conversation has grown by, and which one it was.
@@ -900,15 +907,8 @@ async fn drain(journal: &Open) -> Result<Vec<Turn>, JournalError> {
 mod tests {
     use super::*;
 
-    fn on(session: &str) -> Handle {
-        Handle {
-            agent: Some("claude".into()),
-            cwd: Some("/w".into()),
-            identity: Identity {
-                announced: Some(SessionRef::id("claude", session)),
-                harness: Harness::Unknown,
-            },
-        }
+    fn on(session: &str) -> SessionRef {
+        SessionRef::id("claude", session)
     }
 
     /// A pane's agent goes absent and comes back — herdr's 3.3 s of `unknown` after a
@@ -918,15 +918,24 @@ mod tests {
     #[test]
     fn a_pane_that_stops_naming_its_session_keeps_the_conversation_it_had() {
         let named = on("a");
-        assert!(!moved(Some(&named), &Handle::default()));
-        assert!(!moved(None, &named));
-        assert!(!moved(Some(&named), &named));
+        assert!(!moved(Some(&named), None));
+        assert!(!moved(None, Some(&named)));
+        assert!(!moved(Some(&named), Some(&named)));
     }
 
     /// Two names that disagree is the case this node is certain about: whatever the
     /// client is holding, it is not of the session the pane is on now.
     #[test]
     fn a_pane_that_names_a_different_session_has_left_the_one_on_the_screen() {
-        assert!(moved(Some(&on("a")), &on("b")));
+        assert!(moved(Some(&on("a")), Some(&on("b"))));
+    }
+
+    /// The restart, which is the shape the last-seen name exists for: quitting an agent
+    /// leaves the pane naming nothing for as long as it takes to start another, so the
+    /// two sessions either side of that gap are never neighbours.
+    #[test]
+    fn an_agent_quit_and_run_again_is_a_different_session_across_the_gap() {
+        assert!(!moved(Some(&on("a")), None));
+        assert!(moved(Some(&on("a")), Some(&on("b"))));
     }
 }

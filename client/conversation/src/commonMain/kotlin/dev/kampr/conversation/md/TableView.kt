@@ -66,13 +66,19 @@ fun MarkdownTable(table: MdBlock.Table, query: String, modifier: Modifier = Modi
     }
 
     val shape = RoundedCornerShape(tokens.radii.md)
-    BoxWithConstraints(modifier.fillMaxWidth()) {
+    // Sized to its columns, never to the pane. A two-column table stretched across a desktop is a
+    // table with a hole in the middle of it, which is what growing the columns to fill produced —
+    // and it is not what any terminal, Claude Code's own included, does with one.
+    //
+    // `BoxWithConstraints` carries no width of its own here: `maxWidth` is the room the frame is
+    // offering, and what the box measures to is what the columns came to inside it.
+    BoxWithConstraints(modifier) {
         val available = with(density) { maxWidth.toPx() }
         val widths = remember(head, body, headStyle, cellStyle, available, density) {
-            columnWidths(head, body, headStyle, cellStyle, measurer, density, available)
+            columnWidths(head, body, headStyle, cellStyle, measurer, density)
         }
         val scroll = rememberScrollState()
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.width(with(density) { minOf(widths.sum(), available).toDp() })) {
             Box(Modifier.fillMaxWidth().clip(shape).edge(tokens.chrome, shape)) {
                 Column(Modifier.horizontalScroll(scroll)) {
                     TableRow(head, widths, table.aligns, headStyle, palette, palette.headerGround, true)
@@ -131,18 +137,10 @@ private fun Modifier.ruleBottom(color: Color): Modifier = drawBehind {
     drawRect(color, Offset(0f, size.height - 1f), Size(size.width, 1f))
 }
 
-// Natural width per column, capped, then grown to fill the pane when the table is narrow. It is
-// never scaled *down*: shrinking to fit is what turns a table back into mush, so the overflow
-// goes to the table's own scroller instead and the page stays put.
-internal fun fitColumns(natural: List<Float>, available: Float): List<Float> {
-    val total = natural.sum()
-    if (total >= available || total <= 0f) return natural
-    val scale = available / total
-    val grown = natural.map { it * scale }
-    val drift = available - grown.sum()
-    return grown.mapIndexed { index, value -> if (index == grown.lastIndex) value + drift else value }
-}
-
+// Natural width per column, capped. Never scaled *down*: shrinking to fit is what turns a table
+// back into mush, so the overflow goes to the table's own scroller and the page stays put. Never
+// scaled *up* either — a column is as wide as the widest thing in it, and a table grown to fill
+// the pane is the defect this pairs with.
 private fun columnWidths(
     head: List<AnnotatedString>,
     body: List<List<AnnotatedString>>,
@@ -150,14 +148,13 @@ private fun columnWidths(
     cellStyle: TextStyle,
     measurer: TextMeasurer,
     density: Density,
-    available: Float,
 ): List<Float> {
     fun px(dp: Dp) = with(density) { dp.toPx() }
     val pad = px(CELL_PAD_X) * 2
     val cap = px(MAX_COLUMN)
     val floor = px(MIN_COLUMN)
 
-    val natural = head.indices.map { column ->
+    return head.indices.map { column ->
         val header = measurer.measure(head[column], headStyle, softWrap = false, maxLines = 1).size.width.toFloat()
         val widest = body.fold(header) { acc, row ->
             val cell = row.getOrNull(column) ?: return@fold acc
@@ -165,5 +162,4 @@ private fun columnWidths(
         }
         (widest + pad).coerceIn(floor, cap)
     }
-    return fitColumns(natural, available)
 }

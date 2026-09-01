@@ -24,6 +24,8 @@ import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
+import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -39,9 +41,9 @@ private class Recording : PaneIo {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.conversation(info: PaneInfo): Recording {
+private fun ComposeUiTest.conversation(info: PaneInfo, store: KamprStore = KamprStore()): Recording {
     val io = Recording()
-    val pane = KamprStore().pane(PANE_ID)
+    val pane = store.pane(PANE_ID)
     setContent {
         CompositionLocalProvider(
             LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
@@ -86,6 +88,54 @@ class FreshAgentTest {
             "the first thing said to a fresh agent is typed at its prompt like any other reply",
         )
     }
+
+    // The other road to the same screen, and the one that was reported: *"reusing a terminal that
+    // previously ran claude to run claude again — clicking conversation pane I get 'no conversation
+    // open for this pane (not_found)' and the conversation pane shows an old conversation"*.
+    //
+    // The pane had a conversation, the agent was quit and run again, and the node withdrew the
+    // session the pane had left. The turns going is not the whole of it: the cursor and `more`
+    // the old page was read under outlive them, so the view went on offering "loading earlier
+    // turns" against a transcript that is gone — and the `convo.load` behind that offer is what
+    // the node answered `not_found`.
+    //
+    // The mutation that must fail: keep the cursor across a withdrawal, and the offer stands with
+    // another `convo.load` behind it.
+    @Test
+    fun aWithdrawnConversationLeavesThePaneReadyToStartANewOneRatherThanPagingTheOldOne() =
+        runComposeUiTest {
+            val store = KamprStore()
+            store.accept(
+                ServerMsg.Convo(
+                    pane = PANE_ID, cursor = "a-1", more = true,
+                    turns = listOf(proseTurn("a-1", "an answer from the run before")),
+                ),
+            )
+            val io = conversation(
+                demoInfo(conversation = false, converses = true, status = "idle"),
+                store,
+            )
+            onNodeWithText("an answer from the run before", substring = true).assertIsDisplayed()
+            val askedWhileItWasOpen = io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size
+
+            // The withdrawal: every turn back under its own id, carrying nothing.
+            store.accept(
+                ServerMsg.ConvoTurn(
+                    pane = PANE_ID, sub = null,
+                    turns = listOf(Turn("a-1", "assistant", null, emptyList())),
+                ),
+            )
+            waitForIdle()
+
+            onNodeWithText("nothing written down yet", substring = true).assertIsDisplayed()
+            onNodeWithContentDescription(REPLY).assertIsDisplayed()
+            onNodeWithText("loading earlier turns").assertDoesNotExist()
+            assertEquals(
+                askedWhileItWasOpen,
+                io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size,
+                "the pane asked for an older page of a conversation it has been told to let go of",
+            )
+        }
 
     // The two panes that genuinely have nothing to read are still told so, and told which of the
     // two reasons it is.

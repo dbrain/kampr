@@ -326,6 +326,60 @@ class ModelTest {
         assertFalse(pane.convoMore)
     }
 
+    // The other half of the restarted agent: *"reusing a terminal that previously ran claude to
+    // run claude again — clicking conversation pane I get 'no conversation open for this pane
+    // (not_found)' and the pane shows an old conversation"*.
+    //
+    // The node withdraws the session the pane has left turn by turn, and that leaves the
+    // transcript with nothing drawable in it — but the cursor and the `more` flag it was paged
+    // under survive, and they name a transcript this pane is no longer on. The view offers
+    // "loading earlier turns" against them the moment it opens at the top of an empty list, and
+    // the `convo.load` it sends is answered `not_found` by a node that has no journal to page.
+    //
+    // A conversation with nothing left in it has no older half either.
+    @Test
+    fun aRetirementThatEmptiesTheTranscriptStopsOfferingOlderTurns() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
+            )!!
+        )
+        val pane = store.pane("p")
+        assertTrue(pane.convoMore)
+        store.accept(
+            Wire.decode(
+                """{"t":"convo.turn","pane":"p","turns":[
+                   {"id":"t1","role":"assistant","blocks":[]},
+                   {"id":"t2","role":"assistant","blocks":[]}]}"""
+            )!!
+        )
+        assertFalse(pane.convoMore, "the pane still offers older turns of a conversation it has left")
+        assertNull(pane.convoCursor)
+    }
+
+    // A withdrawal that takes *part* of a conversation is the live preview being retired, and it
+    // says nothing at all about what is older.
+    @Test
+    fun aWithdrawnPreviewLeavesTheRestOfTheConversationPageable() {
+        val store = KamprStore()
+        store.accept(
+            Wire.decode(
+                """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
+            )!!
+        )
+        store.accept(
+            Wire.decode("""{"t":"convo.turn","pane":"p","turns":[{"id":"t2","role":"assistant","blocks":[]}]}""")!!
+        )
+        val pane = store.pane("p")
+        assertTrue(pane.convoMore)
+        assertEquals("t1", pane.convoCursor)
+    }
+
     // The report: a question was asked, the answer never appeared in the conversation pane, it was
     // in the terminal all along — and later turns arrived perfectly well while that one stayed
     // missing for ever.

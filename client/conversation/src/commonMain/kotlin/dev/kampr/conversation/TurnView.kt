@@ -175,7 +175,7 @@ private fun PieceView(
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
         is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
         is Piece.Launch -> Surface(
-            Modifier.fillMaxWidth(),
+            Modifier.fitContent(),
             background = Kampr.tokens.color.raise,
             radius = Kampr.tokens.radii.md,
         ) { SubCard(piece.sub) }

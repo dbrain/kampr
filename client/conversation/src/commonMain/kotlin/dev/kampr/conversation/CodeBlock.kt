@@ -45,7 +45,9 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
     val body = remember(code, lang, palette) { highlight(code, lang, palette) }
     val marked = remember(body, query, palette) { body.markUrls(CODE_LINK).markMatches(query, palette.match) }
 
-    Surface(modifier.fillMaxWidth(), background = palette.codeGround, radius = tokens.radii.md) {
+    // The card is the width of its longest line, capped by the frame — a one-line fence drawn a
+    // metre wide is a box with nothing in it, and a wide one keeps its own scroller either way.
+    Surface(modifier.fitContent(), background = palette.codeGround, radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier.fillMaxWidth().background(palette.codeBar).padding(horizontal = 11.dp, vertical = 7.dp),

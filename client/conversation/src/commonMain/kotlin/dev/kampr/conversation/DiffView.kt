@@ -58,7 +58,7 @@ fun DiffCard(
     val removed = lines.count { it.kind == DiffKind.Removed }
     val scroll = rememberScrollState()
 
-    Surface(modifier.fillMaxWidth(), background = palette.codeGround, radius = tokens.radii.md) {
+    Surface(modifier.fitContent(), background = palette.codeGround, radius = tokens.radii.md) {
         Column {
             Row(
                 Modifier.fillMaxWidth().background(palette.codeBar).padding(horizontal = 11.dp, vertical = 7.dp),
