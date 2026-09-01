@@ -52,6 +52,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
@@ -336,6 +337,15 @@ fun ConversationView(
             }, transcript = {
         SelectionContainer(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
+                    // What a reader is looking at, when it is not the conversation as it stands.
+                    // The grid beside this reattaches to a stream the registry held open, so it is
+                    // current the moment the pane opens; the transcript has to be resolved, folded
+                    // and paged first, and what is on screen until then is a memory (#393).
+                    val catchingUp = catchingUp(
+                        LocalConnectionStatus.current,
+                        pane.convoConfirmed,
+                        drawn = turns.isNotEmpty(),
+                    )
                     if (turns.isEmpty()) {
                         KText(
                             if (info?.hasConversation == false) {
@@ -357,7 +367,7 @@ fun ConversationView(
                             // exactly like a live one — the badge in the header was the whole
                             // signal on the one surface a reader cannot date by looking at it.
                             // Same wash from the other side, so the two surfaces fade alike.
-                            .alpha(if (pane.stale) 0.55f else 1f)
+                            .alpha(if (pane.stale || catchingUp != null) 0.55f else 1f)
                             .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
                             .onSizeChanged { viewport = it.height },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -386,6 +396,17 @@ fun ConversationView(
                             TranscriptRowView(
                                 shown, at, stamps.getOrNull(at), query, expanded, toggle,
                                 attachments = attachments, now = now, agent = info?.agent, clock = clock,
+                            )
+                        }
+                    }
+                    // Above everything the transcript draws, including the pinned header, because
+                    // it is about all of it: what is underneath is a reading or it is a memory, and
+                    // a reader has to know which before they read a word of it.
+                    catchingUp?.let { said ->
+                        DisableSelection {
+                            CatchingUpStrip(
+                                said,
+                                Modifier.align(Alignment.TopStart).background(tokens.color.surface),
                             )
                         }
                     }

@@ -83,6 +83,8 @@ import dev.kampr.terminal.render.TextCache
 import dev.kampr.terminal.review.ReviewSurface
 import dev.kampr.terminal.review.historyEdgeLabel
 import dev.kampr.terminal.review.historyEdgeSpoken
+import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.paneScrollKeys
 import dev.kampr.terminal.review.historyWarning
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
@@ -403,6 +405,20 @@ fun TerminalView(
             )
         }
 
+        // A program that holds the alternate screen keeps no ring behind it (#387), so a gesture
+        // over one moved nothing at all — the report was "some terminals I can't scroll up on,
+        // unclear why". The scroll goes to the program instead, which is what every terminal does
+        // and what herdr already does at the desk: the wheel by the notch, a finger by the row,
+        // once the surface underneath is spent. `paneScrollKeys` decides whether anything may be
+        // sent at all and in what dialect; a read-only viewer sends nothing whatever it says,
+        // because these are pty bytes.
+        val scrollToPane = when {
+            io.readOnly || rows.historyRows > 0 -> null
+            else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
+                PaneScroll(keys) { report -> io.send(ClientMsg.InputText(pane.id, report)) }
+            }
+        }
+
         Box(
             Modifier
                 .fillMaxSize()
@@ -422,7 +438,7 @@ fun TerminalView(
                 // The wheel stays live under a sheet. It consumes nothing but a scroll, so it
                 // cannot steal the tap the scrim needs — and ctrl+wheel while the zoom sheet is
                 // open is the sheet's own readout moving, which is the point of having it there.
-                .pointerInput(pane.id) { terminalWheel(view, probe, presets) }
+                .pointerInput(pane.id, scrollToPane != null) { terminalWheel(view, probe, presets, scrollToPane) }
                 // The touch detector does not. A sheet over this surface is modal, and the grid's
                 // detector consumes the release — so leaving *it* live is what let a tap meant for
                 // the scrim raise the keyboard instead of closing the sheet.
@@ -430,8 +446,8 @@ fun TerminalView(
                     if (view.sheetOpen || session.confirm.held != null || peek.path != null) {
                         Modifier
                     } else {
-                        Modifier.pointerInput(pane.id) {
-                            terminalGestures(session, presets, paint, probe, ::tapped)
+                        Modifier.pointerInput(pane.id, scrollToPane != null) {
+                            terminalGestures(session, presets, paint, probe, scrollToPane, ::tapped)
                         }
                     },
                 ),

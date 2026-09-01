@@ -11,9 +11,12 @@ import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import dev.kampr.terminal.PaneSession
+import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.render.Selection
 import kotlin.math.abs
 
@@ -26,6 +29,7 @@ internal suspend fun PointerInputScope.terminalGestures(
     presets: ZoomPresets,
     paint: PaintRect,
     probe: GridProbe,
+    toPane: PaneScroll? = null,
     onTap: (Offset) -> Unit,
 ) {
     val view = session.view
@@ -38,6 +42,11 @@ internal suspend fun PointerInputScope.terminalGestures(
         val braking = abs(view.velocityX) > 1f || abs(view.velocityY) > 1f
         view.velocityX = 0f
         view.velocityY = 0f
+
+        if (down.type == PointerType.Mouse) {
+            mouseGesture(down, session, probe, braking, onTap)
+            return@awaitEachGesture
+        }
 
         val press = awaitStillPress(down)
         val held = press.held
@@ -70,6 +79,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         var travel = press.travel
         var multi = false
         var event: PointerEvent
+        toPane?.rest()
         do {
             event = awaitPointerEvent()
             if (event.changes.any { it.isConsumed }) break
@@ -80,8 +90,17 @@ internal suspend fun PointerInputScope.terminalGestures(
                 val centroid = event.calculateCentroid(useCurrent = true)
                 view.pinch(centroid.x, centroid.y, pan.x, pan.y, event.calculateZoom())
             } else if (pan != Offset.Zero) {
+                val before = view.scrollY
                 view.scrollBy(pan.x, pan.y)
                 travel += abs(pan.x) + abs(pan.y)
+                // The surface underneath is spent, so the rest of the drag belongs to whatever is
+                // drawing the pane — the same hand-off the wheel makes, by distance rather than by
+                // notch. Only a harness measured to take it is ever given one; `toPane` is null
+                // everywhere else, which is every pane Kampr holds the history for itself.
+                if (toPane != null && pan.y != 0f && view.scrollY == before) {
+                    val cell = probe.cellAt(pressed.first().position)
+                    toPane.refused(pan.y, probe.cellHeight, cell.col, cell.row)
+                }
             }
             pressed.firstOrNull()?.let { tracker.addPosition(it.uptimeMillis, it.position) }
             event.changes.forEach { if (it.positionChanged()) it.consume() }
@@ -133,4 +152,47 @@ private suspend fun AwaitPointerEventScope.awaitStillPress(down: PointerInputCha
         down
     }
     return StillPress(held, travel)
+}
+
+// A mouse is not a fingertip, and a desk has no name for a press held still: it drags across the
+// text it wants, the way every terminal emulator does. The drag is the selection's and nothing
+// else's — the wheel already pans this surface on both axes and zooms it (`terminalWheel`), so a
+// mouse loses nothing by giving it up. A press that never travelled is still a click, and a click
+// is still the tap that puts a selection away and asks for the keyboard.
+//
+// The reading this is gated on is measured rather than assumed: a real mouse on the web build
+// arrives as `PointerType.Mouse` (#382), which is the platform the report came from. The pointer
+// is the question and the *input mode* is not — that flips to `Touch` mid-mouse-gesture there.
+private suspend fun AwaitPointerEventScope.mouseGesture(
+    down: PointerInputChange,
+    session: PaneSession,
+    probe: GridProbe,
+    braking: Boolean,
+    onTap: (Offset) -> Unit,
+) {
+    val view = session.view
+    var travel = 0f
+    var selecting = false
+    var event: PointerEvent
+    do {
+        event = awaitPointerEvent()
+        val moving = event.changes.firstOrNull { it.pressed }
+        if (moving != null) {
+            if (!selecting) {
+                travel += moving.positionChange().getDistance()
+                if (travel > viewConfiguration.touchSlop) {
+                    val anchor = probe.cellAt(down.position)
+                    view.selection = Selection(anchor, anchor, view.blockSelect)
+                    view.target = null
+                    selecting = true
+                }
+            }
+            if (selecting) {
+                view.selection = view.selection?.copy(head = probe.cellAt(moving.position))
+                event.changes.forEach { if (it.positionChanged()) it.consume() }
+            }
+        }
+    } while (event.changes.any { it.pressed })
+    if (!selecting && !braking) onTap(down.position)
+    session.reclaimKeyboard()
 }

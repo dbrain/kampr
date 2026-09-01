@@ -1,6 +1,7 @@
 use super::Check;
 use crate::report::Local;
 use crate::service::{self, Supervisor};
+use kampr_fleet::PathOrigin;
 use kampr_node::Config;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -248,6 +249,44 @@ fn stamp(unix: i64) -> String {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+/// What a fleet run on this host will find, and where that came from.
+///
+/// Worth a line of its own because the failure it explains is silent and fans out: the node is a
+/// service, a service manager's `PATH` has no `~/.local/bin` in it, and `kampr update` across the
+/// herd then fails on every host with a message about a file (#392). A reader who can see the
+/// `PATH` can see why in one glance.
+pub fn fleet_path(config: &Config) -> Check {
+    let configured = Some(config.fleet.path.clone()).filter(|p| !p.is_empty());
+    let Some(path) = kampr_fleet::fleet_path(configured) else {
+        return Check::warn(
+            "fleet path",
+            "this node has no PATH at all to give a fleet run, so a bare command name resolves to \
+             nothing on this host",
+        )
+        .fix("set fleet.path in config.toml");
+    };
+    let source = match path.origin {
+        PathOrigin::Configured => "fleet.path in config.toml",
+        PathOrigin::Login => "this user's login shell",
+        PathOrigin::Inherited => "this process's own environment",
+    };
+    let note = format!("{} ({source})", path.value);
+    match path.origin {
+        // The rung that means the login shell could not be read. It is what every fleet run got
+        // before there was anything else to get, so it is not a failure — but it is the shape the
+        // report was about, and a reader looking for "why did my command not run" has to see it.
+        PathOrigin::Inherited => Check::warn(
+            "fleet path",
+            format!(
+                "{note} — the login shell could not be read, so a fleet run gets a service \
+                 manager's PATH rather than yours"
+            ),
+        )
+        .fix("set fleet.path in config.toml to the PATH your commands need"),
+        _ => Check::ok("fleet path", note),
+    }
 }
 
 #[cfg(test)]

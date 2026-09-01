@@ -38,6 +38,21 @@ pub struct Config {
     pub update: Update,
     #[serde(default)]
     pub naming: Naming,
+    #[serde(default)]
+    pub fleet: Fleet,
+}
+
+/// One command across the herd.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Fleet {
+    /// The `PATH` a fleet run is given, when the operator wants to say so themselves.
+    ///
+    /// Empty means read it from the login shell, which is right for bash and for anyone whose
+    /// profile builds the `PATH` — and wrong for a zsh user who sets it in `.zshrc`, because `-l`
+    /// does not read `.zshrc`. This is the escape hatch for that, and for a host where a login
+    /// shell cannot be run at all. See `kampr_fleet::env`.
+    pub path: String,
 }
 
 /// What a pane is called, and whether that name is written into herdr.
@@ -448,6 +463,7 @@ impl Config {
             android: Android::default(),
             update: Update::default(),
             naming: Naming::default(),
+            fleet: Fleet::default(),
         }
     }
 

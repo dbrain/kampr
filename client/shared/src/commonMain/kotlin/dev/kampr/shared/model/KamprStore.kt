@@ -134,6 +134,14 @@ class KamprStore {
         }
     }
 
+    // Leaving a pane stops the node's pump (`unwatch` drops the handle), so the turns already
+    // drawn stop being confirmed by anything. Re-opening the pane builds a fresh pump that has to
+    // resolve, fold and page before it can say what the conversation is now — and until it does,
+    // what is on screen is a memory rather than a reading.
+    fun noteConversationUnconfirmed(pane: String) {
+        paneStates[pane]?.convoConfirmed = false
+    }
+
     fun markStale() {
         _herd.value = _herd.value.copy(stale = true)
         paneStates.values.forEach { it.markStale() }

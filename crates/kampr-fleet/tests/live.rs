@@ -22,7 +22,7 @@ struct Run {
 
 fn start(script: &str) -> Run {
     let argv = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
-    let supervisor = Supervisor::spawn(&argv, None, Geometry::default()).expect("a pty and a child");
+    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
     let writer = supervisor.writer();
     let killer = supervisor.killer();
     let (tx, events) = mpsc::channel(256);
@@ -190,7 +190,7 @@ async fn dropping_a_supervisor_does_not_leave_the_command_running() {
         "-c".to_string(),
         "printf 'waiting '; read forever".to_string(),
     ];
-    let supervisor = Supervisor::spawn(&argv, None, Geometry::default()).expect("a pty and a child");
+    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
     let pid = supervisor.pid();
     let (tx, _events) = mpsc::channel(16);
     let driver = tokio::spawn(supervisor.drive(tx));

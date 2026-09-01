@@ -127,6 +127,7 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.push(host::bundle());
     checks.push(host::service(&config, &service).await);
     checks.push(host::linger(&service));
+    checks.push(host::fleet_path(&config));
 
     // The device store is the one check that needs the database open, and a database that will
     // not open is itself the answer.

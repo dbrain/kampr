@@ -3,6 +3,7 @@ package dev.kampr.shared.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
+import dev.kampr.shared.model.ConnectionStatus
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
@@ -73,3 +74,9 @@ val LocalPaneIo: ProvidableCompositionLocal<PaneIo> = staticCompositionLocalOf {
 data class PaneChrome(val top: Dp)
 
 val LocalPaneChrome: ProvidableCompositionLocal<PaneChrome?> = staticCompositionLocalOf { null }
+
+// The socket's own state, where a pane surface can read it. The conversation needs it and the grid
+// does not: a grid that has stopped arriving is visible as a grid that has stopped, while a
+// transcript drawn from memory looks exactly like a transcript that is current.
+val LocalConnectionStatus: ProvidableCompositionLocal<ConnectionStatus> =
+    staticCompositionLocalOf { ConnectionStatus.Idle }

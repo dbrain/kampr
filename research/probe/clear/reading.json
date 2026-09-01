@@ -1,0 +1,14 @@
+{
+  "claude": "2.1.252",
+  "how": "a real claude under a bare pty in a throwaway directory, markers and project files sampled at each step. The environment must have every CLAUDE_* var removed first: a claude spawned from inside a claude session inherits CLAUDE_CODE_CHILD_SESSION and says `Transcript saving is off`, so it writes neither a marker nor a transcript.",
+  "steps": {
+    "afterStart":     {"marker": "3be5653f", "files": {}},
+    "afterAPrompt":   {"marker": "3be5653f", "files": {"3be5653f": 18287}},
+    "rightAfterClear":{"marker": "858ea4cb", "files": {"3be5653f": 18916, "858ea4cb": 2142}},
+    "after2ndPrompt": {"marker": "858ea4cb", "files": {"3be5653f": 18916, "858ea4cb": 20020}}
+  },
+  "records": {
+    "3be5653f": {"rows": 15, "sessionIds": ["3be5653f"]},
+    "858ea4cb": {"rows": 17, "sessionIds": ["858ea4cb"]}
+  }
+}

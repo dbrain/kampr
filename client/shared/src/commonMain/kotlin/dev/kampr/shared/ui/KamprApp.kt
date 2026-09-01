@@ -165,6 +165,7 @@ fun KamprApp(
                 // screen; `keyRowNeeded` is the rule that holds it.
                 LocalHardKeyboard provides hardKeyboardAttached(),
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
+                LocalConnectionStatus provides connectionStatus,
                 LocalManage provides remember(state) { AppManage(state) },
                 LocalMosaic provides remember(state, mosaic) {
                     if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null

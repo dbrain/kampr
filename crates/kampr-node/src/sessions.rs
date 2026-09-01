@@ -46,7 +46,9 @@ impl SessionNode {
                 ..HerdrConfig::default()
             },
         ));
-        let fleet = Arc::new(FleetProvider::new());
+        let fleet = Arc::new(FleetProvider::with_path(
+            Some(config.fleet.path.clone()).filter(|p| !p.is_empty()),
+        ));
         // Fleet first: it answers `owns` only for runs it is actually running, so herdr stays the
         // catch-all for everything else.
         let registry = PaneRegistry::with_config(

@@ -7,11 +7,13 @@
 //! herd never hears about cannot clutter a desk, so a fleet run leaves no trace on the machine's
 //! own screen.
 
+pub mod env;
 pub mod exec;
 pub mod provider;
 pub mod tail;
 pub mod waiting;
 
+pub use env::{FleetPath, PathOrigin, PathSearch, fleet_path};
 pub use exec::{Geometry, Killer, RunEvent, State, Supervisor, Writer};
 pub use kampr_core::question::{self as prompt, Question, Shape};
 pub use provider::FleetProvider;

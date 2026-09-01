@@ -5,6 +5,7 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
+import dev.kampr.terminal.input.PaneScroll
 import kotlin.math.pow
 
 // A notch is three rows, the way a terminal emulator moves.
@@ -44,6 +45,7 @@ internal suspend fun PointerInputScope.terminalWheel(
     view: TerminalViewState,
     probe: GridProbe,
     presets: ZoomPresets,
+    toPane: PaneScroll? = null,
 ) {
     awaitPointerEventScope {
         while (true) {
@@ -73,7 +75,19 @@ internal suspend fun PointerInputScope.terminalWheel(
             if (dx == 0f && dy == 0f) continue
             // Negated on both axes: the wheel says where the *content* goes, a drag says where the
             // surface goes, and `scrollBy` speaks the drag's language.
+            val before = view.scrollY
             view.scrollBy(-notches(dx) * probe.cellWidth, -notches(dy) * probe.cellHeight)
+            // The surface had nothing left to give, so the notch belongs to whatever is drawing the
+            // pane. Asked of the clamp rather than of the model: a pane that keeps no ring can
+            // still be zoomed past its own viewport, and that scroll is Kampr's until it runs out.
+            //
+            // Down as well as up, and for the same reason. A pane scrolled up by this path moved
+            // inside the program rather than inside Kampr, so nothing here can bring it back —
+            // only the notch the other way, sent the same route.
+            if (toPane != null && dy != 0f && view.scrollY == before) {
+                val cell = probe.cellAt(event.changes.first().position)
+                toPane.notch(up = dy < 0f, col = cell.col, row = cell.row)
+            }
         }
     }
 }

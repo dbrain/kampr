@@ -2332,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-auth"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2354,13 +2354,14 @@ dependencies = [
 
 [[package]]
 name = "kampr-cli"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
  "clap",
  "kampr-auth",
  "kampr-client",
+ "kampr-fleet",
  "kampr-herdr",
  "kampr-mesh",
  "kampr-node",
@@ -2383,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-client"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2408,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-core"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2427,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-fleet"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2446,7 +2447,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-herdr"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2460,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-journal"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -2471,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-mesh"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2492,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-node"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2535,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-push"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "base64 0.23.1",
  "jwt-simple",
@@ -2552,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-spike"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "kampr-herdr",
@@ -2563,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-term"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "serde",
@@ -2575,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-tui"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "base64 0.23.1",

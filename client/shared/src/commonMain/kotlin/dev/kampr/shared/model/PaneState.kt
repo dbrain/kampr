@@ -180,6 +180,16 @@ class PaneState(val id: String, val styles: StyleTable) {
     var cursor by mutableStateOf(Cursor())
         private set
     var stale by mutableStateOf(false)
+
+    // **Whether the transcript on screen has been confirmed against the node on this connection.**
+    // The grid and the conversation are served by different machinery and only one of them is
+    // warm: a pane's stream is held across a re-watch by the registry (#252), so the terminal
+    // reattaches to a live emulator, while the conversation is opened inside the pump that the
+    // watch created and is cold every time — resolve, fold, page. Nothing pruned the turns already
+    // drawn in that gap, and `stale` could not cover it because `stale` is the grid's reading:
+    // gated on `painted` and cleared by the next frame, which arrives long before the page does.
+    // So a conversation from a session that had been `/clear`ed sat there looking live (#393).
+    var convoConfirmed by mutableStateOf(false)
         internal set
     var painted by mutableStateOf(false)
         private set
@@ -279,6 +289,7 @@ class PaneState(val id: String, val styles: StyleTable) {
     }
 
     fun applyConvo(msg: ServerMsg.Convo) {
+        convoConfirmed = true
         mergeTurns(turns, msg.turns)
         convoCursor = msg.cursor
         convoMore = msg.more
@@ -359,6 +370,7 @@ class PaneState(val id: String, val styles: StyleTable) {
     fun markStale() {
         refusal = null
         if (painted) stale = true
+        convoConfirmed = false
         // Nothing carried across a dropped socket is trustworthy, and a question least of all: the
         // node publishes `pending` on a blocked-state edge and its first attempt at a newly blocked
         // pane carries nothing, so a reconnect would triage the previous connection's question and

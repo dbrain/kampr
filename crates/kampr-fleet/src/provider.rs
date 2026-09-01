@@ -6,6 +6,7 @@
 //! grouping is structural rather than a filter every client has to remember to apply. It is also
 //! the only arrangement in which the state can be read at all (probes #331, #332, #334).
 
+use crate::env::FleetPath;
 use crate::exec::{Geometry, Killer, RunEvent, State, Supervisor, Writer};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -28,6 +29,9 @@ const LIVE_DEPTH: usize = 512;
 pub struct FleetProvider {
     runs: Mutex<HashMap<String, Arc<Run>>>,
     topology: watch::Sender<u64>,
+    /// Resolved once, at construction, so `kampr doctor` and the first run agree and neither pays
+    /// for a login shell in the middle of doing something else.
+    path: Option<FleetPath>,
 }
 
 struct Run {
@@ -48,7 +52,12 @@ impl Default for FleetProvider {
 
 impl FleetProvider {
     pub fn new() -> Self {
+        Self::with_path(None)
+    }
+
+    pub fn with_path(configured: Option<String>) -> Self {
         Self {
+            path: crate::env::fleet_path(configured),
             runs: Mutex::new(HashMap::new()),
             topology: watch::channel(0).0,
         }
@@ -68,7 +77,8 @@ impl FleetProvider {
         if argv.is_empty() {
             return Err(anyhow!("a fleet run needs a command"));
         }
-        let supervisor = Supervisor::spawn(argv, cwd, geometry)?;
+        let supervisor =
+            Supervisor::spawn(argv, cwd, geometry, self.path.as_ref().map(|p| p.value.as_str()))?;
         let pane_id = format!("fleet:{}", ulid::Ulid::generate());
         // **Blind until proven otherwise.** Whether the node can read this job is an observation
         // the supervisor makes over the run, not something knowable the instant after a fork — see

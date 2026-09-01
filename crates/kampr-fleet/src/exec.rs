@@ -84,7 +84,15 @@ impl Default for Geometry {
 
 impl Supervisor {
     /// Forks `argv` onto a fresh pty, with this process as its parent and its session leader.
-    pub fn spawn(argv: &[String], cwd: Option<&str>, geometry: Geometry) -> io::Result<Self> {
+    ///
+    /// `path` is the `PATH` the child is given — the operator's rather than the service manager's,
+    /// see [`crate::env`]. `None` leaves this process's, which is what every run got before.
+    pub fn spawn(
+        argv: &[String],
+        cwd: Option<&str>,
+        geometry: Geometry,
+        path: Option<&str>,
+    ) -> io::Result<Self> {
         let (master, slave) = open_pty(geometry)?;
 
         let mut command = Command::new(
@@ -101,6 +109,9 @@ impl Supervisor {
         // A command that prompts needs a controlling terminal of its own, or it reads EOF and
         // "answers" itself.
         command.env("TERM", "xterm-256color");
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
         let slave_raw = slave.as_raw_fd();
         unsafe {
             command.pre_exec(move || {
@@ -114,7 +125,21 @@ impl Supervisor {
             });
         }
 
-        let child = command.spawn()?;
+        // Named rather than propagated. `spawn` answers ENOENT as "No such file or directory (os
+        // error 2)", which on a fan-out is the same sentence from every host in the herd and says
+        // nothing about the thing that is actually wrong — that this is not the `PATH` the
+        // operator installs into (#392).
+        let child = command.spawn().map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "`{}` is not on this node's fleet PATH ({})",
+                    argv[0],
+                    path.unwrap_or("unset"),
+                ),
+            ),
+            _ => e,
+        })?;
         drop(slave);
 
         Ok(Self {

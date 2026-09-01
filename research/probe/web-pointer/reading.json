@@ -1,0 +1,32 @@
+{
+  "browser": "Chrome/151.0.7922.173",
+  "build": "client/webApp wasmJsBrowserDistribution, CMP 1.11.1, served from 127.0.0.1:8811",
+  "note": "Both pages were throwaway `?probe=` branches in webApp's Main.kt, reverted after the run.",
+  "pointerType": {
+    "page": "?probe=pointer — a full-screen Box whose pointerInput reports every change",
+    "mouseDrag": [
+      "down type=Mouse inputMode=Keyboard",
+      "Enter type=Mouse pressed=true inputMode=Keyboard",
+      "Unknown type=Mouse pressed=true inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Release type=Mouse pressed=false inputMode=Touch"
+    ],
+    "cdpTouchDrag": [
+      "down type=Mouse inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Move type=Mouse pressed=true inputMode=Touch",
+      "Release type=Mouse pressed=false inputMode=Touch"
+    ],
+    "caveat": "Input.dispatchMouseEvent with pointerType touch still arrives as PointerType.Mouse, so the touch half of this reading is the harness, not the platform. Only the mouse half is a measurement."
+  },
+  "selectionWash": {
+    "page": "?probe=select — a SelectionContainer over one line, LocalTextSelectionColors forced to #FF00FF",
+    "beforeAnything": 0,
+    "afterAPlainMouseDrag": 10841,
+    "afterAMouseHeldStillThenDragged": 4593,
+    "washRows": "24..49, which is the row the glyphs are drawn on"
+  }
+}

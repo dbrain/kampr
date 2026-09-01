@@ -117,17 +117,55 @@ private class Inline(
     }
 
     private fun emphasis(marker: Char): Boolean {
+        if (!opens(marker, at)) return false
         val double = src.startsWith("$marker$marker", at)
         val token = if (double) "$marker$marker" else "$marker"
         val style = if (double) SpanStyle(fontWeight = FontWeight.Bold) else SpanStyle(fontStyle = FontStyle.Italic)
-        return wrap(token, style)
+        return wrap(token, style) { closes(marker, it) }
     }
 
-    private fun wrap(token: String, style: SpanStyle): Boolean {
+    // CommonMark 6.2, and the reason the whole run is measured rather than the one character under
+    // the cursor: a delimiter is emphasis only where a word begins or ends. `_` is stricter than
+    // `*` by design, because identifiers are made of it — `SC_4.00bpw_H5` and
+    // `kampr_core::pane_registry` are words with underscores in them, not italics.
+    private fun runOf(marker: Char, from: Int): Int {
+        var run = 0
+        while (from + run < src.length && src[from + run] == marker) run++
+        return run
+    }
+
+    private fun flanking(start: Int, run: Int): Pair<Boolean, Boolean> {
+        val before = src.getOrNull(start - 1)
+        val after = src.getOrNull(start + run)
+        val left = after != null && !after.isWhitespace() &&
+            (!punctuation(after) || before == null || before.isWhitespace() || punctuation(before))
+        val right = before != null && !before.isWhitespace() &&
+            (!punctuation(before) || after == null || after.isWhitespace() || punctuation(after))
+        return left to right
+    }
+
+    private fun opens(marker: Char, start: Int): Boolean {
+        val (left, right) = flanking(start, runOf(marker, start))
+        if (marker != '_') return left
+        val before = src.getOrNull(start - 1)
+        return left && (!right || (before != null && punctuation(before)))
+    }
+
+    private fun closes(marker: Char, start: Int): Boolean {
+        val run = runOf(marker, start)
+        val (left, right) = flanking(start, run)
+        if (marker != '_') return right
+        val after = src.getOrNull(start + run)
+        return right && (!left || (after != null && punctuation(after)))
+    }
+
+    private fun punctuation(c: Char) = !c.isLetterOrDigit() && !c.isWhitespace()
+
+    private fun wrap(token: String, style: SpanStyle, closes: (Int) -> Boolean = { true }): Boolean {
         var probe = at + token.length
         while (probe < src.length) {
             if (src[probe] == '\\') { probe += 2; continue }
-            if (src.startsWith(token, probe)) break
+            if (src.startsWith(token, probe) && closes(probe)) break
             probe++
         }
         if (probe >= src.length) return false

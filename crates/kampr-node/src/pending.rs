@@ -40,24 +40,43 @@ pub fn detect(screen: &str) -> Option<Pending> {
 
     // A prompt is a *run* of consecutive options starting at 1. One stray "1. " in build output
     // is not a question, and neither is a numbered list that starts at 3.
-    let start = options.iter().position(|(_, o)| o.key == "1")?;
-    let mut chosen = vec![options[start].clone()];
-    for pair in options[start + 1..].iter() {
-        let expected = (chosen.len() + 1).to_string();
-        if pair.1.key != expected || pair.0 > chosen.last().expect("non-empty").0 + 2 {
-            break;
+    //
+    // Taken from the **bottom** of the screen, because a pane that is waiting has the thing it is
+    // waiting on last: everything above the dialog is output that has already happened. Taking the
+    // first run instead published three lines of a plan the agent had written earlier and left
+    // standing above its own question, under the real question's "blocked" flag — options an
+    // operator could press that answered nothing that was asked.
+    for start in (0..options.len()).rev().filter(|i| options[*i].1.key == "1") {
+        let mut chosen = vec![options[start].clone()];
+        for pair in options[start + 1..].iter() {
+            let expected = (chosen.len() + 1).to_string();
+            let from = chosen.last().expect("non-empty").0 + 1;
+            if pair.1.key != expected || blanks(&cleaned[from..pair.0]) > 1 {
+                break;
+            }
+            chosen.push(pair.clone());
         }
-        chosen.push(pair.clone());
+        if chosen.len() < 2 {
+            continue;
+        }
+        if let Some(question) = question_above(&lines, &cleaned, chosen[0].0) {
+            return Some(Pending {
+                question,
+                options: chosen.into_iter().map(|(_, o)| o).collect(),
+            });
+        }
     }
-    if chosen.len() < 2 {
-        return None;
-    }
+    None
+}
 
-    let question = question_above(&lines, &cleaned, chosen[0].0)?;
-    Some(Pending {
-        question,
-        options: chosen.into_iter().map(|(_, o)| o).collect(),
-    })
+/// What separates two options of one menu from two numbered lines that merely follow each other.
+///
+/// Not a line count. An option carries its own description under it, and on a pane narrow enough
+/// to wrap one that description is several lines — so a fixed gap of two truncated the menu at
+/// whichever option wrapped first, and the run that was left was too short to be a menu at all.
+/// A blank line is the separator a dialog uses; two of them mean the list ended.
+fn blanks(between: &[String]) -> usize {
+    between.iter().filter(|l| l.is_empty()).count()
 }
 
 /// How far above the options to look when no rule or border marks where the dialog starts.
@@ -76,21 +95,51 @@ fn question_above(lines: &[&str], cleaned: &[String], options_at: usize) -> Opti
         .iter()
         .rposition(|l| is_rule(l))
         .map_or(options_at.saturating_sub(MAX_LOOKBACK), |at| at + 1);
-    let candidates: Vec<&String> = cleaned[floor..options_at]
-        .iter()
-        .filter(|l| !l.is_empty() && l.chars().count() > 2 && numbered(l).is_none())
-        .collect();
-    let asked = candidates
-        .iter()
+    let prose = |at: usize| {
+        let line = &cleaned[at];
+        !line.is_empty() && line.chars().count() > 2 && numbered(line).is_none() && !is_reference(line)
+    };
+    let Some(asked) = (floor..options_at)
         .rev()
-        .find_map(|l| l.rfind('?').map(|at| l[..=at].to_string()));
-    asked.or_else(|| {
-        candidates
-            .iter()
+        .find(|&at| prose(at) && cleaned[at].contains('?'))
+    else {
+        return (floor..options_at)
             .rev()
-            .find(|l| !is_reference(l))
-            .map(|l| (*l).clone())
-    })
+            .find(|&at| prose(at))
+            .map(|at| unmark(&cleaned[at]));
+    };
+
+    // The harness wrapped the sentence at the pane's width, so the question begins wherever that
+    // wrapping began — not on the row the question mark happened to land on, which on an 80-column
+    // pane published "you want me to get the card?" and nothing of what the card was for.
+    let mut from = asked;
+    while from > floor && prose(from - 1) && !ends_a_sentence(&cleaned[from - 1]) {
+        from -= 1;
+    }
+    let joined = unmark(
+        &cleaned[from..=asked]
+            .iter()
+            .map(|l| l.trim())
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    let cut = joined.rfind('?')?;
+    Some(joined[..=cut].to_string())
+}
+
+/// Where a wrapped sentence *cannot* have continued. A hard wrap breaks a line between words, so
+/// a line that closes one is the end of what came before rather than the head of the question.
+fn ends_a_sentence(line: &str) -> bool {
+    matches!(line.chars().last(), Some('.' | '?' | '!' | ':'))
+}
+
+/// The glyph a harness puts in front of a line to say who is speaking. `●` opens every message
+/// Claude writes and `❯` marks the row under the cursor; neither is a word, and both were being
+/// published as the first characters of the question.
+fn unmark(line: &str) -> String {
+    line.trim_start_matches(['\u{25cf}', '\u{23fa}', '\u{2022}', '\u{276f}', '>', '*'])
+        .trim()
+        .to_string()
 }
 
 /// A horizontal rule or a box's top edge: the line that says the dialog starts here.
@@ -238,6 +287,125 @@ mod tests {
         assert_eq!(p.question, "Allow this command?");
         assert_eq!(p.options.len(), 2);
         assert_eq!(p.options[1].label, "No");
+    }
+
+    /// The report, on 0.1.44: *"claude asked me a question, kampr told me it was blocked and had a
+    /// question, listed 3 options but they didn't match the actual options"*. Transcribed off the
+    /// operator's screenshot — the three it listed were a plan the agent had written earlier and
+    /// left standing above the dialog, which is the **first** run of `1.` on the visible screen.
+    const CLAUDE_PLAN_ABOVE_A_DIALOG: &str = concat!(
+        "\u{25cf} Right \u{2014} three arms, then:\n",
+        "\n",
+        "  1. Build exllamav3 for 86;120, load SC_4.00bpw_H5_V6 with plain autosplit, no TP. \
+          Question: does it load on this card pair, and what's decode t/s?\n",
+        "  2. If it clears \u{2014} add TP + MTP, compare to 41-42 t/s.\n",
+        "  3. Only if it lands within ~10% is the quality win worth the second stack.\n",
+        "\n",
+        "\u{25cf} The 2-card arms need the 3060, which gemma is holding with 8.9 GiB. It's \
+          `restart: unless-stopped` and your notes warn other sessions drive it. How do you want \
+          me to get the card?\n",
+        "\n",
+        "\u{276f} 1. Stop gemma, bench, restart it\n",
+        "     I `docker stop kobbler-llama-server-1`, run the full arm set, then bring it back up.\n",
+        "  2. Single-card arm only for now\n",
+        "     I run A1 on the 5060 Ti alone and report that number, then stop and wait.\n",
+        "  3. I'll stop gemma myself, tell me when\n",
+        "     You take it down when it suits you and say go; I run everything then.\n",
+        "  4. Type something.\n",
+        "\n",
+        "  5. Chat about this\n",
+        "\n",
+        "Enter to select \u{b7} \u{2191}/\u{2193} to navigate \u{b7} Esc to cancel\n",
+    );
+
+    #[test]
+    fn the_dialog_at_the_foot_of_the_screen_beats_a_numbered_list_left_standing_above_it() {
+        let p = detect(CLAUDE_PLAN_ABOVE_A_DIALOG).expect("the dialog was not read at all");
+        assert_eq!(
+            p.question,
+            "The 2-card arms need the 3060, which gemma is holding with 8.9 GiB. It's \
+             `restart: unless-stopped` and your notes warn other sessions drive it. How do you \
+             want me to get the card?",
+        );
+        assert_eq!(
+            p.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Stop gemma, bench, restart it",
+                "Single-card arm only for now",
+                "I'll stop gemma myself, tell me when",
+                "Type something.",
+                "Chat about this",
+            ],
+        );
+    }
+
+    /// The same screen on an 80-column pane, which is the width most hosts run. Every option's
+    /// description wraps, so the options themselves are three and four rows apart — and a fixed
+    /// two-row gap cut the menu after the first one, leaving a run too short to be a menu and
+    /// handing the screen back to the plan above it.
+    const CLAUDE_DIALOG_WRAPPED_AT_80: &str = concat!(
+        "\u{25cf} Right \u{2014} three arms, then:\n",
+        "\n",
+        "  1. Build exllamav3 for 86;120, load SC_4.00bpw_H5_V6 with plain autosplit, no\n",
+        "     TP. Question: does it load on this card pair, and what's decode t/s?\n",
+        "  2. If it clears \u{2014} add TP + MTP, compare to 41-42 t/s.\n",
+        "  3. Only if it lands within ~10% is the quality win worth the second stack.\n",
+        "\n",
+        "\u{25cf} The 2-card arms need the 3060, which gemma is holding with 8.9 GiB. It's\n",
+        "  `restart: unless-stopped` and your notes warn other sessions drive it. How do\n",
+        "  you want me to get the card?\n",
+        "\n",
+        "\u{276f} 1. Stop gemma, bench, restart it\n",
+        "     I `docker stop kobbler-llama-server-1`, run the full arm set, then bring\n",
+        "     it straight back up.\n",
+        "  2. Single-card arm only for now\n",
+        "     I run A1 on the 5060 Ti alone and report that number, then stop and wait\n",
+        "     for you to pick a window.\n",
+        "  3. I'll stop gemma myself, tell me when\n",
+        "     You take it down when it suits you and say go; I run everything then.\n",
+        "  4. Type something.\n",
+        "\n",
+        "  5. Chat about this\n",
+        "\n",
+        "Enter to select \u{b7} \u{2191}/\u{2193} to navigate \u{b7} Esc to cancel\n",
+    );
+
+    #[test]
+    fn an_option_whose_description_wraps_does_not_cut_the_menu_short() {
+        let p = detect(CLAUDE_DIALOG_WRAPPED_AT_80).expect("the dialog was not read at all");
+        assert_eq!(
+            p.question,
+            "The 2-card arms need the 3060, which gemma is holding with 8.9 GiB. It's \
+             `restart: unless-stopped` and your notes warn other sessions drive it. How do you \
+             want me to get the card?",
+            "the question was published as the fragment the wrap happened to leave",
+        );
+        assert_eq!(
+            p.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Stop gemma, bench, restart it",
+                "Single-card arm only for now",
+                "I'll stop gemma myself, tell me when",
+                "Type something.",
+                "Chat about this",
+            ],
+        );
+    }
+
+    /// The other half of joining a wrapped question: only the sentence being asked, never the
+    /// output that happened to be printed above it. A hard wrap breaks a line mid-sentence, so a
+    /// line that ends one is where the question starts.
+    #[test]
+    fn output_finished_above_the_question_is_not_joined_onto_it() {
+        let screen = "Running the suite.\nAll 5 passed.\nDo you want to proceed?\n1. Yes\n2. No\n";
+        assert_eq!(detect(screen).unwrap().question, "Do you want to proceed?");
+    }
+
+    /// A URL is what the dialog is about, and a query string in one is not the thing being asked.
+    #[test]
+    fn a_question_mark_inside_a_url_is_not_a_question() {
+        let screen = "Fetch the release notes\nhttps://example.com/notes?v=2\n\n1. Yes\n2. No\n";
+        assert_eq!(detect(screen).unwrap().question, "Fetch the release notes");
     }
 
     #[test]

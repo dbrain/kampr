@@ -117,6 +117,47 @@ class MarkdownTest {
         assertEquals("[image · png]", inlineText("[image · png]", styles).text)
     }
 
+    // Agent prose is full of identifiers, and an identifier is full of underscores. A quantisation
+    // name in a table came back as `SC4.00bpwH5` with its middle in italics, because `_4.00bpw_`
+    // looked like emphasis. CommonMark's rule is that `_` opens and closes only at a word
+    // boundary — `*` is the intraword marker and `_` is deliberately not.
+    @Test
+    fun underscoresInsideAWordAreNotEmphasis() {
+        val styles = testInlineStyles()
+        for (source in listOf(
+            "SC_4.00bpw_H5",
+            "| model | SC_4.00bpw_H5 | 8k |",
+            "snake_case_name",
+            "run_a beside run_b",
+            "kampr_core::pane_registry",
+        )) {
+            val text = inlineText(source, styles)
+            assertEquals(source, text.text, "the underscores were eaten as markup")
+            assertEquals(emptyList(), italicised(text), "part of $source was italicised")
+        }
+    }
+
+    // The other half of the same rule: emphasis at a word boundary is still emphasis, and `*`
+    // still emphasises inside a word.
+    @Test
+    fun emphasisAtAWordBoundaryStillReadsAsEmphasis() {
+        val styles = testInlineStyles()
+        assertEquals(listOf("only"), italicised(inlineText("read _only_ this", styles)))
+        assertEquals(listOf("foo_bar_baz"), italicised(inlineText("_foo_bar_baz_", styles)))
+        assertEquals(listOf("mid"), italicised(inlineText("intra*mid*word", styles)))
+        assertEquals("bold", inlineText("__bold__", styles).text)
+    }
+
+    // A delimiter with a space after it opens nothing, so arithmetic and a shell glob survive a
+    // round trip without being escaped first.
+    @Test
+    fun aMarkerFollowedByASpaceIsNotAnOpener() {
+        val styles = testInlineStyles()
+        assertEquals("2 * 3 * 4", inlineText("2 * 3 * 4", styles).text)
+        assertEquals(emptyList(), italicised(inlineText("2 * 3 * 4", styles)))
+        assertEquals("ls -l * and _ alone", inlineText("ls -l * and _ alone", styles).text)
+    }
+
     @Test
     fun unterminatedMarkupIsRenderedLiterally() {
         val styles = testInlineStyles()

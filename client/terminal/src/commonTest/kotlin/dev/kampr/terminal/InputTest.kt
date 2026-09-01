@@ -11,6 +11,9 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.KeyLayouts
 import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
+import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.ScrollKeys
+import dev.kampr.terminal.input.paneScrollKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -223,5 +226,73 @@ class InputTest {
         for (n in 1..12) {
             assertTrue(caps.any { it.label == "F$n" }, "F$n is not on the Fn layer")
         }
+    }
+}
+
+// A pane whose program holds the alternate screen keeps no ring (#387), so the scroll it cannot
+// give is handed to the program instead — by the notch from a wheel, by the row from a finger, and
+// in the dialect that program understands.
+class PaneScrollTest {
+    private fun reports(keys: ScrollKeys, up: Boolean): List<String> {
+        val sent = mutableListOf<String>()
+        PaneScroll(keys) { sent += it }.notch(up = up, col = 40, row = 20)
+        return sent
+    }
+
+    @Test
+    fun aHarnessThatAskedForTheMouseGetsAWheelReportAndNothingElseMoves() {
+        assertEquals(listOf("\u001b[<64;41;21M"), reports(ScrollKeys.Wheel, up = true))
+        assertEquals(listOf("\u001b[<65;41;21M"), reports(ScrollKeys.Wheel, up = false))
+    }
+
+    // Alternate scroll, which is what herdr does at the desk. The **application** form: `less`,
+    // `man` and `vim` all set DECCKM, and the normal `ESC [ B` moved less by nothing (#390).
+    @Test
+    fun everythingElseGetsApplicationCursorKeysAThreeRowNotchAtATime() {
+        assertEquals(List(3) { "\u001bOA" }, reports(ScrollKeys.CursorKeys, up = true))
+        assertEquals(List(3) { "\u001bOB" }, reports(ScrollKeys.CursorKeys, up = false))
+    }
+
+    // The gate, and it fails closed. A null `cmd` is a pane at its prompt *or* a pane nothing could
+    // read (#297) — and cursor keys into a shell's line editor recall its history. A harness label
+    // outlives the harness, so `agent` alone is not enough to send anything on.
+    @Test
+    fun aPaneWhoseForegroundJobIsUnknownIsNeverTypedInto() {
+        assertEquals(null, paneScrollKeys(agent = null, cmd = null))
+        assertEquals(null, paneScrollKeys(agent = "claude", cmd = null), "a stale label typed at a prompt")
+    }
+
+    @Test
+    fun aMeasuredHarnessIsUpgradedAndEverythingElseTakesTheDefault() {
+        assertEquals(ScrollKeys.Wheel, paneScrollKeys(agent = "claude", cmd = "claude"))
+        assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = "codex", cmd = "codex"))
+        assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = null, cmd = "less"))
+        assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = null, cmd = "vim"))
+    }
+
+    // A row of travel asks for a row, and what is left over is kept: rounding each frame's few
+    // pixels to nothing is a drag that moves the finger and never the pane.
+    @Test
+    fun aRefusedDragAsksForARowPerRowAndCarriesTheRemainder() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.CursorKeys) { sent += it }
+        repeat(4) { scroll.refused(30f, step = 100f, col = 0, row = 0) }
+        assertEquals(listOf("\u001bOA"), sent, "120px of travel across four frames asked for ${sent.size} rows")
+        scroll.refused(-260f, step = 100f, col = 0, row = 0)
+        assertEquals(3, sent.size, "the drag turned round and the other direction was not sent")
+        assertTrue(sent.drop(1).all { it == "\u001bOB" }, "back up the screen is a scroll down")
+    }
+
+    // Leftovers belong to the gesture that made them. Carried across, the first row of a fresh
+    // drag arrives before the finger has travelled it.
+    @Test
+    fun aGesturesLeftoversDoNotArriveInTheNextOne() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.CursorKeys) { sent += it }
+        scroll.refused(90f, step = 100f, col = 0, row = 0)
+        assertEquals(emptyList(), sent, "90 of a 100px row was already a row")
+        scroll.rest()
+        scroll.refused(90f, step = 100f, col = 0, row = 0)
+        assertEquals(emptyList(), sent, "the last drag's leftovers arrived in this one")
     }
 }
