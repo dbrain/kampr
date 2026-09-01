@@ -142,11 +142,18 @@ pub fn active_since(stamp: Option<&str>, modified: SystemTime, since: SystemTime
     }
 }
 
+/// **The fraction is load-bearing.** `since` is a process start read from procfs at nanoseconds,
+/// so a stamp rounded down to its second is compared against an instant that is not — and a record
+/// claude wrote 462 ms *after* the harness started reads as one written 538 ms before it. That is
+/// a pane refused its own transcript for as long as the process lives, which no later record can
+/// clear once the file is only ever appended to within the same second (#415). Every harness in
+/// tree writes the fraction (#285); throwing it away here was the whole of the miss.
 fn parse_rfc3339(stamp: &str) -> Option<SystemTime> {
     let at = time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).ok()?;
     let seconds = at.unix_timestamp();
-    match seconds >= 0 {
-        true => Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64)),
-        false => Some(SystemTime::UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs())),
-    }
+    let whole = match seconds >= 0 {
+        true => SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64),
+        false => SystemTime::UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs()),
+    };
+    Some(whole + Duration::from_nanos(at.nanosecond() as u64))
 }

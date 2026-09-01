@@ -241,6 +241,37 @@ fn a_harness_that_names_no_session_still_gets_the_transcripts_written_since_it_s
     assert_eq!(located(&home, &Harness::Running(later.clone())).as_deref(), None);
 }
 
+/// The bound is a comparison of two instants, and only one of them is an instant.
+///
+/// A harness start comes from procfs at nanoseconds; the other side is a stamp the harness wrote,
+/// and every harness in tree writes a fraction — claude and codex to the millisecond (#285). Read
+/// at whole seconds, `c5eec836`'s last record lands 462 ms *before* the process that wrote it
+/// instead of after, and the pane's own transcript is refused for as long as that process lives:
+/// a `has_conversation` that is false while the file sits there being written to, and nothing
+/// short of a new second in the file to clear it (#415).
+#[test]
+fn a_transcript_written_in_the_second_the_harness_started_is_still_the_one_it_is_writing() {
+    let home = home_with("same-second", &[DECOY, QUIT, RUNNING]);
+    std::fs::remove_file(home.join("sessions").join(format!("{LIVE_PID}.json"))).unwrap();
+    // `c5eec836`'s last record is 2026-08-22T10:45:36.462Z.
+    let same_second = |millis: u64| PaneProcess {
+        started: Some(SystemTime::UNIX_EPOCH + Duration::from_millis(1_787_395_536_000 + millis)),
+        ..live_process()
+    };
+
+    assert_eq!(
+        located(&home, &Harness::Running(same_second(200))).as_deref(),
+        Some(RUNNING),
+        "a record written 262 ms after the process started is the process's own",
+    );
+    // And the second is not a free pass in the other direction: flooring *both* sides would hand
+    // this process the transcript of the run it replaced, which is the bound's whole job (#260).
+    assert_eq!(
+        located(&home, &Harness::Running(same_second(700))).as_deref(),
+        None
+    );
+}
+
 /// The order the handles are tried in. An announcement is exact and comes from herdr; the process
 /// is exact and comes from the harness; the directory is a guess and comes last. Herdr 0.8.2
 /// never makes an announcement (probe #75), so this is about what happens when one starts.

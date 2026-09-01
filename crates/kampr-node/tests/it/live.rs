@@ -6573,6 +6573,60 @@ async fn pane_title(socket: &mut Socket, pane: &str) -> Option<String> {
     saw
 }
 
+/// Every transcript a node opened, and the pane it opened it for.
+///
+/// `pump_convo` records this because a pane served the *wrong* conversation used to leave no trace
+/// at all; it is also the only honest answer to "was the transcript found and parsed again", which
+/// a stopwatch can only approximate. Installed once for the whole binary and read by one test —
+/// every other test emits into it and never asks.
+static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn opens(pane: &str) -> usize {
+    OPENED.lock().unwrap().iter().filter(|p| *p == pane).count()
+}
+
+fn recording_opens() {
+    use tracing_subscriber::layer::SubscriberExt;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(Opened));
+    });
+}
+
+struct Opened;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Opened {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() != "kampr_node::convo" {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        if fields.message.as_deref() == Some("conversation opened")
+            && let Some(pane) = fields.pane
+        {
+            OPENED.lock().unwrap().push(pane);
+        }
+    }
+}
+
+#[derive(Default)]
+struct Fields {
+    message: Option<String>,
+    pane: Option<String>,
+}
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let slot = match field.name() {
+            "message" => &mut self.message,
+            "pane" => &mut self.pane,
+            _ => return,
+        };
+        *slot = Some(format!("{value:?}"));
+    }
+}
+
 /// Reopening a pane's conversation must not cost what opening it cost.
 ///
 /// The grid beside it is warm — the registry holds a pane's stream across a re-watch by design
@@ -6582,9 +6636,12 @@ async fn pane_title(socket: &mut Socket, pane: &str) -> Option<String> {
 /// message and 0.86 s more for the facets, and every re-watch cost the same 1.9 s** (#409). That
 /// is what a reader saw as a conversation that had gone out of date and would not come back.
 ///
-/// The ratio rather than a figure, because a live test that asserts a millisecond count asserts
-/// how loaded the machine was. A warm re-watch does no file work at all, so anything near the cold
-/// figure means the transcript was opened again.
+/// **The count of opens rather than a stopwatch.** A ratio was the first instrument here and it
+/// was a proxy: the cold side is a parse and shrinks with the machine, the warm side is a socket
+/// round trip and a scheduler and does not, so the two do not scale together. This machine
+/// measures 16x unloaded and 43x with its cores taken away; a GitHub runner measured 3.80x against
+/// a bar of 4x, having *worked* — 507 ms where the parse cost 1.93 s. What the test claims is that
+/// the transcript was not opened again, and the node says so itself.
 #[tokio::test(flavor = "multi_thread")]
 async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_parsing_it_again() {
     let home = tempfile::tempdir().unwrap();
@@ -6594,6 +6651,7 @@ async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_pars
     let session = "9f1c0b2e-0000-4000-8000-0000000003f4";
     let transcript = project.join(format!("{session}.jsonl"));
 
+    recording_opens();
     let home_path = home.path().display().to_string();
     let h = harness!("warm", |c: &mut Config| c.journals.home = home_path);
     let token = h.token(Role::Full).await;
@@ -6639,6 +6697,11 @@ async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_pars
     assert!(announced, "the pane never claimed a conversation");
 
     let cold = watch_a_conversation(&mut socket, &pane).await;
+    assert_eq!(
+        opens(&pane),
+        1,
+        "opening it is what the reopen is measured against"
+    );
     send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
     let warm = watch_a_conversation(&mut socket, &pane).await;
@@ -6647,11 +6710,10 @@ async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_pars
         warm.turns > 0,
         "the re-watch served no conversation at all, which is worse than serving it slowly",
     );
-    assert!(
-        warm.took * 4 < cold.took,
-        "opening cost {:?} and reopening cost {:?} — the transcript was found and parsed again",
-        cold.took,
-        warm.took,
+    assert_eq!(
+        opens(&pane),
+        1,
+        "the transcript was found and parsed again for the reader who came back",
     );
     // A fold answers the *difference* since the last read, and a fold kept warm has usually not
     // moved — so a client that has just arrived would be sent `{}` and draw nothing, which is the
@@ -6670,25 +6732,26 @@ async fn reopening_a_conversation_serves_the_one_it_already_had_rather_than_pars
     let _ = until(&mut second, "hello", 10).await;
     let reconnected = watch_a_conversation(&mut second, &pane).await;
     assert!(
-        reconnected.took * 4 < cold.took,
-        "opening cost {:?} and reconnecting cost {:?} — a dropped socket threw the transcript away",
-        cold.took,
-        reconnected.took,
+        reconnected.turns > 0,
+        "the reconnecting reader was served nothing"
+    );
+    assert_eq!(
+        opens(&pane),
+        1,
+        "a dropped socket threw the transcript away and the phone paid for it again",
     );
 }
 
 struct Served {
-    took: Duration,
     turns: usize,
     facets: Value,
 }
 
-/// Watches a pane's conversation and answers how long the node took to serve it, counting the
-/// facets that go with it: both are read off the transcript, and a client has neither until both
-/// have arrived. `convo` or `convo.turn`, because a client already holding this transcript is sent
-/// the revision rather than a page that would merge above what is on its screen.
+/// Watches a pane's conversation and answers what was served: the turns, and the facets that go
+/// with them. Both are read off the transcript, and a client has neither until both have arrived.
+/// `convo` or `convo.turn`, because a client already holding this transcript is sent the revision
+/// rather than a page that would merge above what is on its screen.
 async fn watch_a_conversation(socket: &mut Socket, pane: &str) -> Served {
-    let started = std::time::Instant::now();
     send(
         socket,
         json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
@@ -6710,7 +6773,6 @@ async fn watch_a_conversation(socket: &mut Socket, pane: &str) -> Served {
         }
         if tag == "convo.facets" && turns > 0 {
             return Served {
-                took: started.elapsed(),
                 turns,
                 facets: message["facets"].clone(),
             };
@@ -6807,9 +6869,16 @@ async fn a_transcript_that_moved_while_nobody_watched_is_not_the_one_the_reader_
     );
 }
 
+/// **Stamped to the millisecond, because that is what claude writes** (#285). A record rounded
+/// down to its second is one the node reads as written *before* the pane's harness whenever the
+/// two fall in the same second — the directory bound compares it against a process start read at
+/// nanoseconds — and the transcript is then refused for the life of that process. A fixture that
+/// drops the fraction is not the harness's output, and this one was failing about one run in three
+/// on the clock alone.
 fn one_turn(cwd: &str, uuid: &str, text: &str) -> String {
-    let at = time::OffsetDateTime::now_utc()
-        .replace_nanosecond(0)
+    let now = time::OffsetDateTime::now_utc();
+    let at = now
+        .replace_nanosecond(now.millisecond() as u32 * 1_000_000)
         .unwrap()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
