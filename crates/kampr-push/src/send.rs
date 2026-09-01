@@ -258,7 +258,7 @@ fn reachable(ip: IpAddr, reach: Reach) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::note::Blocked;
+    use crate::note::{Agent, Kind};
 
     fn vapid() -> Arc<Vapid> {
         let dir = tempfile::tempdir().unwrap();
@@ -266,13 +266,16 @@ mod tests {
     }
 
     fn note() -> Notification {
-        Notification::batch(vec![Blocked {
-            pane: "01J/w1:p1".into(),
-            node: "01J".into(),
-            agent: Some("claude".into()),
-            label: None,
-            question: Some("Run the tests?".into()),
-        }])
+        Notification::batch(
+            Kind::Blocked,
+            vec![Agent {
+                pane: "01J/w1:p1".into(),
+                node: "01J".into(),
+                agent: Some("claude".into()),
+                label: None,
+                detail: Some("Run the tests?".into()),
+            }],
+        )
         .unwrap()
     }
 
@@ -290,6 +293,7 @@ mod tests {
                     endpoint: "https://push.example/abc".into(),
                     p256dh: "not-a-key".into(),
                     auth: "nor-this".into(),
+                    payload_version: crate::note::VERSION as i64,
                 },
                 &note(),
             )

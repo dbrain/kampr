@@ -62,6 +62,15 @@ class SeenDone(private val prefs: Prefs? = null, private val key: String = "seen
     }
 }
 
+// The finished panes this device has not read yet — the set a `done` notification stands for.
+//
+// It is not `store.blocked()`'s twin, because the two empty for different reasons. A question
+// leaves the herd when anyone anywhere answers it; a finish leaves *this device's* screen when
+// this device reads it, which is a fact only `SeenDone` holds. Reconciling against herdr's own
+// `done` alone would leave the notification standing after the operator had read the pane here.
+fun Herd.unreadDone(seen: SeenDone): List<PaneInfo> =
+    panes.filter { statusOf(it) == AgentStatus.Done && !seen.hasRead(it) }
+
 // One transform, at the one place the UI reads the herd, so the mark, the spoken status, the
 // triage list and `paneOrder`'s rank all agree. Demoting only at the render site would leave a
 // read pane pinned to the top of the list with no badge on it, which is worse than the bug.

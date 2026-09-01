@@ -24,7 +24,7 @@ pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
 pub use mesh::{Mesh, MeshNode, MeshRole};
 pub use passkey::{Client, PasskeyError, Passkeys};
-pub use push::{ALL_PANES, PushRule, PushSubscription};
+pub use push::{ALL_PANES, ASSUMED_PAYLOAD_VERSION, NewPushSubscription, PushRule, PushSubscription};
 pub use ratelimit::{Policy as RatePolicy, RateLimiter};
 pub use store::{Credential, Device, Extension, Role, Store, StoreError};
 pub use tier::{Tier, TierError};

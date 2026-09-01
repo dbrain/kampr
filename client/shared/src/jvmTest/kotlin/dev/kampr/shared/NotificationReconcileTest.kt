@@ -15,10 +15,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 private class RecordingPush : PushPlatform by NoPush() {
-    val reconciled = mutableListOf<Boolean>()
+    val reconciled = mutableListOf<Pair<Boolean, Boolean>>()
 
-    override fun reconcile(anyBlocked: Boolean) {
-        reconciled += anyBlocked
+    val blocked: List<Boolean> get() = reconciled.map { it.first }
+
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
+        reconciled += anyBlocked to anyDone
     }
 }
 
@@ -31,7 +33,7 @@ private fun KamprStore.take(frame: String) {
 
 private fun herd(vararg statuses: Pair<String, String>): String {
     val panes = statuses.joinToString(",") { (id, status) ->
-        """{"id":"01JNODE/$id","node_id":"01JNODE","agent":"claude","agent_status":"$status"}"""
+        """{"id":"01JNODE/$id","node_id":"01JNODE","agent":"claude","agent_status":"$status","updated_at":"7"}"""
     }
     return """{"t":"herd","nodes":[{"id":"01JNODE","name":"box","kind":"local"}],"panes":[$panes]}"""
 }
@@ -54,13 +56,72 @@ class NotificationReconcileTest {
         val (_, store, scope) = app()
         try {
             store.take(herd("w1:p1" to "blocked"))
-            assertEquals(listOf(true), push.reconciled)
+            assertEquals(listOf(true), push.blocked)
 
             store.take(herd("w1:p1" to "idle"))
             assertEquals(
                 listOf(true, false),
-                push.reconciled,
+                push.blocked,
                 "answering the last blocked agent anywhere has to take the prompt off this device",
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // The finished half, and the one that cannot be reconciled from the herd alone. herdr's own
+    // `done` is only cleared by focusing the pane at the desk (#357, #396), which Kampr may never
+    // do — so what takes the notification down here is this device having *read* the pane, a fact
+    // only `SeenDone` holds and one that is deliberately never sent to the node (rule 3).
+    @Test
+    fun readingAFinishedPaneTakesItsNotificationDownAndLeavesAQuestionStanding() {
+        val (state, store, scope) = app()
+        try {
+            store.take(herd("w1:p1" to "blocked", "w2:p1" to "done"))
+            assertEquals(true to true, push.reconciled.last())
+
+            state.openPane("01JNODE/w2:p1")
+            assertEquals(
+                true to false,
+                push.reconciled.last(),
+                "the finish was read here; the question was not answered anywhere",
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // And a finish nobody has read keeps its notification through every herd update, however many
+    // times the pane is rebuilt under it.
+    @Test
+    fun aFinishNobodyHasReadKeepsItsNotification() {
+        val (_, store, scope) = app()
+        try {
+            store.take(herd("w1:p1" to "done"))
+            store.take(herd("w1:p1" to "done"))
+            assertTrue(
+                push.reconciled.all { it.second },
+                "an unread finish is still on the phone: ${'$'}{push.reconciled}",
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // The tap case. A notification opens the pane before the herd has arrived, so `openPane` has
+    // nothing to mark read — the pane is not in the store yet. The first herd that does arrive
+    // finds the pane already on screen, which is the same fact arriving late.
+    @Test
+    fun aFinishOpenedFromANotificationBeforeTheHerdArrivedIsStillMarkedRead() {
+        val (state, store, scope) = app()
+        try {
+            state.openPane("01JNODE/w1:p1")
+            store.take(herd("w1:p1" to "done"))
+
+            assertEquals(
+                false to false,
+                push.reconciled.last(),
+                "the pane the notification opened is the pane being read",
             )
         } finally {
             scope.cancel()
@@ -92,7 +153,7 @@ class NotificationReconcileTest {
             store.take(herd("w1:p1" to "blocked", "w2:p1" to "blocked"))
             store.take(herd("w1:p1" to "idle", "w2:p1" to "blocked"))
             assertTrue(
-                push.reconciled.all { it },
+                push.blocked.all { it },
                 "a herd that still has a blocked agent never says the prompt is finished",
             )
         } finally {

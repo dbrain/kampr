@@ -32,11 +32,11 @@ class CatchingUpTest {
     @Test
     fun turnsDrawnButNotYetConfirmedSayTheyAreCatchingUp() {
         assertEquals(
-            "read up to here — catching up",
+            "read up to here",
             catchingUp(live, confirmed = false, drawn = true),
         )
         assertEquals(
-            "read up to here — catching up",
+            "read up to here",
             catchingUp(ConnectionStatus.Connecting, confirmed = false, drawn = true),
         )
     }

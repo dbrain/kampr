@@ -15,6 +15,7 @@ import dev.kampr.shared.net.AttachmentApi
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.NodeApi
 import dev.kampr.shared.net.PasskeyApi
+import dev.kampr.shared.net.PushApi
 import dev.kampr.shared.net.PasskeyOutcome
 import dev.kampr.shared.net.createPasskeys
 import dev.kampr.shared.net.createHttpClient
@@ -22,6 +23,7 @@ import dev.kampr.shared.net.createInstallPrompt
 import dev.kampr.shared.net.defaultEndpoint
 import dev.kampr.shared.net.deviceName
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.platform.createPrefs
 import dev.kampr.shared.push.PushPlatform
@@ -221,6 +223,7 @@ class AppState(
         // and on the web it is the one that runs on every load.
         if (target.token == null) return
         push.prepare(target.token)
+        announcePush(target)
         connection.connect(target)
         warm(target)
     }
@@ -317,6 +320,7 @@ class AppState(
         prefs.set(KEY_TOKEN, resolved.token)
         rememberAddress(resolved.baseUrl)
         push.prepare(resolved.token)
+        announcePush(resolved)
         connection.connect(resolved)
         warm(resolved)
     }
@@ -357,6 +361,26 @@ class AppState(
     // The service worker's warm cache is written behind every push and was read by nobody: the
     // page never asked for either URL it holds. Asking is what turns a tap on a notification into
     // a herd that is already painted when the socket finishes opening.
+    // Re-states a subscription this device already holds, so the node's record of what this
+    // client can read is this build's and not the one it first subscribed under. Idempotent — the
+    // node upserts on the endpoint — and silent: a device with no subscription has nothing to say
+    // and says nothing.
+    //
+    // Without it a phone that subscribed under an older build goes on receiving only the kinds
+    // that build declared, with nothing anywhere saying why the rest never arrive.
+    private fun announcePush(target: Endpoint) {
+        if (target.token == null) return
+        scope.launch {
+            val enrolment = push.enrolment() ?: return@launch
+            val client = createHttpClient()
+            try {
+                PushApi(client, target).subscribe(enrolment)
+            } finally {
+                client.close()
+            }
+        }
+    }
+
     private fun warm(target: Endpoint) {
         if (target.token == null) return
         scope.launch {
@@ -456,6 +480,10 @@ class AppState(
 
     fun openPane(paneId: String, prefer: PaneView? = null) {
         seenDone.saw(store.paneInfo(paneId))
+        // Opening the pane *is* the read, so the notification standing for it comes down now
+        // rather than at the next herd update — which is up to a poll interval away, and is a
+        // notification for something the operator is looking at.
+        reconcileNotifications(store.herd.value)
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
         awaitingRemembered = prefer == null && remembered == null
         go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId)))
@@ -504,9 +532,20 @@ class AppState(
     //
     // `known` is the guard that matters: an unloaded herd has no blocked panes either, and
     // reconciling against it would take down the very notification whose tap opened the app.
+    //
+    // The finished half is reconciled against what this device has *read* rather than against
+    // herdr's own marker: only focusing the pane at the desk clears that (#357, #396), and
+    // opening it here deliberately does not (rule 3). So a finish read in this app comes off this
+    // phone without anything being written back to the node.
     private fun reconcileNotifications(herd: Herd) {
         if (!herd.known) return
-        push.reconcile(store.blocked().isNotEmpty())
+        // A pane on the screen is a pane being read. Two cases need it here rather than in
+        // `openPane`: one opened from a notification *before* the herd arrived, which `openPane`
+        // had nothing to mark; and one already open when the agent in it finishes, which is
+        // somebody watching it happen. herdr can say `done` for either (#399), and a notification
+        // about the pane already filling the screen is the app talking to itself.
+        (screen as? Screen.Pane)?.let { seenDone.saw(store.paneInfo(it.paneId)) }
+        push.reconcile(store.blocked().isNotEmpty(), herd.unreadDone(seenDone).isNotEmpty())
     }
 
     // Last in the class on purpose: an Unconfined collector runs its first emission inside the

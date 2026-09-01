@@ -1,4 +1,4 @@
-use crate::note::{Blocked, Notification};
+use crate::note::{Agent, Kind, Notification};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -18,13 +18,16 @@ pub const WINDOW: Duration = Duration::from_millis(900);
 /// name — a second agent blocking used to take the first one off the phone, and an agent answered
 /// at the desk stayed on it until somebody tapped. `outstanding` is what the device should be
 /// showing; `fresh` and `cleared` only decide whether it buzzes and who has to be told.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
-    /// Every pane still blocked, in the herd's own order.
-    pub outstanding: Vec<Blocked>,
-    /// Which of `outstanding` were not blocked last time. Non-empty is what makes a phone buzz.
+    /// Which set moved. Each kind is collected, batched and delivered on its own pipeline, so a
+    /// change never carries two — and a `done` can never absorb, or be absorbed by, a `blocked`.
+    pub kind: Kind,
+    /// Every pane still in this kind's set, in the herd's own order.
+    pub outstanding: Vec<Agent>,
+    /// Which of `outstanding` were not in the set last time. Non-empty is what makes a phone buzz.
     pub fresh: HashSet<String>,
-    /// Panes that stopped being blocked. They are gone from the herd, so their ids are all there
+    /// Panes that left the set. They are gone from the herd, so their ids are all there
     /// is — and their ids are enough, because what they are for is finding the devices that were
     /// told about them.
     pub cleared: HashSet<String>,
@@ -32,16 +35,18 @@ pub struct Change {
 
 impl Change {
     /// Everything outstanding is news: the shape a first block takes, and the one a test writes.
-    pub fn fresh(outstanding: Vec<Blocked>) -> Self {
+    pub fn fresh(kind: Kind, outstanding: Vec<Agent>) -> Self {
         Self {
+            kind,
             fresh: outstanding.iter().map(|p| p.pane.clone()).collect(),
             outstanding,
             cleared: HashSet::new(),
         }
     }
 
-    pub fn cleared(outstanding: Vec<Blocked>, cleared: impl IntoIterator<Item = String>) -> Self {
+    pub fn cleared(kind: Kind, outstanding: Vec<Agent>, cleared: impl IntoIterator<Item = String>) -> Self {
         Self {
+            kind,
             outstanding,
             fresh: HashSet::new(),
             cleared: cleared.into_iter().collect(),
@@ -85,7 +90,7 @@ pub fn per_target<T: PartialEq + Clone>(
 ) -> Vec<(T, Notification)> {
     struct Owed<T> {
         target: T,
-        mine: Vec<Blocked>,
+        mine: Vec<Agent>,
         alert: bool,
         /// Whether this change touched anything this device may see. A device whose own set did
         /// not move already has the right notification on its screen, and re-POSTing it is a
@@ -134,8 +139,8 @@ pub fn per_target<T: PartialEq + Clone>(
     owed.into_iter()
         .filter(|owed| owed.affected)
         .filter_map(|owed| match owed.alert {
-            true => Notification::batch(owed.mine).map(|note| (owed.target, note)),
-            false => Some((owed.target, Notification::resync(owed.mine))),
+            true => Notification::batch(change.kind, owed.mine).map(|note| (owed.target, note)),
+            false => Some((owed.target, Notification::resync(change.kind, owed.mine))),
         })
         .collect()
 }
@@ -160,14 +165,22 @@ pub async fn collect(rx: &mut mpsc::Receiver<Change>, window: Duration) -> Optio
 mod tests {
     use super::*;
 
-    fn blocked(pane: &str, question: Option<&str>) -> Blocked {
-        Blocked {
+    fn blocked(pane: &str, detail: Option<&str>) -> Agent {
+        Agent {
             pane: pane.into(),
             node: "01J".into(),
             agent: Some("claude".into()),
             label: None,
-            question: question.map(str::to_string),
+            detail: detail.map(str::to_string),
         }
+    }
+
+    fn fresh(outstanding: Vec<Agent>) -> Change {
+        Change::fresh(Kind::Blocked, outstanding)
+    }
+
+    fn cleared(outstanding: Vec<Agent>, gone: impl IntoIterator<Item = String>) -> Change {
+        Change::cleared(Kind::Blocked, outstanding, gone)
     }
 
     fn ids(change: &Change) -> Vec<String> {
@@ -178,10 +191,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn two_panes_blocking_together_close_one_batch() {
         let (tx, mut rx) = mpsc::channel(8);
-        tx.send(Change::fresh(vec![blocked("01J/w1:p1", Some("Run the tests?"))]))
+        tx.send(fresh(vec![blocked("01J/w1:p1", Some("Run the tests?"))]))
             .await
             .unwrap();
-        tx.send(Change::fresh(vec![
+        tx.send(fresh(vec![
             blocked("01J/w1:p1", Some("Run the tests?")),
             blocked("01J/w2:p1", Some("Apply the patch?")),
         ]))
@@ -190,7 +203,12 @@ mod tests {
         let change = collect(&mut rx, WINDOW).await.unwrap();
         assert_eq!(change.outstanding.len(), 2);
         assert_eq!(change.fresh.len(), 2);
-        assert_eq!(Notification::batch(change.outstanding).unwrap().count, 2);
+        assert_eq!(
+            Notification::batch(change.kind, change.outstanding)
+                .unwrap()
+                .count,
+            2
+        );
     }
 
     /// And the window has to actually close, or a lone blocked agent waits forever for company
@@ -198,9 +216,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn one_pane_alone_still_closes_its_batch() {
         let (tx, mut rx) = mpsc::channel(8);
-        tx.send(Change::fresh(vec![blocked("01J/w1:p1", None)]))
-            .await
-            .unwrap();
+        tx.send(fresh(vec![blocked("01J/w1:p1", None)])).await.unwrap();
         assert_eq!(ids(&collect(&mut rx, WINDOW).await.unwrap()), ["01J/w1:p1"]);
     }
 
@@ -209,15 +225,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_pane_that_blocks_twice_in_one_window_is_one_entry() {
         let (tx, mut rx) = mpsc::channel(8);
-        tx.send(Change::fresh(vec![blocked("01J/w1:p1", None)]))
-            .await
-            .unwrap();
-        tx.send(Change::fresh(vec![blocked("01J/w1:p1", Some("Run the tests?"))]))
+        tx.send(fresh(vec![blocked("01J/w1:p1", None)])).await.unwrap();
+        tx.send(fresh(vec![blocked("01J/w1:p1", Some("Run the tests?"))]))
             .await
             .unwrap();
         let change = collect(&mut rx, WINDOW).await.unwrap();
         assert_eq!(change.outstanding.len(), 1);
-        assert_eq!(change.outstanding[0].question.as_deref(), Some("Run the tests?"));
+        assert_eq!(change.outstanding[0].detail.as_deref(), Some("Run the tests?"));
     }
 
     /// The whole point of carrying `cleared` through the window: a block and its answer that land
@@ -226,10 +240,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_block_and_an_answer_in_one_window_keep_both_halves() {
         let (tx, mut rx) = mpsc::channel(8);
-        tx.send(Change::fresh(vec![blocked("01J/w2:p1", None)]))
-            .await
-            .unwrap();
-        tx.send(Change::cleared(
+        tx.send(fresh(vec![blocked("01J/w2:p1", None)])).await.unwrap();
+        tx.send(cleared(
             vec![blocked("01J/w2:p1", None)],
             ["01J/w1:p1".to_string()],
         ))
@@ -246,10 +258,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_pane_that_blocked_and_answered_inside_one_window_is_not_a_notification() {
         let (tx, mut rx) = mpsc::channel(8);
-        tx.send(Change::fresh(vec![blocked("01J/w1:p1", None)]))
-            .await
-            .unwrap();
-        tx.send(Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]))
+        tx.send(fresh(vec![blocked("01J/w1:p1", None)])).await.unwrap();
+        tx.send(cleared(Vec::new(), ["01J/w1:p1".to_string()]))
             .await
             .unwrap();
         assert!(
@@ -261,7 +271,7 @@ mod tests {
     /// Muting one agent must not silence the herd, and it must not silence the batch either.
     #[test]
     fn a_muted_pane_is_dropped_from_that_devices_notification_and_no_ones_else() {
-        let change = Change::fresh(vec![blocked("01J/w1:p1", None), blocked("01J/w2:p1", None)]);
+        let change = fresh(vec![blocked("01J/w1:p1", None), blocked("01J/w2:p1", None)]);
         let eligible = HashMap::from([
             ("01J/w1:p1".to_string(), vec!["phone", "laptop"]),
             ("01J/w2:p1".to_string(), vec!["laptop"]),
@@ -278,7 +288,7 @@ mod tests {
 
     #[test]
     fn a_pane_nobody_may_receive_produces_no_notification() {
-        let change = Change::fresh(vec![blocked("01J/w1:p1", None)]);
+        let change = fresh(vec![blocked("01J/w1:p1", None)]);
         let notes = per_target::<&str>(&change, &HashMap::new());
         assert!(notes.is_empty());
     }
@@ -286,7 +296,7 @@ mod tests {
     /// The defect this whole change exists for: answered at the desk, still on the phone.
     #[test]
     fn a_device_told_about_a_pane_that_cleared_is_sent_the_notification_that_takes_it_down() {
-        let change = Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]);
+        let change = cleared(Vec::new(), ["01J/w1:p1".to_string()]);
         let eligible = HashMap::from([("01J/w1:p1".to_string(), vec!["phone"])]);
         let notes = per_target(&change, &eligible);
         assert_eq!(notes.len(), 1);
@@ -300,6 +310,7 @@ mod tests {
     #[test]
     fn a_second_agent_blocking_leaves_the_first_one_named() {
         let change = Change {
+            kind: Kind::Blocked,
             outstanding: vec![blocked("01J/w1:p1", None), blocked("01J/w2:p1", None)],
             fresh: HashSet::from(["01J/w2:p1".to_string()]),
             cleared: HashSet::new(),
@@ -317,7 +328,7 @@ mod tests {
     /// that vibrates to report *less* waiting is a phone that gets muted.
     #[test]
     fn a_shrinking_set_resyncs_without_alerting() {
-        let change = Change::cleared(
+        let change = cleared(
             vec![blocked("01J/w2:p1", Some("Apply the patch?"))],
             ["01J/w1:p1".to_string()],
         );
@@ -336,7 +347,7 @@ mod tests {
     /// only its own set.
     #[test]
     fn a_clear_reaches_the_device_that_was_told_and_leaves_another_devices_set_alone() {
-        let change = Change::cleared(
+        let change = cleared(
             vec![blocked("01J/w2:p1", Some("Apply the patch?"))],
             ["01J/w1:p1".to_string()],
         );
@@ -354,11 +365,33 @@ mod tests {
         assert_eq!(notes[0].1.count, 1, "the phone keeps the pane it still has");
     }
 
+    /// The kind travels the whole way to the payload, so the notification a finished agent
+    /// produces addresses its own tag and never the blocked one's slot.
+    #[test]
+    fn a_finished_set_is_delivered_under_the_done_tag() {
+        let change = Change::fresh(Kind::Done, vec![blocked("01J/w1:p1", Some("~/dev/kampr"))]);
+        let eligible = HashMap::from([("01J/w1:p1".to_string(), vec!["phone"])]);
+        let notes = per_target(&change, &eligible);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].1.kind, Kind::Done);
+        assert_eq!(notes[0].1.tag, crate::note::TAG_DONE);
+        assert!(notes[0].1.title.ends_with("finished"), "{}", notes[0].1.title);
+
+        let gone = Change::cleared(Kind::Done, Vec::new(), ["01J/w1:p1".to_string()]);
+        let taken_down = per_target(&gone, &eligible);
+        assert_eq!(taken_down[0].1.count, 0);
+        assert_eq!(
+            taken_down[0].1.tag,
+            crate::note::TAG_DONE,
+            "a done that was read has to clear the done slot, not the blocked one"
+        );
+    }
+
     /// And a device this change did not touch is not POSTed to at all. Every wake-up costs the
     /// radio and the user's attention; one that repeats what is already on the screen buys neither.
     #[test]
     fn a_device_whose_own_set_did_not_move_is_not_woken() {
-        let change = Change::fresh(vec![blocked("01J/w1:p1", None)]);
+        let change = fresh(vec![blocked("01J/w1:p1", None)]);
         let mut with_bystander = change.clone();
         with_bystander.outstanding.push(blocked("01J/w2:p1", None));
         let eligible = HashMap::from([

@@ -1,5 +1,6 @@
 package dev.kampr.shared.net
 
+import dev.kampr.shared.push.PUSH_PAYLOAD_VERSION
 import dev.kampr.shared.push.PushEnrolment
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
@@ -84,10 +85,19 @@ class PushApi(private val client: HttpClient, private val endpoint: Endpoint) {
 @Serializable
 private data class SubscribeKeys(val p256dh: String, val auth: String)
 
+// `v` is what this client can read. The node uses it to withhold a notification kind this build
+// would render as a different one, so re-POSTing an existing subscription under a newer build is
+// what turns the newer kinds on for a device that subscribed before they existed.
 @Serializable
-private data class SubscribeBody(val endpoint: String, val kind: String, val keys: SubscribeKeys) {
+private data class SubscribeBody(
+    val endpoint: String,
+    val kind: String,
+    val v: Int,
+    val keys: SubscribeKeys,
+) {
     companion object {
-        fun of(e: PushEnrolment) = SubscribeBody(e.endpoint, e.kind, SubscribeKeys(e.p256dh, e.auth))
+        fun of(e: PushEnrolment) =
+            SubscribeBody(e.endpoint, e.kind, PUSH_PAYLOAD_VERSION, SubscribeKeys(e.p256dh, e.auth))
     }
 }
 

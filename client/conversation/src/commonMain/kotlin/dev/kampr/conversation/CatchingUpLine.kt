@@ -35,7 +35,7 @@ fun catchingUp(status: ConnectionStatus, confirmed: Boolean, drawn: Boolean): St
     !drawn -> null
     confirmed && status !is ConnectionStatus.Offline && status !is ConnectionStatus.Connecting -> null
     status is ConnectionStatus.Offline -> "read up to here — offline"
-    else -> "read up to here — catching up"
+    else -> "read up to here"
 }
 
 @Composable

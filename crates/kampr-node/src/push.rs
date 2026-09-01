@@ -3,7 +3,8 @@ use crate::pending;
 use crate::sessions::Sessions;
 use kampr_auth::Store;
 use kampr_core::provider::AgentStatus;
-use kampr_push::{Blocked, Change, Outcome, Reach, Sender, Vapid};
+use kampr_core::wire::PaneEntry;
+use kampr_push::{Agent, Change, Kind, Outcome, Reach, Sender, Vapid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -21,10 +22,31 @@ const QUEUE: usize = 64;
 /// `None` for the VAPID key is the whole of "this node cannot push": a Tier 0 origin is not a
 /// secure context, so no browser on it can even register a service worker, and advertising
 /// `caps.push` there would be offering a control that fails at the last step (findings §3.7).
+/// One queue per notification kind.
+///
+/// **Not one queue carrying both.** The collection window folds everything that lands inside it
+/// into a single change, and folding a `done` into a `blocked` would produce a payload naming
+/// panes of both kinds under one of the two tags — which is exactly the "silently unsays the
+/// rest" failure the set-not-edge rule exists to prevent, arriving from a new direction.
+#[derive(Clone)]
+struct Feeds {
+    blocked: mpsc::Sender<Change>,
+    done: mpsc::Sender<Change>,
+}
+
+impl Feeds {
+    fn of(&self, kind: Kind) -> &mpsc::Sender<Change> {
+        match kind {
+            Kind::Blocked => &self.blocked,
+            Kind::Done => &self.done,
+        }
+    }
+}
+
 pub struct Push {
     vapid: Option<Arc<Vapid>>,
     sender: Option<Sender>,
-    changes: Option<mpsc::Sender<Change>>,
+    changes: Option<Feeds>,
 }
 
 impl std::fmt::Debug for Push {
@@ -65,10 +87,11 @@ impl Push {
         self.vapid.as_ref().map(|v| v.public_key_b64())
     }
 
-    fn feed(&mut self) -> mpsc::Receiver<Change> {
-        let (tx, rx) = mpsc::channel(QUEUE);
-        self.changes = Some(tx);
-        rx
+    fn feed(&mut self) -> (mpsc::Receiver<Change>, mpsc::Receiver<Change>) {
+        let (blocked, blocked_rx) = mpsc::channel(QUEUE);
+        let (done, done_rx) = mpsc::channel(QUEUE);
+        self.changes = Some(Feeds { blocked, done });
+        (blocked_rx, done_rx)
     }
 
     /// A test-visible hand-delivery of one change: the batching and the fan-out are the parts
@@ -88,8 +111,9 @@ impl Push {
             .iter()
             .map(|p| p.pane.clone())
             .chain(change.cleared.iter().cloned());
+        let needs = change.kind.min_payload_version();
         for pane in panes {
-            match store.push_targets(&pane, now).await {
+            match store.push_targets(&pane, now, needs).await {
                 Ok(targets) => {
                     eligible.insert(pane, targets);
                 }
@@ -118,7 +142,8 @@ pub struct PushCtx {
     pub store: Store,
     pub sessions: Arc<Sessions>,
     pub herd: watch::Receiver<Arc<HerdModel>>,
-    pub changes: mpsc::Receiver<Change>,
+    pub blocked: mpsc::Receiver<Change>,
+    pub done: mpsc::Receiver<Change>,
 }
 
 /// Starts the push channel, returning it and the two tasks that drive it.
@@ -144,14 +169,15 @@ pub fn start(
         }
     };
     info!(key = %vapid.public_key_b64(), subject = %vapid.subject(), "web push is available");
-    let changes = push.feed();
+    let (blocked, done) = push.feed();
     let push = Arc::new(push);
     let ctx = PushCtx {
         push: push.clone(),
         store,
         sessions,
         herd,
-        changes,
+        blocked,
+        done,
     };
     let tasks = vec![tokio::spawn(run(ctx))];
     (push, tasks)
@@ -163,16 +189,24 @@ async fn run(ctx: PushCtx) {
         store,
         sessions,
         herd,
-        mut changes,
+        blocked,
+        done,
     } = ctx;
-    let watcher = tokio::spawn(watch_herd(
-        herd,
-        sessions,
-        push.changes.clone().expect("a live push channel has a feed"),
-    ));
+    let feeds = push.changes.clone().expect("a live push channel has a feed");
+    let watcher = tokio::spawn(watch_herd(herd, sessions, feeds));
+    // Two windows, not one: a `done` landing beside a `blocked` must not hold the question back,
+    // and neither may be folded into the other's payload.
+    let quiet = tokio::spawn(pipeline(push.clone(), store.clone(), done));
+    pipeline(push, store, blocked).await;
+    quiet.abort();
+    watcher.abort();
+}
+
+async fn pipeline(push: Arc<Push>, store: Store, mut changes: mpsc::Receiver<Change>) {
     while let Some(change) = kampr_push::collect(&mut changes, kampr_push::WINDOW).await {
         let sent = push.deliver(&store, &change).await;
         debug!(
+            kind = ?change.kind,
             outstanding = change.outstanding.len(),
             fresh = change.fresh.len(),
             cleared = change.cleared.len(),
@@ -180,65 +214,112 @@ async fn run(ctx: PushCtx) {
             "push change delivered"
         );
     }
-    watcher.abort();
 }
 
-/// Turns the herd model into changes to the blocked set.
+/// Turns the herd model into changes to each notification kind's set.
 ///
 /// **The model is the source of truth, and the per-pane `pane.agent_status_changed` subscription
 /// only makes it arrive sooner.** A missed event costs one poll interval here and nothing else,
 /// which is exactly why the subscription is safe to rebuild whenever the agent-pane set moves.
 ///
-/// **Both edges matter.** A pane that stopped being blocked is why a prompt answered at the desk
-/// used to sit on a phone until somebody tapped it: the rising edge was the only thing anybody
-/// sent, and one tag means the last notification stands until another replaces it.
-async fn watch_herd(
-    mut herd: watch::Receiver<Arc<HerdModel>>,
-    sessions: Arc<Sessions>,
-    out: mpsc::Sender<Change>,
-) {
-    let mut previously: HashSet<String> = HashSet::new();
+/// **Both edges matter.** A pane that left a set is why a prompt answered at the desk used to sit
+/// on a phone until somebody tapped it: the rising edge was the only thing anybody sent, and one
+/// tag per kind means the last notification stands until another replaces it. A `done` falls the
+/// same way — the operator focusing the pane at the desk is what destroys herdr's marker (#357,
+/// #396), and the phone has to be told.
+///
+/// **One pass over the herd, two sets, two baselines.** They are tracked separately so a change
+/// one kind could not queue never advances the other's baseline, and so a herd rebuild that moved
+/// only one of them wakes only the devices that kind reaches.
+async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Sessions>, out: Feeds) {
+    let mut previously: HashMap<Kind, HashSet<String>> = HashMap::new();
     loop {
         if herd.changed().await.is_err() {
             return;
         }
         let model = herd.borrow_and_update().clone();
-        let now: HashSet<String> = model
-            .panes
-            .iter()
-            .filter(|p| p.agent_status == AgentStatus::Blocked)
-            .map(|p| p.id.clone())
-            .collect();
-        // A pane that stayed blocked is not a change, and rebuilding the herd every three seconds
-        // is not either. Leaving early here is also what keeps `question_for` — a read against a
-        // real herdr, per outstanding pane — off the poll path.
-        if now == previously {
-            continue;
+        for kind in [Kind::Blocked, Kind::Done] {
+            let seen = previously.entry(kind).or_default();
+            let now: HashSet<String> = model
+                .panes
+                .iter()
+                .filter(|p| p.agent_status == status_for(kind))
+                .map(|p| p.id.clone())
+                .collect();
+            // A pane that stayed in the set is not a change, and rebuilding the herd every three
+            // seconds is not either. Leaving early here is also what keeps `question_for` — a read
+            // against a real herdr, per outstanding pane — off the poll path.
+            if now == *seen {
+                continue;
+            }
+            let fresh: HashSet<String> = now.difference(seen).cloned().collect();
+            let cleared: HashSet<String> = seen.difference(&now).cloned().collect();
+            let mut outstanding = Vec::with_capacity(now.len());
+            for pane in model.panes.iter().filter(|p| now.contains(&p.id)) {
+                outstanding.push(Agent {
+                    pane: pane.id.clone(),
+                    node: pane.node_id.clone(),
+                    agent: pane.agent.clone(),
+                    label: pane.label.clone().or_else(|| pane.workspace.clone()),
+                    detail: detail_for(kind, pane, &sessions).await,
+                });
+            }
+            // Bounded on purpose, and what a full queue costs is a *delay* rather than a
+            // notification: this kind's baseline is left where it was, so the next herd update
+            // re-derives the same change against the same baseline and offers it again. The
+            // queued changes in front of it are the older news, and they are about to drain
+            // anyway.
+            match out.of(kind).try_send(Change {
+                kind,
+                outstanding,
+                fresh,
+                cleared,
+            }) {
+                Ok(()) => *seen = now,
+                Err(_) => debug!(
+                    ?kind,
+                    "push queue is full; this change waits for the next herd update"
+                ),
+            }
         }
-        let fresh: HashSet<String> = now.difference(&previously).cloned().collect();
-        let cleared: HashSet<String> = previously.difference(&now).cloned().collect();
-        let mut outstanding = Vec::with_capacity(now.len());
-        for pane in model.panes.iter().filter(|p| now.contains(&p.id)) {
-            outstanding.push(Blocked {
-                pane: pane.id.clone(),
-                node: pane.node_id.clone(),
-                agent: pane.agent.clone(),
-                label: pane.label.clone().or_else(|| pane.workspace.clone()),
-                question: question_for(&sessions, &pane.id).await,
-            });
-        }
-        // Bounded on purpose, and what a full queue costs is a *delay* rather than a notification:
-        // `previously` is left where it was, so the next herd update re-derives the same change
-        // against the same baseline and offers it again. The queued changes in front of it are the
-        // older news, and they are about to drain anyway.
-        match out.try_send(Change {
-            outstanding,
-            fresh,
-            cleared,
-        }) {
-            Ok(()) => previously = now,
-            Err(_) => debug!("push queue is full; this change waits for the next herd update"),
-        }
+    }
+}
+
+fn status_for(kind: Kind) -> AgentStatus {
+    match kind {
+        Kind::Blocked => AgentStatus::Blocked,
+        Kind::Done => AgentStatus::Done,
+    }
+}
+
+/// The one line under an agent's name, which is a different fact for each kind.
+///
+/// **The finished case reads nothing.** Its honest analogue of the question would be the agent's
+/// closing message, and resolving that means locating and parsing the transcript — 1.99 s on a
+/// 30.7 MB one (#409), inside a 900 ms window, for every pane that finished at once. The working
+/// directory is already in the herd model, tells three simultaneous agents apart, and is not a
+/// guess about what the agent did.
+async fn detail_for(kind: Kind, pane: &PaneEntry, sessions: &Sessions) -> Option<String> {
+    match kind {
+        Kind::Blocked => question_for(sessions, &pane.id).await,
+        Kind::Done => pane.cwd.as_deref().map(|cwd| home_relative(cwd, home())),
+    }
+}
+
+fn home() -> Option<&'static str> {
+    static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| std::env::var("HOME").ok())
+        .as_deref()
+        .filter(|home| !home.is_empty())
+}
+
+/// `~/dev/kampr` rather than `/home/dbrain/dev/kampr`: a lock screen has one line for this, and
+/// the prefix every path shares is the part that carries no information.
+fn home_relative(path: &str, home: Option<&str>) -> String {
+    match home.and_then(|home| path.strip_prefix(home)) {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
     }
 }
 
@@ -255,13 +336,12 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use kampr_core::provider::PaneInfo;
-    use kampr_core::wire::PaneEntry;
     use std::time::Duration;
 
-    fn herd(blocked: &[&str]) -> HerdModel {
+    fn herd(status: AgentStatus, panes: &[&str]) -> HerdModel {
         HerdModel {
             nodes: Vec::new(),
-            panes: blocked
+            panes: panes
                 .iter()
                 .map(|id| {
                     PaneEntry::new(
@@ -269,7 +349,8 @@ mod tests {
                         &PaneInfo {
                             pane_id: (*id).to_string(),
                             agent: Some("claude".into()),
-                            agent_status: AgentStatus::Blocked,
+                            agent_status: status,
+                            cwd: Some("/srv/build/kampr".into()),
                             ..PaneInfo::default()
                         },
                         false,
@@ -277,6 +358,10 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    fn blocked_herd(panes: &[&str]) -> HerdModel {
+        herd(AgentStatus::Blocked, panes)
     }
 
     /// A change, or a named failure. `recv().await` on a watcher that has stopped sending the
@@ -296,34 +381,55 @@ mod tests {
         Sessions::open(&config)
     }
 
+    struct Watched {
+        herd: watch::Sender<Arc<HerdModel>>,
+        blocked: mpsc::Receiver<Change>,
+        done: mpsc::Receiver<Change>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    fn watching(depth: usize) -> Watched {
+        let (blocked, blocked_rx) = mpsc::channel(depth);
+        let (done, done_rx) = mpsc::channel(depth);
+        let (herd, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
+        let task = tokio::spawn(watch_herd(herd_rx, sessions(), Feeds { blocked, done }));
+        Watched {
+            herd,
+            blocked: blocked_rx,
+            done: done_rx,
+            task,
+        }
+    }
+
     /// A queue smaller than the changes arriving at it.
     ///
     /// `try_send` drops the *value being sent*, so a full queue costs the newest change — and if
-    /// `previously` were advanced anyway, the panes in that change would never be offered again
+    /// the baseline were advanced anyway, the panes in that change would never be offered again
     /// for as long as they stayed blocked. A blocked agent nobody is told about is the whole
     /// feature failing quietly.
     #[tokio::test]
     async fn a_change_that_did_not_fit_the_queue_is_offered_again_rather_than_recorded_as_notified() {
         let panes = ["w1:p1", "w1:p2", "w1:p3", "w1:p4", "w1:p5"];
-        let (out, mut queued) = mpsc::channel(1);
-        let (herd_tx, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let watcher = tokio::spawn(watch_herd(herd_rx, sessions(), out));
+        let mut watched = watching(1);
 
         let mut seen: HashSet<String> = HashSet::new();
         for at in 1..=panes.len() {
-            herd_tx.send_replace(Arc::new(herd(&panes[..at])));
-            while let Ok(Some(change)) = tokio::time::timeout(Duration::from_millis(200), queued.recv()).await
+            watched.herd.send_replace(Arc::new(blocked_herd(&panes[..at])));
+            while let Ok(Some(change)) =
+                tokio::time::timeout(Duration::from_millis(200), watched.blocked.recv()).await
             {
                 seen.extend(change.outstanding.into_iter().map(|p| p.pane));
             }
         }
         // One last update with nothing new in it: a change that was dropped is re-derived from the
         // same baseline, so the pane it named still arrives.
-        herd_tx.send_replace(Arc::new(herd(&panes)));
-        while let Ok(Some(change)) = tokio::time::timeout(Duration::from_millis(200), queued.recv()).await {
+        watched.herd.send_replace(Arc::new(blocked_herd(&panes)));
+        while let Ok(Some(change)) =
+            tokio::time::timeout(Duration::from_millis(200), watched.blocked.recv()).await
+        {
             seen.extend(change.outstanding.into_iter().map(|p| p.pane));
         }
-        watcher.abort();
+        watched.task.abort();
 
         let expected: HashSet<String> = panes.iter().map(|p| format!("01J/{p}")).collect();
         assert_eq!(
@@ -337,19 +443,17 @@ mod tests {
     /// per-pane `question_for` read off the three-second poll.
     #[tokio::test]
     async fn a_pane_that_was_already_blocked_is_not_notified_about_again() {
-        let (out, mut queued) = mpsc::channel(16);
-        let (herd_tx, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let watcher = tokio::spawn(watch_herd(herd_rx, sessions(), out));
+        let mut watched = watching(16);
 
-        let model = Arc::new(herd(&["w1:p1"]));
+        let model = Arc::new(blocked_herd(&["w1:p1"]));
         for _ in 0..3 {
-            herd_tx.send_replace(model.clone());
+            watched.herd.send_replace(model.clone());
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        watcher.abort();
+        watched.task.abort();
 
         let mut count = 0;
-        while queued.try_recv().is_ok() {
+        while watched.blocked.try_recv().is_ok() {
             count += 1;
         }
         assert_eq!(
@@ -363,18 +467,18 @@ mod tests {
     /// were told about it have to hear.
     #[tokio::test]
     async fn a_pane_that_stops_being_blocked_is_a_change_naming_it_as_cleared() {
-        let (out, mut queued) = mpsc::channel(16);
-        let (herd_tx, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let watcher = tokio::spawn(watch_herd(herd_rx, sessions(), out));
+        let mut watched = watching(16);
 
-        herd_tx.send_replace(Arc::new(herd(&["w1:p1", "w2:p1"])));
-        let first = next(&mut queued, "two panes blocked").await;
+        watched
+            .herd
+            .send_replace(Arc::new(blocked_herd(&["w1:p1", "w2:p1"])));
+        let first = next(&mut watched.blocked, "two panes blocked").await;
         assert_eq!(first.fresh.len(), 2);
         assert!(first.cleared.is_empty());
 
-        herd_tx.send_replace(Arc::new(herd(&["w2:p1"])));
-        let second = next(&mut queued, "one of the two was answered").await;
-        watcher.abort();
+        watched.herd.send_replace(Arc::new(blocked_herd(&["w2:p1"])));
+        let second = next(&mut watched.blocked, "one of the two was answered").await;
+        watched.task.abort();
 
         assert!(second.fresh.is_empty(), "an answer is not news to alert about");
         assert_eq!(
@@ -397,17 +501,138 @@ mod tests {
     /// a change, and it is the one that takes the prompt off the phone.
     #[tokio::test]
     async fn the_last_blocked_pane_being_answered_is_still_a_change() {
-        let (out, mut queued) = mpsc::channel(16);
-        let (herd_tx, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let watcher = tokio::spawn(watch_herd(herd_rx, sessions(), out));
+        let mut watched = watching(16);
 
-        herd_tx.send_replace(Arc::new(herd(&["w1:p1"])));
-        next(&mut queued, "the pane blocked").await;
-        herd_tx.send_replace(Arc::new(HerdModel::default()));
-        let change = next(&mut queued, "the last blocked pane was answered").await;
-        watcher.abort();
+        watched.herd.send_replace(Arc::new(blocked_herd(&["w1:p1"])));
+        next(&mut watched.blocked, "the pane blocked").await;
+        watched.herd.send_replace(Arc::new(HerdModel::default()));
+        let change = next(&mut watched.blocked, "the last blocked pane was answered").await;
+        watched.task.abort();
 
         assert!(change.outstanding.is_empty());
         assert_eq!(change.cleared.len(), 1);
+    }
+
+    /// The other half of the feature. herdr's `done` is a pane that finished `working`→`idle`
+    /// while nobody was looking at it (#357) — the operator's unread flag — and it now reaches
+    /// the phone on its own queue, carrying where it ran.
+    #[tokio::test]
+    async fn a_pane_that_finished_unwatched_is_a_change_of_its_own_kind() {
+        let mut watched = watching(16);
+
+        watched
+            .herd
+            .send_replace(Arc::new(herd(AgentStatus::Done, &["w1:p1"])));
+        let change = next(&mut watched.done, "a pane finished").await;
+        watched.task.abort();
+
+        assert_eq!(change.kind, Kind::Done);
+        assert_eq!(change.fresh.len(), 1);
+        assert_eq!(change.outstanding[0].pane, "01J/w1:p1");
+        assert_eq!(
+            change.outstanding[0].detail.as_deref(),
+            Some("/srv/build/kampr"),
+            "where it ran is what tells three finished agents apart"
+        );
+    }
+
+    /// And it falls the same way. Focusing the pane at the desk is the one thing that destroys
+    /// herdr's `done` marker (#357, #396), so a phone still showing it is showing something the
+    /// operator has already dealt with.
+    #[tokio::test]
+    async fn a_finished_pane_that_was_seen_at_the_desk_is_a_change_naming_it_as_cleared() {
+        let mut watched = watching(16);
+
+        watched
+            .herd
+            .send_replace(Arc::new(herd(AgentStatus::Done, &["w1:p1"])));
+        next(&mut watched.done, "a pane finished").await;
+        watched
+            .herd
+            .send_replace(Arc::new(herd(AgentStatus::Idle, &["w1:p1"])));
+        let change = next(&mut watched.done, "the operator focused it at the desk").await;
+        watched.task.abort();
+
+        assert!(change.outstanding.is_empty());
+        assert_eq!(change.cleared.iter().collect::<Vec<_>>(), vec!["01J/w1:p1"]);
+    }
+
+    /// **The reason there are two queues and not one.** A finished agent and a blocked one land
+    /// in the same herd update all the time — one agent finishing while another asks a question
+    /// is the ordinary case — and the collection window folds everything on a queue into a single
+    /// payload under a single tag. One queue would have produced a notification naming both under
+    /// one of the two tags, which is the set-not-edge rule failing from a new direction.
+    #[tokio::test]
+    async fn a_finished_pane_and_a_blocked_one_in_the_same_update_never_share_a_payload() {
+        let mut watched = watching(16);
+
+        let mut model = blocked_herd(&["w1:p1"]);
+        model.panes.extend(herd(AgentStatus::Done, &["w2:p1"]).panes);
+        watched.herd.send_replace(Arc::new(model));
+
+        let blocked = next(&mut watched.blocked, "one pane blocked").await;
+        let done = next(&mut watched.done, "another finished in the same update").await;
+        watched.task.abort();
+
+        assert_eq!(blocked.kind, Kind::Blocked);
+        assert_eq!(
+            blocked
+                .outstanding
+                .iter()
+                .map(|p| p.pane.as_str())
+                .collect::<Vec<_>>(),
+            vec!["01J/w1:p1"],
+        );
+        assert_eq!(done.kind, Kind::Done);
+        assert_eq!(
+            done.outstanding
+                .iter()
+                .map(|p| p.pane.as_str())
+                .collect::<Vec<_>>(),
+            vec!["01J/w2:p1"],
+        );
+    }
+
+    /// A blocked pane going quiet must not disturb the finished set's baseline, and the other way
+    /// round. Shared state between the two is how one kind's queue pressure silences the other.
+    #[tokio::test]
+    async fn one_kinds_set_moving_is_not_a_change_to_the_other() {
+        let mut watched = watching(16);
+
+        watched.herd.send_replace(Arc::new(blocked_herd(&["w1:p1"])));
+        next(&mut watched.blocked, "the pane blocked").await;
+        watched
+            .herd
+            .send_replace(Arc::new(herd(AgentStatus::Done, &["w2:p1"])));
+        next(&mut watched.done, "another pane finished").await;
+        let cleared = next(&mut watched.blocked, "the blocked pane was answered").await;
+        watched.task.abort();
+
+        assert_eq!(cleared.kind, Kind::Blocked);
+        assert!(
+            watched.done.try_recv().is_err(),
+            "the finished set did not move, so nothing on its queue should have"
+        );
+    }
+
+    /// Pure, and taking the home rather than reading it: a test that sets `HOME` sets it for
+    /// every other test in the binary, and the one next door asserts a path that is *not*
+    /// shortened.
+    #[test]
+    fn a_path_under_the_operators_home_is_shortened_and_anything_else_is_left_alone() {
+        let home = Some("/home/nobody");
+        assert_eq!(home_relative("/home/nobody/dev/kampr", home), "~/dev/kampr");
+        assert_eq!(home_relative("/home/nobody", home), "~");
+        assert_eq!(home_relative("/srv/build", home), "/srv/build");
+        assert_eq!(
+            home_relative("/home/nobodyelse/dev", home),
+            "/home/nobodyelse/dev",
+            "a prefix match is not a path match"
+        );
+        assert_eq!(
+            home_relative("/srv/build", None),
+            "/srv/build",
+            "a node with no HOME shortens nothing rather than guessing one"
+        );
     }
 }

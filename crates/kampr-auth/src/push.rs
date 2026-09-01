@@ -23,6 +23,13 @@ pub const MAX_SUBSCRIPTIONS_PER_DEVICE: i64 = 8;
 /// The wildcard pane id: a rule that covers every pane on this device.
 pub const ALL_PANES: &str = "*";
 
+/// What a subscription that never said is assumed to read.
+///
+/// A client that predates the field has one notification slot, so it is only ever sent the kind
+/// that slot was built for. Assuming the newest version instead would silently break the one
+/// promise this gate exists to keep, on exactly the devices nobody can upgrade remotely.
+pub const ASSUMED_PAYLOAD_VERSION: i64 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PushSubscription {
     pub id: String,
@@ -34,6 +41,10 @@ pub struct PushSubscription {
     pub endpoint: String,
     pub p256dh: String,
     pub auth: String,
+    /// The highest payload version this subscription's client is known to understand, as the
+    /// client itself declared at subscribe time. Delivery is gated on it: a notification kind a
+    /// client cannot tell apart from the one it already shows is not sent to it at all.
+    pub payload_version: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,32 +64,44 @@ impl PushRule {
     }
 }
 
+/// What a client hands over when it subscribes.
+#[derive(Debug, Clone, Copy)]
+pub struct NewPushSubscription<'a> {
+    pub kind: &'a str,
+    pub endpoint: &'a str,
+    pub p256dh: &'a str,
+    pub auth: &'a str,
+    /// See [`ASSUMED_PAYLOAD_VERSION`]: what this client says it can read, which decides which
+    /// notification kinds it is ever sent.
+    pub payload_version: i64,
+}
+
 impl Store {
     /// Upserts on the endpoint rather than on the device: a browser that re-subscribes gets the
     /// same endpoint back, and a stale row under a different device would then double-send.
     pub async fn save_push_subscription(
         &self,
         device_id: &str,
-        kind: &str,
-        endpoint: &str,
-        p256dh: &str,
-        auth: &str,
+        new: &NewPushSubscription<'_>,
         now: i64,
     ) -> Result<String> {
         let id = hex::encode(secret::random_bytes(8)?);
         sqlx::query(
-            "INSERT INTO push_subscriptions (id, device_id, kind, endpoint, p256dh, auth, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO push_subscriptions
+               (id, device_id, kind, endpoint, p256dh, auth, payload_version, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(endpoint) DO UPDATE SET
                device_id = excluded.device_id, kind = excluded.kind,
-               p256dh = excluded.p256dh, auth = excluded.auth, created_at = excluded.created_at",
+               p256dh = excluded.p256dh, auth = excluded.auth,
+               payload_version = excluded.payload_version, created_at = excluded.created_at",
         )
         .bind(&id)
         .bind(device_id)
-        .bind(kind)
-        .bind(endpoint)
-        .bind(p256dh)
-        .bind(auth)
+        .bind(new.kind)
+        .bind(new.endpoint)
+        .bind(new.p256dh)
+        .bind(new.auth)
+        .bind(new.payload_version)
         .bind(now)
         .execute(self.pool())
         .await?;
@@ -126,11 +149,17 @@ impl Store {
     /// A revoked or expired device has no subscriptions here at all — the join, not a sweep, is
     /// what makes revocation reach the push channel. A pane-specific or wildcard rule that mutes
     /// or is still snoozing removes the device from the set.
-    pub async fn push_targets(&self, pane_id: &str, now: i64) -> Result<Vec<PushSubscription>> {
+    ///
+    /// `needs` is the payload version a client must be able to read for this notification to mean
+    /// what it says. A kind is addressed by *not sending it* to a client that would render it as
+    /// something else, rather than by sending it and hoping — the same reason a subscribe button
+    /// is absent on a node that cannot push instead of present and failing at the last step.
+    pub async fn push_targets(&self, pane_id: &str, now: i64, needs: i64) -> Result<Vec<PushSubscription>> {
         let rows = sqlx::query(
             "SELECT s.* FROM push_subscriptions s
              JOIN devices d ON d.id = s.device_id
              WHERE d.revoked_at IS NULL AND (d.expires_at IS NULL OR d.expires_at > ?1)
+               AND s.payload_version >= ?4
                AND NOT EXISTS (
                  SELECT 1 FROM push_rules r
                  WHERE r.device_id = s.device_id AND r.pane_id IN (?2, ?3)
@@ -141,6 +170,7 @@ impl Store {
         .bind(now)
         .bind(pane_id)
         .bind(ALL_PANES)
+        .bind(needs)
         .fetch_all(self.pool())
         .await?;
         Ok(rows.into_iter().map(subscription_from_row).collect())
@@ -215,6 +245,7 @@ fn subscription_from_row(row: sqlx::sqlite::SqliteRow) -> PushSubscription {
         endpoint: row.get("endpoint"),
         p256dh: row.get("p256dh"),
         auth: row.get("auth"),
+        payload_version: row.get("payload_version"),
     }
 }
 
@@ -233,11 +264,74 @@ mod tests {
             .id
     }
 
+    /// v3 is what a client built alongside the two notification kinds declares.
+    const V3: i64 = 3;
+
     async fn subscribe(store: &Store, device_id: &str, endpoint: &str) {
+        subscribe_at(store, device_id, endpoint, V3).await;
+    }
+
+    async fn subscribe_at(store: &Store, device_id: &str, endpoint: &str, version: i64) {
         store
-            .save_push_subscription(device_id, "webpush", endpoint, "p", "a", NOW)
+            .save_push_subscription(device_id, &webpush(endpoint, version), NOW)
             .await
             .unwrap();
+    }
+
+    fn webpush(endpoint: &str, payload_version: i64) -> NewPushSubscription<'_> {
+        NewPushSubscription {
+            kind: "webpush",
+            endpoint,
+            p256dh: "p",
+            auth: "a",
+            payload_version,
+        }
+    }
+
+    /// The one degradation this feature may not cause. An installed client older than payload v3
+    /// has a single notification slot and posts whatever arrives into it, whatever tag it carries
+    /// — so a `done` sent to one would take a live question off the phone. It is never sent one,
+    /// and it goes on receiving the kind it was built for.
+    #[tokio::test]
+    async fn a_client_that_cannot_tell_the_two_kinds_apart_is_never_sent_the_newer_one() {
+        let store = Store::open_memory().await.unwrap();
+        let old = device(&store, "old phone").await;
+        let new = device(&store, "new phone").await;
+        subscribe_at(&store, &old, "https://push.example/old", ASSUMED_PAYLOAD_VERSION).await;
+        subscribe_at(&store, &new, "https://push.example/new", V3).await;
+
+        let blocked = store.push_targets("n/w1:p1", NOW, 1).await.unwrap();
+        assert_eq!(blocked.len(), 2, "both are still told an agent needs them");
+
+        let done = store.push_targets("n/w1:p1", NOW, V3).await.unwrap();
+        assert_eq!(
+            done.iter().map(|s| s.device_id.as_str()).collect::<Vec<_>>(),
+            vec![new.as_str()],
+            "only the client that keeps the two kinds in two slots hears about a finished agent"
+        );
+    }
+
+    /// And a row written before the column existed is assumed old rather than new: the migration
+    /// defaults it, and guessing the other way breaks the promise on exactly the devices nobody
+    /// can upgrade remotely.
+    #[tokio::test]
+    async fn a_subscription_that_never_declared_a_version_is_assumed_to_be_the_old_one() {
+        let store = Store::open_memory().await.unwrap();
+        let id = device(&store, "phone").await;
+        sqlx::query(
+            "INSERT INTO push_subscriptions (id, device_id, kind, endpoint, p256dh, auth, created_at)
+             VALUES ('s0', ?, 'webpush', 'https://push.example/legacy', 'p', 'a', ?)",
+        )
+        .bind(&id)
+        .bind(NOW)
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        let subscriptions = store.push_subscriptions_for(&id).await.unwrap();
+        assert_eq!(subscriptions[0].payload_version, ASSUMED_PAYLOAD_VERSION);
+        assert!(store.push_targets("n/w1:p1", NOW, 3).await.unwrap().is_empty());
+        assert_eq!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().len(), 1);
     }
 
     /// The whole reason the subscriptions live in this database: revoking a device has to end its
@@ -247,11 +341,11 @@ mod tests {
         let store = Store::open_memory().await.unwrap();
         let id = device(&store, "phone").await;
         subscribe(&store, &id, "https://push.example/1").await;
-        assert_eq!(store.push_targets("n/w1:p1", NOW).await.unwrap().len(), 1);
+        assert_eq!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().len(), 1);
 
         store.revoke_device(&id, NOW).await.unwrap();
         assert!(
-            store.push_targets("n/w1:p1", NOW).await.unwrap().is_empty(),
+            store.push_targets("n/w1:p1", NOW, 1).await.unwrap().is_empty(),
             "a revoked device must not be woken"
         );
     }
@@ -265,8 +359,14 @@ mod tests {
             .unwrap()
             .id;
         subscribe(&store, &id, "https://push.example/1").await;
-        assert_eq!(store.push_targets("n/w1:p1", NOW).await.unwrap().len(), 1);
-        assert!(store.push_targets("n/w1:p1", NOW + 11).await.unwrap().is_empty());
+        assert_eq!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().len(), 1);
+        assert!(
+            store
+                .push_targets("n/w1:p1", NOW + 11, 1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -287,9 +387,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(store.push_targets("n/w1:p1", NOW).await.unwrap().is_empty());
+        assert!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().is_empty());
         assert_eq!(
-            store.push_targets("n/w1:p2", NOW).await.unwrap().len(),
+            store.push_targets("n/w1:p2", NOW, 1).await.unwrap().len(),
             1,
             "muting one agent must not silence the herd"
         );
@@ -306,7 +406,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(store.push_targets("n/w1:p2", NOW).await.unwrap().is_empty());
+        assert!(store.push_targets("n/w1:p2", NOW, 1).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -326,9 +426,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(store.push_targets("n/w1:p1", NOW).await.unwrap().is_empty());
+        assert!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().is_empty());
         assert_eq!(
-            store.push_targets("n/w1:p1", NOW + 601).await.unwrap().len(),
+            store.push_targets("n/w1:p1", NOW + 601, 1).await.unwrap().len(),
             1,
             "nothing sweeps the table, so the query has to do the expiry"
         );
@@ -343,10 +443,10 @@ mod tests {
         let laptop = device(&store, "laptop").await;
         subscribe(&store, &phone, "https://push.example/1").await;
         subscribe(&store, &phone, "https://push.example/1").await;
-        assert_eq!(store.push_targets("n/w1:p1", NOW).await.unwrap().len(), 1);
+        assert_eq!(store.push_targets("n/w1:p1", NOW, 1).await.unwrap().len(), 1);
 
         subscribe(&store, &laptop, "https://push.example/1").await;
-        let targets = store.push_targets("n/w1:p1", NOW).await.unwrap();
+        let targets = store.push_targets("n/w1:p1", NOW, 1).await.unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].device_id, laptop);
         assert!(store.push_subscriptions_for(&phone).await.unwrap().is_empty());
@@ -358,14 +458,7 @@ mod tests {
         let id = device(&store, "phone").await;
         for n in 0..(MAX_SUBSCRIPTIONS_PER_DEVICE + 4) {
             store
-                .save_push_subscription(
-                    &id,
-                    "webpush",
-                    &format!("https://push.example/{n}"),
-                    "p",
-                    "a",
-                    NOW + n,
-                )
+                .save_push_subscription(&id, &webpush(&format!("https://push.example/{n}"), V3), NOW + n)
                 .await
                 .unwrap();
         }

@@ -301,6 +301,15 @@ it — a timing change with no guard is how the next one gets re-tuned by accide
   so it is news where `working` is not. Landed in both surfaces (`sidebar.rs::rank` and
   `Herd.kt::statusRank`) with a test each, because two clients that order one herd differently are
   two different products — the defect `9a52a3e` fixed.
+- **`done` is a notification, on its own slot.** An unread marker is worth telling somebody about
+  without their having to look, so a finished pane now pushes exactly as a blocked one does — its
+  own tag, its own Android channel, its own set, its own falling edge. It is deliberately *not*
+  folded into the blocked notification: one tag is one slot, and an agent finishing while another
+  is asking a question would take the question off the phone. What takes it down is the operator
+  focusing the pane at the desk (herdr's own marker collapsing) or reading it in the app
+  (`SeenDone`, which never reaches the node — clearing herdr's marker would take a focus op).
+  [`docs/08-notifications.md`](./08-notifications.md) has the whole of it, including the payload
+  version an old client is gated on.
 - **Focus is now named in rule 3.** It is not a resize and not a read, but it is the **only** thing
   that destroys herdr's `done` marker; every read leaves it standing. Not `pane.focus` alone:
   `tab.focus` and `workspace.focus` destroy it exactly as `pane.focus` does, because what herdr

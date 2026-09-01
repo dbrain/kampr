@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use kampr_auth::{PushRule, Role, Store};
 use kampr_node::push::Push;
-use kampr_push::{Blocked, Change, Reach, Vapid};
+use kampr_push::{Agent, Change, Kind, Reach, Vapid};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default)]
@@ -140,26 +140,48 @@ async fn reaching(reach: Reach) -> (Store, Arc<Push>, tempfile::TempDir) {
 }
 
 async fn enrol(store: &Store, name: &str, endpoint: &str) -> String {
+    enrol_reading(store, name, endpoint, kampr_push::note::VERSION as i64).await
+}
+
+async fn enrol_reading(store: &Store, name: &str, endpoint: &str, payload: i64) -> String {
     let device = store
         .create_device(name, Role::Full, kampr_auth::now(), None, None, None)
         .await
         .unwrap();
     let (p256dh, auth) = browser_keys();
     store
-        .save_push_subscription(&device.id, "webpush", endpoint, &p256dh, &auth, kampr_auth::now())
+        .save_push_subscription(
+            &device.id,
+            &kampr_auth::NewPushSubscription {
+                kind: "webpush",
+                endpoint,
+                p256dh: &p256dh,
+                auth: &auth,
+                payload_version: payload,
+            },
+            kampr_auth::now(),
+        )
         .await
         .unwrap();
     device.id
 }
 
-fn blocked(pane: &str, agent: &str, question: &str) -> Blocked {
-    Blocked {
+fn blocked(pane: &str, agent: &str, question: &str) -> Agent {
+    Agent {
         pane: format!("01J/{pane}"),
         node: "01J".into(),
         agent: Some(agent.into()),
         label: Some("kampr".into()),
-        question: Some(question.into()),
+        detail: Some(question.into()),
     }
+}
+
+fn fresh(outstanding: Vec<Agent>) -> Change {
+    Change::fresh(Kind::Blocked, outstanding)
+}
+
+fn cleared(outstanding: Vec<Agent>, gone: impl IntoIterator<Item = String>) -> Change {
+    Change::cleared(Kind::Blocked, outstanding, gone)
 }
 
 /// The batching rule, end to end: two panes blocking together are **one** POST per device, not
@@ -174,7 +196,7 @@ async fn two_panes_blocking_together_are_one_push_per_device() {
     let sent = push
         .deliver(
             &store,
-            &Change::fresh(vec![
+            &fresh(vec![
                 blocked("w1:p1", "claude", "Run the tests?"),
                 blocked("w2:p1", "codex", "Apply the patch?"),
             ]),
@@ -197,11 +219,8 @@ async fn a_push_carries_a_vapid_authorization_and_an_encrypted_body() {
     let (store, push, _dir) = fixture().await;
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
-    push.deliver(
-        &store,
-        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
-    )
-    .await;
+    push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+        .await;
 
     let received = stub.received();
     assert_eq!(received.len(), 1);
@@ -249,7 +268,7 @@ async fn a_muted_agent_drops_out_of_that_devices_notification_only() {
     let sent = push
         .deliver(
             &store,
-            &Change::fresh(vec![
+            &fresh(vec![
                 blocked("w1:p1", "claude", "Run the tests?"),
                 blocked("w2:p1", "codex", "Apply the patch?"),
             ]),
@@ -271,7 +290,7 @@ async fn a_muted_agent_drops_out_of_that_devices_notification_only() {
         )
         .await
         .unwrap();
-    push.deliver(&store, &Change::fresh(vec![blocked("w2:p1", "codex", "Again?")]))
+    push.deliver(&store, &fresh(vec![blocked("w2:p1", "codex", "Again?")]))
         .await;
     let paths: Vec<String> = stub.received().into_iter().map(|r| r.path).collect();
     assert_eq!(
@@ -290,20 +309,14 @@ async fn revoking_a_device_stops_its_notifications() {
     let phone = enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
     assert_eq!(
-        push.deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
-        )
-        .await,
+        push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+            .await,
         1
     );
     store.revoke_device(&phone, kampr_auth::now()).await.unwrap();
     assert_eq!(
-        push.deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
-        )
-        .await,
+        push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+            .await,
         0
     );
     assert_eq!(stub.received().len(), 1);
@@ -319,11 +332,8 @@ async fn a_gone_endpoint_is_deleted_rather_than_retried_forever() {
     stub.service.gone.lock().unwrap().push("/push/phone".to_string());
 
     assert_eq!(
-        push.deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
-        )
-        .await,
+        push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+            .await,
         0
     );
     assert!(
@@ -343,11 +353,8 @@ async fn a_node_with_no_vapid_key_sends_nothing() {
     assert!(!push.available());
     assert_eq!(push.public_key(), None);
     assert_eq!(
-        push.deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")])
-        )
-        .await,
+        push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+            .await,
         0
     );
     assert!(stub.received().is_empty());
@@ -366,10 +373,7 @@ async fn a_push_endpoint_that_redirects_never_reaches_what_it_redirects_to() {
     enrol(&store, "phone", &format!("{}/push/phone", endpoint.base)).await;
 
     let sent = push
-        .deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
-        )
+        .deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
         .await;
 
     assert_eq!(sent, 0, "a 302 is not a delivery");
@@ -390,10 +394,7 @@ async fn a_push_endpoint_addressed_inside_this_node_is_never_dialled() {
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
     let sent = push
-        .deliver(
-            &store,
-            &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
-        )
+        .deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
         .await;
 
     assert_eq!(sent, 0);
@@ -413,13 +414,10 @@ async fn a_pane_answered_elsewhere_sends_the_device_a_second_push_that_takes_the
     let (store, push, _dir) = fixture().await;
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
-    push.deliver(
-        &store,
-        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
-    )
-    .await;
+    push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+        .await;
     let sent = push
-        .deliver(&store, &Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]))
+        .deliver(&store, &cleared(Vec::new(), ["01J/w1:p1".to_string()]))
         .await;
 
     assert_eq!(sent, 1, "the device that was told has to be told it is over");
@@ -458,7 +456,7 @@ async fn a_device_that_muted_the_answered_pane_is_not_woken_to_be_told_it_was_an
         .unwrap();
 
     let sent = push
-        .deliver(&store, &Change::cleared(Vec::new(), ["01J/w1:p1".to_string()]))
+        .deliver(&store, &cleared(Vec::new(), ["01J/w1:p1".to_string()]))
         .await;
 
     assert_eq!(sent, 1);
@@ -475,12 +473,10 @@ async fn a_second_agent_blocking_still_alerts_and_still_carries_the_first() {
     let (store, push, _dir) = fixture().await;
     enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
 
-    push.deliver(
-        &store,
-        &Change::fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]),
-    )
-    .await;
+    push.deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Run the tests?")]))
+        .await;
     let change = Change {
+        kind: Kind::Blocked,
         outstanding: vec![
             blocked("w1:p1", "claude", "Run the tests?"),
             blocked("w2:p1", "codex", "Apply the patch?"),
@@ -500,4 +496,107 @@ async fn a_second_agent_blocking_still_alerts_and_still_carries_the_first() {
         received[1].body_len > received[0].body_len,
         "two panes is a longer payload than one: the first block is still named"
     );
+}
+
+fn finished(pane: &str, agent: &str, cwd: &str) -> Agent {
+    Agent {
+        pane: format!("01J/{pane}"),
+        node: "01J".into(),
+        agent: Some(agent.into()),
+        label: Some("kampr".into()),
+        detail: Some(cwd.into()),
+    }
+}
+
+/// The other half of the feature, end to end: an agent that finished while nobody was looking
+/// wakes the device on its own account, and is batched exactly as a block is.
+#[tokio::test]
+async fn two_agents_finishing_together_are_one_push_per_device() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+
+    let sent = push
+        .deliver(
+            &store,
+            &Change::fresh(
+                Kind::Done,
+                vec![
+                    finished("w1:p1", "claude", "~/dev/kampr"),
+                    finished("w2:p1", "codex", "~/dev/herdr"),
+                ],
+            ),
+        )
+        .await;
+
+    assert_eq!(sent, 1, "one notification, not one per pane");
+    assert_eq!(stub.received().len(), 1);
+}
+
+/// **The compatibility rule this whole gate exists for.** An installed client older than payload
+/// v3 has one notification slot and posts whatever arrives into it, whatever tag the payload
+/// carries — so a `done` delivered to one would take a live question off the phone. It is never
+/// sent one, and it goes on being told about blocked agents exactly as before.
+///
+/// Mutation: drop the `payload_version` predicate from `push_targets` and the old phone receives
+/// the finish, which is the prompt-losing bug.
+#[tokio::test]
+async fn a_client_that_cannot_tell_the_two_kinds_apart_is_told_about_blocks_and_never_finishes() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    enrol_reading(
+        &store,
+        "old phone",
+        &format!("{}/push/old", stub.base),
+        kampr_auth::ASSUMED_PAYLOAD_VERSION,
+    )
+    .await;
+    enrol(&store, "new phone", &format!("{}/push/new", stub.base)).await;
+
+    let blocks = push
+        .deliver(&store, &fresh(vec![blocked("w1:p1", "claude", "Proceed?")]))
+        .await;
+    assert_eq!(blocks, 2, "a question still reaches every device");
+
+    let finishes = push
+        .deliver(
+            &store,
+            &Change::fresh(Kind::Done, vec![finished("w2:p1", "claude", "~/dev/kampr")]),
+        )
+        .await;
+    assert_eq!(finishes, 1, "only the client with two slots hears a finish");
+
+    let received = stub.received();
+    let paths: Vec<&str> = received.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(
+        paths.iter().filter(|p| **p == "/push/old").count(),
+        1,
+        "the old phone was told about the block and nothing else: {paths:?}"
+    );
+    assert_eq!(paths.iter().filter(|p| **p == "/push/new").count(), 2);
+}
+
+/// And the falling edge of the finished set is addressed the same way: the device that was told
+/// an agent finished is the one owed the payload that takes it down when the operator sees it at
+/// the desk (#357, #396).
+#[tokio::test]
+async fn a_finish_seen_at_the_desk_sends_the_device_the_payload_that_takes_it_down() {
+    let stub = Stub::start().await;
+    let (store, push, _dir) = fixture().await;
+    enrol(&store, "phone", &format!("{}/push/phone", stub.base)).await;
+
+    push.deliver(
+        &store,
+        &Change::fresh(Kind::Done, vec![finished("w1:p1", "claude", "~/dev/kampr")]),
+    )
+    .await;
+    let sent = push
+        .deliver(
+            &store,
+            &Change::cleared(Kind::Done, Vec::new(), ["01J/w1:p1".to_string()]),
+        )
+        .await;
+
+    assert_eq!(sent, 1);
+    assert_eq!(stub.received().len(), 2, "the clear is a POST of its own");
 }

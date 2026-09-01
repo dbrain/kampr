@@ -112,15 +112,17 @@ fun NotificationsScreen(
                 Surface(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         KText(
-                            if (subscribed) "This device is notified" else "Get told when an agent is blocked",
+                            if (subscribed) "This device is notified" else "Get told without watching",
                             tokens.type.bodyStrong,
                             tokens.color.text,
                         )
                         KText(
                             if (subscribed) {
-                                "A blocked agent wakes this device, with its question in the notification."
+                                "An agent that needs you wakes this device with its question. One that " +
+                                    "finishes while you are away says so more quietly, in a notification of its own."
                             } else {
-                                "The question comes with it, so you can decide before the app opens."
+                                "A question comes with the notification, so you can decide before the app " +
+                                    "opens — and a finished agent tells you rather than being found."
                             },
                             tokens.type.caption,
                             tokens.color.dim,
@@ -155,7 +157,7 @@ fun NotificationsScreen(
 
                 RuleRow(
                     title = "Every agent",
-                    subtitle = "Mute or snooze the whole herd on this device",
+                    subtitle = "Mute or snooze the whole herd on this device — questions and finishes alike",
                     rule = server?.rules?.firstOrNull { it.paneId == ALL_PANES },
                     now = nodeClock,
                     onMute = { muted -> act { it.rule(PushRule(ALL_PANES, muted = muted)) } },

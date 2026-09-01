@@ -12,12 +12,16 @@ const CACHE = 'kampr-warm-v1';
 const DB = 'kampr';
 const STORE = 'auth';
 
-// Notifications are tagged, so the newest replaces the last rather than stacking a column of
-// stale prompts on a phone that was away. Must match `kampr_push::note::TAG`.
+// Notifications are tagged per kind — `kampr.blocked` and `kampr.done`, matching
+// `kampr_push::note::Kind::tag` — so the newest of a kind replaces the last of that kind rather
+// than stacking a column of stale prompts on a phone that was away, while leaving the other
+// kind's slot alone. The tag arrives in the payload; this is only what a payload too broken to
+// carry one falls back to, and a node that sends no tag at all is one that only ever sent
+// questions.
 //
-// One tag is also why the payload has to be the whole outstanding set rather than the pane that
-// just changed: whatever arrives last is the only thing on the screen, so a payload that names
-// less than everything silently unsays the rest.
+// One tag per kind is also why the payload has to be that kind's whole outstanding set rather
+// than the pane that just changed: whatever arrives last under a tag is the only thing on the
+// screen for it, so a payload that names less than everything silently unsays the rest.
 const TAG = 'kampr.blocked';
 
 // The only two URLs this worker caches or serves. Anything else goes straight to the network.

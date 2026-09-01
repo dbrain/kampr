@@ -135,11 +135,12 @@ private class UnifiedPushPlatform(private val context: Context) : PushPlatform {
         return endpoint
     }
 
-    override suspend fun currentEndpoint(): String? = UnifiedPushEndpoints.saved(context)?.endpoint
+    override suspend fun enrolment(): PushEnrolment? = UnifiedPushEndpoints.saved(context)
 
-    override fun reconcile(anyBlocked: Boolean) {
-        if (anyBlocked) return
-        context.getSystemService(NotificationManager::class.java)?.cancel(BLOCKED_NOTIFICATION_ID)
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (!anyBlocked) manager.cancel(BLOCKED_NOTIFICATION_ID)
+        if (!anyDone) manager.cancel(DONE_NOTIFICATION_ID)
     }
 
     private fun notificationsAllowed(): Boolean =

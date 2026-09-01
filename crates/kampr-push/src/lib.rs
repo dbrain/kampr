@@ -16,6 +16,6 @@ pub mod send;
 pub mod vapid;
 
 pub use batch::{Change, WINDOW, collect, per_target};
-pub use note::{Blocked, Notification, TAG};
+pub use note::{Agent, Kind, Notification, TAG_BLOCKED, TAG_DONE};
 pub use send::{Outcome, Reach, Sender, SenderError};
 pub use vapid::{Vapid, VapidError, subject_for};

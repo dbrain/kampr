@@ -96,29 +96,32 @@ private fun jsUnsubscribe(): Promise<JsString?> = js(
     """
 )
 
+// Deliberately does not register the worker, request permission or subscribe: it reports what is
+// already there, so it is safe to call on every connect and outside a user gesture.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun jsEndpoint(): Promise<JsString?> = js(
+private fun jsSubscription(): Promise<JsString?> = js(
     """
     (async function () {
       if (!('serviceWorker' in navigator)) return null;
       var registration = await navigator.serviceWorker.getRegistration('/');
       if (!registration) return null;
       var subscription = await registration.pushManager.getSubscription();
-      return subscription ? subscription.endpoint : null;
+      return subscription ? JSON.stringify(subscription.toJSON()) : null;
     })()
     """
 )
 
-// The page and the worker post under the same tag, so the page can take down what the worker put
-// up. `getNotifications` is scoped to this registration, so nothing else on the device is touched.
+// The page and the worker post under the same tags, so the page can take down what the worker put
+// up. `getNotifications` is scoped to this registration, so nothing else on the device is touched —
+// and it is scoped to one tag, so clearing what has been read never touches the other kind's slot.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun jsClearBlocked(): Unit = js(
+private fun jsClearTag(tag: String): Unit = js(
     """
     (function () {
       if (!('serviceWorker' in navigator)) return;
       navigator.serviceWorker.getRegistration('/').then(function (registration) {
         if (!registration) return;
-        registration.getNotifications({ tag: 'kampr.blocked' }).then(function (shown) {
+        registration.getNotifications({ tag: tag }).then(function (shown) {
           shown.forEach(function (one) { one.close(); });
         }).catch(function () {});
       }).catch(function () {});
@@ -142,13 +145,18 @@ private class BrowserPush : PushPlatform {
         jsPrepare(token.orEmpty())
     }
 
-    override suspend fun subscribe(vapidKey: String): PushEnrolment? {
-        val raw = runCatching { jsSubscribe(vapidKey).await() }.getOrNull()?.toString() ?: return null
-        val body = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
-        val endpoint = body["endpoint"]?.jsonPrimitive?.contentOrNull() ?: return null
+    override suspend fun subscribe(vapidKey: String): PushEnrolment? =
+        enrolmentOf(runCatching { jsSubscribe(vapidKey).await() }.getOrNull()?.toString())
+
+    override suspend fun enrolment(): PushEnrolment? =
+        enrolmentOf(runCatching { jsSubscription().await() }.getOrNull()?.toString())
+
+    private fun enrolmentOf(raw: String?): PushEnrolment? {
+        val body = runCatching { json.parseToJsonElement(raw ?: return null).jsonObject }.getOrNull()
+            ?: return null
         val keys = (body["keys"] as? JsonObject) ?: return null
         return PushEnrolment(
-            endpoint = endpoint,
+            endpoint = body["endpoint"]?.jsonPrimitive?.contentOrNull() ?: return null,
             p256dh = keys["p256dh"]?.jsonPrimitive?.contentOrNull() ?: return null,
             auth = keys["auth"]?.jsonPrimitive?.contentOrNull() ?: return null,
         )
@@ -157,11 +165,9 @@ private class BrowserPush : PushPlatform {
     override suspend fun unsubscribe(): String? =
         runCatching { jsUnsubscribe().await() }.getOrNull()?.toString()
 
-    override suspend fun currentEndpoint(): String? =
-        runCatching { jsEndpoint().await() }.getOrNull()?.toString()
-
-    override fun reconcile(anyBlocked: Boolean) {
-        if (!anyBlocked) jsClearBlocked()
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
+        if (!anyBlocked) jsClearTag(TAG_BLOCKED)
+        if (!anyDone) jsClearTag(TAG_DONE)
     }
 }
 

@@ -6,6 +6,74 @@ change that.
 Every number here was measured on 2026-08-20 against **herdr 0.8.2, protocol 20**, in throwaway
 named sessions torn down afterwards. Claims without a measurement behind them say so.
 
+## Two kinds, two slots
+
+A node sends two kinds of notification, and they are deliberately **not** one.
+
+| Kind | The event | Tag / Android channel | Interrupts | The body says |
+|---|---|---|---|---|
+| `blocked` | An agent is waiting on a person | `kampr.blocked`, `IMPORTANCE_HIGH` | Yes — heads-up | The question |
+| `done` | An agent finished while nobody was looking | `kampr.done`, `IMPORTANCE_DEFAULT` | A sound, no heads-up | Where it ran |
+
+**Why not one notification for both.** One tag is one slot: whatever arrives last under it is the
+only thing on the screen. An agent finishing while another is asking a question is the ordinary
+case, so a shared tag would take a live question off the phone — the "silently unsays the rest"
+failure below, arriving from a new direction. They also differ in what they are worth interrupting
+for, and an Android channel's importance is fixed per channel: sharing one means either a question
+that does not buzz or a finish that does. Two slots also let somebody silence finishes at the OS
+level without silencing questions.
+
+Everything else is the same machinery run twice: the same set-not-edge payload, the same 900 ms
+collection window, the same per-target split, the same falling edge. `kampr_push::Kind` carries
+which, and `watch_herd` makes one pass over the herd keeping **two baselines** — so a change one
+kind could not queue never advances the other's, and a rebuild that moved one set never wakes
+devices about the other.
+
+### What `done` is, and what takes it down
+
+`done` is herdr's own state for a pane that finished `working`→`idle` **while unfocused** (#357) —
+the operator's unread flag. Kampr reads it and never creates it; every read leaves it standing and
+only focus destroys it (#357, #396), which is the operator's press and never Kampr's (rule 3).
+
+It therefore comes down two ways, and they are not the same:
+
+- **Focused at the desk.** herdr's `done` collapses, the pane leaves the herd's done set, and the
+  node sends the falling edge — the `count: 0` payload that takes the notification down.
+- **Read in the app.** Nothing reaches the node at all: clearing herdr's marker would take a focus
+  op. The client holds this fact alone in `SeenDone`, and `AppState.reconcileNotifications` takes
+  its own notification down from `Herd.unreadDone`. `openPane` reconciles immediately rather than
+  waiting for the next herd update, because that update is up to a poll interval away and the
+  operator is looking at the pane now.
+
+**The body is where it ran, and that is a deliberate ceiling.** The honest analogue of the
+question would be the agent's closing message, and resolving that means locating and parsing the
+transcript — 1.99 s on a 30.7 MB one (#409) — inside a 900 ms window, for every pane that finished
+at once. The working directory is already in the herd model, tells three simultaneous agents apart
+and is not a guess.
+
+### The compatibility gate
+
+An installed client older than payload **v3** has one notification slot and posts whatever arrives
+into it, whatever tag it carries. Sending it a `done` would overwrite a live question, which is the
+one degradation this feature may not cause — and old APKs are on real phones.
+
+So a subscription records the payload version its client declared (`v` on
+`POST /api/push/subscribe`, `push_subscriptions.payload_version`, defaulting to
+`ASSUMED_PAYLOAD_VERSION` = 2 for every row written before the column existed), and
+`Store::push_targets` takes the version a kind needs. `Kind::Done` needs 3; `Kind::Blocked` needs
+nothing, because every client that ever subscribed was built for it. **An old client is never sent
+a `done` at all**, rather than sent one it renders wrongly.
+
+The number is clamped rather than trusted: it is a claim a device makes about itself, and the only
+thing it may do is *withhold* a kind.
+
+**A client re-announces itself on connect.** A browser or phone that subscribed under an older
+build has an older number on file, and nothing on screen would say why the new kind never arrives —
+the #233 shape. `AppState.announcePush` re-POSTs the subscription this device already holds every
+time it connects; the node upserts on the endpoint, so it is idempotent, and a device with no
+subscription says nothing. `PushPlatform.enrolment()` reads the existing subscription without
+prompting for anything (it replaced `currentEndpoint()`, which had no callers).
+
 ## The event this rests on
 
 `pane.agent_status_changed` is the only signal that says an agent needs you. It was not
@@ -40,7 +108,7 @@ That is the interval the whole triage story used to spend waiting.
 | Subscriptions and rules | `crates/kampr-auth/src/push.rs`, in the device database |
 | Notification shape and batching | `crates/kampr-push/src/{note,batch}.rs` |
 | Delivery | `crates/kampr-push/src/send.rs` — `web-push` builds and encrypts, `reqwest` posts |
-| The blocked-pane watcher | `crates/kampr-node/src/push.rs` |
+| The pane watcher, both kinds | `crates/kampr-node/src/push.rs` |
 
 **The subscription store is the device store**, deliberately. A push subscription is a standing
 invitation to wake a phone and is exactly as sensitive as the bearer token beside it, so revoking
@@ -66,9 +134,9 @@ notifications racing at a phone is how the feature gets turned off.
 
 ## The payload is the set, not the edge
 
-One tag, one notification id: whatever arrives last is the only thing on the screen. So a payload
-that names less than everything **silently unsays the rest** — and for as long as the node sent
-only rising edges, it did, twice:
+One tag per kind, one notification id per kind: whatever arrives last **of that kind** is the only
+thing on the screen for it. So a payload that names less than everything of its kind **silently
+unsays the rest** — and for as long as the node sent only rising edges, it did, twice:
 
 - A second agent blocking replaced the first one's notification and took it off the phone.
 - A prompt answered anywhere else — at the desk, in the TUI, on another phone — sat there until
@@ -90,7 +158,7 @@ the three-second poll.
 first: somebody who swiped the notification away has already dealt with it, and posting a quieter
 copy of what they dismissed is the app arguing with them.
 
-**The clear degrades rather than breaking.** Payload `v` is 2, and it is additive: a client that
+**The clear degrades rather than breaking.** Payload `v` is 3, and it is additive: a client that
 predates it reads `title` and `body` and shows the clear as an ordinary notification, which under
 the same tag *replaces* the stale prompt instead of leaving it. The degradation is a notification
 to dismiss, never a prompt that lies. Old Android APKs are the reason this matters — they are on
@@ -138,9 +206,12 @@ control on either.
   that pane's outstanding question, a few kilobytes — so the tap opens onto data. It is not the
   grid: reproducing the wire's per-connection style interning outside a live socket would be a
   second encoder, and the socket delivers the real one within a second of the tap.
-- **Deep link**: one blocked pane opens that pane in its conversation view, which is the view an
-  answer can be given from without leasing a terminal. A batch opens the triage list, because
-  picking one of three for the user is picking wrong two times in three.
+- **Deep link**: one pane opens that pane in its conversation view — the view a question can be
+  answered from without leasing a terminal, and the view a finished agent's work is read in. A
+  batch opens the triage list, because picking one of three for the user is picking wrong two
+  times in three. On Android the `PendingIntent` request code is the notification id, or two
+  intents differing only in their extras would be the same intent to the system and the second
+  notification would deep-link to the first one's pane.
 - **Triage list**: `KamprStore.triage()` — blocked panes, newest first, above the herd on every
   breakpoint. `KamprStore.blocked()` had no callers until now.
 - **iOS**: Web Push works **only** for a Home Screen web app. A Safari tab can neither subscribe
@@ -175,8 +246,9 @@ than assumed:
 3. On `onNewEndpoint`, POST the endpoint and the connector's own P-256/auth keys to
    `/api/push/subscribe` with `kind: "unifiedpush"` — the same body the browser sends.
 4. On `onMessage`, the payload is the same JSON `kampr-push` produces, already decrypted by the
-   connector. Render it, and open `pane` on a tap — or, on `count: 0`, cancel the notification
-   instead of rendering anything.
+   connector. Read `kind` to pick the slot (absent means `blocked`: a node that sends no kind only
+   ever sent one), render it, and open `pane` on a tap — or, on `count: 0`, cancel that kind's
+   notification instead of rendering anything.
 
 Until a distributor is installed there is nothing to register with, and the app says so rather
 than failing quietly. `createPushPlatform()` on Android returns `NoPush` today.
@@ -221,6 +293,11 @@ attached client it returns `shown: false, reason: "no_foreground_client"` (probe
 - **A public push endpoint under load.** One subscription, one node, one LAN.
 - **What a browser does with a push that displays nothing.** The `quench` idiom in `sw.js` is
   written so the answer does not matter; the answer itself is unmeasured.
-- **The Android resync and clear on a real device.** `BlockedNotificationTest` asserts all three
-  paths against a real `NotificationManager`, but instrumented tests need a device and none was
-  available — the same gap as everything else in this section.
+- **The Android resync and clear on a real device.** `AgentNotificationTest` asserts every path
+  against a real `NotificationManager` — including that a finished agent does not displace a
+  question, and that the two channels carry different importances — but instrumented tests need a
+  device and none was available, the same gap as everything else in this section.
+- **A `done` notification arriving on any real client.** The chain is proved at both ends — a real
+  herdr driven to `done` reaches the node's herd model (`live.rs`), and that model produces a
+  `done` change and a delivered push (`push.rs`, against a real HTTP push service) — but no
+  browser or phone has shown one.

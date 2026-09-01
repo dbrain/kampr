@@ -575,7 +575,7 @@ async fn push_state(State(node): State<Arc<Node>>, auth: Authenticated) -> Respo
         "unlocks": tier.locked(),
         "subscribed": !subscriptions.is_empty(),
         "endpoints": subscriptions.iter().map(|s| json!({
-            "kind": s.kind, "endpoint": s.endpoint
+            "kind": s.kind, "endpoint": s.endpoint, "v": s.payload_version
         })).collect::<Vec<_>>(),
         "rules": rules,
     }))
@@ -745,6 +745,12 @@ struct PushSubscribe {
     /// never a branch: UnifiedPush 3.0 is RFC 8291, so both are delivered to identically.
     #[serde(default)]
     kind: Option<String>,
+    /// The highest payload version this client can read, so the node never sends it a
+    /// notification kind it would render as a different one. Absent means a client written before
+    /// there was more than one kind, which is assumed rather than guessed upwards
+    /// (`kampr_auth::ASSUMED_PAYLOAD_VERSION`).
+    #[serde(default)]
+    v: Option<i64>,
     keys: PushKeys,
 }
 
@@ -774,15 +780,24 @@ async fn push_subscribe(
         Some("unifiedpush") => "unifiedpush",
         _ => "webpush",
     };
+    // Clamped rather than trusted: this is a number a device declares about itself, and the
+    // only thing it may do is *withhold* a kind from a client too old for it.
+    let payload_version = body.v.unwrap_or(kampr_auth::ASSUMED_PAYLOAD_VERSION).clamp(
+        kampr_auth::ASSUMED_PAYLOAD_VERSION,
+        kampr_push::note::VERSION as i64,
+    );
     match node
         .auth
         .store()
         .save_push_subscription(
             &auth.device.id,
-            kind,
-            &body.endpoint,
-            &body.keys.p256dh,
-            &body.keys.auth,
+            &kampr_auth::NewPushSubscription {
+                kind,
+                endpoint: &body.endpoint,
+                p256dh: &body.keys.p256dh,
+                auth: &body.keys.auth,
+                payload_version,
+            },
             kampr_auth::now(),
         )
         .await
@@ -792,7 +807,7 @@ async fn push_subscribe(
                 &kampr_auth::Entry::new("push.subscribed")
                     .device(&auth.device.id, &auth.device.name, auth.device.role.as_str())
                     .peer(&auth.peer)
-                    .detail(json!({ "kind": kind })),
+                    .detail(json!({ "kind": kind, "v": payload_version })),
             );
             private_json(json!({ "subscribed": true }))
         }

@@ -473,7 +473,7 @@ private fun DeviceBlock(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         KText("Notifications", tokens.type.bodyStrong, tokens.color.text)
                         KText(
-                            "Be told when an agent is blocked",
+                            "Be told when an agent needs you, or finishes",
                             tokens.type.captionSmall,
                             tokens.color.dim,
                         )
