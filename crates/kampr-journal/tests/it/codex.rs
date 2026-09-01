@@ -1,6 +1,6 @@
-mod common;
 
-use common::*;
+use crate::common;
+use crate::common::*;
 use kampr_journal::{Block, CodexAdapter, JournalAdapter, Role, SessionRef, ToolState, TranscriptRoot};
 
 fn journal() -> Box<dyn kampr_journal::Journal> {

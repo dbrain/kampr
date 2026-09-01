@@ -1,8 +1,7 @@
-mod common;
 
 use std::path::PathBuf;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{
     AgyAdapter, ClaudeAdapter, CodexAdapter, FacetFeed, Facets, JournalAdapter, Registry, SessionMarker,
     TitleSource, TranscriptRoot,

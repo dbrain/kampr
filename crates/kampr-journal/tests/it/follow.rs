@@ -1,8 +1,7 @@
-mod common;
 
 use std::io::Write;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{Block, FileJournal, Journal, ToolState};
 
 fn append(path: &std::path::Path, text: &str) {

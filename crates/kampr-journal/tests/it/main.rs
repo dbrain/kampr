@@ -1,0 +1,17 @@
+mod common;
+mod agy;
+mod attachments;
+mod claude;
+mod codex;
+mod composer;
+mod containment;
+mod envelopes;
+mod facets;
+mod follow;
+mod harness_facets;
+mod identity;
+mod live;
+mod registry;
+mod scratch;
+mod subagents;
+mod tail;

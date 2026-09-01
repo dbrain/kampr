@@ -7,12 +7,11 @@
 //! to the `.meta.json` beside each transcript, the `tool-results/` directory and
 //! `custom-title.json`.
 
-mod common;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{
     Block, ClaudeAdapter, JournalAdapter, Registry, SessionRef, SubRef, ToolState, TranscriptRoot, Turn,
 };

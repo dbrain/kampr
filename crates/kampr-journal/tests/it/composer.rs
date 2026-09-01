@@ -6,7 +6,7 @@
 //! `terminal session observe` stream so the caret on its first line is the caret herdr reported
 //! — not one a test chose. `research/probe/composer-line.py` is what captured them.
 
-mod common;
+use crate::common;
 
 use kampr_journal::{
     AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, JournalAdapter, TranscriptRoot,

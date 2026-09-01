@@ -92,6 +92,10 @@ codegen-units = 1
 # breakpoint inside `tokio` is not how this project is debugged.
 [profile.dev]
 debug = "line-tables-only"
+# Metadata hashes churn with every manifest edit (67 in the first 12 days), so each rebuild starts
+# a fresh, empty incremental directory and abandons the last one — cargo never collects them. The
+# cache was costing 140 GB to serve builds that mostly could not reuse it.
+incremental = false
 
 [profile.dev.package."*"]
 debug = false

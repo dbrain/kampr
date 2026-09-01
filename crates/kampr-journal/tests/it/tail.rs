@@ -4,11 +4,10 @@
 //! miscounts one line's terminator hands the next marker a record that no longer parses — or,
 //! worse, one that does.
 
-mod common;
 
 use std::io::Write;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{Attachment, Block, Locator, Turn, attach};
 use serde_json::json;
 

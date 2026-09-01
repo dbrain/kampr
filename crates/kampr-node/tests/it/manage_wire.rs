@@ -5,7 +5,7 @@ use serde_json::Value;
 /// emits. Both sides agreeing with each other and neither agreeing with the wire is how every
 /// seam defect in this project started.
 fn fixture() -> Value {
-    let raw = include_str!("fixtures/manage-ops.json");
+    let raw = include_str!("../fixtures/manage-ops.json");
     serde_json::from_str(raw).expect("the manage fixture is JSON")
 }
 

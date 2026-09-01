@@ -344,7 +344,7 @@ async fn a_burst_of_events_collapses_into_one_snapshot() {
 /// live suite offers the real list to a real herdr for that.
 #[test]
 fn every_subscribed_event_exists_in_herdrs_own_schema() {
-    let schema: Value = serde_json::from_str(include_str!("../../../research/herdr-api-schema.json"))
+    let schema: Value = serde_json::from_str(include_str!("../../../../research/herdr-api-schema.json"))
         .expect("herdr's API schema");
     let mut known: Vec<String> = Vec::new();
     for def in schema["schemas"]["event"]["$defs"]

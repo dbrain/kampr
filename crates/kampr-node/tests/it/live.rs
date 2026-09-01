@@ -3284,7 +3284,7 @@ async fn every_client_op_lands_on_a_real_herd() {
 
     // If the client learns a new op, this test has to have driven it against a real herd before
     // it counts as working.
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/manage-ops.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!("../fixtures/manage-ops.json")).unwrap();
     let expected: std::collections::BTreeSet<&str> = fixture
         .as_object()
         .unwrap()

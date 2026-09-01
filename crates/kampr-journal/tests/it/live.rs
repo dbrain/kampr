@@ -5,7 +5,7 @@
 //! `tests/fixtures/live` are what those same runs wrote. Nothing here is hand-written, because a
 //! hand-written screen would only ever agree with the parser that reads it.
 
-mod common;
+use crate::common;
 
 use kampr_journal::{AgyAdapter, ClaudeAdapter, CodexAdapter, JournalAdapter, LIVE_ID, TranscriptRoot};
 use kampr_journal::{Block, Journal, Turn};

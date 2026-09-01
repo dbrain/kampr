@@ -1,6 +1,5 @@
-mod common;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{Block, FileJournal, Journal, Role, TurnKind};
 
 // A background agent finishing writes a `user` record nobody typed (#286). It reached the phone as

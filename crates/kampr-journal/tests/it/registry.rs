@@ -1,8 +1,7 @@
-mod common;
 
 use std::sync::Arc;
 
-use common::*;
+use crate::common::*;
 use kampr_journal::{ClaudeAdapter, CodexAdapter, Harness, Registry, SessionRef, TranscriptRoot};
 use std::path::Path;
 
