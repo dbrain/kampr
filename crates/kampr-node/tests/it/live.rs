@@ -4428,6 +4428,32 @@ async fn herdr_says(session: &Session, pane: &str, want: &str) {
     panic!("herdr never said {want} about {pane}; it says {saw:?}");
 }
 
+/// Herdr's *own* first answer about the pane, waited for before anything is reported into it —
+/// which is what makes `done` armable at all.
+///
+/// A label attaches ~0.2 s after the process appears and herdr then holds `unknown` for 3.33 s
+/// before its idle fallback publishes (#360). A `working` report inside that window publishes
+/// `working` — the report outranks the fallback (#358), and `pane.get` reads `working` for as long
+/// as you care to poll — but it arms `done` for only ~0.4 s: the first screen publish lands *after*
+/// the report and takes the pane's transition history with it, so the `idle` report that follows is
+/// no longer the `working`→`idle` edge `done` is synthesised from, and no later report re-arms it.
+/// Past that first publish the arming is durable, measured out to 10 s (#405). Locally the two
+/// reports are 2 ms apart and land inside the window; a loaded runner is where the 0.4 s is spent.
+///
+/// This is a read, so it moves nothing (#357), and it waits on `agent` too: a status that settled
+/// before herdr saw the process is the fallback for a pane with no agent, not this pane's.
+async fn herdr_has_scraped(session: &Session, pane: &str) {
+    let mut saw = Value::Null;
+    for _ in 0..300 {
+        saw = session.call("pane.get", json!({ "pane_id": pane })).await["pane"].clone();
+        if saw["agent"] == "claude" && saw["agent_status"] == "idle" {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("herdr never scraped an agent out of {pane}; it says {saw}");
+}
+
 /// The pane's status as the herd holds it *now*, rather than as some frame once carried it.
 ///
 /// The socket is the honest level for "the client is told", and its sibling above uses it. It is
@@ -4820,6 +4846,7 @@ async fn a_pane_that_finished_unwatched_stays_done_when_its_harness_says_idle() 
 
     let pid = fixture.start(&h._session, &local).await;
     fixture.announce_status(pid, "44444444-4444-4444-8444-444444444444", "idle");
+    herdr_has_scraped(&h._session, &local).await;
     report(&h._session, &local, "working").await;
     herdr_says(&h._session, &local, "working").await;
     report(&h._session, &local, "idle").await;
@@ -4861,9 +4888,9 @@ async fn a_harness_still_outranks_the_screen_for_every_word_that_is_not_done() {
     let mut socket = h.connect(&token).await;
     until(&mut socket, "hello", 10).await;
 
-    // Nothing written down yet, so the herd carries herdr's own answer and nothing else.
-    report(&h._session, &local, "idle").await;
-    herdr_says(&h._session, &local, "idle").await;
+    // Nothing written down yet, so the herd carries herdr's own answer and nothing else — and
+    // herdr's own answer is what the step after this one needs to have landed before it reports.
+    herdr_has_scraped(&h._session, &local).await;
     until_herd(&h, &pane, "idle").await;
 
     report(&h._session, &local, "working").await;
