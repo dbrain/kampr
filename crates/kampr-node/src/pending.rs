@@ -401,6 +401,46 @@ mod tests {
         assert_eq!(detect(screen).unwrap().question, "Do you want to proceed?");
     }
 
+    /// The blank line a dialog puts above its question is the other half of that, and it is the
+    /// half that has to hold at *any* pane width.
+    ///
+    /// This is `live::a_blocked_agent_pane_publishes_the_question_from_the_screen`'s own screen,
+    /// off a real 93-column herdr pane (probe #406): a shell echoing the `printf` that raises the
+    /// dialog, then the dialog. The echo ends in `'`, so it is not sentence-final and the join
+    /// walks straight through it — whether it *reaches* it turns on where the ambient `PS1` pushes
+    /// the wrap, which is a property of the machine and not of this code. Every real dialog
+    /// captured here opens with a rule and puts a blank line above its question (probe #407);
+    /// that blank is what cuts the join at 4 columns of prompt and at 45 alike.
+    #[test]
+    fn a_shell_echo_above_a_dialog_is_not_joined_onto_the_question_at_any_prompt_width() {
+        let command = r"printf '\nDo you want to make this edit?\n\n 1. Yes\n 2. No\n'";
+        for prompt in [
+            "ci$ ",
+            "runner@runnervmgx7h7:/tmp$ ",
+            "[17:36:12 dbrain@comingclean tmp]$ ",
+            "[21:15:13 dbrain@comingclean kampr-scratch]$ ",
+        ] {
+            let echo: Vec<String> = format!("{prompt}{command}")
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(93)
+                .map(|row| row.iter().collect())
+                .collect();
+            let screen = format!(
+                "{}\n\nDo you want to make this edit?\n\n 1. Yes\n 2. No\n{prompt}",
+                echo.join("\n")
+            );
+            let width = prompt.chars().count();
+            let p = detect(&screen).unwrap_or_else(|| panic!("no dialog at a {width}-column prompt"));
+            assert_eq!(
+                p.question,
+                "Do you want to make this edit?",
+                "at a {width}-column prompt, over {} rows of echo",
+                echo.len()
+            );
+        }
+    }
+
     /// A URL is what the dialog is about, and a query string in one is not the thing being asked.
     #[test]
     fn a_question_mark_inside_a_url_is_not_a_question() {

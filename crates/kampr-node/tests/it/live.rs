@@ -1643,11 +1643,18 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
     until(&mut socket, "grid.reset", 15).await;
 
-    // Put a permission prompt on the screen, the way a harness would.
+    // Put a permission prompt on the screen, the way a harness would — **including the blank line
+    // above the question**, which every real dialog has (#407) and which is what makes this test
+    // independent of the machine it runs on. Without it the row above the question is the shell's
+    // echo of this very command, and whether `question_above` joins that echo onto the question
+    // turns on how wide the ambient `PS1` is (#406): at CI's 27 columns the echo does not wrap, so
+    // it is one row, it is joined, and the assertion below reads back the whole command line; at
+    // this desk's 35 it wraps to a two-character stub that `prose` happens to reject. Three of the
+    // four prompt widths measured are red, and the one that passes does so by one character.
     send(
         &mut socket,
         json!({ "t": "input", "pane": pane,
-                "text": "printf 'Do you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n'\n" }),
+                "text": "printf '\\nDo you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n'\n" }),
     )
     .await;
     tokio::time::sleep(Duration::from_millis(1200)).await;
