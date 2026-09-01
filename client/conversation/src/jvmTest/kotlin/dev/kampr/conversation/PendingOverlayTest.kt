@@ -11,25 +11,31 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.Block
+import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PendingOption
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 private const val ASKING = "The agent is asking:"
@@ -116,6 +122,88 @@ class PendingOverlayTest {
                 )
             }
         }
+    }
+
+    // The report: the card is drawn, its chips are drawn, and pressing one sends nothing. The
+    // strip on its own has always answered (`AccessibilityTest`), so the tap has to be taken
+    // through the view that actually carries it.
+    @Test
+    fun pressingAnAnswerOnTheOpenQuestionSendsIt() = runComposeUiTest {
+        RecordingIo.sent.clear()
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                LocalPaneIo provides RecordingIo,
+                LocalConnectionStatus provides ConnectionStatus.Live("full"),
+            ) {
+                Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                    ConversationView(asked(SHORT), demoInfo(), Modifier.fillMaxSize())
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithContentDescription("Answer 2, Yes, and do not ask again for this file").performClick()
+        waitForIdle()
+        assertEquals(
+            listOf(ClientMsg.Answer(PANE_ID, "2")),
+            RecordingIo.sent.toList(),
+            "the chip was pressed and the answer never left the client",
+        )
+    }
+
+    // The report: *"we show blocked with options when Claude asks a question, but tapping the
+    // options do nothing"*, on both the card and the terminal's chip row, and *"it worked slowly
+    // after a couple of presses"*. An answer is `typing` on the wire (`KamprConnection.typing`),
+    // so it is dropped the moment the socket is not live — and the phone is exactly there when it
+    // is opened on a blocked-agent notification: the card is drawn from memory over a connection
+    // still climbing its backoff ladder. A chip that presses and delivers nothing is the row of
+    // keys this codebase has paid for twice.
+    @Test
+    fun anAnswerThatCannotLeaveTheDeviceIsNotOfferedAsAPressableChip() = runComposeUiTest {
+        RecordingIo.sent.clear()
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                LocalPaneIo provides RecordingIo,
+                LocalConnectionStatus provides ConnectionStatus.Offline("the node stopped answering", 4_000),
+            ) {
+                Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                    ConversationView(asked(SHORT), demoInfo(), Modifier.fillMaxSize())
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithContentDescription("Answer 1, Yes, make this edit").assertIsNotEnabled()
+        assertTrue(
+            onAllNodesWithText("not connected", substring = true).fetchSemanticsNodes().isNotEmpty(),
+            "the card offered three answers over a dead socket and said nothing about it",
+        )
+    }
+
+    // The other half: the socket was live when the chip was pressed and died with the frame still
+    // in the queue, so `discardTyping` counted it lost. The card is the only place that press was
+    // made and the only place its loss can be reported.
+    @Test
+    fun anAnswerTheSocketLostIsReportedOnTheCardThatSentIt() = runComposeUiTest {
+        RecordingIo.sent.clear()
+        val pane = asked(SHORT)
+        pane.noteUndelivered()
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                LocalPaneIo provides RecordingIo,
+                LocalConnectionStatus provides ConnectionStatus.Live("full"),
+            ) {
+                Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                    ConversationView(pane, demoInfo(), Modifier.fillMaxSize())
+                }
+            }
+        }
+        waitForIdle()
+        assertTrue(
+            onAllNodesWithText("did not get through", substring = true).fetchSemanticsNodes().isNotEmpty(),
+            "an answer that never left the device was silently forgotten",
+        )
     }
 
     // The band the card is given comes out of the top of the list, and a lazy list anchors on its

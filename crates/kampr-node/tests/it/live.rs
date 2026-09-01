@@ -1678,6 +1678,32 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     assert_eq!(options[0]["key"], "1");
     assert_eq!(options[0]["label"], "Yes");
 
+    // And the press lands. Nothing covered the happy path of `answer` at all — only the two
+    // refusals — while the report that found it was a chip that pressed and delivered nothing
+    // (#414). The key goes on the end of a line the shell is already holding, so what arrives is
+    // unambiguous: a bare `1` is a character the dialog above it already put on the screen.
+    // `claude` takes no submit key (#413), so the line stays unexecuted where it can be read.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "echo kampr-answer-" }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    send(&mut socket, json!({ "t": "answer", "pane": pane, "key": "1" })).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut landed = false;
+    while tokio::time::Instant::now() < deadline && !landed {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+            continue;
+        }
+        landed = message.to_string().contains("kampr-answer-1");
+    }
+    assert!(landed, "the key an answer carries never reached the pane's pty");
+
     // Leaving the blocked state clears the strip — the only way a client can know to drop it.
     h._session
         .call(

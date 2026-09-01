@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.wire.PendingOption
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
@@ -55,7 +56,7 @@ class InteractionTest {
         var answered: String? = null
         withScene(
             390.dp, 240.dp, SoftTheme, TypeScale.Phone,
-            content = { PendingStrip(pending, { answered = it }, Modifier.fillMaxWidth()) },
+            content = { PendingStrip(pending, Answering.Ready, { answered = it }, Modifier.fillMaxWidth()) },
             body = { scene ->
                 scene.render()
                 val at = centreOf(scene, SoftTheme.palette.accent)

@@ -1,10 +1,15 @@
 package dev.kampr.shared
 
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Backoff
+import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.util.relativeTime
+import dev.kampr.shared.wire.ClientMsg
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -19,6 +24,23 @@ class ConnectionTest {
         assertTrue(delays.drop(10).all { it >= 7_500 })
         backoff.reset()
         assertTrue(backoff.next() <= 250)
+    }
+
+    // An answer is `typing`, so it is dropped where it stands when there is no socket to put it
+    // on — the same rule that keeps a half-typed command from being replayed into a live shell a
+    // reconnect later. Nothing guarded that for an answer, and `live` is false for the whole
+    // reconnect ladder: a phone opened on a blocked-agent notification presses a chip drawn from
+    // memory and the frame never leaves the device. The count is what the prompt surfaces read to
+    // say so.
+    @Test
+    fun anAnswerPressedWithNoSocketIsDroppedAndCounted() {
+        val store = KamprStore()
+        val pane = store.pane("01JNODE/w1:p1")
+        val connection = KamprConnection(CoroutineScope(Job()), store)
+        connection.send(ClientMsg.Answer(pane.id, "1"))
+        assertEquals(1, pane.undelivered, "the answer was quietly dropped with nothing counting it")
+        connection.send(ClientMsg.Answer(pane.id, "1"))
+        assertEquals(2, pane.undelivered)
     }
 
     @Test

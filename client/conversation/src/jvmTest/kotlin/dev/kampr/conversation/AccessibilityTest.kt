@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.PendingOption
@@ -42,7 +43,7 @@ class AccessibilityTest {
         var answered: String? = null
         setContent {
             CompositionLocalProvider(LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone)) {
-                PendingStrip(PENDING, { answered = it }, Modifier.fillMaxWidth())
+                PendingStrip(PENDING, Answering.Ready, { answered = it }, Modifier.fillMaxWidth())
             }
         }
         onNodeWithContentDescription("Do you want to make this edit?", substring = true)

@@ -25,6 +25,7 @@ import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.LocalGround
 import dev.kampr.shared.theme.LocalTokens
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
@@ -108,7 +109,10 @@ private fun sheet(
         CompositionLocalProvider(LocalPaneIo provides RecordingIo, LocalGround provides ground) {
             Row(Modifier.fillMaxSize()) {
                 for (spec in AllThemes) {
-                    CompositionLocalProvider(LocalTokens provides tokensFor(spec, scale, ground)) {
+                    CompositionLocalProvider(
+                        LocalTokens provides tokensFor(spec, scale, ground),
+                        LocalConnectionStatus provides ConnectionStatus.Live("full"),
+                    ) {
                         Box(Modifier.width(width).height(height).background(Kampr.tokens.color.bg)) {
                             content(spec)
                         }

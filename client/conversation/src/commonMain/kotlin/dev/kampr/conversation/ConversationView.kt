@@ -52,6 +52,7 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LocalConnectionStatus
+import dev.kampr.shared.ui.answering
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
@@ -423,6 +424,7 @@ fun ConversationView(
                     question?.let {
                         PendingStrip(
                             it,
+                            answering = answering(LocalConnectionStatus.current, pane.undelivered),
                             onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
                             modifier = Modifier.onSizeChanged { size -> strip = size.height },
                         )
@@ -434,6 +436,7 @@ fun ConversationView(
             Composer(
                 agent = info?.agent,
                 enabled = !io.readOnly,
+                answering = answering(LocalConnectionStatus.current, pane.undelivered),
                 onSend = { text -> replyMessages(pane.id, text).forEach(io::send) },
                 draft = pane.draft,
                 onDraft = { pane.draft = it },

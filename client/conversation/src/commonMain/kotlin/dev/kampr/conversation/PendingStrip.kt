@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.KText
@@ -30,7 +31,12 @@ import dev.kampr.shared.wire.ServerMsg
 // screen. It is a provenance note, never a branch: the strip and the answer are identical either
 // way, and the node decides whether a submit key follows the one it is sent.
 @Composable
-fun PendingStrip(pending: ServerMsg.Pending, onAnswer: (String) -> Unit, modifier: Modifier = Modifier) {
+fun PendingStrip(
+    pending: ServerMsg.Pending,
+    answering: Answering,
+    onAnswer: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val tokens = Kampr.tokens
     val question = pending.question ?: return
     val shape = RoundedCornerShape(tokens.radii.md)
@@ -65,28 +71,43 @@ fun PendingStrip(pending: ServerMsg.Pending, onAnswer: (String) -> Unit, modifie
                 Box(
                     Modifier
                         .widthIn(min = 96.dp)
-                        .background(if (primary) tokens.color.accent else tokens.color.raise, chip)
-                        .edge(if (primary) BorderSpec(0.dp, tokens.color.accent) else tokens.card, chip)
+                        .background(
+                            if (primary && answering.enabled) tokens.color.accent else tokens.color.raise,
+                            chip,
+                        )
+                        .edge(
+                            if (primary && answering.enabled) BorderSpec(0.dp, tokens.color.accent) else tokens.card,
+                            chip,
+                        )
                         .touchable()
-                        .action("Answer ${option.key}, ${option.label}", { onAnswer(option.key) }, chip)
+                        .action(
+                            "Answer ${option.key}, ${option.label}",
+                            { onAnswer(option.key) },
+                            chip,
+                            enabled = answering.enabled,
+                        )
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     KText(
                         "${option.key} · ${option.label}",
                         tokens.type.buttonSmall,
-                        if (primary) tokens.color.onAccent else tokens.color.text,
+                        when {
+                            !answering.enabled -> tokens.color.mute
+                            primary -> tokens.color.onAccent
+                            else -> tokens.color.text
+                        },
                     )
                 }
             }
         }
         KText(
-            when (pending.source) {
+            answering.note ?: when (pending.source) {
                 "transcript" -> "Read from the transcript, answered by keys into the pane."
                 else -> "Read from the pane, answered by keys into the pane."
             },
             tokens.type.micro,
-            tokens.color.mute,
+            if (answering.note == null) tokens.color.mute else tokens.color.blocked,
             maxLines = 2,
         )
     }

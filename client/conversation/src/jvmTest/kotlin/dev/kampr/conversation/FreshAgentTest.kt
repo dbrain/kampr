@@ -16,6 +16,8 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
@@ -47,7 +49,8 @@ private fun ComposeUiTest.conversation(info: PaneInfo, store: KamprStore = Kampr
     setContent {
         CompositionLocalProvider(
             LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
-            LocalPaneIo provides io,
+            LocalConnectionStatus provides ConnectionStatus.Live("full"),
+                LocalPaneIo provides io,
             LocalSafeArea provides SafeArea(top = 0.dp, bottom = 0.dp),
         ) {
             ConversationView(pane, info, Modifier.fillMaxSize())

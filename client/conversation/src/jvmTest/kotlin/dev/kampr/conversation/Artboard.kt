@@ -24,6 +24,8 @@ import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.typography
+import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneView
@@ -153,6 +155,7 @@ fun <T> withScene(
         CompositionLocalProvider(
             LocalTokens provides tokensFor(spec, scale, ground),
             LocalPaneIo provides RecordingIo,
+            LocalConnectionStatus provides ConnectionStatus.Live("full"),
         ) {
             Box(Modifier.fillMaxSize()) { content() }
         }

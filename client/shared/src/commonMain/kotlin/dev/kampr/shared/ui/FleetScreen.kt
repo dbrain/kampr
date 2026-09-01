@@ -319,9 +319,14 @@ private fun QuestionBlock(
         }
         val match = herd.matching(pane.id).getOrNull()
         val broadcasts = match != null && match.reach > 1
+        // A fleet answer is `input`, which is `typing`, which is dropped over a socket that is not
+        // live — the pane's own chips and these are the same defect. `undelivered` is nothing here
+        // because a board pane is not watched, so nothing counts a lost press against it: what
+        // bites on this screen is the socket, and that is what is read.
+        val reach = answering(LocalConnectionStatus.current, 0)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             question.answerable.forEach { option ->
-                AnswerChip(option.label, option.key == question.defaultKey) {
+                AnswerChip(option.label, option.key == question.defaultKey, enabled = reach.enabled) {
                     if (broadcasts) {
                         onBroadcast(pendingFor(match, herd, option.key, option.label, question.prompt))
                     } else {
@@ -330,6 +335,7 @@ private fun QuestionBlock(
                 }
             }
         }
+        reach.note?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, maxLines = 2) }
         if (broadcasts) {
             val n = match.others.size
             KText(
@@ -363,19 +369,23 @@ private fun pendingFor(
 }
 
 @Composable
-private fun AnswerChip(label: String, isDefault: Boolean, onClick: () -> Unit) {
+private fun AnswerChip(label: String, isDefault: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
     Box(
         modifier = Modifier
-            .background(if (isDefault) tokens.color.accent else tokens.color.raise, shape)
-            .action(label, onClick, shape)
+            .background(if (isDefault && enabled) tokens.color.accent else tokens.color.raise, shape)
+            .action(label, onClick, shape, enabled = enabled)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
         KText(
             label,
             tokens.type.button,
-            if (isDefault) tokens.color.onAccent else tokens.color.text,
+            when {
+                !enabled -> tokens.color.mute
+                isDefault -> tokens.color.onAccent
+                else -> tokens.color.text
+            },
         )
     }
 }
@@ -411,9 +421,11 @@ private fun BroadcastConfirm(
                     maxLines = 3,
                 )
             }
+            val reach = answering(LocalConnectionStatus.current, 0)
+            reach.note?.let { KText(it, tokens.type.caption, tokens.color.blocked, maxLines = 2) }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AnswerChip("Cancel", isDefault = false, onClick = onCancel)
-                AnswerChip("Send to all", isDefault = true, onClick = onConfirm)
+                AnswerChip("Send to all", isDefault = true, enabled = reach.enabled, onClick = onConfirm)
             }
         }
     }

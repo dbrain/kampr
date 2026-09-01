@@ -41,6 +41,7 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.TOUCH
 import dev.kampr.shared.ui.action
@@ -91,6 +92,7 @@ fun Composer(
     onDraft: (String) -> Unit = {},
     desk: DeskLine? = null,
     onTakeOver: (DeskLine) -> Unit = {},
+    answering: Answering = Answering.Ready,
 ) {
     val tokens = Kampr.tokens
     // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
@@ -122,7 +124,7 @@ fun Composer(
     // which is the shape this box spends most of its life in. The send button beside it keeps the
     // pill, because a circle is what it is meant to be at any size.
     val field = RoundedCornerShape(tokens.radii.lg)
-    val ready = enabled && typed.isNotBlank()
+    val ready = enabled && answering.enabled && typed.isNotBlank()
     val hard = LocalHardKeyboard.current
 
     fun submit() {
@@ -226,11 +228,15 @@ fun Composer(
                     .edge(tokens.card, field)
                     .padding(horizontal = FIELD_INSET_X, vertical = FIELD_INSET_Y),
             ) {
+                val idle = when {
+                    !enabled -> "read-only device"
+                    else -> answering.note ?: "Reply to ${agent ?: "the agent"}…"
+                }
                 if (typed.isEmpty()) {
                     KText(
-                        if (enabled) "Reply to ${agent ?: "the agent"}…" else "read-only device",
+                        idle,
                         tokens.type.body,
-                        tokens.color.mute,
+                        if (enabled && answering.note != null) tokens.color.blocked else tokens.color.mute,
                     )
                 }
                 BasicTextField(
@@ -256,6 +262,9 @@ fun Composer(
                         { submit() },
                         pillShape,
                         enabled = ready,
+                        // The name stays what the control is; *why* it will not act is its state,
+                        // which is the one thing a disabled button otherwise never says.
+                        state = if (enabled) answering.note else null,
                     ),
                 contentAlignment = Alignment.Center,
             ) {

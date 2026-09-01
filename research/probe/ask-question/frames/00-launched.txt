@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.252
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/kampr/research/probe/ask-question/work
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                           ● high · /effort
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "write a test for KamprApp.kt"
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents                          /rc
