@@ -1,14 +1,35 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::attach::MAX_RECORD_BYTES;
 
-/// How far a reader has got through a transcript, and whether it stopped inside a record too long
-/// to serve. Small and `Copy` so a fold can hold one, hand it to the next read and take back where
-/// that read reached.
+/// Which transcript a [`Cursor`]'s offset counts bytes of.
+///
+/// **The path is not it.** A fold is handed its transcript per call and a pane's transcript moves
+/// under one — a `--resume`, a `/clear`, a harness restarted in the same pane — so an offset
+/// carried into a *different* file that happens to be longer lands somewhere arbitrary, and every
+/// launch the previous transcript left open stays open for ever because the notification that
+/// would close it is behind the cursor. That was the "8 running while Claude says 3" strip.
+///
+/// The device and inode are what the kernel itself calls one file, they are in the `metadata` the
+/// read already fetches, and they answer the path being replaced as well as the path changing.
+/// What they do not answer: a transcript truncated and rewritten *longer* under the same inode —
+/// caught only when it comes back shorter — and an inode reused by a new file within the life of
+/// one fold. No harness has been measured doing either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+/// How far a reader has got through a transcript, which transcript that was, and whether it
+/// stopped inside a record too long to serve. Small and `Copy` so a fold can hold one, hand it to
+/// the next read and take back where that read reached.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
+    file: Option<FileId>,
     at: u64,
     skipping: bool,
 }
@@ -38,12 +59,21 @@ impl Appended {
         let mut cursor = from;
         let mut restarted = false;
         let reader = File::open(transcript).ok().and_then(|mut file| {
-            // A transcript shorter than what has already been read is not the transcript that was
-            // read: `/clear` opens a new file under a new session id (#259), and a fold that kept
-            // its accumulator would carry one session's queue into the next.
-            if file.metadata().ok()?.len() < cursor.at {
-                cursor = Cursor::default();
-                restarted = true;
+            // Another file, or the same one shorter than what has already been read: either way
+            // this is not the transcript the cursor counts bytes of. `/clear` opens a new file
+            // under a new session id (#259), and a fold that kept its accumulator would carry one
+            // session's queue — and its open launches — into the next.
+            let metadata = file.metadata().ok()?;
+            let file_id = FileId {
+                dev: metadata.dev(),
+                ino: metadata.ino(),
+            };
+            if cursor.file != Some(file_id) || metadata.len() < cursor.at {
+                restarted = cursor != Cursor::default();
+                cursor = Cursor {
+                    file: Some(file_id),
+                    ..Cursor::default()
+                };
             }
             file.seek(SeekFrom::Start(cursor.at)).ok()?;
             Some(BufReader::new(file))
