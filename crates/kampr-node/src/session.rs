@@ -69,9 +69,10 @@ const CONCURRENT_TRANSFERS: usize = 4;
 /// reader who opened one asked for all of it.
 const SUB_PAGE: usize = 200;
 
-const CLIENT_VERBS: [&str; 9] = [
+const CLIENT_VERBS: [&str; 10] = [
     "watch",
     "unwatch",
+    "answer.submit",
     "input",
     "paste",
     "answer",
@@ -570,6 +571,7 @@ impl Session {
             } => self.input(&pane, text, b64, keys).await,
             ClientMsg::Paste { pane, b64, name } => self.paste(&pane, &b64, name.as_deref()).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
+            ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
             ClientMsg::Resync => self.resync().await,
@@ -1054,6 +1056,46 @@ impl Session {
             if let Err(e) = session
                 .registry
                 .write(&local, Input::Bytes(stroke.into_bytes()))
+                .await
+            {
+                self.wire
+                    .error(offline_code(&session), &e.to_string(), Some(pane));
+                return;
+            }
+        }
+    }
+
+    /// Commits a question that takes several answers, after the operator has ticked what they want.
+    ///
+    /// The keys are the node's because they are a measurement (#421): on Claude a digit toggles a
+    /// checkbox and Enter toggles the *focused* row rather than submitting — the dialog draws its
+    /// own `Submit` control in a header row, reached sideways — so the sequence is right-arrow and
+    /// then Enter. A harness nobody has measured this on is refused rather than guessed at, which
+    /// leaves the operator answering at the pane instead of pressing something that does nothing.
+    async fn answer_submit(&mut self, pane: &str) {
+        if !self.may_write("answer.submit", Some(pane)) {
+            return;
+        }
+        let Some((session, local)) = self.node.resolve(pane) else {
+            self.audit("answer.submit", Some(pane), Some(json!({ "peer": true })));
+            self.relay_to_peer(pane, json!({ "t": "answer.submit", "pane": pane }));
+            return;
+        };
+        let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
+        let Some(keys) = commit_keys(agent.as_deref()) else {
+            self.wire.error(
+                ErrorCode::BadRequest,
+                "nobody has measured what commits a multiple-answer question on this harness, so \
+                 it has to be submitted at the pane",
+                Some(pane),
+            );
+            return;
+        };
+        self.audit("answer.submit", Some(pane), Some(json!({ "agent": agent })));
+        for stroke in keys {
+            if let Err(e) = session
+                .registry
+                .write(&local, Input::Bytes(stroke.as_bytes().to_vec()))
                 .await
             {
                 self.wire
@@ -1644,6 +1686,8 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     // no prompt strip at all until its status happened to change again, so an unproductive read is
     // retried for a short while rather than accepted.
     let mut asking = 0u32;
+    // What this socket has been told, so a re-read that finds the same dialog costs no frame.
+    let mut asked: Option<pending::Pending> = None;
     let mut ask = tokio::time::interval(PENDING_RETRY);
     ask.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut history = tokio::time::interval(SCROLLBACK_POLL);
@@ -1685,13 +1729,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             }
             _ = ask.tick(), if asking > 0 => {
                 asking -= 1;
-                match send_pending(&herdr, &wire, &global, &local, true).await {
+                match send_pending(&herdr, &wire, &global, &local, true, &mut asked).await {
                     None => return,
-                    Some(published) => {
-                        if published {
-                            asking = 0;
-                        }
-                    }
+                    Some(published) => asking = keep_asking(published, &asked, asking),
                 }
             }
             _ = history.tick(), if scrollback => {
@@ -1721,13 +1761,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if now_blocked != blocked {
                     blocked = now_blocked;
                     asking = if blocked { PENDING_ATTEMPTS } else { 0 };
-                    match send_pending(&herdr, &wire, &global, &local, blocked).await {
+                    match send_pending(&herdr, &wire, &global, &local, blocked, &mut asked).await {
                         None => return,
-                        Some(published) => {
-                            if published {
-                                asking = 0;
-                            }
-                        }
+                        Some(published) => asking = keep_asking(published, &asked, asking),
                     }
                 }
             }
@@ -1762,18 +1798,48 @@ async fn send_history(
     wire.send_scrollback(global, &doc)
 }
 
+/// How many more times to re-read the screen, after one attempt at publishing a prompt.
+///
+/// **A multiple-answer dialog is the one that has to be re-read for as long as it stands**, and it
+/// is the reason this is a function rather than an assignment at each of the two call sites — the
+/// blocked *edge* zeroed the counter on a successful publish and the retry branch re-armed it, so
+/// the shape that needed re-reading was the one shape that never got it. Every press on such a
+/// dialog is a tick (#421), the checkboxes move under the operator, and nothing else on the wire
+/// ever says which are ticked.
+///
+/// Every other dialog latches on its first successful read exactly as before: the bound exists so
+/// a harness whose dialog Kampr cannot parse costs a handful of reads rather than one every half
+/// second for as long as it sits there. And the re-read is free to the wire either way —
+/// [`send_pending`] compares against what this socket was last told and sends nothing when the
+/// screen has not moved.
+fn keep_asking(published: bool, asked: &Option<pending::Pending>, asking: u32) -> u32 {
+    match (published, asked.as_ref().is_some_and(|p| p.multi)) {
+        (true, true) => PENDING_ATTEMPTS,
+        (true, false) => 0,
+        (false, _) => asking,
+    }
+}
+
 /// Claude publishes nothing about a pending request until after it is answered (probe #42), so
 /// the question comes off the screen and `source` says so. A cleared prompt is the same message
 /// with no question, which is the only way a client can tell the strip to go away.
 ///
 /// `None` means the socket is gone. `Some(published)` says whether a prompt actually went out —
 /// a blocked pane whose screen has no readable dialog yet publishes nothing and is asked again.
+///
+/// `last` is what this socket has already been told, and it is what makes a **re-read** free to
+/// the wire: a question whose screen has not moved sends nothing. That matters for exactly one
+/// shape. A single-answer dialog never changes — the next press closes it — but a multiple-answer
+/// one changes on **every press**, because a press is a tick (#421), and a client drawing the
+/// checkboxes off the first reading would show the same two ticked for as long as the dialog stood
+/// however many times the operator pressed.
 async fn send_pending(
     herdr: &kampr_herdr::Herdr,
     wire: &Wire,
     global: &str,
     local: &str,
     blocked: bool,
+    last: &mut Option<pending::Pending>,
 ) -> Option<bool> {
     let found = match blocked {
         true => pending::read(herdr, local).await,
@@ -1782,9 +1848,15 @@ async fn send_pending(
     if blocked && found.is_none() {
         return Some(false);
     }
+    if found == *last {
+        return Some(found.is_some());
+    }
+    *last = found.clone();
     let sent = wire.send(&ServerMsg::Pending {
         pane: global.to_string(),
         question: found.as_ref().map(|f| f.question.clone()),
+        header: found.as_ref().and_then(|f| f.header.clone()),
+        multi: found.as_ref().is_some_and(|f| f.multi),
         options: found.map(|f| f.options).unwrap_or_default(),
         source: PendingSource::Screen,
     });
@@ -1799,6 +1871,23 @@ async fn send_pending(
 /// "Press enter to confirm" until it gets one (probe #43). A harness nobody has probed gets
 /// nothing rather than a guess.
 const SUBMIT_KEYS: &[(&str, &str)] = &[("codex", "\r")];
+
+/// What commits a question that takes **several** answers, per harness.
+///
+/// Measured on Claude 2.1.258 (#421) and on nothing else. Two digits ticked two boxes and the tool
+/// did not complete; `\r` toggled the focused row instead of submitting and it still did not; the
+/// dialog draws `\u{2190}  \u{2610} Test suites  \u{2714} Submit  \u{2192}` above the question, and right-arrow then
+/// Enter completed it with the ticked answers. A harness with no row here has not been probed, and
+/// is refused rather than sent a guess into a live dialog.
+const COMMIT_KEYS: &[(&str, &[&str])] = &[("claude", &["\u{1b}[C", "\r"])];
+
+fn commit_keys(agent: Option<&str>) -> Option<&'static [&'static str]> {
+    let agent = agent?;
+    COMMIT_KEYS
+        .iter()
+        .find(|(harness, _)| *harness == agent)
+        .map(|(_, keys)| *keys)
+}
 
 fn submit_key(agent: Option<&str>) -> Option<&'static str> {
     let agent = agent?;
@@ -2028,5 +2117,31 @@ mod tests {
             "an unprobed harness gets no guess"
         );
         assert_eq!(submit_key(None), None);
+    }
+
+    /// The other table, and it is a different question with a different answer. A bare digit
+    /// *answers* a single-answer dialog and *ticks* a multiple-answer one; `\r` then toggles the
+    /// focused row rather than committing, and the dialog's own Submit control is reached sideways
+    /// (#421). Two digits and an Enter left the tool uncompleted; right-arrow and Enter completed
+    /// it with the ticked answers.
+    #[test]
+    fn committing_a_multiple_answer_question_is_a_different_key_from_answering_a_single_one() {
+        assert_eq!(commit_keys(Some("claude")), Some(["\u{1b}[C", "\r"].as_slice()));
+        assert_ne!(
+            commit_keys(Some("claude")).map(|k| k.to_vec()),
+            Some(vec!["\r"]),
+            "Enter alone toggles the focused row and leaves the dialog standing",
+        );
+        assert_eq!(
+            commit_keys(Some("codex")),
+            None,
+            "nobody has raised a multiple-answer question on codex, so there is nothing to send"
+        );
+        assert_eq!(
+            commit_keys(Some("gemini")),
+            None,
+            "an unprobed harness gets no guess"
+        );
+        assert_eq!(commit_keys(None), None);
     }
 }

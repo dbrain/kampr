@@ -38,6 +38,18 @@ pub struct PathSearch {
     pub login: Option<String>,
     /// This process's, which is the service manager's.
     pub inherited: Option<String>,
+    /// The directory this node's own binary is in.
+    ///
+    /// Measured on the operator's own herd (#419): `~/.local/bin` is where `kampr` and `herdr` are
+    /// installed on all four hosts, and on two of them the **login shell's** `PATH` does not carry
+    /// it either — the profile that adds it is `.bashrc`, which `-l` does not read. So the rung
+    /// above is the right `PATH` and still cannot find the binary it is running from, and
+    /// `kampr update` across the herd fails on those hosts with a bare `kampr` exactly as it did
+    /// before any of this existed.
+    ///
+    /// Appended rather than preferred: a name the chosen `PATH` already resolves goes on resolving
+    /// to the same file, so this can only add answers and never change one.
+    pub own_bin: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,15 +74,21 @@ pub fn choose(search: &PathSearch) -> Option<FleetPath> {
         (PathOrigin::Login, &search.login),
         (PathOrigin::Inherited, &search.inherited),
     ];
-    rungs.iter().find_map(|(origin, value)| {
+    let chosen = rungs.iter().find_map(|(origin, value)| {
         value
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .map(|v| FleetPath {
-                value: once_each(v),
-                origin: *origin,
-            })
+            .map(|v| (*origin, v.to_string()))
+    })?;
+    let own = search.own_bin.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let (origin, value) = chosen;
+    Some(FleetPath {
+        value: once_each(&match own {
+            Some(own) => format!("{value}:{own}"),
+            None => value,
+        }),
+        origin,
     })
 }
 
@@ -92,7 +110,15 @@ pub fn fleet_path(configured: Option<String>) -> Option<FleetPath> {
         configured,
         login: login_path().clone(),
         inherited: std::env::var("PATH").ok(),
+        own_bin: own_bin(),
     })
+}
+
+/// The directory this process's own executable is in, which is where the operator installed it and
+/// therefore where `herdr` is too.
+fn own_bin() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.to_str()?.to_string())
 }
 
 /// The login shell's `PATH`, read once for the life of the process.
@@ -180,6 +206,7 @@ mod tests {
             configured: Some("/opt/kampr/bin".into()),
             login: Some("/home/u/.local/bin:/usr/bin".into()),
             inherited: Some("/usr/bin".into()),
+            own_bin: None,
         };
         let chosen = choose(&search).expect("something to run with");
         assert_eq!(chosen.value, "/opt/kampr/bin");
@@ -194,6 +221,7 @@ mod tests {
             configured: None,
             login: Some("/home/u/.local/bin:/usr/bin".into()),
             inherited: Some("/usr/local/sbin:/usr/local/bin:/usr/bin".into()),
+            own_bin: None,
         })
         .expect("something to run with");
         assert_eq!(chosen.value, "/home/u/.local/bin:/usr/bin");
@@ -208,6 +236,7 @@ mod tests {
             configured: None,
             login: None,
             inherited: Some("/usr/bin".into()),
+            own_bin: None,
         })
         .expect("something to run with");
         assert_eq!(chosen.origin, PathOrigin::Inherited);
@@ -222,6 +251,7 @@ mod tests {
             configured: Some(String::new()),
             login: Some("   ".into()),
             inherited: Some("/usr/bin".into()),
+            own_bin: None,
         })
         .expect("something to run with");
         assert_eq!(chosen.origin, PathOrigin::Inherited);
@@ -235,6 +265,7 @@ mod tests {
             configured: None,
             login: Some("/home/u/.local/bin:/usr/bin:/home/u/.local/bin:/usr/local/bin:/usr/bin".into()),
             inherited: None,
+            own_bin: None,
         })
         .expect("something to run with");
         assert_eq!(chosen.value, "/home/u/.local/bin:/usr/bin:/usr/local/bin");
@@ -247,6 +278,74 @@ mod tests {
             Some("/home/u/.local/bin:/usr/bin".to_string()),
         );
         assert_eq!(between_markers("no markers at all"), None);
+    }
+
+    /// Measured on the operator's own herd: two of four hosts install `kampr` and `herdr` into
+    /// `~/.local/bin` and their **login shell** does not carry it — `giftofthemagi2` answers
+    /// `/home/dbrain/.bun/bin:/home/dbrain/.atuin/bin:/usr/local/sbin:...` and `artifactone` the
+    /// same without `.bun`. So the rung that was supposed to fix this reads the right shell and
+    /// still cannot resolve the binary the node is running from.
+    #[test]
+    fn a_login_shell_without_the_directory_the_node_was_installed_into_can_still_find_it() {
+        let chosen = choose(&PathSearch {
+            configured: None,
+            login: Some("/home/u/.atuin/bin:/usr/local/sbin:/usr/local/bin:/usr/bin".into()),
+            inherited: Some("/usr/bin".into()),
+            own_bin: Some("/home/u/.local/bin".into()),
+        })
+        .expect("something to run with");
+        assert_eq!(chosen.origin, PathOrigin::Login);
+        assert_eq!(
+            chosen.value,
+            "/home/u/.atuin/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/home/u/.local/bin",
+        );
+    }
+
+    /// Last, never first. A `kampr` the operator's own `PATH` already resolves goes on resolving to
+    /// the same file — this rung may add an answer and may never change one — and that holds for
+    /// the rung whose whole contract is that nothing overrides it.
+    #[test]
+    fn the_nodes_own_directory_never_displaces_a_command_the_chosen_path_already_finds() {
+        let chosen = choose(&PathSearch {
+            configured: Some("/opt/kampr/bin:/usr/bin".into()),
+            login: None,
+            inherited: None,
+            own_bin: Some("/home/u/.local/bin".into()),
+        })
+        .expect("something to run with");
+        assert_eq!(chosen.origin, PathOrigin::Configured);
+        assert_eq!(chosen.value, "/opt/kampr/bin:/usr/bin:/home/u/.local/bin");
+
+        let already = choose(&PathSearch {
+            configured: None,
+            login: Some("/home/u/.local/bin:/usr/bin".into()),
+            inherited: None,
+            own_bin: Some("/home/u/.local/bin".into()),
+        })
+        .expect("something to run with");
+        assert_eq!(already.value, "/home/u/.local/bin:/usr/bin");
+    }
+
+    /// A binary run out of a build directory, or one whose parent cannot be read, leaves the rung
+    /// empty — and an empty rung adds nothing rather than a trailing colon, which is `.` to every
+    /// lookup that reads it.
+    #[test]
+    fn a_node_that_cannot_say_where_it_lives_adds_nothing_to_the_path() {
+        let chosen = choose(&PathSearch {
+            configured: None,
+            login: Some("/usr/bin".into()),
+            inherited: None,
+            own_bin: Some("   ".into()),
+        })
+        .expect("something to run with");
+        assert_eq!(chosen.value, "/usr/bin");
+    }
+
+    /// The node is running from somewhere, and that somewhere is the whole of this rung.
+    #[test]
+    fn a_running_node_knows_which_directory_it_was_started_from() {
+        let own = own_bin().expect("a running test binary has a parent directory");
+        assert!(std::path::Path::new(&own).is_dir(), "{own} is not a directory");
     }
 
     /// Not a fixed string: a machine's login shell is whatever it is. What has to hold is that

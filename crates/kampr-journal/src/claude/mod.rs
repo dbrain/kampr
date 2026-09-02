@@ -1,5 +1,6 @@
 mod facet;
 mod record;
+mod running;
 mod subagent;
 
 use std::collections::{HashMap, HashSet};

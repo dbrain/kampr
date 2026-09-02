@@ -1,0 +1,28 @@
+
+ ▐▛███▛█   Claude Code v2.1.258
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/kampr/research/probe/ask-question/on-disk-work-multi
+
+  Fable 5.1 writes better code and reports progress on long tasks. Switch anytime with
+  /model.
+
+❯ Use the AskUserQuestion tool right now to ask me, with multiSelect true, which of these
+  test suites to run: unit, integration, browser. Ask nothing else, use no other tool, and
+  do not write any files.
+─────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Test suites  ✔ Submit  →
+
+Which test suites should I run?
+
+❯ 1. [✔] unit
+  Run the unit test suite.
+  2. [ ] integration
+  Run the integration test suite.
+  3. [ ] browser
+  Run the browser test suite.
+  4. [ ] Type something
+     Submit
+─────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

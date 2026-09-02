@@ -3,6 +3,7 @@ use crate::report::Local;
 use crate::service::{self, Supervisor};
 use kampr_fleet::PathOrigin;
 use kampr_node::Config;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -251,6 +252,19 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
+/// Whether a bare `name` runs on `path`, asked the way `exec` asks it: the first entry holding a
+/// file this user may execute.
+fn resolves(path: &str, name: &str) -> bool {
+    path.split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| std::path::Path::new(entry).join(name))
+        .any(|candidate| {
+            std::fs::metadata(&candidate)
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        })
+}
+
 /// What a fleet run on this host will find, and where that came from.
 ///
 /// Worth a line of its own because the failure it explains is silent and fans out: the node is a
@@ -273,6 +287,26 @@ pub fn fleet_path(config: &Config) -> Check {
         PathOrigin::Inherited => "this process's own environment",
     };
     let note = format!("{} ({source})", path.value);
+    // `ok` because a PATH was read, while the one command the operator most often fans out cannot
+    // be found on it, is the shape this project has paid for before (#233): the check answered its
+    // own question and not the operator's. Two hosts on this herd read their login shell correctly
+    // and still had no `~/.local/bin` on it (#419).
+    let unreachable: Vec<&str> = ["kampr", "herdr"]
+        .into_iter()
+        .filter(|name| !resolves(&path.value, name))
+        .collect();
+    if !unreachable.is_empty() {
+        return Check::warn(
+            "fleet path",
+            format!(
+                "{note} — {} is not on it, so `kampr run {}` fails on this host with a message \
+                 about a file",
+                unreachable.join(" and "),
+                unreachable[0],
+            ),
+        )
+        .fix("set fleet.path in config.toml to a PATH carrying it");
+    }
     match path.origin {
         // The rung that means the login shell could not be read. It is what every fleet run got
         // before there was anything else to get, so it is not a failure — but it is the shape the
@@ -337,5 +371,35 @@ mod tests {
         let check = &files(&config, &state)[0];
         assert_eq!(check.status, Status::Fail);
         assert!(check.detail.contains("vapid.pem"), "{}", check.detail);
+    }
+
+    /// A PATH read from the right shell, that a fleet run cannot run `kampr` on, is the report the
+    /// operator filed: `doctor` said `ok` while `kampr update` across the herd failed.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_cannot_run_the_command_it_is_for_is_not_an_ok() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let path = bin.display().to_string();
+
+        assert!(!resolves(&path, "kampr"), "an empty directory resolves nothing");
+
+        for name in ["kampr", "herdr"] {
+            let file = bin.join(name);
+            std::fs::write(&file, "#!/bin/sh\n").unwrap();
+            // Present but not executable is not a command, and `exec` agrees.
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!resolves(&path, name), "{name} is not executable");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(resolves(&path, "kampr") && resolves(&path, "herdr"));
+        assert!(
+            !resolves(&format!("{}:{}", empty.display(), empty.display()), "kampr"),
+            "no entry of the PATH holds it",
+        );
     }
 }

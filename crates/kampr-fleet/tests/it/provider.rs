@@ -2,9 +2,11 @@
 
 use kampr_core::provider::{AgentStatus, Input, PaneEvent, PaneInfo, Provider};
 use kampr_fleet::exec::Geometry;
-use kampr_fleet::{FleetProvider, State};
+use kampr_fleet::{FleetProvider, RunEvent, State, Supervisor};
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 const PATIENCE: Duration = Duration::from_secs(10);
 
@@ -320,4 +322,46 @@ async fn a_run_whose_state_cannot_be_read_says_so_instead_of_looking_idle() {
         pane.detail
     );
     provider.stop(&pane_id).expect("stopped");
+}
+
+/// The half of #419 that a table test cannot reach: whether a `PATH` this process does not have
+/// actually resolves the child's program name.
+///
+/// It is not obvious that it does. `Command::new` takes a bare name and `execvp` searches the
+/// **calling** process's environment — Rust only gets this right because a `pre_exec` (which this
+/// supervisor has, for `setsid` and the controlling terminal) forces the fork/exec path, where the
+/// child's `envp` is installed before the exec. Reasoning about that would have been a guess; this
+/// runs it.
+#[tokio::test]
+async fn a_command_is_found_on_the_path_the_run_was_given_and_not_on_this_processs() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let name = "kampr-fleet-path-probe";
+    let script = dir.path().join(name);
+    std::fs::write(&script, "#!/bin/sh\necho found-on-the-given-path\n").expect("a script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+
+    let argv = vec![name.to_string()];
+    assert!(
+        Supervisor::spawn(&argv, None, Geometry::default(), None).is_err(),
+        "this process's own PATH must not already resolve {name}, or this proves nothing",
+    );
+
+    let given = format!("/nonexistent-for-this-test:{}", dir.path().display());
+    let supervisor =
+        Supervisor::spawn(&argv, None, Geometry::default(), Some(&given)).expect("a pty and a child");
+    let (tx, mut events) = mpsc::channel(64);
+    let driver = tokio::spawn(supervisor.drive(tx));
+
+    let mut seen = String::new();
+    while let Some(event) = events.recv().await {
+        if let RunEvent::Bytes(bytes) = event {
+            seen.push_str(&String::from_utf8_lossy(&bytes));
+            if seen.contains("found-on-the-given-path") {
+                break;
+            }
+        }
+    }
+    driver.abort();
+    let _ = driver.await;
+    assert!(seen.contains("found-on-the-given-path"), "{seen:?}");
 }

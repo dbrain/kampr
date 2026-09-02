@@ -7,8 +7,9 @@ use anyhow::{Context, Result};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HeaderMap, HeaderName, ORIGIN,
-    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HeaderMap, HeaderName,
+    IF_NONE_MATCH, ORIGIN, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri};
@@ -1156,6 +1157,7 @@ fn asset_links_response(document: Option<String>) -> Response {
     }
 }
 
-async fn static_asset(uri: Uri) -> Response {
-    assets::serve(uri.path())
+async fn static_asset(uri: Uri, headers: HeaderMap) -> Response {
+    let held = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok());
+    assets::serve(uri.path(), held)
 }

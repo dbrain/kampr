@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::running::Watch;
 use crate::facet::{Compaction, FacetFold, Facets, Mode, Queued, Timing, Titles};
 use crate::marker::SessionMarker;
 use crate::scan::{Appended, Cursor};
@@ -26,6 +27,7 @@ pub struct Fold {
     titles: Titles,
     queue: Vec<Queued>,
     mode: Mode,
+    watch: Watch,
 }
 
 impl FacetFold for Fold {
@@ -34,6 +36,7 @@ impl FacetFold for Fold {
         Facets {
             title: self.levels(transcript, marker).resolve(),
             queued: self.queue.clone(),
+            running: self.watch.running(),
             mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
             ..self.accumulated.clone()
         }
@@ -76,8 +79,23 @@ impl Fold {
             "ai-title" => self.titles.generated = record.ai_title.or(self.titles.generated.take()),
             "agent-name" => self.titles.named = record.agent_name.or(self.titles.named.take()),
             "custom-title" => self.titles.manual = record.custom_title.or(self.titles.manual.take()),
-            "queue-operation" => queued(&mut self.queue, &record),
-            "user" => delivered(&mut self.queue, &record),
+            "queue-operation" => {
+                queued(&mut self.queue, &record);
+                self.watch.notified(record.content.as_ref());
+            }
+            "user" => {
+                delivered(&mut self.queue, &record);
+                self.watch.record(
+                    record.message.as_ref(),
+                    record.tool_use_result.as_ref(),
+                    record.timestamp.as_deref(),
+                );
+            }
+            "assistant" => self.watch.record(
+                record.message.as_ref(),
+                record.tool_use_result.as_ref(),
+                record.timestamp.as_deref(),
+            ),
             "permission-mode" => {
                 self.mode.permission = record.permission_mode.or(self.mode.permission.take())
             }
@@ -202,6 +220,8 @@ struct FacetRecord {
     operation: Option<String>,
     content: Option<Value>,
     message: Option<Value>,
+    #[serde(rename = "toolUseResult")]
+    tool_use_result: Option<Value>,
     #[serde(rename = "durationMs")]
     duration_ms: Option<u64>,
     #[serde(rename = "messageCount")]

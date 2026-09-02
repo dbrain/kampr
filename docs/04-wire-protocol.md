@@ -793,9 +793,12 @@ every other agent kind serves its transcript and nothing more.
 
 ### `pending` — a prompt is waiting
 ```jsonc
-{ "t": "pending", "pane": "01J.../w3:p2", "question": "Do you want to make this edit?",
-  "options": [ { "key": "1", "label": "Yes" }, { "key": "2", "label": "Yes, and don't ask again" } ],
-  "source": "transcript" }              // "transcript" | "screen"
+{ "t": "pending", "pane": "01J.../w3:p2", "question": "Which indentation do you prefer?",
+  "header": "Indentation",              // the dialog's own title, absent where it draws none
+  "multi": false,                       // whether it takes several answers at once
+  "options": [ { "key": "1", "label": "Tabs", "detail": "Indent with tab characters." },
+               { "key": "2", "label": "Two spaces", "detail": "Indent with two spaces per level." } ],
+  "source": "screen" }                  // "transcript" | "screen"
 ```
 `source` records where the question came from. Claude does **not** write a pending tool request to its
 transcript before approval, so its questions come from the screen; Codex does, so an unmatched tool
@@ -803,6 +806,39 @@ call is its signal (probes #42, #43). **Clients must not care which.**
 
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
+
+`detail` is what the dialog says an option **means**, and it is the half a label cannot carry: a
+harness writes a description against every option of a structured question and draws it under the
+name. Kampr published the names alone for a year, so answering from a phone meant choosing between
+four words with nothing to choose on. Absent on a dialog that draws none, which is every permission
+prompt. `header` is the same shape: two words saying what the question is *about*.
+
+**`multi` changes what a press means, which is why it is on the wire rather than left to look the
+same.** On a single-answer question a bare digit answers and the dialog closes ([#413](./03-probe-log.md));
+on a multiple-answer one the identical digit **ticks a checkbox** and the dialog stays up
+([#421](./03-probe-log.md)). `chosen` on each option is which are currently ticked, re-read off the
+screen on every poll, and is always false on a single-answer question. A client that ignores `multi`
+offers a press that looks like an answer and silently is not.
+
+### `answer.submit`
+```jsonc
+client -> node  { "t": "answer.submit", "pane": "01J/w1:p1" }
+```
+
+Commits a question that takes several answers, once the operator has ticked the ones they want with
+ordinary `answer` presses.
+
+**A frame of its own rather than a flag on `answer`.** `answer` carries a required `key` and a
+submit carries none, so saying this with `answer` would mean reinterpreting a field every installed
+client already sends — which this wire does not do. A new `t` is what it is additive *by*: a node
+that has never heard of this ignores the frame and leaves the operator where they were.
+
+The keystrokes are the **node's**, for the reason `answer`'s submit key is: which ones commit is a
+measurement, and a phone already installed cannot be corrected when a harness changes its mind.
+Measured for Claude in [#421](./03-probe-log.md) — a digit toggles, `\r` toggles the *focused row*
+rather than committing, and it is right-arrow then Enter that completes it. A harness nobody has
+raised a multiple-answer question on is **refused** with `bad_request` rather than sent a guess into
+a live dialog; the operator answers that one at the pane.
 
 ### `paste`
 ```jsonc
@@ -838,7 +874,9 @@ node -> client  { "t": "convo.facets", "pane": "01J/w1:p1", "facets": {
   "timings": [ { "turn": "<turn id>", "duration_ms": 315990, "messages": 144 } ],
   "queued":  [ { "text": "and copy the config across", "at": "2026-08-28T02:10:59.658Z" } ],
   "mode":    { "mode": "normal", "permission": "bypassPermissions" },
-  "compactions": [ { "trigger": "manual", "pre_tokens": 756165, "post_tokens": 18709 } ]
+  "compactions": [ { "trigger": "manual", "pre_tokens": 756165, "post_tokens": 18709 } ],
+  "running": [ { "call": "toolu_01XX", "kind": "shell", "name": "Bash",
+                 "title": "the workspace build", "since": "2026-09-01T23:46:16.370Z" } ]
 } }
 ```
 
@@ -855,13 +893,29 @@ tick per pane.
 **Every field is optional and the whole object may be `{}`.** Kampr serves three harnesses and the
 wire is additive for ever, so nothing here is named after the record one harness happens to write:
 a facet is filled only where a harness has been *measured* to carry an equivalent, and a harness
-with nothing to say says nothing. Today Claude fills all five and Codex and agy fill none — their
+with nothing to say says nothing. Today Claude fills all six and Codex and agy fill none — their
 nearest candidates were looked at and rejected as unmeasured rather than guessed at. A client draws
 nothing for what it does not get.
 
 `title.source` is `manual` or `generated`, and it is the whole point of carrying the source at all:
 a name a person typed outranks one a harness made up, however good. `timings[].turn` is a turn id
 the client already holds, so a duration hangs off the turn it belongs to.
+
+`running` is the work the session **launched and has not been told is over**: a subagent, or a
+command it put in the background. It exists because `agent_status` cannot express the difference the
+operator has to see — a pane reports `working` while anything at all is outstanding, so a shell left
+running an hour ago makes an idle session look busy. `since` is an **instant, not a duration**, so a
+client draws a stopwatch off it without the node sending a frame per second; `kind` is an open
+string for the reason `mode` is — `agent` and `shell` are what Claude Code launches, and a client
+renders the word it is given rather than matching an enum it would have to be reinstalled to extend.
+`call` is the launching tool call's own id, which is what the harness's completion notification
+names, and is stable for the life of the launch.
+
+**What closes one is measured and is not what it looks like** ([#418](./03-probe-log.md)). A
+background shell's `tool_result` arrives *at launch*, within 300–400 ms, carrying only a task id;
+an asynchronous agent's says `async_launched`. Neither is an ending, so an outstanding call finds
+nothing. The ending is the harness's own completion notification — except for a synchronous agent,
+which never gets one and is closed by its own real result.
 
 ### `convo.composer`
 ```jsonc

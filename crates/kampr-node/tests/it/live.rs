@@ -418,6 +418,22 @@ async fn get(url: &str, token: Option<&str>) -> (String, Value) {
     (status, Value::from(body))
 }
 
+/// The whole response head, for the one question a JSON body cannot answer: what a browser is
+/// told to do with a file it already has.
+async fn response_head(url: &str, extra: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (host, port, path) = split(url);
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n{extra}Connection: close\r\n\r\n");
+    let mut stream = TcpStream::connect((host.as_str(), port)).await.expect("connect");
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.expect("read");
+    let text = String::from_utf8_lossy(&response).to_string();
+    text.split_once("\r\n\r\n")
+        .map(|(head, _)| head.to_string())
+        .unwrap_or(text)
+}
+
 fn split(url: &str) -> (String, u16, String) {
     let rest = url.trim_start_matches("http://");
     let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
@@ -3016,6 +3032,121 @@ async fn a_prompt_queued_while_the_agent_is_working_reaches_the_client_before_th
         emptied["facets"],
         json!({}),
         "the queue emptying is a change like any other: {emptied}"
+    );
+}
+
+/// The operator, on 0.1.49: *"sometimes claude leaves shells open forever and 'working' can mean
+/// nothing but 'a shell was left running'"*. End to end, on the shape measured in #418: a
+/// background command whose `tool_result` arrives **at launch** and is therefore not an ending, and
+/// the `<task-notification>` that is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_left_running_in_the_background_is_named_on_the_wire_until_it_reports_back() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = "/tmp";
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join("9f1c0b2e-0000-4000-8000-000000000047.jsonl");
+
+    let home_path = home.path().display().to_string();
+    let h = harness!("running", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "working" }),
+        )
+        .await;
+    let (body, _) = claude_transcript(cwd, 2);
+    std::fs::write(&transcript, &body).unwrap();
+
+    let mut announced = false;
+    for _ in 0..40 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            announced = serde_json::to_value(entry).unwrap()["has_conversation"] == true;
+        }
+        if announced {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(announced, "the pane never claimed a conversation");
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false, "conversation": true }),
+    )
+    .await;
+    until_pane(&mut socket, "convo", &pane, 25).await;
+    let opening = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    assert_eq!(
+        opening["facets"],
+        json!({}),
+        "nothing has been launched yet: {opening}"
+    );
+
+    let append = |records: &[serde_json::Value]| {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        for record in records {
+            std::io::Write::write_all(&mut file, format!("{record}\n").as_bytes()).unwrap();
+        }
+    };
+
+    append(&[
+        json!({
+            "type": "assistant", "uuid": "cccccccc-0000-4000-8000-000000000001",
+            "timestamp": "2026-09-01T23:46:16.370Z",
+            "message": { "role": "assistant", "content": [{
+                "type": "tool_use", "id": "toolu_bg", "name": "Bash",
+                "input": { "command": "cargo build --release", "description": "the release build",
+                           "run_in_background": true }
+            }]}
+        }),
+        // Measured at 300-400 ms after the call, and carrying nothing but the task id: this is the
+        // harness saying "started". Treating it as an ending is the defect.
+        json!({
+            "type": "user", "uuid": "cccccccc-0000-4000-8000-000000000002",
+            "timestamp": "2026-09-01T23:46:16.720Z",
+            "toolUseResult": { "stdout": "", "stderr": "", "backgroundTaskId": "brelease" },
+            "message": { "role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": "toolu_bg", "content": "ok"
+            }]}
+        }),
+    ]);
+
+    let launched = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    let running = &launched["facets"]["running"];
+    assert_eq!(
+        running[0]["kind"], "shell",
+        "the launch acknowledgement ended it: {launched}"
+    );
+    assert_eq!(running[0]["title"], "the release build");
+    assert_eq!(running[0]["name"], "Bash");
+    assert_eq!(
+        running[0]["since"], "2026-09-01T23:46:16.370Z",
+        "the stopwatch runs from the call, not from whenever a client asked",
+    );
+    assert!(running[1].is_null(), "one launch, one entry: {launched}");
+
+    append(&[json!({
+        "type": "queue-operation", "operation": "enqueue",
+        "timestamp": "2026-09-01T23:50:16.000Z",
+        "content": "<task-notification>\n<task-id>brelease</task-id>\n                    <tool-use-id>toolu_bg</tool-use-id>\n<status>completed</status>\n                    <summary>Background command \"the release build\" completed (exit code 0)</summary>\n                    </task-notification>"
+    })]);
+
+    let over = until_pane(&mut socket, "convo.facets", &pane, 20).await;
+    assert_eq!(
+        over["facets"],
+        json!({}),
+        "the notification is the one thing that ends a background run: {over}"
     );
 }
 
@@ -7061,6 +7192,155 @@ async fn an_agent_pane_with_a_transcript(
 /// Paints a harness-shaped screen through the pane's own tty, so the node's emulator sees exactly
 /// what herdr would put there. One `printf` on one shell line: a command with real newlines in it
 /// is read line by line and every line after the first becomes its own prompt.
+/// The defect this was written for: `pending` is published on a blocked *edge* and latches on its
+/// first successful read, so a dialog whose **checkboxes move under the operator** was drawn from
+/// its first reading for as long as it stood. Every press on a multiple-answer question is a tick
+/// (#421), and nothing else on the wire ever says which are ticked.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pressed() {
+    let h = harness!("multipending");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+
+    // The blank line above the question is what makes this independent of the machine it runs on
+    // (#406, #407) — without it the row above is this command's own echo, and whether it is joined
+    // on turns on the ambient prompt width.
+    // Painted through `paint_harness_screen`, which clears first: the shell echoes the command
+    // that draws the dialog, and this one is long enough to wrap into the rows the detector reads.
+    let dialog = |unit: &str, browser: &str| {
+        let box_glyph = '\u{2610}';
+        format!(
+            " {box_glyph} Test suites\\n\\nWhich test suites should I run?\\n\\n             1. [{unit}] unit\\n  Run the unit test suite.\\n             2. [ ] integration\\n  Run the integration test suite.\\n             3. [{browser}] browser\\n  Run the browser test suite.\\n"
+        )
+    };
+
+    // **Waited for on the screen, not on the clock.** This dialog is long enough that herdr is
+    // still reporting `processing input...` after the fixed sleep `paint_harness_screen` takes,
+    // and reporting the pane blocked before the command has run asks the node to read a screen
+    // that has nothing on it yet — which it then latches as "no dialog here" for good.
+    paint_harness_screen(&mut socket, &pane, &dialog(" ", " ")).await;
+    assert!(
+        drawn(&h, &local, "Run the browser test suite.", 20).await,
+        "the dialog never reached the screen",
+    );
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
+        )
+        .await;
+
+    let seen: Value = h
+        ._session
+        .call(
+            "pane.read",
+            json!({ "pane_id": local, "source": "visible", "format": "text", "strip_ansi": true }),
+        )
+        .await;
+    let _ = &seen;
+
+    let asked = until_pane(&mut socket, "pending", &pane, 25).await;
+    assert_eq!(
+        asked["multi"], true,
+        "the checkboxes say what kind of question this is: {asked}"
+    );
+    assert_eq!(asked["header"], "Test suites");
+    assert_eq!(asked["question"], "Which test suites should I run?");
+    assert_eq!(
+        asked["options"][0]["label"], "unit",
+        "the checkbox is stripped out of the label"
+    );
+    assert_eq!(
+        asked["options"][0]["detail"], "Run the unit test suite.",
+        "the description is the whole point of this: {asked}",
+    );
+    assert_eq!(
+        asked["options"][0]["chosen"],
+        Value::Null,
+        "nothing is ticked yet"
+    );
+
+    // The operator presses 1 and 3 — at the desk, or from a phone. Either way a press is a *tick*
+    // (#421), the screen moves, and nothing but a re-read can say so.
+    paint_harness_screen(&mut socket, &pane, &dialog("\u{2714}", "\u{2714}")).await;
+    assert!(
+        drawn(&h, &local, "[\u{2714}] browser", 20).await,
+        "the ticks never reached the screen"
+    );
+
+    // Not merely "the next `pending`": clearing the screen to repaint it takes the dialog away and
+    // puts it back, so the frames in between are honest readings of a screen mid-repaint. What has
+    // to arrive is the one carrying the ticks.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    let mut moved = Value::Null;
+    while tokio::time::Instant::now() < deadline {
+        let frame = until_pane(&mut socket, "pending", &pane, 25).await;
+        if frame["options"][0]["chosen"] == true {
+            moved = frame;
+            break;
+        }
+    }
+    assert_ne!(
+        moved,
+        Value::Null,
+        "the ticks froze at the first reading and never moved"
+    );
+    assert_eq!(moved["multi"], true, "{moved}");
+    assert_eq!(moved["options"][2]["chosen"], true, "{moved}");
+    assert_eq!(
+        moved["options"][1]["chosen"],
+        Value::Null,
+        "an untouched option was reported as ticked: {moved}",
+    );
+
+    // **And a dialog nobody is touching costs nothing.** Re-reading for as long as one stands is
+    // only affordable because the frame is sent when the *reading* moved, not when the tick fired
+    // — without that this is two frames a second, per watched blocked pane, for as long as the
+    // operator is thinking about the question.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    while recv(&mut socket, Duration::from_millis(200)).await.is_some() {}
+    let quiet = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < quiet {
+        if let Some(message) = recv(&mut socket, Duration::from_millis(500)).await {
+            assert_ne!(
+                message["t"], "pending",
+                "the screen has not moved and the node published anyway: {message}",
+            );
+        }
+    }
+}
+
+/// Whether the pane's own screen is showing `want` yet.
+///
+/// A sleep is not enough for a screen a test painted: herdr reports `processing input...` while a
+/// long line is still arriving, and a node asked to read one mid-paste reads whatever is there.
+async fn drawn(h: &Harness, local: &str, want: &str, seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let seen: Value = h
+            ._session
+            .call(
+                "pane.read",
+                json!({ "pane_id": local, "source": "visible", "format": "text", "strip_ansi": true }),
+            )
+            .await;
+        if seen["read"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(want))
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    false
+}
+
 async fn paint_harness_screen(socket: &mut Socket, pane: &str, body: &str) {
     send(
         socket,
@@ -7108,4 +7388,53 @@ fn write_session_marker(home: &Path, pid: u32, session: &str) {
         json!({ "sessionId": session, "cwd": "/tmp", "status": "idle" }).to_string(),
     )
     .unwrap();
+}
+
+/// **The bundle is re-checked on every load and re-sent only when it changed.** #157 fixed the
+/// other end of this — a stable name served `immutable` pinned a returning browser to a build the
+/// node no longer had — and the fix was `no-store`, which is *never keep this at all*. The four
+/// terminal faces are 1.01 MB each since the emoji were cut in (#417), so that was +2.7 MB on
+/// every visit rather than on the first, on the surface the operator reads from a phone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_browser_that_already_has_the_bundle_is_not_sent_it_again() {
+    let h = harness!("assets");
+    let head = response_head(&format!("{}/index.html", h.origin), "").await;
+    if head.starts_with("HTTP/1.1 404") {
+        eprintln!("skipping: no client bundle staged into this build");
+        return;
+    }
+    assert!(head.contains("200"), "{head}");
+    assert!(
+        head.to_lowercase().contains("cache-control: no-cache"),
+        "a stable name must be revalidated, never kept without asking: {head}",
+    );
+    let tag = head
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("etag: ")
+                .or_else(|| line.strip_prefix("ETag: "))
+        })
+        .expect("an entity tag")
+        .trim()
+        .to_string();
+
+    let again = response_head(
+        &format!("{}/index.html", h.origin),
+        &format!("If-None-Match: {tag}\r\n"),
+    )
+    .await;
+    assert!(
+        again.contains("304"),
+        "a browser holding the current file was sent the whole thing again: {again}",
+    );
+
+    let stale = response_head(
+        &format!("{}/index.html", h.origin),
+        "If-None-Match: \"0123456789abcdef\"\r\n",
+    )
+    .await;
+    assert!(
+        stale.contains("200"),
+        "a browser holding an old file was told it was still current: {stale}",
+    );
 }

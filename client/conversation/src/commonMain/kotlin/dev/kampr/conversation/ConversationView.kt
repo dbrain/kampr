@@ -426,9 +426,24 @@ fun ConversationView(
                             it,
                             answering = answering(LocalConnectionStatus.current, pane.undelivered),
                             onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
+                            onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id)) },
                             modifier = Modifier.onSizeChanged { size -> strip = size.height },
                         )
                     }
+                    // Pinned at the foot rather than in the turn that launched it: what is running
+                    // now is a fact about now, and the card in the transcript is only findable by
+                    // scrolling back to the moment of the launch. Under the question, which is the
+                    // one thing on this screen that outranks everything.
+                    RunningStrip(
+                        pane.facets.running,
+                        Modifier.align(Alignment.BottomStart),
+                        clock = clock,
+                    )
+                    // Pinned at the foot rather than in the turn that launched it: what is running
+                    // now is a fact about now, and the card in the transcript is only findable by
+                    // scrolling back to the moment of the launch. Under the question, which is the
+                    // one thing on this screen that outranks everything.
+
                 }
             }
 

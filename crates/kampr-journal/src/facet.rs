@@ -25,6 +25,34 @@ pub struct Facets {
     pub mode: Option<Mode>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub compactions: Vec<Compaction>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<Running>,
+}
+
+/// A piece of work the harness launched and has not been told is over — a subagent, or a command
+/// it put in the background.
+///
+/// **`working` is not this.** A pane reports `working` while anything is outstanding, so a shell
+/// somebody left running an hour ago makes an idle session look busy, and the operator cannot tell
+/// the two apart from the status alone. This is what makes the difference readable, and it is why
+/// `since` is an instant rather than a duration: a client draws a stopwatch off it and the node
+/// does not have to keep sending one.
+///
+/// Measured in #418. `kind` is an open string for the reason [`Mode`]'s are: `agent` and `shell` are what Claude
+/// Code launches, another harness will launch something else, and a client renders the word it is
+/// given rather than matching an enum it would have to be reinstalled to extend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Running {
+    /// The launching call's own id, which is what the harness's completion notification names.
+    pub call: String,
+    pub kind: String,
+    /// The tool that launched it — `Agent`, `Bash` — where a harness names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

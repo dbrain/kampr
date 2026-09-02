@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.md.markUrls
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
@@ -110,13 +111,14 @@ private fun DiffRow(line: DiffLine, query: String, palette: ConversationPalette)
             .markUrls(CODE_LINK)
             .markMatches(query, palette.match)
     }
+    val style = tokens.type.caption.copy(fontFamily = tokens.fonts.mono, color = ink)
     BasicText(
-        text = text,
+        text = text.glyphFallback(style),
         modifier = Modifier
             .fillMaxWidth()
             .let { if (ground != null) it.background(ground) else it }
             .padding(horizontal = 11.dp, vertical = 1.dp),
-        style = tokens.type.caption.copy(fontFamily = tokens.fonts.mono, color = ink),
+        style = style,
         softWrap = false,
     )
 }

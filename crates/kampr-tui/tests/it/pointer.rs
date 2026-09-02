@@ -358,10 +358,12 @@ fn a_pending_prompt_sends_only_a_key_it_offered() {
         PendingOption {
             key: "1".into(),
             label: "Yes".into(),
+            ..PendingOption::default()
         },
         PendingOption {
             key: "2".into(),
             label: "No".into(),
+            ..PendingOption::default()
         },
     ];
     let rects = vec![Rect::new(0, 0, 8, 1), Rect::new(8, 0, 8, 1)];

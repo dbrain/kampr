@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.workspaceIdOf
 
 @Immutable
 data class Herd(
@@ -34,6 +35,22 @@ data class Herd(
 
 @Immutable
 data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>)
+
+// The pane a `managed` ack's `id` stands for, once the herd patch carrying it has arrived.
+//
+// The ack names whatever herdr created — a workspace for `workspace.create` and both `worktree`
+// ops, a tab for `tab.create`, a pane for `pane.split` — and only the last of those is something a
+// client can open. A container is opened by opening the pane inside it, and a pane id carries its
+// workspace but never its tab (see `PaneInfo`), so the tab has to be matched on the field the node
+// sends beside the label rather than derived from the id.
+//
+// Null while the patch has not landed yet, which is the ordinary case for the first look: the ack
+// comes back on the socket before the sweep that finds the pane.
+fun Herd.createdPane(id: String): PaneInfo? {
+    panes.firstOrNull { it.id == id }?.let { return it }
+    return panes.firstOrNull { it.tabId == id }
+        ?: panes.firstOrNull { (it.workspaceId ?: workspaceIdOf(it.id)) == id }
+}
 
 enum class AgentStatus { Idle, Working, Blocked, Done, Unknown }
 

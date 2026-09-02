@@ -34,6 +34,7 @@ import dev.kampr.conversation.markMatches
 import dev.kampr.conversation.rememberConversationPalette
 import dev.kampr.conversation.rememberInlineStyles
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.edge
 
 private val CELL_PAD_X = 10.dp
@@ -117,7 +118,7 @@ private fun TableRow(
     ) {
         cells.forEachIndexed { index, cell ->
             BasicText(
-                text = cell,
+                text = cell.glyphFallback(style),
                 modifier = Modifier
                     .width(with(density) { widths.getOrElse(index) { 0f }.toDp() })
                     .padding(horizontal = CELL_PAD_X, vertical = CELL_PAD_Y),

@@ -411,6 +411,18 @@ impl HerdDelta {
 pub struct PendingOption {
     pub key: String,
     pub label: String,
+    /// What the dialog says the option *means*, which is the half a label cannot carry.
+    ///
+    /// The harness writes one per option — `AskUserQuestion`'s own input carries a `description`
+    /// against every option and draws it under the label — and Kampr published the labels alone,
+    /// so an operator answering from a phone chose between four names with nothing to choose on
+    /// (#421). Absent where the dialog draws none, which is every permission prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Whether this option is currently ticked, on a question that takes several answers. Always
+    /// false on one that takes a single answer, where nothing is ticked until it is answered.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chosen: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -521,6 +533,20 @@ pub enum ServerMsg {
         question: Option<String>,
         options: Vec<PendingOption>,
         source: PendingSource,
+        /// The dialog's own title — `Indentation`, `Test suites` — which the harness draws above
+        /// the question and which says what the question is *about* in two words. Absent on a
+        /// dialog that draws none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        header: Option<String>,
+        /// Whether this question takes several answers at once.
+        ///
+        /// **It changes what a press means**, which is why it is on the wire rather than left to
+        /// look the same: on a single-answer question a bare digit answers and the dialog closes
+        /// (#413), and on a multi-answer one the same digit *toggles* a checkbox and the dialog
+        /// stays up until something submits it (#421). A client that cannot tell them apart offers
+        /// a press that looks like an answer and silently is not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        multi: bool,
     },
     /// What the harness wrote down about the *session* rather than about any one turn — its own
     /// title for the conversation, how long each turn took, what is queued behind the one running,
@@ -642,6 +668,21 @@ pub enum ClientMsg {
     },
     #[serde(rename = "unwatch")]
     Unwatch { pane: String },
+    /// Submit a question that takes several answers, once the operator has ticked the ones they
+    /// want with ordinary `answer` presses.
+    ///
+    /// **A frame of its own rather than a flag on `answer`.** `answer` carries a required key and
+    /// a submit carries none, so expressing this as `answer` would mean reinterpreting a field
+    /// every installed client already sends — which the wire's own rule forbids. A new `t` is what
+    /// this protocol is additive *by*: a node that has never heard of it ignores the frame, which
+    /// leaves the operator exactly where they were.
+    ///
+    /// The keys are the node's, not the client's, for the reason `answer`'s submit key is: it is a
+    /// measurement, and a phone already installed cannot be corrected when a harness changes its
+    /// mind. Measured for Claude in #421 — a digit toggles, and it is `\u{1b}[C` then `\r` that
+    /// commits — and absent for a harness nobody has probed, which refuses rather than guesses.
+    #[serde(rename = "answer.submit")]
+    AnswerSubmit { pane: String },
     #[serde(rename = "input")]
     Input {
         pane: String,

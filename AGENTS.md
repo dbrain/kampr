@@ -104,6 +104,19 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
   honest; the width has to be inferred and that machinery is `ARCHITECTURE.md` §4.2.
 - **The wire is additive only.** Older clients are installed on real phones. Unknown `t` values and
   unknown fields are ignored by rule; an unrecognised `error.code` must still render its `message`.
+- **A login shell's `PATH` is not where `kampr` is installed**, on two of the four machines here.
+  A fleet run gets the operator's login `PATH` rather than the service manager's (#392) and that is
+  still not enough: the profile that adds `~/.local/bin` is `.bashrc`, which `-l` does not read
+  (#419). The directory `current_exe()` is in is appended for exactly this, and `kampr doctor`
+  refuses to say `ok` about a fleet `PATH` it cannot resolve `kampr` and `herdr` on.
+- **A digit does not answer every dialog.** On Claude's single-answer question it answers and the
+  dialog closes (#413); on a multiple-answer one the same digit *ticks a box*, `\r` toggles the
+  focused row, and only right-arrow then Enter commits (#421). `pending.multi` is what tells the
+  two apart, and a client that ignores it offers a press that looks like an answer and is not.
+- **A `FontFamily` of loaded fonts draws everything from its first font.** A second face in it
+  supplies no glyph the first is missing, either way round (#416) — so a codepoint the terminal
+  face lacks is tofu in the browser and nothing else can answer for it. `tools/terminalmono.py`
+  merges glyphs into the four faces; adding a font beside them fixes nothing.
 
 ## Where the code lives
 

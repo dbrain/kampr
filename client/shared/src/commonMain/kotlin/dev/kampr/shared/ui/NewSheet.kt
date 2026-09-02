@@ -49,6 +49,12 @@ private val RATIOS = listOf("⅓" to 0.33, "½" to 0.5, "⅔" to 0.67)
 // the name; refusing it here means the operator sees why instead of eating a `bad_request`.
 private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 
+// The ops whose ack names something the operator asked to be *made*, and which therefore ends with
+// them looking at it. `agent.start` is not one: it runs in a pane that already exists and is
+// already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
+// `layout.export` answers with the caller's own container.
+private val OPENS = listOf("workspace.create", "tab.create", "pane.split", "worktree.")
+
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
 // `--dangerously-skip-permissions` wants it every launch, so it is kept per harness rather than
@@ -77,6 +83,9 @@ fun NewSheet(
     onNodePicker: () -> Unit,
     onDismiss: () -> Unit,
     panes: List<PaneInfo> = emptyList(),
+    // What the ack said was made, handed on so whoever is holding the herd can open it when the
+    // patch carrying its pane lands. Nothing is opened from here: the sheet is gone by then.
+    onCreated: (String) -> Unit = {},
     onRefreshCaps: () -> Unit = {},
     agentArgs: AgentArgs = NoAgentArgs,
 ) {
@@ -138,7 +147,13 @@ fun NewSheet(
                 sessionName = TextFieldValue()
                 onRefreshCaps()
             }
-            else -> onDismiss()
+            else -> {
+                // The whole reason a create op carries an id back. Without this the sheet closed
+                // on a workspace that then appeared at the foot of the herd, and the operator had
+                // to go and find the thing they had just asked for.
+                ack.id?.takeIf { OPENS.any(ack.op::startsWith) }?.let(onCreated)
+                onDismiss()
+            }
         }
     }
 

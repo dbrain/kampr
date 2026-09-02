@@ -39,11 +39,12 @@ private class Sheet {
     val sent = mutableListOf<ManageOp>()
     var dismissed = false
     var refreshes = 0
+    val created = mutableListOf<String>()
     val outcome = mutableStateOf<ServerMsg.Managed?>(null)
     val caps = mutableStateOf(capsOf())
 
-    fun acknowledge(op: String, ok: Boolean = true) {
-        outcome.value = ServerMsg.Managed(op = op, ok = ok, id = null)
+    fun acknowledge(op: String, ok: Boolean = true, id: String? = null) {
+        outcome.value = ServerMsg.Managed(op = op, ok = ok, id = id)
     }
 }
 
@@ -144,6 +145,45 @@ class NewSheetSessionTest {
         assertEquals(0, sheet.refreshes)
     }
 
+    // The operator, on 0.1.49: *"when i create a new workspace from the session list it just
+    // appends to the bottom of the list and doesn't open it"*. Closing is not enough — the id the
+    // ack carries has to reach whoever holds the herd, because the pane it names is not there yet.
+    @Test
+    fun aCreatedContainerHandsItsIdOnSoSomethingCanOpenIt() = runComposeUiTest {
+        val sheet = Sheet()
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
+
+        onNodeWithContentDescription("Create workspace").performClick()
+        waitForIdle()
+        sheet.acknowledge("workspace.create", id = "01JNODE/w9")
+        waitForIdle()
+
+        assertEquals(listOf("01JNODE/w9"), sheet.created)
+        assertTrue(sheet.dismissed)
+    }
+
+    // A refusal names nothing, and an op that makes nothing has nothing to open. Both would put
+    // the operator on a pane they did not ask for.
+    @Test
+    fun anOpThatMadeNothingHandsNothingOn() = runComposeUiTest {
+        val sheet = Sheet()
+        setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
+
+        onNodeWithContentDescription("Create workspace").performClick()
+        waitForIdle()
+        sheet.acknowledge("workspace.create", ok = false, id = "01JNODE/w9")
+        waitForIdle()
+        assertEquals(emptyList(), sheet.created)
+
+        sheet.acknowledge("rename", id = "01JNODE/w1")
+        waitForIdle()
+        assertEquals(emptyList(), sheet.created, "a rename names a container that was already there")
+
+        sheet.acknowledge("agent.start", id = "01JNODE/w1:p1")
+        waitForIdle()
+        assertEquals(emptyList(), sheet.created, "an agent starts in the pane the operator is on")
+    }
+
     // A refused session op is the one case where the sheet has something of its own to say.
     @Test
     fun aRefusedSessionOpIsShownRatherThanRefreshedAway() = runComposeUiTest {
@@ -192,6 +232,7 @@ private fun Sheet.render() {
         onNode = {},
         onNodePicker = {},
         onDismiss = { dismissed = true },
+        onCreated = { created += it },
         onRefreshCaps = { refreshes += 1 },
     )
 }

@@ -19,6 +19,7 @@ import dev.kampr.shared.ui.AppManage
 import dev.kampr.shared.ui.AppState
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.ManageLayer
+import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.Sheet
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.Wire
@@ -56,12 +57,15 @@ private val HERD = Herd(
 // pane that already lived on it, which is exactly the thing you are trying to make.
 @OptIn(ExperimentalTestApi::class)
 class NewSheetTargetTest {
-    private fun app(): Pair<AppState, CoroutineScope> {
+    private fun app(): Pair<AppState, CoroutineScope> = withStore().let { (state, scope, _) -> state to scope }
+
+    private fun withStore(): Triple<AppState, CoroutineScope, KamprStore> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val store = KamprStore()
         store.take(MANAGING)
         store.take(HERD_FRAME)
-        return AppState(scope, store, MemoryPrefs(), null) to scope
+        val state = AppState(scope, store, MemoryPrefs(), null).apply { go(Screen.Herd) }
+        return Triple(state, scope, store)
     }
 
     @Test
@@ -125,6 +129,39 @@ class NewSheetTargetTest {
                 "an unreachable machine has to be listed, and listed as unreachable",
             )
             assertEquals(Sheet.New("01JHUB", null), state.sheet)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    // End to end through the layer that owns the seam: press the button, take the node's ack off
+    // the socket, take the patch that follows, and the operator is looking at what they made.
+    @Test
+    fun creatingAWorkspaceLandsTheOperatorInIt() = runComposeUiTest {
+        val (state, scope, store) = withStore()
+        try {
+            AppManage(state).openNew(null)
+            setContent {
+                CompositionLocalProvider(LocalTokens provides phoneTokens()) {
+                    Box(Modifier.size(411.dp, 914.dp)) {
+                        ManageLayer(state, HERD, Breakpoint.Portrait)
+                    }
+                }
+            }
+            waitForIdle()
+            onNodeWithContentDescription("Create workspace").performSemanticsAction(SemanticsActions.OnClick)
+            waitForIdle()
+
+            store.take("""{"t":"managed","op":"workspace.create","ok":true,"id":"01JHUB/w7"}""")
+            waitForIdle()
+            assertEquals(Screen.Herd, state.screen, "there is no pane to open until the patch lands")
+
+            store.take(
+                """{"t":"herd","nodes":[{"id":"01JHUB","name":"comingclean","kind":"local"}],""" +
+                    """"panes":[{"id":"01JHUB/w7:p1","node_id":"01JHUB","workspace_id":"01JHUB/w7","updated_at":"7"}]}"""
+            )
+            waitForIdle()
+            assertEquals("01JHUB/w7:p1", (state.screen as Screen.Pane).paneId)
         } finally {
             scope.cancel()
         }

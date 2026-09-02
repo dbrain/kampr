@@ -30,7 +30,17 @@ import dev.kampr.shared.res.terminalmono_italic
 import dev.kampr.shared.res.terminalmono_regular
 
 @Immutable
-data class KamprFonts(val ui: FontFamily, val mono: FontFamily, val terminal: FontFamily)
+data class KamprFonts(
+    val ui: FontFamily,
+    val mono: FontFamily,
+    val terminal: FontFamily,
+    // What each chosen face cannot draw and `terminal` can, so a piece of prose can re-aim exactly
+    // those characters and nothing else — see `GlyphFallback.kt`. Empty by default: a caller that
+    // builds this by hand (an artboard, a harness) gets today's behaviour rather than a table that
+    // does not describe the faces it handed over.
+    val uiGaps: GlyphGaps = GlyphGaps.none,
+    val monoGaps: GlyphGaps = GlyphGaps.none,
+)
 
 private fun faces(id: FamilyId): List<FontFace> = when (id) {
     FamilyId.Manrope -> listOf(
@@ -88,5 +98,5 @@ fun resolveFonts(spec: ThemeSpec): KamprFonts? {
     val mono = rememberFamily(remember(spec.mono) { faces(spec.mono) })
     val terminal = rememberFamily(terminalFaces)
     if (ui == null || mono == null || terminal == null) return null
-    return KamprFonts(ui, mono, terminal)
+    return KamprFonts(ui, mono, terminal, gapsOf(spec.ui), gapsOf(spec.mono))
 }

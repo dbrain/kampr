@@ -100,6 +100,8 @@ object Wire {
                 question = obj.str("question")?.takeIf { it.isNotBlank() },
                 options = obj.decodeList<PendingOption>("options"),
                 source = obj.str("source") ?: "screen",
+                header = obj.str("header")?.takeIf { it.isNotBlank() },
+                multi = obj.bool("multi") ?: false,
             )
             "managed" -> ServerMsg.Managed(
                 op = obj.str("op").orEmpty(),
@@ -149,6 +151,7 @@ object Wire {
             put("keys", buildJsonArray { msg.keys.forEach { add(JsonPrimitive(it)) } })
         }
         is ClientMsg.Answer -> buildJsonObject { put("t", "answer"); put("pane", msg.pane); put("key", msg.key) }
+        is ClientMsg.AnswerSubmit -> buildJsonObject { put("t", "answer.submit"); put("pane", msg.pane) }
         is ClientMsg.ConvoLoad -> buildJsonObject {
             put("t", "convo.load"); put("pane", msg.pane); msg.before?.let { put("before", it) }
         }

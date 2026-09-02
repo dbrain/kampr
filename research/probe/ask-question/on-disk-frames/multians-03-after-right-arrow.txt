@@ -1,0 +1,24 @@
+
+ ▐▛███▛█   Claude Code v2.1.258
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/kampr/research/probe/ask-question/multi-answer-work
+
+  Fable 5.1 writes better code and reports progress on long tasks. Switch anytime with
+  /model.
+
+❯ Use the AskUserQuestion tool right now to ask me, with multiSelect true, which of these
+  test suites to run: unit, integration, browser. Ask nothing else, use no other tool, and
+  do not write any files.
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Test suites  ✔ Submit  →
+
+Review your answers
+
+ ● Which test suites should I run?
+   → browser
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

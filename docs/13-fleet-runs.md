@@ -109,6 +109,34 @@ that out stands on its own: [#334](./03-probe-log.md) for why a supervisor must 
 command's privilege at all, and [#338](./03-probe-log.md) for how such a helper would have had
 to report, should the question ever come back.
 
+## The PATH a run is given, and why it took two goes
+
+A fleet run is forked by the node, the node is a service, and a service manager's `PATH` is not the
+installing shell's — measured as `/usr/local/sbin:/usr/local/bin:/usr/bin` here
+([#392](./03-probe-log.md)). So `kampr update` across the herd looked for a binary in three
+directories it was never installed into. `kampr_fleet::env` reads the operator's **login shell**
+`PATH` once per process (`$SHELL -lc`, then the passwd entry, then `/bin/sh`), between NUL markers so
+a chatty profile's hello does not become the answer, and hands it to an ordinary `exec` rather than
+running every command under `sh -lc` — which would re-parse the argv, interleave the profile's
+output with the run's, and pay the profile on every host on every run.
+
+**That fixed the rung and not the problem, on half this herd.**
+[#419](./03-probe-log.md): `giftofthemagi2` and `artifactone` read their login shell correctly and
+it has **no `~/.local/bin` on it**, because the profile that adds it is `.bashrc` and `-l` does not
+read that. `~/.local/bin` is where `kampr` and `herdr` are installed on all four machines. And
+`kampr doctor` reported `ok`, because *a* `PATH` had been read — a check answering its own question
+instead of the operator's, which is [#233](./03-probe-log.md) in miniature.
+
+So the chosen `PATH` now has **the directory the node's own executable is in appended to it**. The
+node is running from where it was installed, and `herdr` is installed beside it; that is a fact
+rather than a guess, and it is *appended* so a name the chosen `PATH` already resolves goes on
+resolving to the same file. This rung can add an answer and can never change one. `doctor` resolves
+`kampr` and `herdr` on the final value the way `exec` does, and warns rather than saying `ok` when
+it cannot find them.
+
+`fleet.path` in `config.toml` still outranks everything, for a shell whose `PATH` a login shell
+does not build — zsh puts it in `.zshrc` as often as in `.zprofile`.
+
 ## Still unmeasured
 
 `pacman`'s replace and conflict prompts. [#336](./03-probe-log.md) could only produce the

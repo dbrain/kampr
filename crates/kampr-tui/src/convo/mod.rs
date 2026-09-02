@@ -992,6 +992,14 @@ fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
     let Some(question) = pending.question.as_deref() else {
         return Strip::default();
     };
+    // The dialog's own title in front of the question, where it draws one. Two lines is the whole
+    // budget here — a row this strip takes is a row the pane never gets (#373, #374) — so the
+    // header rides on the question's line rather than earning one, and the per-option descriptions
+    // the Compose client draws have nowhere to go at all.
+    let asked = match pending.header.as_deref() {
+        Some(header) => format!("{header} · {question}"),
+        None => question.to_string(),
+    };
     let mut lines = vec![Line::from(vec![
         Span::styled(
             " ⚑ ".to_string(),
@@ -1001,7 +1009,7 @@ fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            clip(question, width.saturating_sub(4) as usize),
+            clip(&asked, width.saturating_sub(4) as usize),
             Style::default()
                 .fg(theme.text)
                 .bg(theme.blocked_bg)
@@ -1028,7 +1036,14 @@ fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
                 .bg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ));
-        let label = format!(" {}  ", option.label);
+        // A tick is drawn rather than left implicit: on a question that takes several answers the
+        // node strips the checkbox out of the label to publish `chosen`, and a reader who cannot
+        // see which are ticked cannot tell what pressing again would do.
+        let label = match (pending.multi, option.chosen) {
+            (true, true) => format!(" ☑ {}  ", option.label),
+            (true, false) => format!(" ☐ {}  ", option.label),
+            _ => format!(" {}  ", option.label),
+        };
         x += label.chars().count() as u16;
         spans.push(Span::styled(
             label,
@@ -1039,6 +1054,15 @@ fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
         spans.push(Span::styled(
             "no keys were offered".to_string(),
             Style::default().fg(theme.dim).bg(theme.blocked_bg),
+        ));
+    }
+    // **The one thing this client must not let a chip imply.** A press here ticks a box and does
+    // not answer, and there is no commit affordance on this surface — the sequence that commits is
+    // right-arrow then Enter (#421), which the operator sends by opening the pane.
+    if pending.multi {
+        spans.push(Span::styled(
+            "· ticks only, submit in the pane".to_string(),
+            Style::default().fg(theme.mute).bg(theme.blocked_bg),
         ));
     }
     lines.push(Line::from(spans));
@@ -1074,5 +1098,90 @@ pub(super) fn pad(text: &str, width: usize, align: Alignment) -> String {
             format!("{}{text}{}", " ".repeat(left), " ".repeat(slack - left))
         }
         _ => format!("{text}{}", " ".repeat(slack)),
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    fn option(key: &str, label: &str, chosen: bool) -> kampr_client::PendingOption {
+        kampr_client::PendingOption {
+            key: key.into(),
+            label: label.into(),
+            chosen,
+            ..kampr_client::PendingOption::default()
+        }
+    }
+
+    fn said(pending: &Pending) -> Vec<String> {
+        prompt(pending, &crate::theme::PHOSPHOR, 120)
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    /// Two lines is the whole budget, so the dialog's own title rides on the question's line
+    /// rather than earning one of its own.
+    #[test]
+    fn a_dialogs_title_reaches_a_terminal_without_costing_the_pane_a_row() {
+        let strip = prompt(
+            &Pending {
+                pane: "p".into(),
+                question: Some("Which indentation do you prefer?".into()),
+                header: Some("Indentation".into()),
+                options: vec![option("1", "Tabs", false)],
+                ..Pending::default()
+            },
+            &crate::theme::PHOSPHOR,
+            120,
+        );
+        assert_eq!(strip.lines.len(), 2, "the strip grew a row");
+        assert!(
+            strip.lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.contains("Indentation · Which indentation")),
+            "{:?}",
+            said(&Pending::default()),
+        );
+    }
+
+    /// **The chip must not read as an answer when it is a tick.** This surface has no commit
+    /// affordance — the sequence is right-arrow then Enter (#421) — so it says where to send.
+    #[test]
+    fn a_question_that_takes_several_answers_says_a_press_is_only_a_tick() {
+        let pending = Pending {
+            pane: "p".into(),
+            question: Some("Which test suites should I run?".into()),
+            multi: true,
+            options: vec![option("1", "unit", true), option("2", "integration", false)],
+            ..Pending::default()
+        };
+        let lines = said(&pending);
+        assert!(lines[1].contains("☑ unit"), "{lines:?}");
+        assert!(lines[1].contains("☐ integration"), "{lines:?}");
+        assert!(lines[1].contains("ticks only, submit in the pane"), "{lines:?}");
+    }
+
+    /// And a single-answer question is untouched: no boxes, no warning, because a press there
+    /// really is the answer.
+    #[test]
+    fn a_single_answer_question_is_drawn_exactly_as_it_was() {
+        let lines = said(&Pending {
+            pane: "p".into(),
+            question: Some("Do you want to make this edit?".into()),
+            options: vec![option("1", "Yes", false), option("2", "No", false)],
+            ..Pending::default()
+        });
+        assert!(
+            lines[1].contains(" Yes  ") && lines[1].contains(" No  "),
+            "{lines:?}"
+        );
+        assert!(
+            !lines[1].contains('☐') && !lines[1].contains("ticks only"),
+            "{lines:?}"
+        );
     }
 }

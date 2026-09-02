@@ -219,6 +219,8 @@ fn confirm(prompt: &str) -> Option<Shape> {
         options.push(PendingOption {
             key,
             label: part.to_string(),
+            detail: None,
+            chosen: false,
         });
     }
 
@@ -285,11 +287,15 @@ mod tests {
                 options: vec![
                     PendingOption {
                         key: "y".into(),
-                        label: "Y".into()
+                        label: "Y".into(),
+                        detail: None,
+                        chosen: false,
                     },
                     PendingOption {
                         key: "n".into(),
-                        label: "n".into()
+                        label: "n".into(),
+                        detail: None,
+                        chosen: false,
                     },
                 ],
                 default_key: Some("y".into()),

@@ -229,6 +229,76 @@ legibility for a morning's work. Ship that, then nest.
 
 **Depends on** W0's subagent row.
 
+### W2b — What is running *now*, in one place
+
+**Shipped.** The card above is right and it was not enough: it appears in the turn that launched the
+agent, which a reader only reaches by scrolling back to the moment of the launch. The operator, on
+0.1.49: *"i was expecting some representation in a static location ... because sometimes claude
+leaves shells open forever and 'working' can mean nothing but 'a shell was left running'"*.
+
+**`agent_status` cannot express this and should not be made to.** A pane reports `working` while
+anything at all is outstanding. That is correct and it is one word for two situations the operator
+has to tell apart: an agent thinking, and a shell somebody forgot about.
+
+What closes a launch is measured and is not what it looks like ([#418](./03-probe-log.md)):
+
+| Measured | Consequence |
+|---|---|
+| A background `Bash` writes its `tool_result` **at launch**, in 300–400 ms, carrying `backgroundTaskId` and an empty `stdout` | An outstanding `tool_use` finds **nothing** — 333 calls, 333 results, 24 launches among them |
+| An asynchronous `Agent` writes `status: "async_launched"` | Same: an acknowledgement, not an ending |
+| The ending is a `queue-operation` `enqueue` whose content is a `<task-notification>` naming `<tool-use-id>` and a `<status>` — `completed`, `killed`, `failed` | This is the one signal that closes both kinds |
+| A **synchronous** `Agent` never gets a notification | Closed by its own real result |
+| The harness's own `<note>`: a task may notify more than once, because an agent can be resumed | A second launch of a call id **reopens** it |
+
+`crates/kampr-journal/src/claude/running.rs` folds it; `Facets.running` carries it, additively;
+`RunningStrip` draws it pinned above the reply box with a per-second stopwatch off `since` — an age
+would say `2m` and then not move for forty-nine seconds, which is the frozen-counter complaint
+[#285](./03-probe-log.md) already earned once. It is a **read**: nothing on it presses anything, and
+the way into a launched conversation is still the card the turn carries.
+
+**Not done, and deliberately left:** the herd list still says only `working`. Putting the count on
+`PaneEntry` would let a reader tell a busy machine from one with a stale shell on it *without
+opening the pane*, and that is a wire addition and a separate piece of work.
+
+---
+
+## W2c — A question the operator can actually answer
+
+**Shipped.** Separate from the subagent work and reported alongside it: *"we get options to select
+from with no context around them and the context is the most important part"*.
+
+**The transcript is still not a source, and that was re-measured rather than assumed.** #42 said
+Claude writes nothing until the question is answered; against 2.1.258, driving a real
+`AskUserQuestion` and polling for 60 s, that still holds — 0 records on disk while the dialog stands,
+and the `tool_use` and its result land together the moment it is answered
+([#421](./03-probe-log.md)). So `source: "screen"` stays honest and the screen is where this comes
+from.
+
+**But the screen was being read for a fifth of what it says.** The dialog draws its own title, and
+under every option the harness's own `description`; Kampr published five bare labels. `pending` now
+carries `header` and per-option `detail`, both additive, and the strip draws each option as a card
+with its description rather than a row of chips — a paragraph cannot be laid beside three others on
+a phone.
+
+**And a multiple-answer question is a different dialog with a different keystroke grammar**, which
+is the part that would have shipped as a lie:
+
+| Measured (#421) | Consequence |
+|---|---|
+| It draws `[ ]` against each option, and `←  ☐ Test suites  ✔ Submit  →` above them | The checkboxes are the only thing on the screen that says which kind it is |
+| A digit **toggles**; two digits left the tool uncompleted | A chip that reads as an answer is not one |
+| `\r` toggles the **focused row** and still does not commit | Enter is not the submit key here, whatever the footer says |
+| Right-arrow then Enter completes it, with the ticked answers in the transcript | The commit is a sequence, and it belongs in the node |
+
+So `pending` carries `multi` and per-option `chosen`, the card says a press is a tick and offers a
+Send that counts what is ticked, and `answer.submit` is a frame of its own — a flag on `answer`
+would mean reinterpreting a required field. The commit sequence sits beside the submit-key table in
+`session.rs` because it is a measurement, and a harness nobody has raised one on is refused rather
+than sent a guess into a live dialog.
+
+**Not done:** the permission prompt is unchanged and has nothing to change — it draws no title, no
+descriptions and no checkboxes, which the tests assert so that it stays that way.
+
 ---
 
 ## W3 — A pane is an agent the moment the agent opens

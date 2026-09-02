@@ -220,8 +220,17 @@ data class HerdDelta(
     val panes: List<PaneInfo> = emptyList(),
 )
 
+// `detail` is what the dialog says the option *means*, and it is the half a label cannot carry:
+// the harness writes a description against every option of an `AskUserQuestion` and Kampr used to
+// publish the names alone, so answering from a phone was choosing between four words with nothing
+// to choose on. `chosen` is whether it is ticked, and only ever moves on a `multi` question.
 @Serializable
-data class PendingOption(val key: String, val label: String)
+data class PendingOption(
+    val key: String,
+    val label: String,
+    val detail: String? = null,
+    val chosen: Boolean = false,
+)
 
 // The header of something a transcript mentions but never carries: a pasted screenshot is ~730 KB
 // and the socket it would ride on is the one carrying live terminal frames, which it head-of-lines
@@ -278,7 +287,31 @@ data class Turn(
 // say sends `{}`; and unknown fields are ignored by the wire's own rule, so reading a further
 // facet later costs nothing but adding it here.
 @Serializable
-data class Facets(val queued: List<Queued> = emptyList())
+data class Facets(
+    val queued: List<Queued> = emptyList(),
+    val running: List<Running> = emptyList(),
+)
+
+// A piece of work the harness launched and has not been told is over: a subagent, or a command it
+// put in the background.
+//
+// **This is the difference `working` cannot express.** A pane reports `working` while anything is
+// outstanding, so a shell left running an hour ago makes a session that is doing nothing look
+// busy — which is the operator's report exactly. The node folds this from the harness's own
+// records: a launch is open from its call until a completion notification names it, and a
+// background shell's result arrives *at launch* so it is not an ending (#418).
+//
+// `since` is an instant, not a duration, so the stopwatch runs on this device rather than needing
+// a frame per second from the node. `kind` is an open string for the reason a mode is: `agent` and
+// `shell` are what Claude Code launches, and a client draws the word it is given.
+@Serializable
+data class Running(
+    val call: String,
+    val kind: String = "",
+    val name: String? = null,
+    val title: String? = null,
+    val since: String? = null,
+)
 
 // A prompt the operator has sent that the harness has not started on yet, and the enqueue stamp
 // where it recorded one.
@@ -403,6 +436,13 @@ sealed interface ServerMsg {
         val question: String?,
         val options: List<PendingOption>,
         val source: String,
+        // The dialog's own two-word title, where it draws one.
+        val header: String? = null,
+        // Whether it takes several answers at once. **It changes what a press means** — on a
+        // single-answer question a digit answers and the dialog closes, and here the same digit
+        // ticks a box and the dialog stays up until something commits it (#421) — so a client that
+        // ignores this offers a press that looks like an answer and is not.
+        val multi: Boolean = false,
     ) : ServerMsg
 
     data class Managed(
@@ -460,6 +500,13 @@ sealed interface ClientMsg {
     data class InputKeys(val pane: String, val keys: List<String>) : ClientMsg
 
     data class Answer(val pane: String, val key: String) : ClientMsg
+
+    // Commits a question that takes several answers, once the ones wanted are ticked. A frame of
+    // its own rather than a flag on `answer`, because `answer`'s key is required and reinterpreting
+    // a field every installed node already reads is the one thing this wire does not do. The keys
+    // are the node's: which ones commit is a measurement, and a phone already installed cannot be
+    // corrected when a harness changes its mind.
+    data class AnswerSubmit(val pane: String) : ClientMsg
 
     data class ConvoLoad(val pane: String, val before: String?) : ClientMsg
 

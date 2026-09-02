@@ -19,12 +19,17 @@ private val FACES = listOf(
     "terminalmono_bolditalic",
 )
 
-private class Face(val name: String) {
-    private val bytes = File("src/commonMain/composeResources/font/$name.ttf").readBytes()
+private class Face(val name: String, root: File = File("src/commonMain/composeResources/font")) {
+    private val bytes = File(root, "$name.ttf").readBytes()
     val typeface: Typeface = FontMgr.default.makeFromData(Data.makeFromBytes(bytes))!!
     val font = Font(typeface, EM)
 
     fun draws(codePoint: Int) = typeface.getUTF32Glyph(codePoint) != 0.toShort()
+
+    // Asked of Skia rather than of a cmap parser, for the reason above: Skia is what resolves a
+    // codepoint in the browser. A face's own coverage is walked over the planes it can reach.
+    fun codePoints(): List<Int> =
+        ((0x20..0x2FFFF) + (0xE0000..0xE01FF)).filter { draws(it) }
 
     fun advanceOf(codePoint: Int): Float {
         val glyph = typeface.getUTF32Glyph(codePoint)
@@ -90,6 +95,43 @@ class TerminalFontCoverageTest {
             }
         }
         assertTrue(complaints.isEmpty(), complaints.joinToString("\n\n"))
+    }
+
+    // Probe #417. The assertion that closes the class rather than one report of it. A census names what a
+    // screen has already drawn; a harness prints whatever a person or a tool picked, and the
+    // report this was written for was a headphone an artifact chose as its own icon. So the
+    // contract is the donor: every codepoint the vendored monochrome Noto Emoji face draws is in
+    // all four terminal faces, and `tools/terminalmono.py --write` is what keeps it true.
+    @Test
+    fun everyEmojiTheDonorDrawsIsInAllFourTerminalFaces() {
+        val donor = Face("../../tools/donors/NotoEmoji-Regular", root = File("."))
+        val wanted = donor.codePoints()
+        assertTrue(wanted.size > 1000, "the emoji donor did not load: ${wanted.size} codepoints")
+        val complaints = FACES.mapNotNull { name ->
+            val face = Face(name)
+            val absent = wanted.filterNot { face.draws(it) }
+            if (absent.isEmpty()) {
+                null
+            } else {
+                "$name is missing ${absent.size} of the donor's emoji, first few:\n" +
+                    absent.take(8).joinToString("\n") { "    U+%04X %s".format(it, String(Character.toChars(it))) }
+            }
+        }
+        assertTrue(complaints.isEmpty(), complaints.joinToString("\n\n"))
+    }
+
+    // And none of them widened a cell on the way in. Asserted over the donor's whole set rather
+    // than over the census, because that is the set that was added.
+    @Test
+    fun noEmojiCutInWidensTheCellItLandsIn() {
+        val wanted = Face("../../tools/donors/NotoEmoji-Regular", root = File(".")).codePoints()
+        val complaints = FACES.mapNotNull { name ->
+            val face = Face(name)
+            val cell = face.advanceOf('0'.code)
+            val wrong = wanted.filter { face.advanceOf(it) != cell }
+            if (wrong.isEmpty()) null else "$name draws ${wrong.size} emoji at an advance that is not $cell"
+        }
+        assertTrue(complaints.isEmpty(), complaints.joinToString("\n"))
     }
 
     // The other half of "no symbol widens a cell or grows a line". A cut-in carrying its donor's

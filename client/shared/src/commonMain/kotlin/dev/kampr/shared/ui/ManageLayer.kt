@@ -93,6 +93,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 onNode = { state.openSheet(Sheet.New(it, null)) },
                 onNodePicker = { state.go(Screen.Setup) },
                 onDismiss = state::closeSheet,
+                onCreated = state::opening,
                 panes = herd.panes,
                 // `askCaps` keeps a ten-second floor under the connection's own polling, which is
                 // right for a herd patch and wrong for the one moment the operator has just

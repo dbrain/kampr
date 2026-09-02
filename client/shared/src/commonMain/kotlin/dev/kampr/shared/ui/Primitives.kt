@@ -30,7 +30,11 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.text.AnnotatedString
 import dev.kampr.shared.theme.BorderSpec
+import dev.kampr.shared.theme.GlyphGaps
+import dev.kampr.shared.theme.withGlyphFallback
 import dev.kampr.shared.theme.Kampr
 
 @Composable
@@ -42,13 +46,43 @@ fun KText(
     maxLines: Int = 1,
     overflow: TextOverflow = TextOverflow.Ellipsis,
 ) {
-    BasicText(
-        text = text,
-        modifier = modifier,
-        style = style.copy(color = color),
-        maxLines = maxLines,
-        overflow = overflow,
-    )
+    val styled = style.copy(color = color)
+    val routed = glyphFallback(text, styled)
+    if (routed == null) {
+        BasicText(text = text, modifier = modifier, style = styled, maxLines = maxLines, overflow = overflow)
+    } else {
+        BasicText(text = routed, modifier = modifier, style = styled, maxLines = maxLines, overflow = overflow)
+    }
+}
+
+// The one seam every piece of prose in this app goes through, and the reason it is here rather
+// than in the markdown builder: a tool card's summary, a launched-agent headline and a pane title
+// are all prose too, and all of them were drawing `✅` as tofu in a browser.
+//
+// Null means "nothing to re-aim", which is every ASCII string — the caller then draws the plain
+// `String` it already had and nothing is allocated. `remember` keys on the text and the family
+// because a transcript redraws far more often than it changes.
+@Composable
+fun glyphFallback(text: String, style: TextStyle): AnnotatedString? {
+    val fonts = Kampr.tokens.fonts
+    val gaps = when (style.fontFamily) {
+        fonts.mono, fonts.terminal -> if (style.fontFamily == fonts.terminal) GlyphGaps.none else fonts.monoGaps
+        else -> fonts.uiGaps
+    }
+    return remember(text, gaps, fonts.terminal) { text.withGlyphFallback(gaps, fonts.terminal) }
+}
+
+// The same, for text that is already styled — the markdown builder's output, which carries its own
+// code and link spans and must keep them.
+@Composable
+fun AnnotatedString.glyphFallback(style: TextStyle): AnnotatedString {
+    val fonts = Kampr.tokens.fonts
+    val gaps = when (style.fontFamily) {
+        fonts.mono, fonts.terminal -> if (style.fontFamily == fonts.terminal) GlyphGaps.none else fonts.monoGaps
+        else -> fonts.uiGaps
+    }
+    val source = this
+    return remember(source, gaps, fonts.terminal) { source.withGlyphFallback(gaps, fonts.terminal) }
 }
 
 @Composable

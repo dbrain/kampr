@@ -29,6 +29,7 @@ import dev.kampr.conversation.md.markUrls
 import dev.kampr.conversation.syntax.langSpec
 import dev.kampr.conversation.syntax.scan
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
@@ -60,13 +61,14 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
                 DisableSelection { CopyButton(code, lang) }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
+            val style = tokens.type.caption.copy(fontFamily = tokens.fonts.mono, color = palette.plain)
             BasicText(
-                text = marked,
+                text = marked.glyphFallback(style),
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 11.dp, vertical = 10.dp),
-                style = tokens.type.caption.copy(fontFamily = tokens.fonts.mono, color = palette.plain),
+                style = style,
                 softWrap = false,
             )
         }

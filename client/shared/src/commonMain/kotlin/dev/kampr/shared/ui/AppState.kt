@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.Enrolment
@@ -116,6 +117,11 @@ private const val KEY_AGENT_ARGS = "agent.args."
 private const val KEY_RAIL = "sidebar.collapsed"
 
 private const val RECENT_ADDRESSES = 5
+
+// How long a create op's ack stays worth acting on. Generous on purpose: it is the window in which
+// an *unrelated* patch may land in front of the one carrying the pane, and the cost of overrunning
+// it is that the operator lands on the herd, which is where they were.
+private const val CREATE_OPEN_WINDOW_MS = 15_000.0
 
 class AppState(
     private val scope: CoroutineScope,
@@ -537,6 +543,36 @@ class AppState(
     // herdr's own marker: only focusing the pane at the desk clears that (#357, #396), and
     // opening it here deliberately does not (rule 3). So a finish read in this app comes off this
     // phone without anything being written back to the node.
+    // What a create op was told it made, held until the pane inside it turns up.
+    //
+    // A `managed` ack answers on the socket before the sweep that finds the pane, so there is
+    // nothing to open at the moment the sheet closes — which is why a new workspace used to appear
+    // at the foot of the herd and stay there. Nothing here writes to herdr: opening a pane is a
+    // watch and a screen, never a `focus` (rule 3).
+    private var creating: Pair<String, Double>? = null
+
+    // Held for a bounded time rather than until the next patch. A structural op is **not** settled
+    // before its ack — only the session ops are, and they reconcile the herd first (`spawn_settle`)
+    // — so the pane arrives on whatever sweep or `workspace.created` event notices it, and an
+    // unrelated patch can easily land in front of it. Held for ever is the other failure: these ids
+    // come round again, and an intent nobody cancelled would one day open a pane the operator did
+    // not ask for.
+    fun opening(id: String?) {
+        creating = id?.let { it to wallClockMillis() + CREATE_OPEN_WINDOW_MS }
+    }
+
+    private fun openWhenItArrives(herd: Herd) {
+        val (wanted, deadline) = creating ?: return
+        if (!herd.known) return
+        val pane = herd.createdPane(wanted)
+        if (pane == null) {
+            if (wallClockMillis() > deadline) creating = null
+            return
+        }
+        creating = null
+        openPane(pane.id)
+    }
+
     private fun reconcileNotifications(herd: Herd) {
         if (!herd.known) return
         // A pane on the screen is a pane being read. Two cases need it here rather than in
@@ -552,7 +588,12 @@ class AppState(
     // constructor, and `adoptRememberedView` reads `screen`.
     init {
         scope.launch { store.prefs.collect { adoptRememberedView() } }
-        scope.launch { store.herd.collect { reconcileNotifications(it) } }
+        scope.launch {
+            store.herd.collect {
+                openWhenItArrives(it)
+                reconcileNotifications(it)
+            }
+        }
     }
 }
 

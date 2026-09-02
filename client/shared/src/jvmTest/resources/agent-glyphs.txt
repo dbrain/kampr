@@ -179,3 +179,86 @@ U+29C9  ⧉  TWO JOINED SQUARES
 U+FFFD  �  REPLACEMENT CHARACTER
 U+1F5BC  🖼  FRAME WITH PICTURE
 U+1F6E1  🛡  SHIELD
+
+# Third pass, probe #417, same three corpora (605 files, 793M characters). Every row below was already tofu on
+# the last release and none of them could have been caught by adding a symbol at a time: the
+# operator's report was a headphone an artifact had chosen as its own icon, and there is no census
+# that predicts the next one. So the face now carries the monochrome Noto Emoji donor **entire**
+# and these are the ones the corpus can vouch for, kept as the record of what a real screen drew
+# rather than as the thing that decides what is built.
+#
+# `everyEmojiTheDonorDrawsIsInAllFourTerminalFaces` is the assertion that actually closes the
+# class; this list is evidence, not the contract.
+U+2421  ␡  SYMBOL FOR DELETE
+U+258C  ▌  LEFT HALF BLOCK
+U+258F  ▏  LEFT ONE EIGHTH BLOCK
+U+25BE  ▾  BLACK DOWN-POINTING SMALL TRIANGLE
+U+25CC  ◌  DOTTED CIRCLE
+U+25D0  ◐  CIRCLE WITH LEFT HALF BLACK
+U+25D1  ◑  CIRCLE WITH RIGHT HALF BLACK
+U+2610  ☐  BALLOT BOX
+U+2611  ☑  BALLOT BOX WITH CHECK
+U+2612  ☒  BALLOT BOX WITH X
+U+2630  ☰  TRIGRAM FOR HEAVEN
+U+26A1  ⚡  HIGH VOLTAGE SIGN
+U+26D4  ⛔  NO ENTRY
+U+2716  ✖  HEAVY MULTIPLICATION X
+U+2726  ✦  BLACK FOUR POINTED STAR
+U+2727  ✧  WHITE FOUR POINTED STAR
+U+2728  ✨  SPARKLES
+U+274E  ❎  NEGATIVE SQUARED CROSS MARK
+U+2754  ❔  WHITE QUESTION MARK ORNAMENT
+U+2755  ❕  WHITE EXCLAMATION MARK ORNAMENT
+U+2757  ❗  HEAVY EXCLAMATION MARK SYMBOL
+U+2770  ❰  HEAVY LEFT-POINTING ANGLE BRACKET ORNAMENT
+U+2771  ❱  HEAVY RIGHT-POINTING ANGLE BRACKET ORNAMENT
+U+2795  ➕  HEAVY PLUS SIGN
+U+2796  ➖  HEAVY MINUS SIGN
+U+2797  ➗  HEAVY DIVISION SIGN
+U+2834  ⠴  BRAILLE PATTERN DOTS-356
+U+2B1B  ⬛  BLACK LARGE SQUARE
+U+2B50  ⭐  WHITE MEDIUM STAR
+U+1F1E7  🇧  REGIONAL INDICATOR SYMBOL LETTER B
+U+1F1EB  🇫  REGIONAL INDICATOR SYMBOL LETTER F
+U+1F1EC  🇬  REGIONAL INDICATOR SYMBOL LETTER G
+U+1F30D  🌍  EARTH GLOBE EUROPE-AFRICA
+U+1F310  🌐  GLOBE WITH MERIDIANS
+U+1F332  🌲  EVERGREEN TREE
+U+1F33E  🌾  EAR OF RICE
+U+1F33F  🌿  HERB
+U+1F389  🎉  PARTY POPPER
+U+1F3C6  🏆  TROPHY
+U+1F3FD  🏽  EMOJI MODIFIER FITZPATRICK TYPE-4
+U+1F411  🐑  SHEEP
+U+1F415  🐕  DOG
+U+1F41B  🐛  BUG
+U+1F433  🐳  SPOUTING WHALE
+U+1F44D  👍  THUMBS UP SIGN
+U+1F467  👧  GIRL
+U+1F468  👨  MAN
+U+1F469  👩  WOMAN
+U+1F4C1  📁  FILE FOLDER
+U+1F4CA  📊  BAR CHART
+U+1F4CB  📋  CLIPBOARD
+U+1F4DA  📚  BOOKS
+U+1F4E6  📦  PACKAGE
+U+1F4F1  📱  MOBILE PHONE
+U+1F504  🔄  ANTICLOCKWISE DOWNWARDS AND UPWARDS OPEN CIRCLE ARROWS
+U+1F50D  🔍  LEFT-POINTING MAGNIFYING GLASS
+U+1F510  🔐  CLOSED LOCK WITH KEY
+U+1F511  🔑  KEY
+U+1F512  🔒  LOCK
+U+1F514  🔔  BELL
+U+1F517  🔗  LINK SYMBOL
+U+1F525  🔥  FIRE
+U+1F5A5  🖥  DESKTOP COMPUTER
+U+1F680  🚀  ROCKET
+U+1F687  🚇  METRO
+U+1F6A8  🚨  POLICE CARS REVOLVING LIGHT
+U+1F916  🤖  ROBOT FACE
+U+1F9F9  🧹  BROOM
+
+# One file, and kept anyway: this is the symbol the report was about. The two-file floor is there
+# to keep symbol dumps out of a list of things a screen drew, and a screenshot from the operator
+# outranks it.
+U+1F3A7  🎧  HEADPHONE

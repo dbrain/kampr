@@ -24,7 +24,9 @@ import dev.kampr.conversation.CodeCard
 import dev.kampr.conversation.markMatches
 import dev.kampr.conversation.rememberConversationPalette
 import dev.kampr.conversation.rememberInlineStyles
+import androidx.compose.ui.text.AnnotatedString
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.glyphFallback
 
 @Composable
 fun Markdown(source: String, query: String, modifier: Modifier = Modifier) {
@@ -49,18 +51,16 @@ private fun MarkdownBlock(block: MdBlock, query: String) {
             val text = remember(block, inline, query, palette) {
                 inlineMarkdown(block.text, inline).markMatches(query, palette.match)
             }
-            BasicText(text, style = tokens.type.body.copy(color = tokens.color.text))
+            val style = tokens.type.body.copy(color = tokens.color.text)
+            BasicText(text.glyphFallback(style), style = style)
         }
 
         is MdBlock.Heading -> {
             val text = remember(block, inline, query, palette) {
                 inlineMarkdown(block.text, inline).markMatches(query, palette.match)
             }
-            BasicText(
-                text,
-                Modifier.padding(top = 4.dp),
-                style = headingStyle(block.level, tokens.type.body.copy(color = tokens.color.text)),
-            )
+            val style = headingStyle(block.level, tokens.type.body.copy(color = tokens.color.text))
+            BasicText(text.glyphFallback(style), Modifier.padding(top = 4.dp), style = style)
         }
 
         is MdBlock.Fence -> CodeCard(block.lang, block.code, query)
@@ -81,10 +81,11 @@ private fun MarkdownBlock(block: MdBlock, query: String) {
         ) {
             for (item in block.items) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val marker = tokens.type.body.copy(color = tokens.color.dim)
                     BasicText(
-                        item.marker,
+                        AnnotatedString(item.marker).glyphFallback(marker),
                         Modifier.width(if (block.ordered) 21.dp else 13.dp),
-                        style = tokens.type.body.copy(color = tokens.color.dim),
+                        style = marker,
                     )
                     MarkdownBlocks(item.blocks, query, Modifier.weight(1f))
                 }

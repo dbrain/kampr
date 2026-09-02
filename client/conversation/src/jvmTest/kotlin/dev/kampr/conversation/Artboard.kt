@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.Density
@@ -15,7 +14,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
+import androidx.compose.ui.text.font.FontStyle
 import dev.kampr.shared.theme.FamilyId
+import dev.kampr.shared.theme.GlyphGaps
+import dev.kampr.shared.theme.gapsOfForTest
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
@@ -122,10 +124,38 @@ private fun family(id: FamilyId): FontFamily {
     }
 }
 
-fun tokensFor(spec: ThemeSpec, scale: TypeScale, ground: Ground = Ground.Dark): KamprTokens {
+fun tokensFor(
+    spec: ThemeSpec,
+    scale: TypeScale,
+    ground: Ground = Ground.Dark,
+    // The gap tables the app runs with. Defaulted on rather than off because an artboard that
+    // draws prose differently from the app is an artboard that cannot show the app being wrong —
+    // and a test that wants the *un*routed rendering asks for it, which is what proves the seam.
+    routed: Boolean = true,
+): KamprTokens {
     val grounded = spec.on(ground)
-    val fonts = KamprFonts(family(grounded.ui), family(grounded.mono), family(FamilyId.JetBrainsMono))
+    // The real terminal face, not JetBrains Mono. It is what ships, it is the only face carrying
+    // the symbols prose gets routed to, and nothing outside the terminal module reads it otherwise.
+    val fonts = KamprFonts(
+        family(grounded.ui),
+        family(grounded.mono),
+        terminalFamily(),
+        if (routed) gapsOfForTest(grounded.ui) else GlyphGaps.none,
+        if (routed) gapsOfForTest(grounded.mono) else GlyphGaps.none,
+    )
     return KamprTokens(grounded, fonts, typography(fonts, grounded.label, scale))
+}
+
+private fun terminalFamily(): FontFamily {
+    val dir = File("../shared/src/commonMain/composeResources/font")
+    fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) =
+        Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
+    return FontFamily(
+        face("terminalmono_regular", FontWeight.W400),
+        face("terminalmono_bold", FontWeight.W700),
+        face("terminalmono_italic", FontWeight.W400, FontStyle.Italic),
+        face("terminalmono_bolditalic", FontWeight.W700, FontStyle.Italic),
+    )
 }
 
 fun <T> withScene(

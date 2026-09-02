@@ -102,10 +102,15 @@ pub struct Managed {
     pub layout: Option<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct PendingOption {
     pub key: String,
     pub label: String,
+    /// What the dialog says the option means. Absent on a prompt that draws none.
+    pub detail: Option<String>,
+    /// Whether it is ticked, on a question that takes several answers.
+    pub chosen: bool,
 }
 
 /// What a node can be asked to make, as opposed to what it can do — the answer to a `caps`
@@ -134,6 +139,15 @@ pub struct Pending {
     pub question: Option<String>,
     pub options: Vec<PendingOption>,
     pub source: String,
+    /// The dialog's own title, where it draws one.
+    pub header: Option<String>,
+    /// Whether it takes several answers at once.
+    ///
+    /// **A press means something different here.** On a single-answer question the key this
+    /// client sends answers it and the dialog closes; on this one the same key *ticks a box* and
+    /// the dialog stays up until it is committed (#421). This client has no commit affordance, so
+    /// what it can honestly do is say so rather than let a chip read as an answer.
+    pub multi: bool,
 }
 
 impl Pending {

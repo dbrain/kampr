@@ -303,20 +303,38 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
         options: vec![PendingOption {
             key: "1".into(),
             label: "Yes".into(),
+            detail: None,
+            chosen: false,
         }],
         source: PendingSource::Screen,
+        header: None,
+        multi: false,
     })
     .unwrap();
     assert_eq!(asked["t"], "pending");
     assert_eq!(asked["source"], "screen");
     assert_eq!(asked["options"][0]["key"], "1");
     assert_eq!(asked["options"][0]["label"], "Yes");
+    // The three fields a dialog that draws none of them must not grow. An installed client reads
+    // this frame by field, and an empty `detail` is a description the operator did not write.
+    let object = asked["options"][0].as_object().unwrap();
+    assert!(
+        !object.contains_key("detail") && !object.contains_key("chosen"),
+        "{asked}"
+    );
+    let frame = asked.as_object().unwrap();
+    assert!(
+        !frame.contains_key("header") && !frame.contains_key("multi"),
+        "{asked}"
+    );
 
     let cleared = serde_json::to_value(ServerMsg::Pending {
         pane: "01J/w3:p2".into(),
         question: None,
         options: vec![],
         source: PendingSource::Transcript,
+        header: None,
+        multi: false,
     })
     .unwrap();
     assert!(cleared["question"].is_null());

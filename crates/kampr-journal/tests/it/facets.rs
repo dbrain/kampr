@@ -682,3 +682,69 @@ fn a_task_notification_is_the_harness_talking_to_itself_and_never_a_queued_promp
         .expect("the operator's own prompt is still queued");
     assert_eq!(queued_texts(&moved), ["and add a probe row for it"]);
 }
+
+// The operator, on 0.1.49: *"sometimes claude leaves shells open forever and 'working' can mean
+// nothing but 'a shell was left running'"*. The fixture is the shape measured on this machine —
+// an async launch acknowledged in 400 ms and notified 100 s later, a background shell whose result
+// beat it to disk by 300 ms and which nothing has closed, and a synchronous agent that no
+// notification ever names.
+#[test]
+fn what_a_session_launched_and_has_not_been_told_is_over_is_what_it_reports_as_running() {
+    let running = facets_of(FACETS_RUNNING, None).running;
+    let named: Vec<(&str, &str, Option<&str>)> = running
+        .iter()
+        .map(|r| (r.kind.as_str(), r.call.as_str(), r.title.as_deref()))
+        .collect();
+
+    assert_eq!(
+        named,
+        vec![
+            ("agent", "toolu_agent", Some("close the width gaps")),
+            ("shell", "toolu_shell", Some("the workspace build")),
+        ],
+        "an acknowledgement is not an ending, an ending is, and an ordinary call is not a launch"
+    );
+    assert_eq!(running[0].name.as_deref(), Some("Agent"));
+    assert_eq!(running[1].name.as_deref(), Some("Bash"));
+    assert_eq!(
+        running[1].since.as_deref(),
+        Some("2026-08-27T09:04:00.000Z"),
+        "the stopwatch runs from the call, not from whenever a client happened to ask",
+    );
+}
+
+// The same file read twice, once whole and once as it grew. A fold that only got the running list
+// right on a cold read would be wrong for every client actually following a pane.
+#[test]
+fn the_running_list_is_the_same_whether_the_fold_read_the_file_at_once_or_as_it_grew() {
+    let path = facets_transcript(FACETS_RUNNING);
+    let whole = facets_of(FACETS_RUNNING, None).running;
+
+    let grown = scratch_dir("facets-running");
+    let root = grown.join("projects/-home-u-facets");
+    std::fs::create_dir_all(&root).expect("a project directory");
+    let growing = root.join(format!("{FACETS_RUNNING}.jsonl"));
+    let adapter = ClaudeAdapter::new(TranscriptRoot::new(&grown).expect("a root"));
+    let mut fold = adapter.fold().expect("claude folds");
+
+    let mut written = String::new();
+    let mut last = Vec::new();
+    for line in std::fs::read_to_string(&path).expect("the fixture").lines() {
+        written.push_str(line);
+        written.push('\n');
+        std::fs::write(&growing, &written).expect("a write");
+        last = fold.facets(&growing, None).running;
+    }
+    assert_eq!(last, whole);
+}
+
+// Everything above is Claude's. The other two harnesses have never been measured to record a
+// launch at all, and a facet filled from a field that merely reads like one is the thing this
+// plane exists to refuse.
+#[test]
+fn a_harness_nobody_has_measured_a_launch_on_reports_none() {
+    let codex = CodexAdapter::new(TranscriptRoot::new(codex_root()).expect("a root"));
+    let agy = AgyAdapter::new(TranscriptRoot::new(agy_root()).expect("a root"));
+    assert_eq!(codex.facets(&codex_transcript(), None).running, []);
+    assert_eq!(agy.facets(&agy_transcript(), None).running, []);
+}

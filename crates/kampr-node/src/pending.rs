@@ -7,6 +7,10 @@ use serde_json::Value;
 pub struct Pending {
     pub question: String,
     pub options: Vec<PendingOption>,
+    /// The dialog's own two-word title, drawn above the question.
+    pub header: Option<String>,
+    /// Whether the dialog takes several answers at once, read off the checkboxes it draws.
+    pub multi: bool,
 }
 
 /// Reads the question off the screen.
@@ -60,9 +64,28 @@ pub fn detect(screen: &str) -> Option<Pending> {
             continue;
         }
         if let Some(question) = question_above(&lines, &cleaned, chosen[0].0) {
+            let rows: Vec<usize> = chosen.iter().map(|(at, _)| *at).collect();
+            let mut options: Vec<PendingOption> = chosen.into_iter().map(|(_, o)| o).collect();
+            // **Noticed while stripping, not afterwards.** A checkbox is what says the question
+            // takes several answers, and by the time the labels have had theirs taken out there is
+            // nothing left to notice — which read a dialog with *nothing ticked yet* as an ordinary
+            // one, and that is the state every one of them opens in.
+            let mut boxed = false;
+            for (index, option) in options.iter_mut().enumerate() {
+                option.detail = detail_under(&lines, &cleaned, rows[index], rows.get(index + 1).copied());
+                let (label, ticked) = untick(&option.label);
+                if let Some(ticked) = ticked {
+                    boxed = true;
+                    option.label = label;
+                    option.chosen = ticked;
+                }
+            }
+            let multi = boxed;
             return Some(Pending {
                 question,
-                options: chosen.into_iter().map(|(_, o)| o).collect(),
+                header: header_above(&cleaned, rows[0]),
+                multi,
+                options,
             });
         }
     }
@@ -81,6 +104,93 @@ fn blanks(between: &[String]) -> usize {
 
 /// How far above the options to look when no rule or border marks where the dialog starts.
 const MAX_LOOKBACK: usize = 20;
+
+/// What the dialog says an option *means*: the lines between it and the next option that are not
+/// options themselves.
+///
+/// **Not chosen by indentation.** The obvious rule is "more indented than the option", and it is
+/// wrong on the harness's own output: a single-answer dialog indents a description five columns
+/// under a two-column option, and a multi-answer one draws both at two (#421). What separates them
+/// is that a description is not a numbered row, which is the same thing the option run is found by.
+///
+/// A blank line ends it. `blanks` already allows one blank *inside* a menu, so a description that
+/// runs to a second paragraph would otherwise swallow the gap before the next option.
+fn detail_under(
+    lines: &[&str],
+    cleaned: &[String],
+    option_at: usize,
+    next_at: Option<usize>,
+) -> Option<String> {
+    let end = next_at.unwrap_or(cleaned.len()).min(cleaned.len());
+    let mut said: Vec<&str> = Vec::new();
+    for at in (option_at + 1)..end {
+        let text = cleaned.get(at)?.trim();
+        if text.is_empty() {
+            break;
+        }
+        if numbered(text).is_some() || is_rule(text) {
+            break;
+        }
+        // **A description is indented and the screen under the dialog is not.** The last option
+        // has no next option to stop at, so without this it runs to the foot of the screen and
+        // takes the shell prompt with it — seen on a live pane, `"Run the browser test suite.
+        // [11:23:16 dbrain@comingclean tmp]$"`. How *much* indentation is not a rule (a
+        // single-answer dialog uses five columns and a multiple-answer one two, #421); having any
+        // at all is what both have and what a prompt at column zero does not.
+        if !lines.get(at)?.starts_with([' ', '\t']) {
+            break;
+        }
+        said.push(text);
+    }
+    let joined = said.join(" ");
+    let trimmed = joined.trim();
+    // The one line that is the dialog's own control rather than anything about the option: a
+    // multi-answer dialog draws `Submit` under its last row, and publishing it as a description
+    // would put the word on a card that is not it.
+    if trimmed.is_empty() || trimmed == SUBMIT_LABEL {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// The label of the submit control a multi-answer dialog draws, which is not a description.
+const SUBMIT_LABEL: &str = "Submit";
+
+/// `[ ] unit` and `[✔] unit` — the checkbox a question that takes several answers draws against
+/// every option, and the only thing on the screen that says it is one.
+fn untick(label: &str) -> (String, Option<bool>) {
+    let trimmed = label.trim_start();
+    let Some(rest) = trimmed.strip_prefix('[') else {
+        return (label.to_string(), None);
+    };
+    let Some((mark, tail)) = rest.split_once(']') else {
+        return (label.to_string(), None);
+    };
+    let mark = mark.trim();
+    let ticked = match mark {
+        "" => false,
+        "\u{2714}" | "x" | "X" | "*" | "\u{2713}" => true,
+        _ => return (label.to_string(), None),
+    };
+    (tail.trim().to_string(), Some(ticked))
+}
+
+/// The dialog's own title, drawn above the question against a box glyph.
+///
+/// A multi-answer dialog draws it in a row of controls — `\u{2190}  \u{2610} Test suites  \u{2714} Submit  \u{2192}` — so
+/// what is taken is the run between the box and the next control, which is separated by more than
+/// one space. A single-answer dialog draws the box and the title alone.
+fn header_above(cleaned: &[String], options_at: usize) -> Option<String> {
+    let floor = options_at.saturating_sub(MAX_LOOKBACK);
+    let at = (floor..options_at)
+        .rev()
+        .find(|&at| cleaned[at].contains(['\u{2610}', '\u{2612}', '\u{2611}']))?;
+    let line = &cleaned[at];
+    let start = line.find(['\u{2610}', '\u{2612}', '\u{2611}'])? + '\u{2610}'.len_utf8();
+    let rest = line[start..].trim_start();
+    let title = rest.split("  ").next()?.trim();
+    (!title.is_empty() && title != SUBMIT_LABEL).then(|| title.to_string())
+}
 
 /// The question, chosen from inside the dialog rather than from whatever line happens to be
 /// nearest.
@@ -273,11 +383,129 @@ mod tests {
             p.options[0],
             PendingOption {
                 key: "1".into(),
-                label: "Yes".into()
+                label: "Yes".into(),
+                detail: None,
+                chosen: false,
             }
         );
         assert_eq!(p.options[1].key, "2");
         assert!(p.options[1].label.starts_with("Yes, and don't ask again"));
+    }
+
+    /// Captured verbatim from a real `claude` 2.1.258 `AskUserQuestion` dialog through
+    /// `pane.read visible strip_ansi` in a throwaway herdr session
+    /// (`research/probe/ask-question/on-disk.py`). Kampr published the five labels and nothing
+    /// else, which is the report: *"we get options to select from with no context around them and
+    /// the context is the most important part"*.
+    #[test]
+    fn a_question_the_harness_asked_carries_its_title_and_what_each_answer_means() {
+        let p = detect(&fixture("claude-single")).expect("a dialog");
+
+        assert_eq!(p.header.as_deref(), Some("Indentation"));
+        assert_eq!(p.question, "Which indentation do you prefer?");
+        assert!(!p.multi, "a single-answer dialog draws no checkboxes");
+        assert_eq!(
+            p.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(),
+            [
+                "Tabs",
+                "Two spaces",
+                "Four spaces",
+                "Type something.",
+                "Chat about this"
+            ],
+        );
+        assert_eq!(
+            p.options[0].detail.as_deref(),
+            Some("Indent with tab characters.")
+        );
+        assert_eq!(
+            p.options[2].detail.as_deref(),
+            Some("Indent with four spaces per level.")
+        );
+        assert_eq!(
+            p.options[3].detail, None,
+            "the dialog's own escape hatches describe nothing and must not borrow a description",
+        );
+        assert!(p.options.iter().all(|o| !o.chosen));
+    }
+
+    /// The same harness, a question that takes several answers, captured after two digits were
+    /// sent to it. **A digit toggles here and answers there** — measured, #421 — so what the
+    /// screen says about which are ticked is the only thing a client has to go on.
+    #[test]
+    fn a_question_that_takes_several_answers_says_so_and_says_which_are_ticked() {
+        let p = detect(&fixture("claude-multi")).expect("a dialog");
+
+        assert!(
+            p.multi,
+            "the checkboxes are the only thing on the screen that says so"
+        );
+        assert_eq!(p.header.as_deref(), Some("Test suites"));
+        assert_eq!(p.question, "Which test suites should I run?");
+        assert_eq!(
+            p.options
+                .iter()
+                .map(|o| (o.label.as_str(), o.chosen))
+                .collect::<Vec<_>>(),
+            [
+                ("unit", true),
+                ("integration", false),
+                ("browser", true),
+                ("Type something", false),
+                ("Chat about this", false),
+            ],
+            "the two digits sent were 1 and 3",
+        );
+        assert_eq!(
+            p.options[1].detail.as_deref(),
+            Some("Run the integration test suite.")
+        );
+        assert_eq!(
+            p.options[3].detail, None,
+            "the dialog draws its own Submit control under the last row, which is not a description",
+        );
+    }
+
+    /// A permission prompt draws no title, no checkboxes and no descriptions, and must not grow
+    /// any: everything above is `AskUserQuestion`'s and this is the other half of what a pane
+    /// blocks on.
+    #[test]
+    fn a_permission_prompt_still_has_no_title_no_ticks_and_no_descriptions() {
+        let p = detect(CLAUDE).expect("a dialog");
+        assert_eq!(p.header, None);
+        assert!(!p.multi);
+        assert!(p.options.iter().all(|o| o.detail.is_none() && !o.chosen));
+
+        let trust = detect(CLAUDE_TRUST).expect("a dialog");
+        assert_eq!(trust.header, None);
+        assert!(!trust.multi);
+        assert!(trust.options.iter().all(|o| o.detail.is_none()));
+    }
+
+    /// Seen on a live pane while writing the test above: the last option has no next option to
+    /// stop at, so its description ran to the foot of the screen and took the shell prompt with it.
+    #[test]
+    fn the_last_options_description_stops_at_the_dialog_rather_than_at_the_foot_of_the_screen() {
+        let screen = concat!(
+            " \u{2610} Test suites\n",
+            "\n",
+            "Which test suites should I run?\n",
+            "\n",
+            "1. [ ] unit\n",
+            "  Run the unit test suite.\n",
+            "2. [ ] browser\n",
+            "  Run the browser test suite.\n",
+            "[11:23:16 dbrain@comingclean tmp]$ \n",
+        );
+        let p = detect(screen).expect("a dialog");
+        assert_eq!(
+            p.options[1].detail.as_deref(),
+            Some("Run the browser test suite.")
+        );
+    }
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(format!("tests/fixtures/dialogs/{name}.txt")).expect("a captured dialog")
     }
 
     #[test]

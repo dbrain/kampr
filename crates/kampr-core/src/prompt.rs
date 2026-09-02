@@ -26,6 +26,8 @@ pub fn numbered_option(line: &str) -> Option<PendingOption> {
     Some(PendingOption {
         key: digits,
         label: label.to_string(),
+        detail: None,
+        chosen: false,
     })
 }
 
@@ -68,6 +70,8 @@ pub fn numbered_run(line: &str) -> Vec<PendingOption> {
             out.push(PendingOption {
                 key: digits.clone(),
                 label: label.to_string(),
+                detail: None,
+                chosen: false,
             });
         }
     }
