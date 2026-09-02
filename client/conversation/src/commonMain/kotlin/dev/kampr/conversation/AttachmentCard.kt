@@ -38,7 +38,9 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
     val scope = rememberCoroutineScope()
     val state = attachments.state(att.id)
     val headline = headlineOf(att)
-    val offer = offerFor(att)
+    // What this device will do with it, not only what it is: a recording no decoder here can read
+    // is a download, said in the word "download" rather than in a play button that saves a file.
+    val offer = offerOn(att, LocalVoices.current)
 
     if (state is AttachmentState.Shown) {
         // A thumbnail and its name, not the picture at full width. A screenshot of a 292-column
@@ -87,7 +89,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                 IconGlyph(
                     when (offer) {
                         AttachmentOffer.Image -> ConversationIcons.image
-                        AttachmentOffer.Video -> ConversationIcons.film
+                        AttachmentOffer.Audio -> ConversationIcons.sound
                         AttachmentOffer.Text -> ConversationIcons.file
                         AttachmentOffer.File -> ConversationIcons.download
                     },
@@ -106,6 +108,8 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                     tokens.color.working,
                     Modifier.announce("Fetching $headline"),
                 )
+
+                is AttachmentState.Sound -> SoundBar(att, state, attachments, Modifier.fillMaxWidth())
 
                 is AttachmentState.Text -> DisableSelection {
                     QuietAction(

@@ -1,6 +1,7 @@
 package dev.kampr.conversation
 
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
@@ -124,6 +125,52 @@ class AttachmentTest {
         assertEquals(listOf(2), hitRows(turns, "logs.zip"))
         assertEquals(listOf(0, 1), hitRows(turns, "image/png"), "the mime is worth finding, the marker is not")
         assertTrue(hitRows(turns, "[image").isEmpty(), "a match nothing on screen carries")
+    }
+
+    // The report: an agent wrote a `.wav`, and the conversation pane showed nothing to press but
+    // an offer to read it as a document. Everything that was not a picture was typed `text`.
+    @Test
+    fun aRecordingIsTypedAsOneRatherThanAsADocumentToRead() {
+        val wav = fileTarget("/home/u/demo/clip.wav")
+        assertEquals("audio", wav.kind)
+        assertEquals("clip.wav", wav.name)
+        assertEquals(AttachmentOffer.Audio, offerFor(wav))
+        assertNull(wav.mime, "an extension's guess must not outrank the type the node read off the bytes")
+    }
+
+    @Test
+    fun aPathIsTypedByItsExtensionAndEverythingUnnamedStaysAFileToRead() {
+        for ((path, kind) in listOf(
+            "/tmp/shot.png" to "image",
+            "/tmp/a.WAV" to "audio",
+            "/tmp/a.mp3" to "audio",
+            "/tmp/a.flac" to "audio",
+            "/tmp/a.opus" to "audio",
+            "/tmp/logs.zip" to "file",
+            "/tmp/clip.mp4" to "file",
+            "/tmp/main.rs" to "text",
+            "/tmp/README" to "text",
+            "/tmp/notes.no-such-type" to "text",
+        )) assertEquals(kind, fileTarget(path).kind, path)
+    }
+
+    // Additive by rule: a node that starts recording `audio/wav` beside a record reaches the same
+    // player on a client already installed, without a new `kind` and without a new `t`.
+    @Test
+    fun aRecordedAudioTypeIsEnoughOnItsOwn() {
+        val att = Attachment(id = "att-1", kind = "file", mime = "audio/wav", name = "clip.wav")
+        assertEquals(AttachmentOffer.Audio, offerFor(att))
+        assertEquals("wav · 12 B", detailOf(att.copy(bytes = 12)))
+    }
+
+    // The narrow rule that makes reading prose for paths defensible at all, applied to the kind
+    // this adds: a token has to be a path *and* be named as a recording.
+    @Test
+    fun onlyAPathThatNamesARecordingIsOfferedAsOne() {
+        assertEquals(listOf("/home/u/demo/clip.wav"), soundsIn("rendered `/home/u/demo/clip.wav` for you"))
+        assertEquals(emptyList(), soundsIn("I made you a wav file of it"))
+        assertEquals(emptyList(), soundsIn("see out/clip.wav"), "a relative path is not one the route resolves")
+        assertEquals(emptyList(), soundsIn("see /home/u/demo/notes.md"))
     }
 
     @Test

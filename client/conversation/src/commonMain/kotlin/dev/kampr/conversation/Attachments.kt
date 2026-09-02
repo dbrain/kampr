@@ -19,7 +19,11 @@ import kotlinx.coroutines.withContext
 import kotlin.math.round
 
 private const val IMAGE = "image"
+
+// Kept for `detailOf`, which shortens `video/mp4` to `mp4` in a label. There is no video *offer* —
+// see `offerFor`. Naming a type is not the same as promising to open it.
 private const val VIDEO = "video"
+private const val AUDIO = "audio"
 private const val TEXT = "text"
 
 // A kind this release has never heard of is a file, offered as a download. Matching an exhaustive
@@ -27,18 +31,36 @@ private const val TEXT = "text"
 // transcript on every phone that is already installed.
 enum class AttachmentOffer(val label: String) {
     Image("Show image"),
-    Video("Show video"),
+    Audio("Play audio"),
     Text("Show file"),
     File("Download file"),
 }
 
+// **There is deliberately no video offer.** One existed, reachable only from `kind == "video"`,
+// which nothing in the tree has ever written — and had a node begun to, the reader would have been
+// shown "Show video" over a route that serves no video type inline and a client with no player, so
+// it was a present-and-failing affordance waiting for its producer. Video falls through to the
+// download every unknown kind gets, which is the truth until something can actually play one.
 fun offerFor(att: Attachment): AttachmentOffer = when {
     att.kind == IMAGE -> AttachmentOffer.Image
-    att.kind == VIDEO -> AttachmentOffer.Video
+    att.kind == AUDIO || att.mime?.startsWith("$AUDIO/") == true -> AttachmentOffer.Audio
     // A file whose bytes are words is read here rather than handed to the device's downloads
     // folder, which on a phone is a file the reader then has to go and find an app for.
     att.kind == TEXT || att.mime?.startsWith("$TEXT/") == true -> AttachmentOffer.Text
     else -> AttachmentOffer.File
+}
+
+// What *this* device will do with it. [offerFor] says what the attachment is, and that is the
+// half a test can pin down; whether there is a decoder behind the word "play" is the other half,
+// and a reader told to press play who gets a file in their downloads folder was lied to. Only
+// audio can lose its offer this way — every other kind reaches the same download in the end.
+//
+// `named` is the path the target was built from, for a client-minted id that carries no `mime`.
+fun offerOn(att: Attachment, voices: Voices, named: String? = null): AttachmentOffer {
+    val offer = offerFor(att)
+    if (offer != AttachmentOffer.Audio) return offer
+    val type = audioType(att.mime) ?: soundType(named ?: att.name)
+    return if (voices.canPlay(type)) offer else AttachmentOffer.File
 }
 
 sealed interface AttachmentState {
@@ -59,6 +81,13 @@ sealed interface AttachmentState {
         override fun equals(other: Any?): Boolean = this === other
         override fun hashCode(): Int = text.hashCode()
     }
+    // The bytes and nothing made of them. A [Voice] is a decoder and, on two of the three targets,
+    // a hardware line: it is opened by the card that draws the button and released when that card
+    // leaves the composition, so nothing this store evicts can leave one running.
+    data class Sound(val bytes: ByteArray, val mime: String?) : AttachmentState {
+        override fun equals(other: Any?): Boolean = this === other
+        override fun hashCode(): Int = bytes.size
+    }
     data class Saved(val where: String) : AttachmentState
     data class Failed(val reason: String) : AttachmentState
 }
@@ -67,14 +96,18 @@ sealed interface AttachmentState {
 fun headlineOf(att: Attachment): String = att.name?.takeIf { it.isNotBlank() }
     ?: when (offerFor(att)) {
         AttachmentOffer.Image -> "Image"
-        AttachmentOffer.Video -> "Video"
+        AttachmentOffer.Audio -> "Audio"
         AttachmentOffer.Text -> "File"
         AttachmentOffer.File -> "File"
     }
 
 fun detailOf(att: Attachment): String? {
     val type = att.mime?.takeIf { it.isNotBlank() }?.let { mime ->
-        if (mime.startsWith("$IMAGE/") || mime.startsWith("$VIDEO/")) mime.substringAfter('/') else mime
+        if (mime.startsWith("$IMAGE/") || mime.startsWith("$VIDEO/") || mime.startsWith("$AUDIO/")) {
+            mime.substringAfter('/')
+        } else {
+            mime
+        }
     }
     return listOfNotNull(type, att.bytes?.takeIf { it > 0 }?.let(::sizeWords)).joinToString(" · ")
         .takeIf { it.isNotEmpty() }
@@ -104,6 +137,7 @@ private const val MOST_PIXEL_BYTES_HELD = 24L * 1024 * 1024
 @Stable
 class AttachmentStore(
     private val pane: String,
+    private val voices: Voices = deviceVoices,
     private val mostImagesHeld: Int = MOST_IMAGES_HELD,
     private val mostPixelBytesHeld: Long = MOST_PIXEL_BYTES_HELD,
 ) {
@@ -141,6 +175,7 @@ class AttachmentStore(
         val (bytes, mime) = when (val held = states[att.id]) {
             is AttachmentState.Shown -> held.bytes to held.mime
             is AttachmentState.Text -> held.bytes to held.mime
+            is AttachmentState.Sound -> held.bytes to held.mime
             else -> return
         }
         val name = attachmentFileName(att.name, mime, att.id)
@@ -165,6 +200,7 @@ class AttachmentStore(
         when (landed) {
             is AttachmentState.Shown -> hold(att.id, landed, landed.image.width.toLong() * landed.image.height * 4)
             is AttachmentState.Text -> hold(att.id, landed, landed.bytes.size.toLong())
+            is AttachmentState.Sound -> hold(att.id, landed, landed.bytes.size.toLong())
             else -> states[att.id] = landed
         }
     }
@@ -181,6 +217,12 @@ class AttachmentStore(
             if (offer == AttachmentOffer.Image && att.mime != null) {
                 return AttachmentState.Failed("Those bytes are not a picture this device can read.")
             }
+        }
+        // Asked again with the type the node derived from the bytes, rather than trusted from the
+        // guess an extension made before the fetch: a `.wav` that is really an MP3 is a device
+        // that cannot play it, and the honest end of that is the download below.
+        if (offer == AttachmentOffer.Audio && voices.canPlay(mime)) {
+            return AttachmentState.Sound(got.bytes, mime)
         }
         if (offer == AttachmentOffer.Text) {
             runCatching { got.bytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
@@ -205,4 +247,7 @@ class AttachmentStore(
 }
 
 @Composable
-fun rememberAttachmentStore(pane: String): AttachmentStore = remember(pane) { AttachmentStore(pane) }
+fun rememberAttachmentStore(pane: String): AttachmentStore {
+    val voices = LocalVoices.current
+    return remember(pane, voices) { AttachmentStore(pane, voices) }
+}

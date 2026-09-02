@@ -51,6 +51,9 @@ sealed interface Piece {
     // the pane's own machine and types the path in, so the transcript carries a path string and
     // nothing else says a picture was ever handed over.
     data class Picture(val att: Attachment) : Piece
+    // A recording a message named, offered where it named it. A row and not a fetch, which is what
+    // makes it safe in an agent's reply as well as in the operator's own.
+    data class Sound(val path: String) : Piece
     // A launched conversation with no call in front of it. The node writes the two together, so
     // this is the shape a page that opened between them arrives in rather than the ordinary one.
     data class Launch(val sub: Block.Sub) : Piece
@@ -75,18 +78,39 @@ private fun isToolOutput(block: Block.Code): Boolean = block.role == TOOL_OUTPUT
 // before it.
 private const val MOST_PICTURES_INLINE = 2
 
+// How many recordings one paragraph may put a row under. A row is a name and a press — no fetch,
+// no decode, nothing held — so the ceiling is about a reply that names a directory's worth of
+// files rather than about what the device can carry, and an agent that made eight clips should
+// not have five of them silently dropped.
+private const val MOST_SOUNDS_INLINE = 8
+
+// The paths a message names, split the one way both scans below agree on.
+private fun pathsIn(text: String): List<String> = text
+    .split(' ', '\t', '\n', '\r')
+    .mapNotNull { filePathOf(it.trim('`', '"', '\'', '(', ')', ',', ';', ':')) }
+    .distinct()
+
 // The pictures the operator's own message names, to be shown where it named them.
 //
 // Deliberately narrow, for the reason `filePathOf` refuses to search prose at all: a token is
 // offered only where it is an absolute or `~/`-anchored path **and** ends in one of the extensions
 // the node will serve inline. `/etc` in a sentence is not a picture; `/tmp/kampr-3f2.png` is.
-fun picturesIn(text: String): List<Attachment> = text
-    .split(' ', '\t', '\n', '\r')
-    .mapNotNull { filePathOf(it.trim('`', '"', '\'', '(', ')', ',', ';', ':')) }
-    .distinct()
+fun picturesIn(text: String): List<Attachment> = pathsIn(text)
     .map(::fileTarget)
     .filter { offerFor(it) == AttachmentOffer.Image }
     .take(MOST_PICTURES_INLINE)
+
+// The recordings a message names, offered where it named them.
+//
+// The same narrow rule the pictures follow, and offered in an agent's reply as well as in the
+// operator's own — which a picture is not. A picture is *fetched* on sight, so forty in a reply is
+// forty authorised round trips and several hundred megabytes of pixels; this is a line of text
+// until somebody presses it. An agent that produced a `.wav` and typed its path is the only way a
+// recording reaches a transcript at all: nothing writes it as an attachment, and a `Bash` call's
+// summary is its `description` rather than its output path.
+fun soundsIn(text: String): List<String> = pathsIn(text)
+    .filter { soundType(it) != null }
+    .take(MOST_SOUNDS_INLINE)
 
 // A tool call and the code or patch that follows it in the same turn are one thing to a reader,
 // so the call owns them and collapsing hides them together.
@@ -127,6 +151,7 @@ fun groupBlocks(blocks: List<Block>, pictures: Boolean = false): List<Piece> {
                     // is on the screen today instead of to an empty frame (#233).
                     out += Piece.Prose(block.text)
                     if (pictures) for (shot in picturesIn(block.text)) out += Piece.Picture(shot)
+                    for (heard in soundsIn(block.text)) out += Piece.Sound(heard)
                 }
                 index++
             }
@@ -235,6 +260,7 @@ private fun PieceView(
         )
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
         is Piece.Picture -> InlinePicture(piece.att, attachments, Modifier.fillMaxWidth())
+        is Piece.Sound -> FileAffordance(piece.path, attachments, Modifier.fillMaxWidth())
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
         is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
         is Piece.Launch -> Surface(

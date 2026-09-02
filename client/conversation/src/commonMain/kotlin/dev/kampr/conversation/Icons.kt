@@ -36,6 +36,14 @@ object ConversationIcons {
             trace("M4.4 3v10M11.6 3v10M1.5 8h13"),
     )
     val download = Icon(16f, 1.6f, trace("M8 2.2v7.6M4.8 6.8 8 10.2l3.2-3.4", "M2.6 13.2h10.8"))
+    // A cone and two arcs. The waves are what tells it apart from the play triangle beside it at
+    // 13 dp, where a bare speaker body and a bare triangle are the same wedge.
+    val sound = Icon(
+        16f, 1.6f,
+        trace("M3.4 6.2h2.2L8.6 3.4v9.2L5.6 9.8H3.4Z", "M10.8 6.2a2.6 2.6 0 0 1 0 3.6", "M12.6 4.4a5.2 5.2 0 0 1 0 7.2"),
+    )
+    val play = Icon(16f, 1.6f, trace("M5.4 3.2 12.2 8l-6.8 4.8Z"))
+    val pause = Icon(16f, 1.8f, trace("M6 3.4v9.2M10 3.4v9.2"))
     val diff = Icon(16f, 1.6f, trace("M3 5h10M3 11h10M8 2.6v4.8", "M5.4 11H10.6"))
     // A conversation this one launched: a line that leaves the trunk and an arrow onto its own
     // thread.

@@ -17,6 +17,12 @@ use crate::http::refuse;
 /// node that echoed it would serve `text/html` from its own origin, past a CSP written for the
 /// bundle. Anything not on this list is bytes to download, never a document to render — and SVG
 /// is deliberately absent, because it is a scriptable document wearing an image's name.
+///
+/// The audio types are here on the same argument that keeps SVG off. A container on this list is
+/// read by a media decoder and by nothing else: it cannot name an origin, cannot carry script, and
+/// is not a shape a sniffing browser ever promotes to HTML. `audio/ogg` and `audio/mp4` are the two
+/// that could have named a video track, and neither one is reached from a recorded string alone —
+/// [`sniff`] proves the codec out of the bytes before either is minted here.
 const RENDERABLE: &[&str] = &[
     "image/png",
     "image/jpeg",
@@ -25,6 +31,12 @@ const RENDERABLE: &[&str] = &[
     "image/avif",
     "image/bmp",
     "image/x-icon",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/flac",
+    "audio/aiff",
 ];
 
 const OPAQUE: &str = "application/octet-stream";
@@ -177,6 +189,11 @@ fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// How far into an Ogg stream the codec's own identification packet is looked for. The page header
+/// is 27 bytes plus a segment table, so the first packet starts around byte 28 and the name is
+/// inside it; 64 bytes covers that without letting a `vorbis` somewhere in a payload decide.
+const OGG_CODEC_WINDOW: usize = 64;
+
 fn sniff(data: &[u8]) -> Option<&'static str> {
     let at = |from: usize, magic: &[u8]| {
         data.len() >= from + magic.len() && &data[from..from + magic.len()] == magic
@@ -198,6 +215,33 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
     }
     if at(0, b"BM") {
         return Some("image/bmp");
+    }
+    if at(0, b"RIFF") && at(8, b"WAVE") {
+        return Some("audio/wav");
+    }
+    if at(0, b"FORM") && (at(8, b"AIFF") || at(8, b"AIFC")) {
+        return Some("audio/aiff");
+    }
+    if at(0, b"fLaC") {
+        return Some("audio/flac");
+    }
+    // An MPEG audio file either opens with a tag or with a frame. The frame test is the sync word
+    // plus **layer III** — mask `0xE6`, value `0xE2` — rather than the sync word alone, which two
+    // bytes of anything hit once in eight.
+    if at(0, b"ID3") || (data.len() >= 2 && data[0] == 0xFF && data[1] & 0xE6 == 0xE2) {
+        return Some("audio/mpeg");
+    }
+    // Ogg and the ISO base media format are the two containers on the list that can hold video, so
+    // neither is minted from the container alone: the codec's own name has to be in the bytes.
+    if at(0, b"OggS") {
+        let window = &data[..data.len().min(OGG_CODEC_WINDOW)];
+        if window.windows(6).any(|w| w == b"vorbis") || window.windows(8).any(|w| w == b"OpusHead") {
+            return Some("audio/ogg");
+        }
+        return None;
+    }
+    if at(4, b"ftypM4A") {
+        return Some("audio/mp4");
     }
     None
 }
@@ -285,4 +329,131 @@ fn filename(claim: &Claim<'_>) -> String {
         .filter(|e| e.chars().all(|c| c.is_ascii_alphanumeric()))
         .unwrap_or("bin");
     format!("attachment.{extension}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kampr_journal::attach::{FILE, IMAGE};
+
+    fn wav() -> Vec<u8> {
+        let mut bytes = b"RIFF\x24\x00\x00\x00WAVEfmt ".to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        bytes
+    }
+
+    fn served(kind: &str, mime: Option<&str>, body: &[u8]) -> String {
+        let claim = Claim {
+            kind,
+            mime,
+            name: Some("clip.wav"),
+            bytes: body.len() as u64,
+        };
+        let headers = headers(&claim, body);
+        headers
+            .into_iter()
+            .find(|(name, _)| name == CONTENT_TYPE)
+            .map(|(_, value)| value)
+            .expect("a content type")
+    }
+
+    fn disposition(kind: &str, mime: Option<&str>, body: &[u8]) -> String {
+        let claim = Claim {
+            kind,
+            mime,
+            name: Some("clip.wav"),
+            bytes: body.len() as u64,
+        };
+        headers(&claim, body)
+            .into_iter()
+            .find(|(name, _)| name == CONTENT_DISPOSITION)
+            .map(|(_, value)| value)
+            .expect("a disposition")
+    }
+
+    // A file on disk carries no recorded type at all — `image_mime` answers only for pictures — so
+    // the bytes are the only thing that can say a `.wav` is a `.wav`.
+    #[test]
+    fn a_recording_with_no_recorded_type_is_served_as_the_audio_it_is() {
+        assert_eq!(served(FILE, None, &wav()), "audio/wav");
+        assert_eq!(disposition(FILE, None, &wav()), "inline");
+    }
+
+    #[test]
+    fn each_audio_container_on_the_list_is_recognised_by_its_own_bytes() {
+        let mut ogg = b"OggS\x00\x02".to_vec();
+        ogg.extend_from_slice(&[0u8; 23]);
+        ogg.extend_from_slice(b"\x01vorbis");
+        let mut m4a = b"\x00\x00\x00\x20ftypM4A ".to_vec();
+        m4a.extend_from_slice(&[0u8; 16]);
+        for (name, body, want) in [
+            ("wav", wav(), "audio/wav"),
+            ("flac", b"fLaC\x00\x00\x00\x22".to_vec(), "audio/flac"),
+            (
+                "mp3 with a tag",
+                b"ID3\x04\x00\x00\x00\x00".to_vec(),
+                "audio/mpeg",
+            ),
+            ("bare mp3 frame", vec![0xFF, 0xFB, 0x90, 0x00], "audio/mpeg"),
+            ("aiff", b"FORM\x00\x00\x00\x20AIFFCOMM".to_vec(), "audio/aiff"),
+            ("ogg vorbis", ogg, "audio/ogg"),
+            ("m4a", m4a, "audio/mp4"),
+        ] {
+            assert_eq!(served(FILE, None, &body), want, "{name} was not recognised");
+        }
+    }
+
+    // The whole argument for widening the list: what may render is decided here, from a fixed
+    // table, and never from the string a transcript happens to carry.
+    #[test]
+    fn a_type_that_is_not_on_the_list_is_bytes_to_download_however_it_is_claimed() {
+        for claimed in [
+            "text/html",
+            "image/svg+xml",
+            "audio/x-scriptable",
+            "application/pdf",
+        ] {
+            assert_eq!(
+                served(IMAGE, Some(claimed), &wav()),
+                OPAQUE,
+                "{claimed} was served as itself",
+            );
+        }
+        assert!(disposition(IMAGE, Some("text/html"), &wav()).starts_with("attachment;"));
+    }
+
+    // An Ogg page can carry Theora as easily as Vorbis, and the ISO container is worse — `ftyp`
+    // alone is an mp4 video. Neither is minted from the container.
+    #[test]
+    fn a_container_that_could_hold_video_is_not_audio_until_the_codec_says_so() {
+        let mut theora = b"OggS\x00\x02".to_vec();
+        theora.extend_from_slice(&[0u8; 23]);
+        theora.extend_from_slice(b"\x80theora");
+        assert_eq!(served(FILE, None, &theora), OPAQUE);
+
+        let mut mp4 = b"\x00\x00\x00\x20ftypmp42".to_vec();
+        mp4.extend_from_slice(&[0u8; 16]);
+        assert_eq!(served(FILE, None, &mp4), OPAQUE);
+    }
+
+    // The bytes only ever get a vote where the record had nothing to say. A record that named a
+    // type keeps being judged by that name, whatever its body opens with.
+    #[test]
+    fn bytes_that_look_like_audio_do_not_override_a_recorded_type() {
+        assert_eq!(served(FILE, Some("text/html"), &wav()), OPAQUE);
+        assert_eq!(served(FILE, Some("audio/wav"), b"not audio at all"), "audio/wav");
+    }
+
+    // A `RIFF` header is a family, not a format: the same four bytes open a WebP.
+    #[test]
+    fn a_riff_container_is_told_apart_by_its_second_tag() {
+        let mut webp = b"RIFF\x24\x00\x00\x00WEBPVP8 ".to_vec();
+        webp.extend_from_slice(&[0u8; 16]);
+        assert_eq!(served(FILE, None, &webp), "image/webp");
+    }
+
+    #[test]
+    fn a_text_file_is_still_bytes_to_download() {
+        assert_eq!(served(FILE, None, b"# notes\n\nnothing here\n"), OPAQUE);
+    }
 }
