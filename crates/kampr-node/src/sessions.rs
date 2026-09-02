@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tracing::{info, warn};
 
 /// A named herdr session is a whole separate server with its own socket (probe #49), so it is a
@@ -105,7 +105,7 @@ pub struct Sessions {
     config: Config,
     primary: Arc<SessionNode>,
     all: RwLock<Vec<Arc<SessionNode>>>,
-    changed: Notify,
+    changed: watch::Sender<u64>,
 }
 
 impl Sessions {
@@ -121,7 +121,7 @@ impl Sessions {
             config: config.clone(),
             all: RwLock::new(vec![primary.clone()]),
             primary,
-            changed: Notify::new(),
+            changed: watch::Sender::new(0),
         })
     }
 
@@ -140,8 +140,17 @@ impl Sessions {
 
     /// Bumps whenever a session appears or vanishes, so the herd model is rebuilt without
     /// waiting for the next poll.
-    pub fn notified(&self) -> impl std::future::Future<Output = ()> + '_ {
-        self.changed.notified()
+    ///
+    /// **A subscription rather than a notification, because the reader looks and then waits.** The
+    /// herd loop reads the session set to build its model and only afterwards waits to be told it
+    /// moved, and those are two separate moments; a `Notify` wakes whoever is already waiting and
+    /// keeps nothing for whoever is about to. A session created by a manage op in that gap was
+    /// therefore announced to nobody, and since `reconcile` reports no further change the next
+    /// discovery poll finds nothing to say either — leaving the herd a whole `HERD_RECONCILE`
+    /// behind the ack that had already promised the session was in it. A receiver taken before
+    /// the read remembers the edge.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
     /// Adds and drops providers to match what is running on the host, leaving every other
@@ -160,7 +169,11 @@ impl Sessions {
     /// dropped every extra server on the host out of every client's herd — tearing down its
     /// watchers — until the next sweep put them back. Adding on a partial read is still safe;
     /// only removal has to stand on an answer.
-    fn apply(&self, found: Result<Vec<SessionEntry>, SessionListError>) -> bool {
+    ///
+    /// Crate-visible for [`crate::state`]'s own test: the session list is a spawned process, and a
+    /// test that needs a session to appear at one particular *moment* cannot make one appear by
+    /// starting a herdr.
+    pub(crate) fn apply(&self, found: Result<Vec<SessionEntry>, SessionListError>) -> bool {
         let found = match found {
             Ok(found) => found,
             Err(e) => {
@@ -196,7 +209,7 @@ impl Sessions {
             changed |= all.len() != before;
         }
         if changed {
-            self.changed.notify_waiters();
+            self.changed.send_modify(|seen| *seen += 1);
         }
         true
     }

@@ -310,10 +310,11 @@ async fn refresh_herd(
     let conversations = Conversations::default();
     let names = Names::default();
     loop {
-        // Subscribed *before* the model is built. A viewer joining while `build_model` is still
-        // running would otherwise be seen by neither this round nor the wait that follows it, and
-        // what is behind that wait is a sweep measured in tens of seconds.
-        let mut changes = session_changes(&sessions);
+        // Subscribed *before* the model is built. A viewer joining — or a session appearing —
+        // while `build_model` is still running would otherwise be seen by neither this round nor
+        // the wait that follows it, and what is behind that wait is a sweep measured in tens of
+        // seconds.
+        let mut changes = herd_changes(&sessions);
         let journal = journals.borrow().clone();
         let available = update.borrow_and_update().clone();
         let mut model = build_model(&sessions, &journal, &conversations, &names, available.as_deref()).await;
@@ -353,7 +354,6 @@ async fn refresh_herd(
         };
         tokio::select! {
             _ = wait_for_change(&mut changes) => {}
-            _ = sessions.notified() => {}
             _ = moved(&mut mesh) => {}
             _ = moved(&mut update) => {}
             _ = tokio::time::sleep(sweep) => {}
@@ -383,27 +383,39 @@ type SessionChanges = (
     watch::Receiver<u64>,
 );
 
-fn session_changes(sessions: &Sessions) -> Vec<SessionChanges> {
-    sessions
-        .all()
-        .iter()
-        .map(|s| {
-            (
-                s.registry.topology(),
-                s.provider.watch_health(),
-                s.registry.watchers_changed(),
-            )
-        })
-        .collect()
+/// Everything a rebuild is worth doing for, subscribed in one go.
+///
+/// The **set** is here rather than in the `select!` for the reason [`Sessions::changes`] gives:
+/// this is armed before the model is read, and a session that appears in the gap has to wake the
+/// loop rather than land on nobody.
+struct HerdChanges {
+    set: watch::Receiver<u64>,
+    each: Vec<SessionChanges>,
 }
 
-/// Wakes on the first session to report any of them, so all three land on the wire at once rather
-/// than at the next sweep.
-async fn wait_for_change(watches: &mut [SessionChanges]) {
-    if watches.is_empty() {
-        std::future::pending::<()>().await;
+fn herd_changes(sessions: &Sessions) -> HerdChanges {
+    HerdChanges {
+        set: sessions.changes(),
+        each: sessions
+            .all()
+            .iter()
+            .map(|s| {
+                (
+                    s.registry.topology(),
+                    s.provider.watch_health(),
+                    s.registry.watchers_changed(),
+                )
+            })
+            .collect(),
     }
-    let waits = watches.iter_mut().map(|(topology, health, watchers)| {
+}
+
+/// Wakes on the first of them any session reports, or on the set of sessions itself moving, so
+/// they land on the wire at once rather than at the next sweep.
+async fn wait_for_change(watches: &mut HerdChanges) {
+    let HerdChanges { set, each } = watches;
+    let empty = each.is_empty();
+    let waits = each.iter_mut().map(|(topology, health, watchers)| {
         Box::pin(async move {
             tokio::select! {
                 _ = moved(topology) => {}
@@ -412,7 +424,18 @@ async fn wait_for_change(watches: &mut [SessionChanges]) {
             }
         })
     });
-    futures_util::future::select_all(waits).await;
+    let any = async move {
+        match empty {
+            true => std::future::pending::<()>().await,
+            false => {
+                futures_util::future::select_all(waits).await;
+            }
+        }
+    };
+    tokio::select! {
+        _ = moved(set) => {}
+        _ = any => {}
+    }
 }
 
 /// How long a pane that resolved to no transcript is left alone before the directories are
@@ -700,6 +723,35 @@ fn chosen_name(marker: &SessionMarker) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caps::SessionEntry;
+
+    /// **The wait is armed before the session set is read, and a session that appears in between
+    /// still has to wake the loop.** Those are two separate moments — `build_model` walks every
+    /// session and asks its herdr for panes and a round trip — and a `session.create` that landed
+    /// in the gap used to announce itself to nobody: `Notify::notify_waiters` keeps nothing for a
+    /// waiter that has not arrived yet, the next `reconcile` finds nothing further changed and so
+    /// says nothing either, and the herd sat a whole `HERD_RECONCILE` behind the ack that had
+    /// already promised the session was in it. Held open on purpose with three seconds in front
+    /// of the wait, the live test failed three runs out of three with exactly the message CI
+    /// reported.
+    #[tokio::test]
+    async fn a_session_that_appears_before_the_wait_is_armed_still_wakes_the_herd() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::bootstrap("testnode");
+        config.herdr.socket = dir.path().join("herdr.sock").display().to_string();
+        let sessions = Sessions::open(&config);
+
+        let mut changes = herd_changes(&sessions);
+        assert!(sessions.apply(Ok(vec![SessionEntry {
+            name: "agents".into(),
+            running: true,
+            socket_path: Some(dir.path().join("sessions/agents/herdr.sock")),
+        }])));
+
+        tokio::time::timeout(Duration::from_millis(500), wait_for_change(&mut changes))
+            .await
+            .expect("a session that appeared while the model was being built woke nobody");
+    }
 
     fn named(name: &str, source: Option<&str>) -> SessionMarker {
         SessionMarker {
