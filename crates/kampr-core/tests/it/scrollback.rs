@@ -390,3 +390,81 @@ fn a_render_after_an_ingest_is_not_the_document_from_before_it() {
     ring.ingest(&labelled(&refs(&numbered(90, 92)), Some(20), 0, false));
     assert_eq!(lines_of(&mut ring), numbered(90, 92));
 }
+
+/// The shape a live Claude Code pane actually produces, replayed from a real one.
+///
+/// Claude Code takes the **alternate screen**, so herdr's ring goes away for as long as the
+/// harness holds it (probe #244) and the conversation never enters it — measured end to end: a
+/// pane with 363 rows of shell output went to `max_offset_from_bottom: 0` the moment `claude`
+/// started, answered every `pane.read` with exactly the viewport for the whole session, and handed
+/// the 367-row shell era back untouched on exit with not one conversation row in it. So the ring
+/// froze on the shell session and went on calling it complete, which is the pre-harness `git`
+/// output an operator found one screen above a Claude conversation.
+#[test]
+fn the_shell_that_ran_before_a_harness_is_not_the_harness_panes_history() {
+    let mut ring = once(&raw(
+        &["git-log-1", "git-log-2", "git-log-3", "viewport"],
+        20,
+        1,
+        false,
+    ));
+    assert!(
+        ring.render().complete,
+        "the shell era was this pane's whole history"
+    );
+
+    assert_eq!(ring.superseded(), 3);
+
+    let doc = ring.render();
+    assert!(doc.rows.is_empty(), "a shell session is not a conversation");
+    assert_eq!(doc.total_rows, 0);
+    assert_eq!(doc.from_top, 3);
+    assert!(
+        doc.capped,
+        "could not read this pane's history, not this pane has none (#233)"
+    );
+    assert!(!doc.complete);
+}
+
+/// It runs on every poll for the harness's whole life, so it has to be free after the first one —
+/// and a ring that never held anything has lost nothing to say it is capped about.
+#[test]
+fn superseding_a_ring_that_holds_nothing_claims_nothing_was_lost() {
+    let mut ring = ScrollbackRing::default();
+    assert_eq!(ring.superseded(), 0);
+    let doc = ring.render();
+    assert_eq!(doc.from_top, 0);
+    assert!(!doc.capped);
+    assert!(doc.complete);
+}
+
+/// The harness exits and herdr hands the ring straight back — measured: the shell era verbatim,
+/// four rows longer for the command that ran it, and not one conversation row in it. So the pane
+/// has a history again, and it joins the ring where the supersede cut it rather than claiming to
+/// be the top of it.
+///
+/// The base has to move exactly once for that. `from_top` is what the client's copy is joined
+/// onto, and a supersede that advanced it on every poll would rebase a document that never
+/// changed, once every three seconds, for as long as the harness ran.
+#[test]
+fn a_pane_whose_harness_exited_takes_its_history_up_from_where_it_was_cut() {
+    let mut ring = once(&raw(&["shell-1", "shell-2", "viewport"], 20, 1, false));
+    assert_eq!(ring.superseded(), 2);
+    assert_eq!(
+        ring.superseded(),
+        0,
+        "it runs on every poll for the harness's whole life"
+    );
+    assert_eq!(ring.superseded(), 0);
+
+    ring.ingest(&raw(
+        &["shell-1", "shell-2", "claude", "exit", "viewport"],
+        20,
+        1,
+        false,
+    ));
+    let doc = ring.render();
+    assert_eq!(doc.from_top, 2, "the base moved once, when the rows went");
+    assert_eq!(doc.total_rows, 4);
+    assert!(doc.capped, "the harness's own era is still unreachable");
+}

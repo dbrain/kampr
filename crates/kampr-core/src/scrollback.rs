@@ -200,6 +200,40 @@ impl ScrollbackRing {
         }
     }
 
+    /// A harness took the pane's screen, so there is no ring behind it and will not be one until
+    /// the harness exits — and everything held is from whatever ran *before* it.
+    ///
+    /// Claude Code does not clear the scrollback. It sets `\e[?1049h` and takes the **alternate
+    /// screen**, measured straight off its own pty with no `\e[3J` anywhere, which is probe #244:
+    /// herdr's ring goes away for as long as a full-screen program holds the pane and comes back
+    /// untouched on exit. The conversation never enters that ring at all — a real session driven
+    /// to two full replies kept `max_offset_from_bottom` at 0 throughout, answered every read with
+    /// exactly the viewport, and gave the shell era back on exit with not one conversation row in
+    /// it. So the rows this drops are the last thing the pane did before the harness started, and
+    /// serving a `git log` one screen above a Claude conversation is what made an operator stop
+    /// believing the surface.
+    ///
+    /// **Not the same thing as a read that came back short.** [`Self::ingest`] must go on treating
+    /// that as no news (#244 from the other side: a pager holds the screen for a moment and gives
+    /// it back, and the ring outlives it). The difference is *whose* screen it is, which only the
+    /// provider can answer — see `Provider::harness_owns_the_screen`.
+    ///
+    /// Runs on every poll for the harness's whole life, so it is a no-op once the ring is empty:
+    /// a base that kept advancing would rebase the client's copy every three seconds on a pane
+    /// where nothing had happened at all.
+    pub fn superseded(&mut self) -> usize {
+        if self.rows.is_empty() {
+            return 0;
+        }
+        let dropped = self.rows.len();
+        self.rendered = None;
+        self.base += dropped as u32;
+        self.rows.clear();
+        // Not "there is no history": there is, and this node cannot reach it (#233).
+        self.capped = true;
+        dropped
+    }
+
     /// The newest read shares nothing with what we hold. Splicing them would fabricate adjacency
     /// between two unrelated stretches of history, so the old rows go and the ring says it is
     /// capped from here.

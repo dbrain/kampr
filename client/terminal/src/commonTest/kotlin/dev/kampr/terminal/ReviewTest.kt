@@ -13,6 +13,7 @@ import dev.kampr.terminal.review.ReviewMove
 import dev.kampr.terminal.review.ReviewState
 import dev.kampr.terminal.review.ReviewSurface
 import dev.kampr.terminal.review.historyEdge
+import dev.kampr.terminal.review.historyEdgeSpoken
 import dev.kampr.terminal.review.historyWarning
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -162,6 +163,39 @@ class ReviewTest {
             repeat(8) { review.step(surfaceOf(pane), ReviewMove.PreviousLine) }
             assertTrue(review.utterance.contains(expected), "$expected missing from ${review.utterance}")
         }
+    }
+
+    // A harness on the alternate screen takes herdr's ring with it (#438), so the node stops
+    // vouching for the shell session that ran before it: base advanced, nothing held, `complete`
+    // gone and `capped` set — its way of saying "there was more and it cannot be reached".
+    //
+    // The row count was asked first, so all of that arrived as `None` and the surface told the
+    // operator "This pane keeps no history" — the node's careful "I could not reach it" rendered
+    // as "there is none", which is #233 one level up from where it usually happens.
+    @Test
+    fun aPaneWhoseHistoryTheProgramTookSaysSoRatherThanClaimingItNeverHadAny() {
+        val superseded = pane().also {
+            it.history(0, listOf("a", "b"), complete = true, capped = false)
+            it.history(2, emptyList(), totalRows = 0, complete = false, capped = true)
+        }
+        assertEquals(0, surfaceOf(superseded).historyRows, "the shell era should be gone")
+        assertEquals(HistoryEdge.Superseded, historyEdge(surfaceOf(superseded)))
+        assertTrue(
+            historyWarning(surfaceOf(superseded))!!.contains("its own"),
+            "the reader is not told who does have the history",
+        )
+        assertFalse(
+            historyEdgeSpoken(surfaceOf(superseded)).contains("keeps no history"),
+            "a pane whose history was taken is not a pane that never had any",
+        )
+    }
+
+    // The other side of it: a pane that genuinely never had a ring is still `None`, and widening
+    // the new state to every empty history would put a notice on every fresh shell pane.
+    @Test
+    fun aPaneThatNeverHadHistoryIsStillQuietAboutIt() {
+        assertEquals(HistoryEdge.None, historyEdge(surfaceOf(pane())))
+        assertEquals(null, historyWarning(surfaceOf(pane())))
     }
 
     // Quiet when the record is whole: a permanent badge on every pane teaches people to ignore it.

@@ -205,6 +205,21 @@ pub trait Provider: Send + Sync + 'static {
     /// Bumps whenever the pane list or its geometry may have changed.
     fn topology(&self) -> watch::Receiver<u64>;
 
+    /// Whether a harness owns this pane's screen — which is *why* [`Self::read_scrollback`] has no
+    /// ring to offer, as distinct from a pane that has simply not scrolled yet.
+    ///
+    /// The two look identical from the read and are not the same news. A harness holds the
+    /// alternate screen for its whole life, so herdr's ring stays away and the rows a node has
+    /// already accumulated are the shell session that ran *before* it — not this pane's history
+    /// any more (`ScrollbackRing::superseded`). A pager takes the screen for a moment and gives it
+    /// back, and the ring outlives it (probe #244).
+    ///
+    /// Answered from cached state and never from the socket: it is asked on the same poll the read
+    /// is, for every watched pane.
+    fn harness_owns_the_screen(&self, _pane_id: &str) -> bool {
+        false
+    }
+
     /// Whether this implementation is the one that owns `pane_id`.
     ///
     /// Only [`Composite`] asks. The default is "yes", which makes a single provider the answer to
@@ -283,6 +298,11 @@ impl Provider for Composite {
 
     async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>> {
         self.route(pane_id)?.read_scrollback(pane_id).await
+    }
+
+    fn harness_owns_the_screen(&self, pane_id: &str) -> bool {
+        self.route(pane_id)
+            .is_ok_and(|p| p.harness_owns_the_screen(pane_id))
     }
 
     fn topology(&self) -> watch::Receiver<u64> {

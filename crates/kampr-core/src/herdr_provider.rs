@@ -1048,6 +1048,19 @@ impl Provider for HerdrProvider {
         }))
     }
 
+    /// herdr answers for the pane and this only reads the snapshot already in hand, so it costs
+    /// nothing and never touches the socket. `is_agent` is the whole of the distinction: a pane
+    /// herdr has labelled with a harness, reporting no ring, is one whose harness has the screen —
+    /// and an unlabelled pane reporting no ring is a pager, a pane that has not scrolled yet, or a
+    /// harness herdr lost the label for, none of which may cost the ring its rows.
+    fn harness_owns_the_screen(&self, pane_id: &str) -> bool {
+        self.inner
+            .snapshot
+            .borrow()
+            .pane(pane_id)
+            .is_some_and(|p| p.is_agent() && !p.scrollback_is_safe_to_read())
+    }
+
     fn topology(&self) -> watch::Receiver<u64> {
         self.inner.revision.subscribe()
     }

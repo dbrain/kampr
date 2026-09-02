@@ -280,11 +280,22 @@ impl Pane {
     /// received no wheel bytes at all (probe #231). Excluding them cost the node history on the
     /// one kind of pane it exists to serve.
     ///
-    /// What is slow is a live harness whose ring is *empty* — Claude Code clears the scrollback
-    /// when it takes the screen: every read past `viewport_rows` there costs a flat ~375 ms and
-    /// returns the viewport anyway. That is this predicate's remaining half, so the only way to
-    /// pay it is for the agent to clear its ring between the snapshot this was asked of and the
-    /// read that follows.
+    /// **The other half was recorded with the wrong mechanism, and its cost is gone.** Claude Code
+    /// does not clear the scrollback: it sets `\e[?1049h` and takes the **alternate screen** —
+    /// measured straight off its own pty, with no `\e[3J` anywhere — which is probe #244 exactly.
+    /// herdr's ring is unavailable for as long as the harness holds the pane and comes back
+    /// untouched on exit, and the conversation never enters it at all: a real session driven to
+    /// two full replies held `max_offset_from_bottom` at 0 throughout, answered every read with
+    /// exactly the viewport, and gave the 367-row shell era back on exit with not one conversation
+    /// row in it. Nor is such a read expensive on herdr 0.8.2 — `lines: 4168` against a live
+    /// `claude` pane with an empty ring answers in **0.2–0.6 ms** at every depth, which corrects
+    /// #231's ~375 ms.
+    ///
+    /// So this predicate stays, because there is nothing there to read — but what it says `false`
+    /// about is a pane whose history became **unreachable**, not one that has none. That is
+    /// `Provider::harness_owns_the_screen` and `ScrollbackRing::superseded`: the rows a node
+    /// accumulated before the harness started are the shell session that preceded it, and serving
+    /// them under a conversation is what made an operator stop believing the surface.
     pub fn scrollback_is_safe_to_read(&self) -> bool {
         self.scroll.is_some_and(|s| s.max_offset_from_bottom > 0)
     }
@@ -315,8 +326,7 @@ mod tests {
     /// Probe #231 — reading above the viewport on a detected-agent pane. The hazard the interlock
     /// inherited was never measured: a real `codex` and a real `claude`, both herdr-detected,
     /// both holding a ring, answer `lines: 5000` in **1 ms** with every row of the ring and the
-    /// viewport exactly where it was. What is slow is a live harness with an *empty* ring, and
-    /// that is the case the other half of the interlock already excludes.
+    /// viewport exactly where it was.
     #[test]
     fn a_ring_is_a_ring_whether_or_not_a_harness_is_in_the_pane() {
         assert!(pane(None, 361).scrollback_is_safe_to_read());
@@ -326,8 +336,10 @@ mod tests {
         );
     }
 
-    /// The half of the interlock that measurement keeps: an alt-screen pane reports no ring, and
-    /// a live harness with no ring is the one read that costs ~375 ms rather than under one.
+    /// The half of the interlock that measurement keeps, though not for the reason it was written
+    /// down with: a pane whose screen a full-screen program holds reports no ring (#244), and a
+    /// live harness is one of those for its whole life. There is simply nothing there to read —
+    /// the cost is under a millisecond either way on herdr 0.8.2.
     #[test]
     fn a_pane_with_no_ring_is_never_read_above_its_viewport() {
         assert!(!pane(None, 0).scrollback_is_safe_to_read());

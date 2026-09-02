@@ -39,7 +39,22 @@ class ScrollbackStore {
     // discard — only a start outside the held range is a gap it could not stitch. Same predicate
     // as History::absorb in kampr-mesh, which is the other end of this wire.
     fun apply(msg: ServerMsg.Scrollback) {
-        val restart = msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
+        // A document holding *nothing* at or past the client's end is the node saying it no longer
+        // has history for this pane — not a tail that grew by no rows. A poll with nothing new
+        // still reports the ring's whole depth, so `totalRows == 0` is the discriminator.
+        //
+        // It exists because a harness on the alternate screen takes herdr's ring with it: Claude
+        // Code sends `?1049h` and never `3J`, so the shell session that ran before it comes back
+        // untouched on exit and not one row of the conversation is ever in the ring. The node
+        // stops vouching for that shell era the moment the harness owns the screen, and its base
+        // lands exactly on the client's end — which `restart` alone reads as an ordinary tail, so
+        // the client went on drawing 363 dead rows under a live conversation.
+        //
+        // The cost of getting this wrong is not only the wrong rows: `TerminalView` hands the
+        // wheel to the pane only while `historyRows == 0`, so a client still holding them scrolls
+        // them instead of letting Claude scroll its own transcript.
+        val discarded = msg.totalRows == 0 && msg.rows.isEmpty() && msg.fromTop >= fromTop + totalRows
+        val restart = discarded || msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
         if (restart) {
             fromTop = msg.fromTop
             rows.clear()

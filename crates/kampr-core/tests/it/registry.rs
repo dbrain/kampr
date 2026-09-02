@@ -19,6 +19,8 @@ struct Scripted {
     reads_done: AtomicUsize,
     stall_when_empty: std::sync::atomic::AtomicBool,
     reads_fail: std::sync::atomic::AtomicBool,
+    no_ring: std::sync::atomic::AtomicBool,
+    harness: std::sync::atomic::AtomicBool,
     announce: std::sync::Mutex<Option<(u16, u16)>>,
 }
 
@@ -34,6 +36,8 @@ impl Default for Scripted {
             reads_done: AtomicUsize::default(),
             stall_when_empty: std::sync::atomic::AtomicBool::new(false),
             reads_fail: std::sync::atomic::AtomicBool::new(false),
+            no_ring: std::sync::atomic::AtomicBool::new(false),
+            harness: std::sync::atomic::AtomicBool::new(false),
             announce: std::sync::Mutex::default(),
         }
     }
@@ -83,6 +87,9 @@ impl Provider for Scripted {
         if self.reads_fail.load(Ordering::SeqCst) {
             anyhow::bail!("pane.read is not answering");
         }
+        if self.no_ring.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         if let Some(next) = self.reads.lock().await.pop_front() {
             *self.last_read.lock().await = Some(next.clone());
             return Ok(Some(next));
@@ -97,6 +104,10 @@ impl Provider for Scripted {
 
     fn topology(&self) -> watch::Receiver<u64> {
         self.topology.subscribe()
+    }
+
+    fn harness_owns_the_screen(&self, _pane_id: &str) -> bool {
+        self.harness.load(Ordering::SeqCst)
     }
 }
 
@@ -920,6 +931,148 @@ async fn a_read_that_is_only_the_viewport_does_not_cost_the_ring_its_history() {
     assert_eq!(
         doc.from_top, 0,
         "nothing was discarded, so nothing may be rebased past what the client holds"
+    );
+}
+
+fn lines_of(doc: &kampr_core::scrollback::ScrollbackDoc) -> Vec<String> {
+    doc.rows
+        .iter()
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The operator's report: one screen above a live Claude conversation was `git` output from
+/// before the harness started.
+///
+/// Claude Code takes the alternate screen, so herdr holds no ring for the pane and hands the node
+/// nothing for the harness's whole life (probe #244's mechanism, measured against a real
+/// `claude`). The node kept the shell session it had already accumulated and went on serving it as
+/// this pane's complete history — the ring's `Ingest` sequence over a real session is
+/// `Fresh { rows: 363 }` and then fourteen polls that read nothing at all.
+#[tokio::test]
+async fn a_pane_a_harness_took_stops_serving_the_shell_session_that_came_before_it() {
+    let p = Arc::new(Scripted::default());
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["git-log-1".into(), "git-log-2".into(), "v".into()], 1));
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: patient(),
+            ..RegistryConfig::default()
+        },
+    );
+    let _w = reg.watch("p").await.unwrap();
+
+    let doc = reg
+        .scrollback("p")
+        .await
+        .unwrap()
+        .expect("the shell era is this pane's history");
+    assert_eq!(lines_of(&doc), ["git-log-1", "git-log-2"]);
+    assert!(doc.complete);
+
+    p.no_ring.store(true, Ordering::SeqCst);
+    p.harness.store(true, Ordering::SeqCst);
+
+    let doc = reg
+        .scrollback("p")
+        .await
+        .unwrap()
+        .expect("a pane whose history is unreachable still has something to say about it");
+    assert!(doc.rows.is_empty(), "the shell session is not the conversation");
+    assert_eq!(doc.from_top, 2);
+    assert!(doc.capped, "could not read it, not there is none (#233)");
+    assert!(!doc.complete);
+}
+
+/// The poller has to do it too, and without waiting to be asked for a document: it is the only
+/// thing running while nobody has the pane open, and a client that joins later is handed whatever
+/// the ring holds at that moment.
+#[tokio::test]
+async fn the_history_poller_drops_the_pre_harness_era_on_its_own() {
+    let p = Arc::new(Scripted::default());
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["shell-1".into(), "shell-2".into(), "v".into()], 1));
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: brisk(),
+            ..RegistryConfig::default()
+        },
+    );
+    let _w = reg.watch("p").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(reg.scrollback("p").await.unwrap().expect("history").total_rows, 2);
+
+    p.no_ring.store(true, Ordering::SeqCst);
+    p.harness.store(true, Ordering::SeqCst);
+    let polls = p.reads_done.load(Ordering::SeqCst);
+    while p.reads_done.load(Ordering::SeqCst) < polls + 2 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Asked for through a read that is not itself a supersede, so it is the poller being measured
+    // and not the same op reached a second way. The harness has gone and its rows are back; a ring
+    // the poller left holding them stitches at row zero, and one it emptied starts again past them.
+    p.reads.lock().await.push_back(read(
+        &["shell-1".into(), "shell-2".into(), "after-1".into(), "v".into()],
+        1,
+    ));
+    p.harness.store(false, Ordering::SeqCst);
+    p.no_ring.store(false, Ordering::SeqCst);
+
+    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    assert_eq!(lines_of(&doc), ["shell-1", "shell-2", "after-1"]);
+    assert_eq!(
+        doc.from_top, 2,
+        "the poller had already cut the pre-harness era off the ring"
+    );
+    assert!(doc.capped);
+}
+
+/// The other side of probe #244, and the reason this turns on *whose* screen it is rather than on
+/// there being no ring: a pager takes the screen for a moment and gives it back, and the ring
+/// outlives it. Nothing about that pane is a harness, so nothing supersedes.
+#[tokio::test]
+async fn a_pager_that_takes_the_screen_for_a_moment_does_not_cost_the_ring_its_history() {
+    let p = Arc::new(Scripted::default());
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["shell-1".into(), "shell-2".into(), "v".into()], 1));
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            history: patient(),
+            ..RegistryConfig::default()
+        },
+    );
+    let _w = reg.watch("p").await.unwrap();
+    assert_eq!(reg.scrollback("p").await.unwrap().expect("history").total_rows, 2);
+
+    p.no_ring.store(true, Ordering::SeqCst);
+
+    assert!(
+        reg.scrollback("p").await.unwrap().is_none(),
+        "silence about history is not news about it"
+    );
+    p.no_ring.store(false, Ordering::SeqCst);
+    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    assert_eq!(lines_of(&doc), ["shell-1", "shell-2"]);
+    assert_eq!(
+        doc.from_top, 0,
+        "nothing was discarded, so nothing may be rebased"
     );
 }
 

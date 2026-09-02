@@ -31,9 +31,16 @@ sealed interface ReviewAnchor {
 
 // `complete` is `from_top == 0` and `capped` is "something above was unreachable", so the two are
 // independent and mean different losses. Naming them apart is the point of this type.
-enum class HistoryEdge { None, Whole, Clipped, Discarded }
+enum class HistoryEdge { None, Whole, Clipped, Discarded, Superseded }
 
 fun historyEdge(surface: ReviewSurface): HistoryEdge = when {
+    // Asked before the plain empty case, which used to swallow it. A harness that takes the
+    // alternate screen takes herdr's ring with it (#438) and the node stops vouching for the shell
+    // session that ran before it — nothing held, `complete` gone, `capped` set, which is the node
+    // saying "there was more and it cannot be reached". Reading the row count first turned that
+    // into "this pane keeps no history", which is the node's one careful admission rendered as its
+    // opposite. `capped` is what separates the two: a pane that never had a ring is not capped.
+    surface.historyRows == 0 && surface.capped -> HistoryEdge.Superseded
     surface.historyRows == 0 -> HistoryEdge.None
     !surface.complete -> HistoryEdge.Discarded
     surface.capped -> HistoryEdge.Clipped
@@ -42,6 +49,9 @@ fun historyEdge(surface: ReviewSurface): HistoryEdge = when {
 
 fun historyEdgeSpoken(surface: ReviewSurface): String = when (historyEdge(surface)) {
     HistoryEdge.None -> "Top of the grid. This pane keeps no history."
+    HistoryEdge.Superseded ->
+        "Top of the grid. The program on screen keeps its own scrollback, so Kampr holds none for " +
+            "this pane while it is running."
     HistoryEdge.Whole -> "Top of the history. The record starts here."
     HistoryEdge.Clipped ->
         "Top of the history. Older output was never captured — herdr hands back at most 1000 " +
@@ -55,6 +65,9 @@ fun historyEdgeSpoken(surface: ReviewSurface): String = when (historyEdge(surfac
 // only thing worth saying about intact history is nothing.
 fun historyWarning(surface: ReviewSurface): String? = when (historyEdge(surface)) {
     HistoryEdge.None, HistoryEdge.Whole -> null
+    HistoryEdge.Superseded ->
+        "the program on screen keeps its own scrollback — Kampr holds none for this pane while it " +
+            "is running, and what ran before it is no longer this pane's history"
     HistoryEdge.Clipped ->
         "history is clipped — output older than this scrolled away before Kampr was watching, " +
             "and herdr caps a read at 1000 lines"
@@ -66,6 +79,7 @@ fun historyWarning(surface: ReviewSurface): String? = when (historyEdge(surface)
 // Short enough to sit at the top of the surface without becoming a paragraph.
 fun historyEdgeLabel(surface: ReviewSurface): String? = when (historyEdge(surface)) {
     HistoryEdge.None -> null
+    HistoryEdge.Superseded -> "the program keeps its own history"
     HistoryEdge.Whole -> "history starts here"
     HistoryEdge.Clipped -> "older output is unreachable"
     HistoryEdge.Discarded -> "${surface.fromTop} rows lost here"

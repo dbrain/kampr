@@ -158,9 +158,9 @@ impl Herdr {
     ///
     /// Probe #84: both render at the **true PTY width**, which in a headless session is not the
     /// layout rect, and the difference between them is the only exact measurement of that width
-    /// the socket API offers. `lines` is the viewport and not more: past it, a pane whose harness
-    /// is live and whose ring is empty answers in ~375 ms rather than under one (probe #231), and
-    /// this runs on a poll.
+    /// the socket API offers. `lines` is the viewport and not more, because that is all this needs
+    /// — a wrap is measurable on one screen, and the rows above it are the history poller's job
+    /// and travel a different way.
     pub async fn read_wrapped_and_logical(
         &self,
         pane_id: &str,

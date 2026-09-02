@@ -276,7 +276,7 @@ impl PaneRegistry {
     /// and the ring gets one more chance to stitch.
     pub async fn scrollback(&self, pane_id: &str) -> Result<Option<ScrollbackDoc>> {
         let Some(raw) = self.provider.read_scrollback(pane_id).await? else {
-            return Ok(None);
+            return Ok(self.superseded(pane_id));
         };
         match self.lookup(pane_id) {
             Some(entry) => {
@@ -290,6 +290,24 @@ impl PaneRegistry {
                 Ok(Some(ring.render()))
             }
         }
+    }
+
+    /// Nothing to read, because a harness has the pane's screen: what the ring holds is the shell
+    /// session that ran before it, and it is not this pane's history any more. Dropping it says
+    /// *could not reach it* — `capped`, with `complete` gone — which is the one thing that must
+    /// not round to "there is none" (#233).
+    ///
+    /// `None` for every other silent pane, and for a pane nobody is watching: a ring nothing has
+    /// accumulated into has nothing to supersede, and an empty document from one would claim a
+    /// complete history of no rows.
+    fn superseded(&self, pane_id: &str) -> Option<ScrollbackDoc> {
+        if !self.provider.harness_owns_the_screen(pane_id) {
+            return None;
+        }
+        let entry = self.lookup(pane_id)?;
+        let mut ring = entry.history.lock().unwrap();
+        ring.superseded();
+        Some(ring.render())
     }
 
     /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed,
@@ -685,11 +703,27 @@ async fn accumulate_history(
                     0
                 }
             },
-            // No ring to read: an alt-screen or agent pane, or a pane that has simply not
-            // scrolled yet. The provider answers this from cached state without touching the
-            // socket, so it costs nothing to keep asking at the quiet cadence — and a pane with
-            // no ring *yet* is one frame away from having one.
-            Ok(None) => 0,
+            // No ring to read: a full-screen program has the pane, or it has simply not scrolled
+            // yet. The provider answers this from cached state without touching the socket, so it
+            // costs nothing to keep asking at the quiet cadence — and a pane with no ring *yet* is
+            // one frame away from having one.
+            //
+            // A harness is the case that is not silence. It holds the alternate screen for its
+            // whole life, so the rows already accumulated are the shell session from before it
+            // started, and the poller is the only thing running while nobody has the pane open.
+            Ok(None) => {
+                if provider.harness_owns_the_screen(&pane_id) {
+                    let dropped = ring.lock().unwrap().superseded();
+                    if dropped > 0 {
+                        warn!(
+                            pane = %pane_id,
+                            dropped,
+                            "a harness took the pane's screen; the era before it is not its history"
+                        );
+                    }
+                }
+                0
+            }
             // **Not the same state as a quiet pane, and it must not settle into the same
             // cadence.** `Ok(None)` is the pane having no ring to offer; an error is this node
             // failing to ask, and a poller that parks on the idle backstop for it stops growing
