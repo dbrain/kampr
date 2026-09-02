@@ -2936,6 +2936,10 @@ async fn a_watched_agent_pane_streams_its_conversation() {
     // and a real process named after the harness is what makes the report true. The transcript is
     // written after both, because a harness cannot have written one before it started.
     become_harness(&h._session, &local, home.path(), "claude").await;
+    // Nothing is reported into a pane herdr has not published about yet: a report inside the
+    // post-label `unknown` hold is overtaken by herdr's own first screen publish (#405), and every
+    // status this test then reports would be racing it.
+    herdr_has_scraped(&h._session, &local).await;
     h._session
         .call(
             "pane.report_agent",
@@ -3516,8 +3520,30 @@ async fn every_client_op_lands_on_a_real_herd() {
         }
         assert_eq!(started["ok"], true, "{started}");
         // The agent is real: the node sees the harness on the pane and says so in the herd.
+        //
+        // **Two waits, because two unrelated things are being waited for**, and folding them into
+        // one 20 s budget is what made this test load-sensitive. The first is the host booting a
+        // real `claude` and herdr noticing the process: 0.42–0.65 s on an idle machine here, and
+        // 9.5–10.2 s with these cores twelve times oversubscribed, because a Node.js binary
+        // starting under contention is neither fast nor bounded and nothing in this repository
+        // makes it faster. The second — the only half this test is about — is the node carrying
+        // herdr's answer into its own herd, and that one is *flat* under the same load: 0.92–1.06 s
+        // loaded against well under a second idle, because `pane.agent_detected` is a subscribed
+        // topology event and a missed one costs the 500 ms resubscribe floor rather than the 30 s
+        // sweep. The old failure said the herd never saw the agent when what had happened was that
+        // `claude` had not finished starting.
+        //
+        // The first wait's four minutes are a give-up threshold and not a measurement, which is
+        // what makes them honest: nothing is being timed there, and when they run out the message
+        // says the host never started the agent rather than blaming the node. Four rather than two
+        // because two was not enough once in five full-suite runs under sixteen spinners.
+        let local = second_pane.rsplit('/').next().unwrap().to_string();
+        herdr_pane(&h._session, &local, 240, "labelled an agent on", |p| {
+            p["agent"] == "claude"
+        })
+        .await;
         let mut agent = None;
-        for _ in 0..40 {
+        for _ in 0..120 {
             agent = h
                 .node
                 .herd()
@@ -3528,9 +3554,13 @@ async fn every_client_op_lands_on_a_real_herd() {
             if agent.is_some() {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(125)).await;
         }
-        assert_eq!(agent.as_deref(), Some("claude"), "the herd never saw the agent");
+        assert_eq!(
+            agent.as_deref(),
+            Some("claude"),
+            "herdr had labelled the pane and the node's herd never carried it",
+        );
     }
 
     // worktree.create / worktree.open — Herdr's own git support, straight through.
@@ -4099,6 +4129,10 @@ async fn a_freshly_started_agent_offers_its_conversation_before_a_transcript_exi
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
     become_harness(&h._session, &local, home.path(), "claude").await;
+    // Nothing is reported into a pane herdr has not published about yet: a report inside the
+    // post-label `unknown` hold is overtaken by herdr's own first screen publish (#405), and every
+    // status this test then reports would be racing it.
+    herdr_has_scraped(&h._session, &local).await;
     h._session
         .call(
             "pane.report_agent",
@@ -4691,15 +4725,34 @@ async fn herdr_says(session: &Session, pane: &str, want: &str) {
 /// This is a read, so it moves nothing (#357), and it waits on `agent` too: a status that settled
 /// before herdr saw the process is the fallback for a pane with no agent, not this pane's.
 async fn herdr_has_scraped(session: &Session, pane: &str) {
+    herdr_pane(session, pane, 30, "scraped an agent out of", |p| {
+        p["agent"] == "claude" && p["agent_status"] == "idle"
+    })
+    .await;
+}
+
+/// Herdr's own answer about a pane, polled until it is the one asked for.
+///
+/// Every caller is waiting on something herdr does on its own clock rather than on anything this
+/// suite drives, so the failure message carries what herdr last said — a pane that never got a
+/// label and a pane whose label is the wrong one are different faults and used to read alike.
+async fn herdr_pane(
+    session: &Session,
+    pane: &str,
+    seconds: u64,
+    what: &str,
+    ready: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let mut saw = Value::Null;
-    for _ in 0..300 {
+    while tokio::time::Instant::now() < deadline {
         saw = session.call("pane.get", json!({ "pane_id": pane })).await["pane"].clone();
-        if saw["agent"] == "claude" && saw["agent_status"] == "idle" {
-            return;
+        if ready(&saw) {
+            return saw;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("herdr never scraped an agent out of {pane}; it says {saw}");
+    panic!("herdr never {what} {pane}; it says {saw}");
 }
 
 /// The pane's status as the herd holds it *now*, rather than as some frame once carried it.
@@ -6262,6 +6315,21 @@ async fn a_created_session_is_in_the_herd_by_the_time_its_ack_arrives() {
 /// 1.2 ms, against 26.5 ms into an interactive `bash` with the operator's rc (#273) — so what this
 /// records is a ceiling on the whole path, not a reading of the node's share, and the node's share
 /// is the part that is genuinely below the instrument.
+///
+/// **So it is measured twice, and only the second one is asserted on.** #273's split is the whole
+/// reason: one budget over both halves is a budget over the operator's `.bashrc`, and that is what
+/// went red five times out of five under sixteen spinners while the node was doing nothing wrong.
+/// Measured here, p50 / max:
+///
+/// | | idle | 16 spinners | whole suite + 16 spinners |
+/// |---|---|---|---|
+/// | the pane's own shell on the path | 8.5 ms / 109 ms | 39 ms / 284 ms | **73 ms / 1800 ms** |
+/// | no shell on the path | 2.4 ms / 141 ms | 9.0 ms / 156 ms | **16.9 ms / 162 ms** |
+///
+/// The shell's half is unbounded — a second and three quarters at its worst — and it is not this
+/// suite's to bound. The node's half moves by seven over the same range and its tail stays inside
+/// 162 ms, which is what a budget can be derived from. The first arm keeps its liveness: every one
+/// of its keystrokes still has to come back inside ten seconds or the test says which one did not.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
     let h = harness!("latency");
@@ -6277,14 +6345,97 @@ async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
     // counted as the answer to the first keystroke.
     drain(&mut socket, Duration::from_millis(600)).await;
 
+    // The whole path, with whatever shell the operator's machine puts in a pane. Recorded, and
+    // guarded only by the ten-second deadline inside every round: this is #272's number and there
+    // is nothing here that can make a `.bashrc` faster.
+    let shell = keypress_to_glyph(&mut socket, &pane, 48).await;
+    eprintln!(
+        "keypress-to-glyph, the pane's own shell on the path: {}",
+        quantiles(&shell)
+    );
+
+    // The same path with the shell taken off it, which is the half this node owns.
+    //
+    // `stty sane` first, and it is not tidiness: ble.sh leaves an idle pane's tty with ECHO
+    // already off (#333) and `exec` keeps the termios, so `cat` inherits a tty that echoes
+    // nothing and the first keystroke never comes back at all. Waited for on herdr's own answer
+    // about the pane's foreground process rather than slept over.
+    let local = pane.rsplit('/').next().unwrap().to_string();
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "stty sane; exec cat\n" }),
+    )
+    .await;
+    let mut bare_pane = false;
+    for _ in 0..600 {
+        let info = h
+            ._session
+            .call("pane.process_info", json!({ "pane_id": local }))
+            .await;
+        bare_pane = info["process_info"]["foreground_processes"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["name"] == "cat"));
+        if bare_pane {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        bare_pane,
+        "the pane never got a shell-free process on it to measure"
+    );
+    drain(&mut socket, Duration::from_millis(600)).await;
+    let bare = keypress_to_glyph(&mut socket, &pane, 48).await;
+    eprintln!("keypress-to-glyph, no shell on the path: {}", quantiles(&bare));
+
+    // **The floor, not the median, and from the second arm only.**
+    //
+    // A median is the statistic contention moves: it went 4.6 ms to 63.4 ms between two runs of
+    // this suite with nothing else on the box, because a share of the readings park on a ~110 ms
+    // plateau that is the *test's own* wakeup latency under a parallel suite and not anything the
+    // node did. The floor cannot be moved that way — a busy machine can only ever add — while a
+    // regression that puts constant latency in the path shifts every reading including the
+    // fastest. Both directions are measured: the floor of this arm is 1.7–2.4 ms idle, 6.0–6.8 ms
+    // under sixteen spinners and 6.6–8.0 ms with the whole suite as well, and with a deliberate
+    // 150 ms parked in the node's own `input` it is 152.6 ms. A hundred is twelve times the worst
+    // floor and a third of the mutation.
+    //
+    // What the floor cannot see is a regression that is slow only sometimes; the whole
+    // distribution is printed above for exactly that, and #272 is where it is read.
+    assert!(
+        bare[0] < 100.0,
+        "the fastest of {} keystrokes still took {:.1} ms to come back as a glyph with no shell \
+         in the way, so the node's own share of the path has grown",
+        bare.len(),
+        bare[0]
+    );
+}
+
+fn percentile(sorted: &[f64], q: f64) -> f64 {
+    sorted[((sorted.len() as f64 - 1.0) * q).round() as usize]
+}
+
+fn quantiles(sorted: &[f64]) -> String {
+    format!(
+        "over {} readings: min {:.1} ms  p50 {:.1} ms  p90 {:.1} ms  max {:.1} ms",
+        sorted.len(),
+        sorted[0],
+        percentile(sorted, 0.50),
+        percentile(sorted, 0.90),
+        sorted[sorted.len() - 1],
+    )
+}
+
+/// Keypress-to-glyph readings for one pane, sorted, in milliseconds.
+async fn keypress_to_glyph(socket: &mut Socket, pane: &str, rounds: u32) -> Vec<f64> {
     let mut readings = Vec::new();
-    for round in 0..48u32 {
+    for round in 0..rounds {
         // Every keystroke is a character the screen does not already hold, so the frame that
         // carries it cannot be a repaint of something older.
         let ch = char::from(b'a' + (round % 26) as u8);
         let at = std::time::Instant::now();
         send(
-            &mut socket,
+            socket,
             json!({ "t": "input", "pane": pane, "text": ch.to_string() }),
         )
         .await;
@@ -6292,10 +6443,10 @@ async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut took = None;
         while tokio::time::Instant::now() < deadline && took.is_none() {
-            let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            let Some(message) = recv(socket, Duration::from_secs(2)).await else {
                 continue;
             };
-            if message["pane"] != pane.as_str() {
+            if message["pane"] != pane {
                 continue;
             }
             if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
@@ -6316,34 +6467,20 @@ async fn a_keystroke_comes_back_as_a_glyph_and_the_round_trip_is_recorded() {
         // periodicity is a 16 ms floor between frames and it delivers a write in ~1 ms (#274) —
         // so the aliasing is in the pane's own shell. The jitter stays because the number moves
         // by a factor of three without it.
-        send(
-            &mut socket,
-            json!({ "t": "input", "pane": pane, "keys": ["BSpace"] }),
-        )
-        .await;
+        //
+        // **The last sentence is the one this suite has since contradicted, and it has not been
+        // reprobed.** The plateau is at ~110 ms rather than ~100 ms, and it shows up on the arm
+        // with *no shell on the pane at all* — p90 104–117 ms in every loaded run of the suite,
+        // against a p50 of 13–17 ms and a floor of 7 ms. Whatever it is, a shell is not required
+        // to produce it, and it tracks how oversubscribed the box is rather than what the pane is
+        // running: it is most likely this test's own wakeup latency and not the node's. That is a
+        // guess and it is why nothing here asserts on a quantile it can reach.
+        send(socket, json!({ "t": "input", "pane": pane, "keys": ["BSpace"] })).await;
         let jitter = 50 + (round as u64 * 37) % 190;
-        drain(&mut socket, Duration::from_millis(jitter)).await;
+        drain(socket, Duration::from_millis(jitter)).await;
     }
-
     readings.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let at = |q: f64| readings[((readings.len() as f64 - 1.0) * q).round() as usize];
-    eprintln!(
-        "keypress-to-glyph over {} readings: min {:.1} ms  p50 {:.1} ms  p90 {:.1} ms  max {:.1} ms",
-        readings.len(),
-        readings[0],
-        at(0.50),
-        at(0.90),
-        readings[readings.len() - 1],
-    );
-
-    // Load-sensitive, so this is a ceiling that says "the path is not broken", not the measurement.
-    // The measurement is the line above; #272 is where it is written down and #273 is what it
-    // turned out to be a measurement of.
-    assert!(
-        at(0.50) < 250.0,
-        "the median keystroke took {:.1} ms to come back as a glyph",
-        at(0.50)
-    );
+    readings
 }
 
 async fn drain(socket: &mut Socket, quiet: Duration) {
@@ -6572,6 +6709,10 @@ async fn what_the_operator_left_in_the_panes_own_composer_reaches_the_phone_befo
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
     become_harness(&h._session, &local, home.path(), "claude").await;
+    // Nothing is reported into a pane herdr has not published about yet: a report inside the
+    // post-label `unknown` hold is overtaken by herdr's own first screen publish (#405), and every
+    // status this test then reports would be racing it.
+    herdr_has_scraped(&h._session, &local).await;
     h._session
         .call(
             "pane.report_agent",
@@ -7023,6 +7164,10 @@ async fn a_transcript_that_moved_while_nobody_watched_is_not_the_one_the_reader_
     let local = pane.split_once('/').unwrap().1.to_string();
 
     become_harness(&h._session, &local, home.path(), "claude").await;
+    // Nothing is reported into a pane herdr has not published about yet: a report inside the
+    // post-label `unknown` hold is overtaken by herdr's own first screen publish (#405), and every
+    // status this test then reports would be racing it.
+    herdr_has_scraped(&h._session, &local).await;
     h._session
         .call(
             "pane.report_agent",
@@ -7163,9 +7308,22 @@ async fn the_message_a_pane_is_asking_about_stays_on_the_conversation_while_it_a
         "I am about to remove the old migration file,",
         "I am about to remove the old migration file, which cannot be undone.",
     ] {
-        paint_harness_screen(&mut socket, &pane, &format!("\u{25cf} {said}\\n\\n\u{276f} \\n")).await;
+        repaint_harness_screen(
+            &h,
+            &mut socket,
+            &pane,
+            &format!("\u{25cf} {said}\\n\\n\u{276f} \\n"),
+            said,
+        )
+        .await;
     }
-    let (writing, _) = live_preview(&mut socket, &pane, 3).await;
+    let (writing, _) = live_preview(
+        &mut socket,
+        &pane,
+        60,
+        Some("I am about to remove the old migration file, which cannot be undone."),
+    )
+    .await;
     assert_eq!(
         writing.as_deref(),
         Some("I am about to remove the old migration file, which cannot be undone."),
@@ -7173,11 +7331,13 @@ async fn the_message_a_pane_is_asking_about_stays_on_the_conversation_while_it_a
     );
 
     // And then it asks. The message is still on the screen, above the dialog.
-    paint_harness_screen(
+    repaint_harness_screen(
+        &h,
         &mut socket,
         &pane,
         "\u{25cf} I am about to remove the old migration file, which cannot be undone.\\n\\n\
          Do you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n\\n\u{276f} \\n",
+        "Do you want to make this edit?",
     )
     .await;
     h._session
@@ -7186,7 +7346,13 @@ async fn the_message_a_pane_is_asking_about_stays_on_the_conversation_while_it_a
             json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
         )
         .await;
-    let (_, retired) = live_preview(&mut socket, &pane, 5).await;
+    // **The window is opened on the edge, not on the report.** Withdrawing is what the pump does
+    // when a pane stops being live, so a watch that expires before the herd has even carried
+    // `blocked` to the pump proves nothing and passes — which is the worse of the two failures a
+    // load-sensitive negative assertion can have. Three seconds past the edge is fifteen turns of
+    // the 200 ms live poll, and the withdrawal this guards against is published on the first.
+    until_herd(&h, &pane, "blocked").await;
+    let (_, retired) = live_preview(&mut socket, &pane, 3, None).await;
     assert!(
         !retired,
         "the pane asked a question and the conversation took away the message it was asking about",
@@ -7200,11 +7366,13 @@ async fn the_message_a_pane_is_asking_about_stays_on_the_conversation_while_it_a
 async fn a_pane_opened_while_it_is_already_asking_still_says_what_it_is_asking_about() {
     let (h, mut socket, pane, local, _home) = an_agent_pane_with_a_transcript("asked").await;
 
-    paint_harness_screen(
+    repaint_harness_screen(
+        &h,
         &mut socket,
         &pane,
         "\u{25cf} I am about to remove the old migration file, which cannot be undone.\\n\\n\
          Do you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n\\n\u{276f} \\n",
+        "Do you want to make this edit?",
     )
     .await;
     h._session
@@ -7214,7 +7382,13 @@ async fn a_pane_opened_while_it_is_already_asking_still_says_what_it_is_asking_a
         )
         .await;
 
-    let (shown, _) = live_preview(&mut socket, &pane, 8).await;
+    let (shown, _) = live_preview(
+        &mut socket,
+        &pane,
+        60,
+        Some("I am about to remove the old migration file, which cannot be undone."),
+    )
+    .await;
     assert_eq!(
         shown.as_deref(),
         Some("I am about to remove the old migration file, which cannot be undone."),
@@ -7244,6 +7418,10 @@ async fn an_agent_pane_with_a_transcript(
     let local = pane.split_once('/').unwrap().1.to_string();
 
     become_harness(&h._session, &local, home.path(), "claude").await;
+    // Nothing is reported into a pane herdr has not published about yet: a report inside the
+    // post-label `unknown` hold is overtaken by herdr's own first screen publish (#405), and every
+    // status this test then reports would be racing it.
+    herdr_has_scraped(&h._session, &local).await;
     h._session
         .call(
             "pane.report_agent",
@@ -7400,10 +7578,17 @@ async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pre
     }
 }
 
-/// Whether the pane's own screen is showing `want` yet.
+/// Whether a screen a test painted has landed — on **both** of the screens the node reads.
 ///
-/// A sleep is not enough for a screen a test painted: herdr reports `processing input...` while a
-/// long line is still arriving, and a node asked to read one mid-paste reads whatever is there.
+/// A sleep is not enough: herdr reports `processing input...` while a long line is still arriving,
+/// and a node asked to read one mid-paste reads whatever is there. Nor is it enough on a contended
+/// machine, where the shell running the `printf` competes for the same cores as the test — a fixed
+/// 900 ms covered none of three paints on a box with twelve times more runnable work than cores.
+///
+/// Both, because the node has two screens and its two surfaces read different ones: `pending`
+/// re-reads herdr over the socket, and the conversation's live preview reads the node's own
+/// emulator, fed by a stream that arrives on its own schedule. Waiting for one and asserting on
+/// the other is the same fixed-duration bet with extra steps.
 async fn drawn(h: &Harness, local: &str, want: &str, seconds: u64) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     while tokio::time::Instant::now() < deadline {
@@ -7414,13 +7599,19 @@ async fn drawn(h: &Harness, local: &str, want: &str, seconds: u64) -> bool {
                 json!({ "pane_id": local, "source": "visible", "format": "text", "strip_ansi": true }),
             )
             .await;
-        if seen["read"]["text"]
+        let on_herdr = seen["read"]["text"]
             .as_str()
-            .is_some_and(|text| text.contains(want))
-        {
+            .is_some_and(|text| text.contains(want));
+        let on_node = h
+            .node
+            .primary()
+            .registry
+            .screen(local)
+            .is_some_and(|screen| screen.rows.join("\n").contains(want));
+        if on_herdr && on_node {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     false
 }
@@ -7434,8 +7625,52 @@ async fn paint_harness_screen(socket: &mut Socket, pane: &str, body: &str) {
     tokio::time::sleep(Duration::from_millis(900)).await;
 }
 
+/// The same screen for a test watching the *conversation*, painted two ways the one above is not.
+///
+/// **The erase is inside the `printf`.** Two commands leave the screen genuinely blank between
+/// them, and the node's live preview polls every 200 ms: on a contended machine it reads that
+/// blank, `Watch::stop`s on it, and the preview it was following is withdrawn and cannot come
+/// back — the block it would have resumed from is the one `stop` just forgot. That withdrawal is
+/// the pump behaving correctly about a screen no real harness ever draws, and it was the fixture
+/// drawing it. One `printf` is one write.
+///
+/// **And it is waited for rather than slept over.** The fixed sleep above covered none of three
+/// paints on a box with twelve times more runnable work than cores, and a preview of a message
+/// nothing was ever seen writing is no preview at all.
+///
+/// Neither change is portable back to the sibling, which is why there are two: a `pending` test's
+/// command line is part of *its* fixture — the shell echoes it, it is long enough to wrap into the
+/// rows the dialog detector reads, and how it wraps turns on the ambient prompt width (#406, #407).
+/// Lengthening that echo with escapes cost `the_ticks_on_a_question…` its `header`/`question`
+/// split in four loaded runs out of six where `clear` cost it none.
+async fn repaint_harness_screen(h: &Harness, socket: &mut Socket, pane: &str, body: &str, drawn_when: &str) {
+    let erase = "\\033[H\\033[2J\\033[3J";
+    send(
+        socket,
+        json!({ "t": "input", "pane": pane, "text": format!("printf '%b' '{erase}{body}'\n") }),
+    )
+    .await;
+    let local = pane.rsplit('/').next().unwrap();
+    assert!(
+        drawn(h, local, drawn_when, 60).await,
+        "the pane never painted {drawn_when:?}",
+    );
+}
+
 /// What the live preview is showing on this pane, and whether it was ever taken away.
-async fn live_preview(socket: &mut Socket, pane: &str, seconds: u64) -> (Option<String>, bool) {
+///
+/// `wanted` is what turns this from a sample into a wait. A claim that the conversation *shows*
+/// something is proved the instant it arrives, so watching a fixed window past that only makes the
+/// test slower — and, on a loaded machine, watching a window too short for the paints to have
+/// landed at all made it report that nothing was ever shown. A claim that nothing was *withdrawn*
+/// has no such moment and still watches the whole window; its callers earn the window by waiting
+/// for the edge the withdrawal would happen on before they open it.
+async fn live_preview(
+    socket: &mut Socket,
+    pane: &str,
+    seconds: u64,
+    wanted: Option<&str>,
+) -> (Option<String>, bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let (mut shown, mut retired) = (None, false);
     while tokio::time::Instant::now() < deadline {
@@ -7456,6 +7691,9 @@ async fn live_preview(socket: &mut Socket, pane: &str, seconds: u64) -> (Option<
                 // trust the surface — which is the whole complaint.
                 false => retired = true,
             }
+        }
+        if wanted.is_some() && shown.as_deref() == wanted {
+            return (shown, retired);
         }
     }
     (shown, retired)
