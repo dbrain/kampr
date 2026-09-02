@@ -7397,12 +7397,17 @@ fn write_session_marker(home: &Path, pid: u32, session: &str) {
 /// every visit rather than on the first, on the surface the operator reads from a phone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_browser_that_already_has_the_bundle_is_not_sent_it_again() {
-    let h = harness!("assets");
-    let head = response_head(&format!("{}/index.html", h.origin), "").await;
-    if head.starts_with("HTTP/1.1 404") {
+    // **Asked of the bundle, not of the shell.** A build with no bundle staged into it — which is
+    // every CI job but `single-binary` — answers `index.html` with the *placeholder*, and that is a
+    // page the node generates rather than a file it holds: it has no content to hash and it is
+    // `no-store` for the same reason the shell is not, because it stops being the right answer the
+    // moment a bundle appears. Skipping on a 404 was checking for a reply this path never gives.
+    if !kampr_node::assets::has_bundle() {
         eprintln!("skipping: no client bundle staged into this build");
         return;
     }
+    let h = harness!("assets");
+    let head = response_head(&format!("{}/index.html", h.origin), "").await;
     assert!(head.contains("200"), "{head}");
     assert!(
         head.to_lowercase().contains("cache-control: no-cache"),
