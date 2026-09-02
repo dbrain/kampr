@@ -56,8 +56,9 @@ fun workingSince(reply: Reply?, nowMillis: Double): String? {
 
 // Ticked by the second, and it is the one thing on this screen that has to be: a counter that
 // moves once a minute reads as a frozen one, which is the whole complaint that the age beside a
-// turn used to earn (#285). It ticks only while it is on the screen, which is only while an agent
-// is working.
+// turn used to earn. An operator's reading rather than a measurement — there is no probe behind
+// it, and it wore #285's number for a while, which measured something else entirely. It ticks only
+// while it is on the screen, which is only while an agent is working.
 @Composable
 fun WorkingStrip(reply: Reply?, modifier: Modifier = Modifier, clock: () -> Double = ::wallClockMillis) {
     val tokens = Kampr.tokens

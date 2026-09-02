@@ -265,6 +265,12 @@ fun ConversationView(
     // three harness tests that handed the view a finished transcript all said it worked.
     val pinned by remember(shown, leading) { derivedStateOf { pinnedBlock(listState, shown, leading) } }
     var strip by remember { mutableStateOf(0) }
+    // The band under the transcript belongs to a strip that is standing there, and read through
+    // the list rather than off the last measurement: a composable that returns before it draws
+    // anything is never measured again, so a strip that has gone reports the size it had when it
+    // was there for ever.
+    var footPx by remember { mutableStateOf(0) }
+    val foot = if (pane.facets.running.isEmpty()) 0 else footPx
     val density = LocalDensity.current
     // Over the whole pane and outside the transcript's own column, because that is what a picture
     // opened to be looked at needs — and because the card that opened it is inside a lazy list,
@@ -369,7 +375,10 @@ fun ConversationView(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() })
+                            .padding(
+                                top = if (question == null) 0.dp else with(density) { strip.toDp() },
+                                bottom = with(density) { foot.toDp() },
+                            )
                             .onSizeChanged { viewport = it.height },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
@@ -439,16 +448,19 @@ fun ConversationView(
                     // now is a fact about now, and the card in the transcript is only findable by
                     // scrolling back to the moment of the launch. Under the question, which is the
                     // one thing on this screen that outranks everything.
+                    //
+                    // Measured, and the list handed that much of its own box, for the reason the
+                    // question card above is: an overlay that takes nothing back does not sit
+                    // above the transcript, it sits *on* it — the last turn was under the strip
+                    // for as long as anything was running. The list's 16 dp of foot survives it
+                    // and becomes the gap between the two.
                     RunningStrip(
                         pane.facets.running,
-                        Modifier.align(Alignment.BottomStart),
+                        Modifier.align(Alignment.BottomStart).onSizeChanged { size -> footPx = size.height },
+                        open = RUNNING_OPEN in expanded,
+                        onFold = { toggle(RUNNING_OPEN) },
                         clock = clock,
                     )
-                    // Pinned at the foot rather than in the turn that launched it: what is running
-                    // now is a fact about now, and the card in the transcript is only findable by
-                    // scrolling back to the moment of the launch. Under the question, which is the
-                    // one thing on this screen that outranks everything.
-
                 }
             }
 

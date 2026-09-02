@@ -5,6 +5,7 @@ import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 private const val BEGAN = "2026-08-20T09:00:00Z"
@@ -44,7 +45,14 @@ class WorkingStripTest {
         assertEquals("0s", workingSince(reply, AT))
         assertEquals("41s", workingSince(reply, AT + 41_000))
         assertEquals("2m 11s", workingSince(reply, AT + 131_000))
-        assertEquals("1h 5m", workingSince(reply, AT + 3_900_000))
+        // Past the hour it keeps its seconds place, because this counter is watched for movement
+        // and an agent an hour into a reply is the one being watched hardest.
+        assertEquals("1h 05m 00s", workingSince(reply, AT + 3_900_000))
+        assertNotEquals(
+            workingSince(reply, AT + 3_900_000),
+            workingSince(reply, AT + 3_901_000),
+            "an hour-old reply's counter stood still for a minute at a time",
+        )
     }
 
     // A reply the harness stamped in the future is two clocks disagreeing, not a negative

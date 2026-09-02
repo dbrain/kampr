@@ -114,16 +114,20 @@ fun localDay(atMillis: Double, offsetMillis: Double): Long =
 private fun pad2(value: Long): String = if (value < 10L) "0$value" else "$value"
 
 // A stopwatch, not an age: "2m 11s" for something still running, where `elapsed` would say "2m"
-// and stop moving for the next fifty-eight seconds. Seconds are dropped past an hour, where they
-// are noise, and the whole thing is dropped below zero — a reply stamped in the future is a clock
-// disagreeing, not a negative duration.
+// and stop moving for the next fifty-eight seconds. The seconds place survives the hour, and it
+// has to: both callers are counters somebody is watching to decide whether a thing is stuck, and
+// an hour-old launch is precisely the one they are watching. Dropping the seconds there left the
+// oldest, most suspicious row as the one frozen thing on the screen. Minutes and seconds are
+// padded past the hour so a row that will be up for hours does not change width every second.
+// Dropped below zero — a reply stamped in the future is a clock disagreeing, not a negative
+// duration.
 fun elapsedSpan(millis: Double): String? {
     val seconds = (millis / 1000.0).toLong()
     if (seconds < 0) return null
     return when {
         seconds < 60 -> "${seconds}s"
         seconds < 3600 -> "${seconds / 60}m ${seconds % 60}s"
-        else -> "${seconds / 3600}h ${seconds % 3600 / 60}m"
+        else -> "${seconds / 3600}h ${pad2(seconds % 3600 / 60)}m ${pad2(seconds % 60)}s"
     }
 }
 

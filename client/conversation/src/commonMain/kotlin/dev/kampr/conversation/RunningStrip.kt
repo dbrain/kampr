@@ -23,11 +23,14 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
+import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.util.elapsedSpan
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.wire.Running
@@ -47,8 +50,28 @@ fun runningLabel(run: Running): String {
     return what?.let { "$who · $it" } ?: who
 }
 
+// The fold lives in the transcript's own toggle set, keyed like a turn's, so this is the mechanism
+// the tool cards already use rather than a second one beside it. That set holds departures from the
+// default and this strip's default is shut, so membership means open — and because the set is not
+// keyed on the list, a launch finishing or starting never folds the strip back under a reader who
+// opened it.
+const val RUNNING_OPEN = "running:open"
+
 fun runningSince(run: Running, nowMillis: Double): String? =
     parseIsoMillis(run.since)?.let { elapsedSpan(nowMillis - it) }
+
+// What a reader with no eyes on the strip is told, and it is never less than the eye is shown. A
+// folded strip draws a count and the names are behind it, so the line names them anyway — losing
+// them is the one thing a fold must not do to a screen reader. The stopwatches go with the rows
+// they belong to: they move every second, this is a live region, and a folded strip re-read once a
+// second is a fold that made the screen louder rather than quieter.
+fun runningSpoken(running: List<Running>, rows: Boolean, nowMillis: Double): String {
+    val head = "${running.size} still running"
+    return running.joinToString("; ", prefix = if (rows) "$head: " else "$head, folded: ") { run ->
+        val since = if (rows) runningSince(run, nowMillis) else null
+        if (since == null) runningLabel(run) else "${runningLabel(run)}, $since"
+    }
+}
 
 // The operator, on 0.1.49: *"sometimes claude leaves shells open forever and 'working' can mean
 // nothing but 'a shell was left running'"*.
@@ -60,16 +83,33 @@ fun runningSince(run: Running, nowMillis: Double): String? =
 // is a fixed place, above the reply box, that holds while anything is in flight and disappears
 // when nothing is.
 //
-// Each row is a stopwatch rather than an age. `elapsedSpan` moves every second, and it has to:
-// a counter that changes once a minute reads as a frozen one (#285), and a frozen counter is
-// exactly what somebody looking for a stuck shell would misread.
+// Each row is a stopwatch rather than an age. `elapsedSpan` moves every second, and it has to: a
+// counter that changes once a minute reads as a frozen one, and a frozen counter is exactly what
+// somebody looking for a stuck shell would misread. Not a probe — an operator's reading of their
+// own screen, twice: the complaint the age beside a turn used to earn, and then this strip's own,
+// *"one is measuring in minutes so can't tell if it's ticking"*, against the `≥1h` branch that
+// still rendered `2h 14m` while claiming to be a stopwatch.
+//
+// It starts folded, on the operator's own reading of it: *"id say it should collapse by default
+// and just show numbers, or if one show the one running full line"*. Eight launches is eight rows
+// standing over the transcript, and the count is the news — that something is outstanding — where
+// the names are what somebody who has read the count then goes looking for.
+//
+// A single launch is not a special case of the fold, it is a size at which there is nothing to
+// fold: the row names the thing and carries its stopwatch, which is strictly more than the count
+// says, and it hides nothing. So there is no chevron there offering to hide it. The count line
+// stands above the rows in every state, so a second launch starting changes what is under the
+// header rather than the shape of the whole strip.
 //
 // It is a **read**. Nothing here presses anything, and nothing here reshapes or focuses a pane
-// (rule 3) — the way in to a launched conversation is still the card the turn carries.
+// (rule 3) — the way in to a launched conversation is still the card the turn carries. The fold is
+// this client's own state and goes nowhere near the pane.
 @Composable
 fun RunningStrip(
     running: List<Running>,
     modifier: Modifier = Modifier,
+    open: Boolean = false,
+    onFold: () -> Unit = {},
     clock: () -> Double = ::wallClockMillis,
 ) {
     if (running.isEmpty()) return
@@ -85,6 +125,8 @@ fun RunningStrip(
         }
     }
     val shape = RoundedCornerShape(tokens.radii.md)
+    val foldable = running.size > 1
+    val rows = if (foldable && !open) emptyList() else running
     DisableSelection {
         Column(
             modifier
@@ -92,21 +134,44 @@ fun RunningStrip(
                 .padding(horizontal = 12.dp, vertical = 6.dp)
                 .background(tokens.color.raise, shape)
                 .edge(tokens.card, shape)
-                .announce(
-                    running.joinToString("; ", prefix = "${running.size} still running: ") { run ->
-                        val since = runningSince(run, now)
-                        if (since == null) runningLabel(run) else "${runningLabel(run)}, $since"
-                    },
-                )
+                .announce(runningSpoken(running, rows.isNotEmpty(), now))
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            LabelText(
-                if (running.size == 1) "1 still running" else "${running.size} still running",
-                tokens.type.metaSmall,
-                tokens.color.mute,
-            )
-            running.forEach { run ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (!foldable) {
+                            Modifier
+                        } else {
+                            Modifier
+                                .touchable(LANDSCAPE_TOUCH)
+                                .action(
+                                    if (open) "Hide what is running" else "Show what is running",
+                                    onFold,
+                                    selected = open,
+                                )
+                        },
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LabelText(
+                    if (running.size == 1) "1 still running" else "${running.size} still running",
+                    tokens.type.metaSmall,
+                    tokens.color.mute,
+                    Modifier.weight(1f),
+                )
+                if (foldable) {
+                    IconGlyph(
+                        if (open) ConversationIcons.chevronUp else ConversationIcons.chevronDown,
+                        12.dp,
+                        tokens.color.mute,
+                    )
+                }
+            }
+            rows.forEach { run ->
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
