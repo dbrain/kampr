@@ -91,21 +91,20 @@ class WheelScrollTest {
         assertTrue(session.view.scrolled, "a wheel is the reader moving the surface, same as a drag")
     }
 
+    // Both ends of the surface, and the far end is the one that was missing. The wheel used to be
+    // clamped at the caret floor — a *resting* place, never a limit — so on any grid taller than
+    // the viewport whose caret is above the bottom of it, the last rows of the pane could not be
+    // reached at all. `ReachingTheBottomOfAPaneTest` is what that costs an operator; this is the
+    // wheel's share of it.
     @Test
-    fun aWheelStopsWhereTheDragStops() = runComposeUiTest {
+    fun aWheelReachesBothEndsOfTheSurface() = runComposeUiTest {
         val session = deepPane()
         val view = session.view
-        assertTrue(view.minScroll > 0f, "the caret floor has to be off the bottom, or nothing is tested")
+        assertTrue(view.band.floor > 0f, "the caret floor has to be off the bottom, or nothing is tested")
         repeat(NOTCHES_TO_THE_END) { wheel(-1f) }
         assertEquals(view.maxScroll, view.scrollY, 0.01f, "the wheel ran past the top of history")
         repeat(NOTCHES_TO_THE_END) { wheel(1f) }
-        assertEquals(
-            view.minScroll,
-            view.scrollY,
-            0.01f,
-            "the wheel ran past the caret floor, which is the bug #175 and #177 were about",
-        )
-        assertTrue(view.following, "back on the floor is back on the live edge")
+        assertEquals(0f, view.scrollY, 0.01f, "the wheel stopped short of the bottom of the grid")
     }
 
     // The grid pans sideways as well, and a trackpad and a browser both send that axis of their

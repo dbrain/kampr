@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -35,6 +36,7 @@ private val PANE = PaneInfo(
 )
 
 private const val FILL = "fill the tab"
+private const val FOCUS = "focus at the desk"
 
 @OptIn(ExperimentalTestApi::class)
 @Composable
@@ -69,6 +71,26 @@ class PaneActionsTest {
             spoken.size + written.size,
             "the actions sheet says \"zoom\" ${spoken.size + written.size} times, " +
                 "and the only zoom this app has is the one in the pane header",
+        )
+    }
+
+    // Two chips, one op. The one called "focus" sent `pane.zoom`, so the sheet offered the same
+    // toggle twice under two names and the operator could not tell either of them apart — and
+    // `ManageOp.Focus`, which the node has implemented since `manage.rs:443`, was constructed
+    // nowhere in the client at all.
+    @Test
+    fun theChipCalledFocusSendsAFocusAndNotAZoom() = runComposeUiTest {
+        val sent = mutableListOf<ManageOp>()
+        setContent { Sheet(sent) }
+        waitForIdle()
+        onAllNodesWithText(FOCUS).onFirst().performClick()
+        waitForIdle()
+        onNodeWithText("focus").performClick()
+        waitForIdle()
+        assertEquals(
+            listOf<ManageOp>(ManageOp.Focus(PANE.id)),
+            sent,
+            "\"$FOCUS\" sent $sent",
         )
     }
 

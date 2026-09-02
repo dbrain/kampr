@@ -133,6 +133,18 @@ fun defaultZoom(
 // seven rows at a time (#380).
 // Inside the band nothing moves; outside it the surface moves the least it can, which is what
 // keeping the caret on screen actually asks for.
+//
+// **The band is a function of one number: how many rows sit below the caret.** Its width is fixed
+// at `contentHeight - cellHeight`, so it translates with the caret one pixel per pixel — and a
+// caret excursion wider than the band therefore drags the viewport in *both* directions, once per
+// frame. A full-screen redraw is exactly that excursion: on a grid taller than the rectangle,
+// #380's fix does not cover it and the surface swings up and back several times a second. So the
+// index handed in is the one the caret has *held still on*, never the live one (`TerminalView`).
+//
+// That the band depends on the caret's distance from the bottom rather than on its absolute index
+// is what makes settling safe on a pane whose output scrolls: the caret stays on the last live row
+// while its index grows with every row that leaves the grid, so the distance — and the band — never
+// move, and a follower is never dragged by a reading that has gone stale.
 data class CaretBand(val floor: Float, val ceiling: Float)
 
 fun caretBand(

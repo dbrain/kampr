@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.LocalManage
 import dev.kampr.shared.ui.ManageIo
+import dev.kampr.shared.ui.MenuAnchor
 import dev.kampr.shared.ui.PaneCard
 import dev.kampr.shared.ui.PaneRow
 import dev.kampr.shared.wire.PaneInfo
@@ -44,14 +45,24 @@ private val LISTED = PaneInfo(
 
 private const val NOW = 1_700_000_000.0
 
-private const val ELLIPSIS = "Pane actions"
+private const val ELLIPSIS = "Pane menu"
 
+// Two menus, and which one a listed pane reaches is the whole point: a row is a pane you cannot
+// see, so it gets the list menu and never the in-session sheet.
 private class ManageSpy(override val enabled: Boolean = true) : ManageIo {
     val opened = mutableListOf<String>()
+    val sheeted = mutableListOf<String>()
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) {
-        opened += paneId
+        sheeted += paneId
     }
+
+    override fun openMenu(paneId: String, at: MenuAnchor?) {
+        opened += paneId
+        anchors += at
+    }
+
+    val anchors = mutableListOf<MenuAnchor?>()
 }
 
 private enum class Listing { Card, Row }
@@ -82,7 +93,7 @@ private fun Listed(manage: ManageIo, place: Place, onClick: () -> Unit) {
     }
 }
 
-private data class Outcome(val opened: List<String>, val clicked: Int)
+private data class Outcome(val opened: List<String>, val sheeted: List<String>, val clicked: Int)
 
 @OptIn(ExperimentalTestApi::class)
 private fun gesture(place: Place, on: SemanticsNodeInteraction.() -> Unit): Outcome {
@@ -94,7 +105,7 @@ private fun gesture(place: Place, on: SemanticsNodeInteraction.() -> Unit): Outc
         waitForIdle()
         onNodeWithContentDescription("Open ", substring = true).on()
         waitForIdle()
-        outcome = Outcome(manage.opened.toList(), clicked)
+        outcome = Outcome(manage.opened.toList(), manage.sheeted.toList(), clicked)
     }
     return outcome
 }
@@ -168,6 +179,52 @@ class PaneActionsGestureTest {
                     listOf(LISTED.id),
                     manage.opened,
                     "the ellipsis on ${place.said} opened ${manage.opened}",
+                )
+            }
+        }
+    }
+
+    // The list menu is the sidebar's, and the in-session sheet is the pane screen's and the mosaic
+    // cell's. A row that opened the sheet would be offering "fill the tab" about a tab nobody is
+    // looking at, which is the thing the rework is for.
+    @Test
+    fun aListedPaneReachesTheListMenuAndNeverTheInSessionSheet() {
+        for (place in PLACES) {
+            val right = gesture(place) { performMouseInput { rightClick() } }
+            assertTrue(
+                right.sheeted.isEmpty(),
+                "a right-click on ${place.said} opened the in-session sheet: ${right.sheeted}",
+            )
+            val manage = ManageSpy()
+            runComposeUiTest {
+                setContent { Listed(manage, place) {} }
+                waitForIdle()
+                onNodeWithContentDescription(ELLIPSIS).performClick()
+                waitForIdle()
+                assertTrue(
+                    manage.sheeted.isEmpty(),
+                    "the ellipsis on ${place.said} opened the in-session sheet: ${manage.sheeted}",
+                )
+            }
+        }
+    }
+
+    // Herdr anchors a context menu at the pointer's own cell (#426). A menu that always opened at
+    // the top-left would still be a menu, and would still be wrong on a 27-inch screen.
+    @Test
+    fun aRightClickHandsTheMenuThePointersOwnPlace() {
+        for (place in PLACES) {
+            val manage = ManageSpy()
+            runComposeUiTest {
+                setContent { Listed(manage, place) {} }
+                waitForIdle()
+                onNodeWithContentDescription("Open ", substring = true)
+                    .performMouseInput { rightClick(percentOffset(0.75f, 0.5f)) }
+                waitForIdle()
+                val at = manage.anchors.singleOrNull()
+                assertTrue(
+                    at != null && at.x > 100.dp,
+                    "a right-click three quarters across a 320 dp ${place.said} anchored at $at",
                 )
             }
         }

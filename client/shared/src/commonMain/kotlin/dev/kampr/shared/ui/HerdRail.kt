@@ -143,14 +143,14 @@ private fun RailPane(pane: PaneInfo, now: Double, active: Boolean, onClick: () -
             .fillMaxWidth()
             .height(TILE)
             .let { if (active) it.background(tokens.color.raise, shape) else it }
-            .paneActions(pane.id)
+            .paneMenu(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
                 onClick,
                 shape,
                 role = Role.Tab,
                 selected = active,
-                onLongClick = if (manage.enabled) ({ manage.openActions(pane.id) }) else null,
+                onLongClick = if (manage.enabled) ({ manage.openMenu(pane.id) }) else null,
             ),
         contentAlignment = Alignment.Center,
     ) {

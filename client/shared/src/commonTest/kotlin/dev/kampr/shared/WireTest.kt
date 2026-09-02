@@ -113,6 +113,38 @@ class WireTest {
         assertEquals("Bash", (blocks[2] as Block.Tool).name)
     }
 
+    // A tool card's `lines` has always counted the *result*, and the only block beside it was the
+    // call's own input — so a Bash card read "13 lines" over a one-line command and expanding it
+    // showed the command. `role` names which side of the call a code block sits on, and it is the
+    // only thing that tells the two apart on the wire.
+    @Test
+    fun aCodeBlockSaysWhichSideOfTheCallItIsOn() {
+        val msg = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[
+               {"id":"t1","role":"assistant","blocks":[
+                 {"b":"tool","name":"Bash","summary":"probe key grammar","lines":3,"state":"done"},
+                 {"b":"code","lang":"bash","text":"herdr key list"},
+                 {"b":"code","text":"Home\nEnd\nPageUp","role":"output"}]}]}"""
+        ) as ServerMsg.Convo
+        val blocks = msg.turns[0].blocks
+        assertNull((blocks[1] as Block.Code).role, "the call's own input is not its output")
+        assertEquals("output", (blocks[2] as Block.Code).role)
+        assertNull((blocks[2] as Block.Code).lang, "a result is not written in a language")
+    }
+
+    // Additive in the direction that matters: the field is absent on every code block an installed
+    // client has ever been sent, and a node too old to send it leaves the reading it always gave.
+    @Test
+    fun aCodeBlockWithNoRoleIsTheOneEveryOlderNodeSends() {
+        val msg = Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[
+               {"id":"t1","role":"assistant","blocks":[{"b":"code","lang":"ts","text":"send()"}]}]}"""
+        ) as ServerMsg.Convo
+        val code = msg.turns[0].blocks[0] as Block.Code
+        assertEquals("ts", code.lang)
+        assertNull(code.role)
+    }
+
     // Additive: a header beside the marker, and a client that has never heard of `att` still
     // renders the marker it always did.
     @Test

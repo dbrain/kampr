@@ -16,11 +16,15 @@ import kotlin.js.ExperimentalWasmJsInterop
 // beforeinput / input / composition*, diffed against what it last held. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun installDom(notify: () -> Unit) {
+private fun installDom(notify: () -> Unit, chord: (String) -> String) {
     js(
         """
         (function () {
-            if (globalThis.__kamprInput) { globalThis.__kamprInput.notify = notify; return; }
+            if (globalThis.__kamprInput) {
+                globalThis.__kamprInput.notify = notify;
+                globalThis.__kamprInput.chord = chord;
+                return;
+            }
             var el = document.createElement('div');
             el.setAttribute('contenteditable', 'plaintext-only');
             el.setAttribute('autocapitalize', 'off');
@@ -35,7 +39,7 @@ private fun installDom(notify: () -> Unit) {
                 'background:transparent;overflow:hidden;z-index:-1;';
             document.body.appendChild(el);
 
-            var state = { el: el, queue: [], hold: false, notify: notify };
+            var state = { el: el, queue: [], hold: false, notify: notify, chord: chord };
             globalThis.__kamprInput = state;
 
             var composed = '';
@@ -139,6 +143,17 @@ private fun installDom(notify: () -> Unit) {
                     return;
                 }
                 if ((e.ctrlKey || e.metaKey) && e.key && e.key.length === 1) {
+                    // Asked of `paneChords.kt` rather than decided here: this handler owns the
+                    // browser's half — which key, which modifiers, and whether the page keeps its
+                    // default — and the meaning of a chord is one table in common code.
+                    var verdict = state.chord(
+                        e.key + (e.ctrlKey ? 'c' : '') + (e.metaKey ? 'm' : '') + (e.shiftKey ? 's' : '')
+                    );
+                    // Taken: the selection has been copied or the clipboard read, here in Kotlin.
+                    // Passed: a chord carrying the platform's command key, which is the browser's
+                    // — `⌘T`, `⌘W`, `⌘L` — and must reach it with its default intact.
+                    if (verdict === 'taken') { e.preventDefault(); return; }
+                    if (verdict !== 'control') { return; }
                     var lower = e.key.toLowerCase();
                     var body = null;
                     if (lower >= 'a' && lower <= 'z') {
@@ -182,6 +197,15 @@ internal fun drainInput(): String =
 // see it. This array was upstream of every counter in the client.
 private var deliverTo: ((String) -> Unit)? = null
 
+// The copy and paste chords do not go to the pane, so they do not go through the queue either:
+// they are actions on the surface that put them up, and the surface is what holds the selection
+// and the clipboard.
+private var chordTo: ((PaneChord) -> Unit)? = null
+
+internal fun deliverChordsTo(take: ((PaneChord) -> Unit)?) {
+    chordTo = take
+}
+
 private fun flushInput() {
     val deliver = deliverTo ?: return
     val pending = drainInput()
@@ -194,7 +218,26 @@ internal fun deliverInputTo(deliver: ((String) -> Unit)?) {
     flushInput()
 }
 
-internal fun installInput() = installDom(::flushInput)
+// The chord's whole descriptor in one string, because it crosses into JS and back: the key
+// itself, then `c`, `m` and `s` for the modifiers that were down. The answer is what the DOM
+// handler does next — take the key, send a control byte, or leave it to the browser.
+private fun answerChord(descriptor: String): String {
+    val key = descriptor.firstOrNull() ?: return "pass"
+    val flags = descriptor.drop(1)
+    val chord = paneChord(key, ctrl = flags.contains('c'), meta = flags.contains('m'), shift = flags.contains('s'))
+    val take = chordTo
+    if (chord != null && take != null) {
+        take(chord)
+        return "taken"
+    }
+    // With nothing standing to act on it, the key is left to the browser rather than swallowed:
+    // a copy that reaches nothing is a copy that did nothing, and preventing the default as well
+    // would take away the only other thing that might have.
+    if (chord != null) return "pass"
+    return if (chordSendsControl(ctrl = flags.contains('c'), meta = flags.contains('m'))) "control" else "pass"
+}
+
+internal fun installInput() = installDom(::flushInput, ::answerChord)
 
 // `touchBrowser` and not the key row's reading, because these are two questions off one browser
 // and they want different thresholds. Here the question is whether focusing would raise a soft
@@ -288,6 +331,7 @@ actual fun PaneTextInput(
     session: PaneSession,
     sink: InputSink,
     enabled: Boolean,
+    onChord: (PaneChord) -> Unit,
     modifier: Modifier,
 ) {
     LaunchedEffect(Unit) { installInput() }
@@ -298,6 +342,14 @@ actual fun PaneTextInput(
     DisposableEffect(sink, enabled) {
         deliverInputTo(if (enabled) sink::type else null)
         onDispose { deliverInputTo(null) }
+    }
+    // Ungated, because this is a route and not a permission: whether any key reaches the handler
+    // at all is `holdsInput`'s answer, and a read-only pane never takes the focus. What a paste
+    // chord does on a device that may not type is the caller's to refuse, the way the selection
+    // pill refuses it — by handing in nothing to call.
+    DisposableEffect(onChord) {
+        deliverChordsTo(onChord)
+        onDispose { deliverChordsTo(null) }
     }
     // A frame is the wrong clock for delivering a keystroke and the only one there is for renewing
     // a focus claim: nothing fires when the slot is lost to something that took it a while ago, so

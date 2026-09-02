@@ -33,7 +33,7 @@ private const val MARGIN = 4f
 // buttons: unclamped it hung 182 dp of itself past a 411 dp phone, so the one affordance a long
 // press exists to offer was off the screen exactly where a right thumb lands. The handles are held
 // by the same arithmetic — one that cannot be touched cannot be dragged.
-private fun Modifier.atPixels(x: Float, y: Float) = layout { measurable, constraints ->
+internal fun Modifier.atPixels(x: Float, y: Float) = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
     fun hold(at: Float, size: Int, room: Int, bounded: Boolean): Int {
         if (!bounded) return at.roundToInt()

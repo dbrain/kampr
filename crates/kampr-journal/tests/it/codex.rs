@@ -63,15 +63,17 @@ fn exec_command_becomes_a_tool_and_a_code_block() {
         Block::Tool {
             name: "exec_command".into(),
             summary: Some("herdr pane list --json".into()),
-            lines: Some(5),
+            lines: Some(1),
             state: ToolState::Done,
-        }
+        },
+        "one line of output under four of Codex's own bookkeeping, and the card counts the output"
     );
     assert_eq!(
         call.blocks[1],
         Block::Code {
             lang: Some("bash".into()),
             text: "herdr pane list --json".into(),
+            role: None,
         }
     );
 }
@@ -152,7 +154,7 @@ fn code_mode_exec_is_a_code_block_not_a_diff() {
         } if name == "exec"
     ));
     assert!(
-        matches!(&call.blocks[1], Block::Code { lang: None, text } if text.starts_with("const r =")),
+        matches!(&call.blocks[1], Block::Code { lang: None, text, .. } if text.starts_with("const r =")),
         "code-mode input is JavaScript, so no language is claimed for it"
     );
     assert!(diff_blocks(&turns).is_empty());

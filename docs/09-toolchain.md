@@ -197,3 +197,26 @@ nothing left that says who built the tarball, and a checksum served beside it do
 `KAMPR_ALLOW_UNVERIFIED` and `KAMPR_BASE_URL` are deliberately *not* inherited — not by the
 installer `kampr update` runs, and not by `packaging/fetch-binary.sh` on the `herdr plugin install`
 path.
+
+## Mutation-testing a Rust change: restore by writing, never by renaming
+
+Rule 2 asks every fix to be proved load-bearing by reverting it and watching the test fail. Doing
+that with a script is where the trap is.
+
+Cargo's fingerprint is **mtime-based**. Restoring a backup with `shutil.move`, `mv`, or `cp -p` —
+anything that preserves the backup's timestamp — hands back a source file *older* than the mutated
+one cargo has already built from. Cargo then declares the restored, byte-correct source `Fresh` and
+keeps running the **mutated** library. `git diff` says the tree is clean, and it is; the artifact is
+not.
+
+That cost a day here. A `wake()` mutation stayed resident through five consecutive runs of a live
+test, producing a failure that looked exactly like a product race — a probe succeeding and the op
+after it failing to connect — until `cargo build -v` was read and said `Fresh kampr-node`.
+
+So:
+
+- **Restore by writing the file**, or `touch` it afterwards. Both give it a genuinely newer mtime.
+- **A mutation that still fails after you restore is a stale artifact, not a finding.** Check
+  `cargo build -v` for `Fresh` before believing it.
+- `cargo build --tests` printing `Compiling kampr-node` is **not** proof your change was rebuilt —
+  it compiles other test targets while reusing the stale lib rlib.

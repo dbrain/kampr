@@ -27,6 +27,7 @@ import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.LocalManage
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.ManageIo
+import dev.kampr.shared.ui.MenuAnchor
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.terminal.TerminalSurfaces
@@ -48,10 +49,15 @@ private val CELL = PaneInfo(
 
 private class ManageSpy : ManageIo {
     val opened = mutableListOf<String>()
+    val listed = mutableListOf<String>()
     override val enabled = true
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) {
         opened += paneId
+    }
+
+    override fun openMenu(paneId: String, at: MenuAnchor?) {
+        listed += paneId
     }
 }
 
@@ -103,6 +109,22 @@ class MosaicCellActionsTest {
             manage.opened.isEmpty(),
             "a long press took the gesture the grid selects with: opened ${manage.opened}",
         )
+    }
+
+    // A cell is a pane the operator is looking at, so both its ways in are the in-session sheet.
+    // The sidebar's list menu is the other half of the same rework, and a cell that reached it
+    // would be a pane on screen offered nothing about the screen it is on.
+    @Test
+    fun aCellReachesTheInSessionSheetAndNeverTheListMenu() = runComposeUiTest {
+        val manage = ManageSpy()
+        setContent { Cell(manage) }
+        waitForIdle()
+        onRoot().performMouseInput { rightClick(percentOffset(0.5f, 0.8f)) }
+        waitForIdle()
+        onNodeWithContentDescription("Pane actions").performClick()
+        waitForIdle()
+        assertTrue(manage.listed.isEmpty(), "a cell opened the list menu: ${manage.listed}")
+        assertEquals(listOf(CELL.id, CELL.id), manage.opened, "a cell opened ${manage.opened}")
     }
 
     @Test

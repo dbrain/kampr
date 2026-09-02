@@ -62,6 +62,16 @@ pub fn exit_failed(body: &str) -> bool {
     })
 }
 
+/// The lines `agy` 1.1.18 writes above a command's own output. The exit status is already on the
+/// card's own `state`, and `Output:` under it opens the bytes the command produced — the
+/// `Stdout:` / `Stderr:` shape a command that printed nothing gets instead is kept, because there
+/// the labels are the whole of what the result says.
+const COMMAND_HEADER: &[&str] = &["The command exited with code "];
+
+pub fn command_output(body: &str) -> &str {
+    crate::envelope::after_header(body, COMMAND_HEADER)
+}
+
 const DIFF_OPEN: &str = "[diff_block_start]";
 const DIFF_CLOSE: &str = "[diff_block_end]";
 

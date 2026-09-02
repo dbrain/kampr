@@ -20,6 +20,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -80,6 +81,7 @@ fun FieldTextInput(
     session: PaneSession,
     sink: InputSink,
     enabled: Boolean,
+    onChord: (PaneChord) -> Unit,
     modifier: Modifier,
 ) {
     val focus = remember { FocusRequester() }
@@ -121,7 +123,7 @@ fun FieldTextInput(
                 if (!enabled) {
                     false
                 } else {
-                    when (handleKeyEvent(event, sink)) {
+                    when (handleKeyEvent(event, sink, onChord)) {
                         null -> false
                         Echo.Erase -> {
                             state.edit {
@@ -163,6 +165,8 @@ private fun emitDiff(previous: CharSequence, current: CharSequence, sink: InputS
     if (current.length > shared) sink.type(current.subSequence(shared, current.length).toString())
 }
 
+private val chordLetters = mapOf(Key.C to 'c', Key.V to 'v')
+
 private val functionKeys = listOf(
     Key.F1, Key.F2, Key.F3, Key.F4, Key.F5, Key.F6,
     Key.F7, Key.F8, Key.F9, Key.F10, Key.F11, Key.F12,
@@ -200,11 +204,21 @@ private enum class Echo { Erase, Drop, Kept }
 // Characters are deliberately left on the hardware modifiers alone: `InputSink.type` owns the IME's
 // character path and decorates them there, and reading the latch in both places would spend it on a
 // keystroke that has not been sent yet.
-private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Echo? {
+private fun handleKeyEvent(event: KeyEvent, sink: InputSink, onChord: (PaneChord) -> Unit): Echo? {
     if (event.type != KeyEventType.KeyDown) return null
     val ctrl = event.isCtrlPressed || sink.latches.ctrl.active()
     val alt = event.isAltPressed || sink.latches.alt.active()
     val shift = event.isShiftPressed || sink.latches.shift.active()
+    // Read off the hardware modifiers alone, and asked before anything else can turn the key into
+    // a byte: a latch armed on the key row is the operator spelling out a control code with one
+    // finger, never a request to copy.
+    chordLetters[event.key]?.let { letter ->
+        val chord = paneChord(letter, event.isCtrlPressed, event.isMetaPressed, event.isShiftPressed)
+        if (chord != null) {
+            onChord(chord)
+            return Echo.Kept
+        }
+    }
     val function = functionKeys.indexOf(event.key)
     if (function >= 0) {
         sink.latches.consume()
@@ -224,7 +238,7 @@ private fun handleKeyEvent(event: KeyEvent, sink: InputSink): Echo? {
         sink.raw(payload)
         return if (event.key == Key.Backspace && !ctrl && !alt) Echo.Erase else Echo.Drop
     }
-    if (!event.isCtrlPressed && !event.isAltPressed) return null
+    if (!chordSendsControl(event.isCtrlPressed, event.isMetaPressed) && !event.isAltPressed) return null
     val code = event.utf16CodePoint
     if (code in 1..0xFFFF) {
         val ch = code.toChar()

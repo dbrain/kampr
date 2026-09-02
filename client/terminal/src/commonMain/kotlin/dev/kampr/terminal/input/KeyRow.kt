@@ -28,6 +28,7 @@ import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.ui.group
 import dev.kampr.shared.ui.named
+import dev.kampr.shared.ui.pressable
 import dev.kampr.terminal.PaneSession
 
 // The bar's own inside margin, above the first row of caps and below the last. `safe.bottom` used
@@ -129,25 +130,33 @@ private fun RowScope.Cap(
             .weight(1f)
             .background(background, shape)
             .edge(tokens.card, shape)
+            // The caps drive themselves through `gestureAction` and a raw tap detector rather
+            // than through `Modifier.action`, so they get nothing from the cursor `action` already
+            // chains and hovered as a plain arrow on a desk.
             .then(
-                if (!enabled) Modifier.named("$spoken, unavailable on a read-only device")
-                else Modifier.gestureAction(
-                    label = spoken,
-                    onClick = { capPress(cap, session, sink) },
-                    onLongClick = { capHold(cap, session, sink) },
-                    state = when {
-                        state == LatchState.Locked -> "locked"
-                        state == LatchState.Armed -> "armed for the next key"
-                        cap.kind == CapKind.Keyboard && session.keyboardOpen -> "keyboard showing"
-                        else -> null
-                    },
-                    longLabel = when {
-                        cap.hold != null -> holdLabel(cap.hold).replaceFirstChar(Char::uppercase)
-                        alternate != null -> alternate
-                        cap.kind == CapKind.Latch -> "Lock"
-                        else -> null
-                    },
-                )
+                if (!enabled) {
+                    Modifier
+                        .named("$spoken, unavailable on a read-only device")
+                        .pressable(false)
+                } else {
+                    Modifier.pressable().gestureAction(
+                        label = spoken,
+                        onClick = { capPress(cap, session, sink) },
+                        onLongClick = { capHold(cap, session, sink) },
+                        state = when {
+                            state == LatchState.Locked -> "locked"
+                            state == LatchState.Armed -> "armed for the next key"
+                            cap.kind == CapKind.Keyboard && session.keyboardOpen -> "keyboard showing"
+                            else -> null
+                        },
+                        longLabel = when {
+                            cap.hold != null -> holdLabel(cap.hold).replaceFirstChar(Char::uppercase)
+                            alternate != null -> alternate
+                            cap.kind == CapKind.Latch -> "Lock"
+                            else -> null
+                        },
+                    )
+                },
             )
             .pointerInput(cap, enabled) {
                 if (!enabled) return@pointerInput

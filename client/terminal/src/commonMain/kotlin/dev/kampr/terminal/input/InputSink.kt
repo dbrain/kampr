@@ -1,6 +1,7 @@
 package dev.kampr.terminal.input
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.ui.PaneIo
@@ -43,8 +44,17 @@ class InputSink(
         offField++
     }
 
+    // Every byte that actually left for the pane, counted. Two surfaces owe an answer to "the
+    // operator has just typed into this pane" and neither can see the send otherwise: the viewport,
+    // which goes back to following the caret because typing is a request to be shown what you
+    // typed, and the handover line, whose whole statement is about a composer the next keystroke
+    // has already moved on from.
+    var sends by mutableIntStateOf(0)
+        private set
+
     private fun emit(text: String) {
         if (text.isEmpty()) return
+        sends++
         io.send(ClientMsg.InputText(paneId, text))
     }
 

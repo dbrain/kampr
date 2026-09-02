@@ -282,17 +282,19 @@ fun Segmented(
                 // Measured and never drawn — `drawWithContent` that does not call `drawContent`
                 // costs a text layout and no paint. A `Box` is as wide as its widest child, and
                 // this one is the widest this segment can ever be.
-                KText(
-                    option,
-                    tokens.type.tab,
-                    tokens.color.text,
-                    Modifier.clearAndSetSemantics {}.drawWithContent {},
-                )
-                KText(
-                    option,
-                    if (active) tokens.type.tab else tokens.type.tab.copy(fontWeight = FontWeight.W500),
-                    if (active) tokens.color.text else tokens.color.dim,
-                )
+                DisableSelection {
+                    KText(
+                        option,
+                        tokens.type.tab,
+                        tokens.color.text,
+                        Modifier.clearAndSetSemantics {}.drawWithContent {},
+                    )
+                    KText(
+                        option,
+                        if (active) tokens.type.tab else tokens.type.tab.copy(fontWeight = FontWeight.W500),
+                        if (active) tokens.color.text else tokens.color.dim,
+                    )
+                }
             }
         }
     }

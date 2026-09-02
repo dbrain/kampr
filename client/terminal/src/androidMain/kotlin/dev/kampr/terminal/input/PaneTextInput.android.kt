@@ -9,5 +9,6 @@ actual fun PaneTextInput(
     session: PaneSession,
     sink: InputSink,
     enabled: Boolean,
+    onChord: (PaneChord) -> Unit,
     modifier: Modifier,
-) = FieldTextInput(session, sink, enabled, modifier)
+) = FieldTextInput(session, sink, enabled, onChord, modifier)

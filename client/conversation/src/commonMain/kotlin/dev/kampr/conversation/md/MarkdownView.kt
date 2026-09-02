@@ -29,8 +29,8 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.glyphFallback
 
 @Composable
-fun Markdown(source: String, query: String, modifier: Modifier = Modifier) {
-    val blocks = remember(source) { parseMarkdown(source) }
+fun Markdown(source: String, query: String, modifier: Modifier = Modifier, breaks: Breaks = Breaks.Soft) {
+    val blocks = remember(source, breaks) { parseMarkdown(source, breaks) }
     MarkdownBlocks(blocks, query, modifier)
 }
 

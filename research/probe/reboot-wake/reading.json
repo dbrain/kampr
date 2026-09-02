@@ -1,0 +1,39 @@
+{
+  "herdr": "herdr 0.8.2",
+  "question": "would manage.rs's wake() find the session on a host that has just rebooted, where herdr has never started in this boot?",
+  "whereTheSocketLives": {
+    "measured": "$XDG_CONFIG_HOME/herdr/sessions/<name>/herdr.sock",
+    "runtimeDir": "nothing at all under $XDG_RUNTIME_DIR — the directory stayed empty for the whole life of the server",
+    "alsoInTheSessionDir": ["herdr-client.sock", "herdr-server.log"],
+    "consequence": "the socket is under the config root, which survives a reboot; the file itself does not, and neither state is new to herdr"
+  },
+  "cleanStop": {
+    "socketStillOnDisk": false,
+    "stillListed": true,
+    "running": false,
+    "socketPathReported": "the same path it had while running",
+    "sessionAtMatches": "kampr-probe-w0-reboot",
+    "sessionAtViaSymlinkedParent": "kampr-probe-w0-reboot",
+    "respawnAnsweredMs": 51,
+    "socketRecreatedAtSamePath": true,
+    "workspaceCreateOverIt": "workspace_created w1"
+  },
+  "hardStop": {
+    "how": "SIGKILL to the server, which is what a reboot without a clean shutdown looks like",
+    "socketStillOnDisk": true,
+    "connect": "ConnectionRefusedError: [Errno 111] Connection refused",
+    "listedRunning": false,
+    "note": "herdr decides `running` by connecting, not by stat()ing the socket file — a stale socket is not mistaken for a live one",
+    "spawnOverIt": "the detached `herdr server --session <name>` took the path over and answered in 54 ms; workspace.create over it returned workspace_created"
+  },
+  "freshConfigRoot": {
+    "listing": [{"default": true, "name": "default", "running": false, "socket_path": "<root>/herdr/herdr.sock"}],
+    "note": "a root herdr has never run in still lists `default` with a socket_path, so a node configured against the default socket has something for session_at to match even on a machine that has never started herdr"
+  },
+  "notMeasured": [
+    "an actual reboot — the runtime state was reproduced, not produced",
+    "a session directory that is itself gone (a wiped ~/.config), where the session is not listed at all and wake() is right to refuse",
+    "$XDG_RUNTIME_DIR being unset or pointing at a tmpfs herdr does use on another platform; this is Linux with the socket demonstrably under the config root",
+    "a node whose configured socket is a path no session claims — the existing error message covers it and was not exercised here"
+  ]
+}

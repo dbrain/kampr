@@ -34,6 +34,17 @@ pub struct Attachment {
     pub name: Option<String>,
 }
 
+/// Which side of a tool call a `code` block sits on.
+///
+/// A tool card's `lines` has always counted the *result*, and until now the only block beside it
+/// was the call's own input — so a `Bash` card read "13 lines" over a one-line command. `Output`
+/// names the block that carries what the call produced, and its absence names everything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeRole {
+    Output,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "b", rename_all = "lowercase")]
 pub enum Block {
@@ -48,6 +59,11 @@ pub enum Block {
         #[serde(skip_serializing_if = "Option::is_none")]
         lang: Option<String>,
         text: String,
+        /// Additive: absent is the ordinary case, and the ordinary case is every `code` block an
+        /// installed client has ever been sent. One that has never heard of the field reads this
+        /// as the code block it already reads.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<CodeRole>,
     },
     Tool {
         name: String,

@@ -67,6 +67,40 @@ impl Session {
         }
     }
 
+    /// The rung a reboot lands on. A `server.stop` unlinks the socket; a **SIGKILL** does not, so
+    /// the file is left on disk with nothing listening on it and herdr goes on reporting
+    /// `running: false` because it decides that by connecting rather than by `stat` (#427).
+    ///
+    /// The pid is looked up rather than kept: `herdr server` daemonises, so the process this
+    /// harness spawned exits immediately and the one holding the socket is a fork further on.
+    async fn kill(&self) {
+        let pid = server_pid(&self.name).expect("the herdr server's own pid");
+        let killed = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+        assert!(killed.is_ok_and(|s| s.success()), "could not SIGKILL herdr {pid}");
+        for _ in 0..100 {
+            if server_pid(&self.name).is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(server_pid(&self.name).is_none(), "herdr {pid} outlived a SIGKILL");
+        assert!(
+            self.herdr().snapshot().await.is_err(),
+            "something is still answering on the socket"
+        );
+        // **The one assertion that keeps this from being a second copy of the clean-stop test.**
+        // A `server.stop` unlinks the socket *before* the process goes, so waiting for the process
+        // and then finding the file is the whole of the difference between the two outages — and
+        // asserting it the other way round, on the socket the moment herdr stops answering, holds
+        // nothing: a clean stop passes that too, because the unlink has not landed yet.
+        assert!(
+            self.socket.exists(),
+            "the socket went with the server, so this was a clean stop after all"
+        );
+    }
+
     // The server is stopped over its own socket in `Drop`, not by reaping a child: it outlives
     // this handle by design, exactly as the one `start` spawns does.
     #[allow(clippy::zombie_processes)]
@@ -178,6 +212,28 @@ fn forget_session(dir: &Path) {
             break;
         }
     }
+}
+
+/// The pid of the `herdr server` on `name`, read out of `/proc` because the process that holds
+/// the socket is not the one this harness spawned.
+fn server_pid(name: &str) -> Option<u32> {
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let argv: Vec<&str> = std::str::from_utf8(&raw)
+            .unwrap_or_default()
+            .split('\0')
+            .filter(|a| !a.is_empty())
+            .collect();
+        if argv.contains(&"server") && argv.contains(&name) {
+            return Some(pid);
+        }
+    }
+    None
 }
 
 fn which(binary: &str) -> Option<PathBuf> {
@@ -2150,20 +2206,29 @@ async fn a_herdr_outage_reaches_the_client_and_recovers() {
     assert!(back, "the node must come back online on its own");
 }
 
-/// The rarely-visited host: the node is up, herdr is not, and the operator taps New. Probe #324
-/// says one spawn spelling starts either kind of server and #325 says racing it is harmless, so
-/// the op starts the herdr it needs rather than refusing — and waits for an answered call, which
-/// per #326 is the only thing that means the herdr it just started can serve the op.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_manage_op_on_a_node_whose_herdr_is_stopped_starts_it_rather_than_refusing() {
-    let h = harness!("wake");
+/// How the herdr went away, which is the whole difference between the two tests below.
+enum Outage {
+    /// `server.stop`, which unlinks the socket on its way out.
+    Clean,
+    /// SIGKILL, which leaves the socket file on disk with nothing listening on it (#427).
+    Killed,
+}
+
+/// The node is up, herdr is not, and the operator taps New. Probe #324 says one spawn spelling
+/// starts either kind of server and #325 says racing it is harmless, so the op starts the herdr it
+/// needs rather than refusing — and waits for an answered call, which per #326 is the only thing
+/// that means the herdr it just started can serve the op.
+async fn a_manage_op_wakes_the_herdr(h: &Harness, outage: Outage, label: &str) {
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
     until(&mut socket, "hello", 10).await;
     until(&mut socket, "herd", 10).await;
     let node = h.node.node_id().to_string();
 
-    h._session.stop().await;
+    match outage {
+        Outage::Clean => h._session.stop().await,
+        Outage::Killed => h._session.kill().await,
+    }
     assert!(
         h.offline(20).await,
         "the node never noticed its herdr had gone, so this proves nothing"
@@ -2172,7 +2237,7 @@ async fn a_manage_op_on_a_node_whose_herdr_is_stopped_starts_it_rather_than_refu
     let created = ok(
         &mut socket,
         json!({ "t": "manage", "op": "workspace.create", "node": node,
-                "label": "woken", "cwd": "/tmp" }),
+                "label": label, "cwd": "/tmp" }),
         30,
     )
     .await;
@@ -2184,9 +2249,28 @@ async fn a_manage_op_on_a_node_whose_herdr_is_stopped_starts_it_rather_than_refu
         snapshot
             .workspaces
             .iter()
-            .any(|w| w.label.as_deref() == Some("woken")),
+            .any(|w| w.label.as_deref() == Some(label)),
         "the woken herdr does not have the workspace the op acked: {created}"
     );
+}
+
+/// The rarely-visited host, stopped the way a person stops one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manage_op_on_a_node_whose_herdr_is_stopped_starts_it_rather_than_refusing() {
+    let h = harness!("wake");
+    a_manage_op_wakes_the_herdr(&h, Outage::Clean, "woken").await;
+}
+
+/// **The rung an actual reboot lands on**, and the one the test above cannot reach: its `stop()`
+/// waits for the socket to disappear, so it only ever exercises the clean path. A machine that
+/// went down hard comes back with `herdr.sock` still on disk and nothing behind it — probe #427
+/// measured that `herdr session list --json` still reports `running: false` there, because herdr
+/// decides that **by connecting, not by `stat`**, and that a detached server takes the stale path
+/// over in 54 ms. So a stale socket is not a herdr, and `wake()` must not read it as one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manage_op_over_a_stale_herdr_socket_starts_it_rather_than_refusing() {
+    let h = harness!("stale");
+    a_manage_op_wakes_the_herdr(&h, Outage::Killed, "revived").await;
 }
 
 /// Kampr must not start a herdr nobody asked it to. Watching, polling and reconnecting are not

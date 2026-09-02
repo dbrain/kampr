@@ -36,6 +36,15 @@ fun speakerOf(turn: Turn): Speaker = when {
     else -> Speaker.Agent
 }
 
+// Whether a person pressed the keys, which is the question CommonMark's soft break answers wrongly
+// for half a transcript: an agent's newline is where its own wrapping ran out and must not become a
+// break, and a person's is a break they typed. The summary is the one turn filed under a user
+// record that nobody typed — the harness wrote it, as markdown, like any reply.
+fun typedByHand(turn: Turn): Boolean = when (speakerOf(turn)) {
+    Speaker.You, Speaker.Queued -> true
+    Speaker.Agent, Speaker.Summary -> false
+}
+
 // What tells the two apart, and it has to survive four themes. Not a pair of status colours:
 // `accent` and `working` are the *same colour* in Phosphor and in Warm, and `done` is the same as
 // `text` in Brutalist — a scheme built on two hues reads as one in half the themes shipped. So the

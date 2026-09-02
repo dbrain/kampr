@@ -158,14 +158,16 @@ fn a_shell_call_becomes_a_tool_and_a_code_block() {
         Block::Tool {
             name: "run_command".into(),
             summary: Some("Append lines to notes.md".into()),
-            lines: Some(4),
+            lines: Some(3),
             state: ToolState::Done,
         },
-        "agy writes its own one-line summary of every call, so nothing has to be derived"
+        "agy writes its own one-line summary of every call, so nothing has to be derived, and the \
+         count is the result under the exit-status line rather than the line itself"
     );
     assert_eq!(
         call.blocks[1],
         Block::Code {
+            role: None,
             lang: Some("bash".into()),
             text: "cat << 'EOF' >> notes.md\nLine 1: Antigravity probe confirmed.\nLine 2: System operational and responsive.\nLine 3: Logging completed successfully.\nEOF".into(),
         }

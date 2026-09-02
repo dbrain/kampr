@@ -5,7 +5,9 @@ import dev.kampr.terminal.input.deliverInputTo
 import dev.kampr.terminal.input.drainInput
 import dev.kampr.terminal.input.focusInput
 import dev.kampr.terminal.input.holdsInput
+import dev.kampr.terminal.input.deliverChordsTo
 import dev.kampr.terminal.input.installInput
+import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.reclaimInputFocus
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
@@ -183,6 +185,26 @@ private fun dismissRival() {
         """
     )
 }
+
+
+// A hardware chord as the browser reports one, and whether the page got to keep its default. A
+// keydown the handler did not `preventDefault` is a keydown the browser is still free to act on,
+// which for `⌘T` is the whole point.
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun chordKey(key: String, ctrl: Boolean, meta: Boolean, shift: Boolean): Boolean =
+    js(
+        """
+        (function () {
+            var s = globalThis.__kamprInput;
+            var e = new KeyboardEvent('keydown', {
+                key: key, ctrlKey: ctrl, metaKey: meta, shiftKey: shift,
+                bubbles: true, cancelable: true,
+            });
+            s.el.dispatchEvent(e);
+            return !e.defaultPrevented;
+        })()
+        """
+    )
 
 // Runs in a real ChromeHeadless, which is the only place the browser half of the input exists.
 // Everything here is the DOM the wasm build actually talks to, not a model of it.
@@ -439,6 +461,101 @@ class BrowserInputTest {
             deliverInputTo { typed.append(it) }
             assertEquals("\u001b[A", typed.toString(), "a keystroke typed between two panes was stranded")
         } finally {
+            deliverInputTo(null)
+            focusInput(false)
+        }
+    }
+
+    // The report: the copy chord was sent to the pane as a control code, so **copying interrupted
+    // the process**. `ctrl+shift+C` arrives here as `e.key === "C"`, and the handler lowercased it
+    // and looked it straight up in the control table. `⌘C` hit the same branch, which made
+    // Command-C a SIGINT on macOS.
+    //
+    // This is the browser half, in a real browser: what the DOM handler queues, and what it lets
+    // the page keep. The meaning of each chord is `paneChord`'s, tested against its own table.
+    @Test
+    fun theCopyAndPasteChordsAreTakenOffTheKeyPathInsteadOfBeingSentToThePane() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val chords = mutableListOf<PaneChord>()
+        val typed = StringBuilder()
+        deliverChordsTo { chords += it }
+        deliverInputTo { typed.append(it) }
+        try {
+            for (chord in listOf("c" to PaneChord.Copy, "v" to PaneChord.Paste)) {
+                chords.clear()
+                typed.clear()
+                assertFalse(
+                    chordKey(chord.first.uppercase(), ctrl = true, meta = false, shift = true),
+                    "ctrl+shift+${chord.first} left the page its default",
+                )
+                assertEquals(listOf(chord.second), chords, "ctrl+shift+${chord.first} reached nothing")
+                assertEquals("", typed.toString(), "ctrl+shift+${chord.first} was sent to the pane as bytes")
+
+                chords.clear()
+                assertFalse(
+                    chordKey(chord.first, ctrl = false, meta = true, shift = false),
+                    "the command chord left the page its default",
+                )
+                assertEquals(listOf(chord.second), chords, "the command chord reached nothing")
+                assertEquals("", typed.toString(), "the command chord was sent to the pane as bytes")
+            }
+        } finally {
+            deliverChordsTo(null)
+            deliverInputTo(null)
+            focusInput(false)
+        }
+    }
+
+    // And what must not change with it: an unshifted ctrl chord is still the control byte, which is
+    // the whole of a terminal, and a shifted one that is not C or V still is too.
+    @Test
+    fun aPlainControlChordStillReachesThePaneAsItsByte() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val chords = mutableListOf<PaneChord>()
+        val typed = StringBuilder()
+        deliverChordsTo { chords += it }
+        deliverInputTo { typed.append(it) }
+        try {
+            chordKey("c", ctrl = true, meta = false, shift = false)
+            assertEquals("\u0003", typed.toString(), "ctrl+C stopped interrupting the pane")
+            typed.clear()
+            chordKey("A", ctrl = true, meta = false, shift = true)
+            assertEquals("\u0001", typed.toString(), "ctrl+shift+A stopped producing its control byte")
+            assertTrue(chords.isEmpty(), "a control chord was taken for a copy")
+        } finally {
+            deliverChordsTo(null)
+            deliverInputTo(null)
+            focusInput(false)
+        }
+    }
+
+    // The other half of the same defect, and the one a browser feels: every `⌘`/Super chord with
+    // a letter in it was turned into a control byte and `preventDefault`ed, so `⌘T`, `⌘W` and
+    // `⌘L` both interrupted the pane and never reached the browser.
+    @Test
+    fun aCommandChordThatIsNotCopyOrPasteIsLeftEntirelyToTheBrowser() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val chords = mutableListOf<PaneChord>()
+        val typed = StringBuilder()
+        deliverChordsTo { chords += it }
+        deliverInputTo { typed.append(it) }
+        try {
+            for (key in listOf("t", "w", "l", "r")) {
+                assertTrue(
+                    chordKey(key, ctrl = false, meta = true, shift = false),
+                    "the browser's own command-$key was swallowed by the pane",
+                )
+            }
+            assertEquals("", typed.toString(), "a command chord was sent to the pane as a control byte")
+            assertTrue(chords.isEmpty(), "a command chord was taken for a copy")
+        } finally {
+            deliverChordsTo(null)
             deliverInputTo(null)
             focusInput(false)
         }

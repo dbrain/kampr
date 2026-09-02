@@ -14,6 +14,7 @@ import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.terminal.view.CARET_SETTLE_MS
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -109,6 +110,10 @@ class CaretVisibilityTest {
                     links = emptyList(),
                 ),
             )
+            // The band is moved by where the caret *stops*, so the caret has to stop. A frame is
+            // not enough on purpose: a repaint that walks the caret across the grid and back
+            // inside one batch of writes must move nothing at all (`FollowingTheOutputTest`).
+            mainClock.advanceTimeBy(CARET_SETTLE_MS * 2)
             waitForIdle()
             val top = caretTop(pane, session)
             assertTrue(
@@ -143,7 +148,7 @@ class CaretVisibilityTest {
             )
             waitForIdle()
             assertTrue(session.view.minPanX < 0f, "the grid has to overrun the window sideways")
-            assertTrue(session.view.minScroll > 0f, "and downwards, or the old gate would have held")
+            assertTrue(session.view.band.floor > 0f, "and downwards, or the old gate would have held")
             val left = caretLeft(pane, session)
             assertTrue(
                 left >= 0.dp && left <= PHONE_WIDTH,

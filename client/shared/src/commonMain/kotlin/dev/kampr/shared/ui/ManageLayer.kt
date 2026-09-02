@@ -5,26 +5,44 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 
+// Root-window coordinates for the corner a context menu hangs off, which is the pointer's own cell
+// on a desk (#426) and the "…" glyph's own box when a finger asked. Null on a phone, where the menu
+// is a bottom sheet and there is no pointer to anchor to.
+data class MenuAnchor(val x: Dp, val y: Dp)
+
 // `caps.manage` false, or a read-only device, means the affordance is absent rather than
 // present-and-failing — so every entry point asks this before it draws anything.
 interface ManageIo {
     val enabled: Boolean
     fun openNew(paneId: String?)
+    // The in-session sheet: the pane, its tab and its workspace, and the things that only mean
+    // something while you are looking at the pane.
     fun openActions(paneId: String)
+    // The list menu, on a surface where the pane is a row rather than a screen. Defaulted onto
+    // `openActions` because `ManageIo` is implemented by test doubles in four modules and two of
+    // them are not this one's to edit; `AppManage` is the only implementor that answers it.
+    fun openMenu(paneId: String, at: MenuAnchor? = null) = openActions(paneId)
 }
 
 private object NoManage : ManageIo {
     override val enabled: Boolean get() = false
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) = Unit
+    override fun openMenu(paneId: String, at: MenuAnchor?) = Unit
 }
 
 val LocalManage: ProvidableCompositionLocal<ManageIo> = staticCompositionLocalOf { NoManage }
@@ -41,6 +59,10 @@ class AppManage(private val state: AppState) : ManageIo {
 
     override fun openActions(paneId: String) {
         state.openSheet(Sheet.Actions(paneId))
+    }
+
+    override fun openMenu(paneId: String, at: MenuAnchor?) {
+        state.openSheet(Sheet.Menu(paneId, at))
     }
 }
 
@@ -63,6 +85,29 @@ fun PaneManageAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Mo
     if (!manage.enabled) return
     GlyphAction(KamprIcons.ellipsis, "Pane actions", Kampr.tokens.color.dim, target, modifier) {
         manage.openActions(paneId)
+    }
+}
+
+// The list menu's own way in. Herdr anchors a context menu at the pointer's cell (#426) and a
+// glyph has no pointer, so it hangs off the glyph's own bottom-left instead — the same corner, from
+// the thing that was pressed.
+@Composable
+fun PaneMenuAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Modifier) {
+    val manage = LocalManage.current
+    if (!manage.enabled) return
+    val density = LocalDensity.current
+    var anchor by remember(paneId) { mutableStateOf<MenuAnchor?>(null) }
+    GlyphAction(
+        KamprIcons.ellipsis,
+        "Pane menu",
+        Kampr.tokens.color.dim,
+        target,
+        modifier.onGloballyPositioned {
+            val box = it.boundsInRoot()
+            anchor = with(density) { MenuAnchor(box.left.toDp(), box.bottom.toDp()) }
+        },
+    ) {
+        manage.openMenu(paneId, anchor)
     }
 }
 
@@ -109,6 +154,19 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 pane = pane,
                 outcome = outcome,
                 onManage = state::manage,
+                onDismiss = state::closeSheet,
+                panes = herd.panes,
+            )
+        }
+        is Sheet.Menu -> {
+            val pane = herd.panes.firstOrNull { it.id == sheet.paneId } ?: return
+            PaneMenu(
+                breakpoint = breakpoint,
+                pane = pane,
+                anchor = sheet.at,
+                outcome = outcome,
+                onManage = state::manage,
+                onOpen = { state.openPane(pane.id) },
                 onDismiss = state::closeSheet,
             )
         }

@@ -1,0 +1,49 @@
+{
+  "herdr": "herdr 0.8.2",
+  "client": "herdr --session kampr-probe-w0-menu, forked under a 120x40 PTY, rendered off its own output bytes with ../vt.py",
+  "config": "a throwaway XDG_CONFIG_HOME holding onboarding = false and [experimental] allow_nested = true — the latter only so the client will start at all from inside a herdr pane; nothing about the sidebar is customised",
+  "sidebar": {
+    "width": 26,
+    "textWidth": 25,
+    "separatorColumn": "the 26th column is the │ between sidebar and layout",
+    "sections": ["spaces (header)", "one row per workspace", "new … menu (buttons)", "──── (divider)", "agents … grouped (header)", "one group row and one agent row per detected agent"],
+    "note": "there are no tab rows and no pane rows in the sidebar at all — tabs live in the top strip, panes live in the layout"
+  },
+  "rightClick": {
+    "sequence": "ESC [ < 2 ; col ; row M then ESC [ < 2 ; col ; row m, SGR, over a client that set 1000/1002/1003/1015/1006 at startup (#376)",
+    "workspaceRow": ["Rename", "Close"],
+    "tabStripTab": ["New tab", "Rename", "Close"],
+    "paneFocused": ["Rename pane", "Split right", "Split down", "Zoom", "Send right-clicks to pane", "Close pane"],
+    "paneUnfocused": ["Rename pane", "Swap with focused pane", "Split right", "Split down", "Zoom", "Send right-clicks to pane", "Close pane"],
+    "nothingHappens": ["spaces header", "new button", "menu button", "divider", "agents header", "grouped toggle", "agent group row", "agent row", "empty sidebar space above the buttons", "empty sidebar space at the foot", "the tab strip's + button"],
+    "noOpBytes": 114,
+    "menuBytes": "2695-3648",
+    "anchor": "top-left cell of the box is the clicked cell; the box flips upward when it would not fit below",
+    "focusUnchanged": "a right-click on the unfocused workspace row drew the menu and left the tab strip on the focused workspace — it does not select the row"
+  },
+  "dismissal": {
+    "escape": "closes it",
+    "enter": "closes it, and does not activate the first item — no rename editor appears",
+    "q": "leaves it open; it is not any-key-to-dismiss",
+    "downArrow": "leaves it open and changes not one cell — the menu has no keyboard highlight",
+    "leftClickElsewhere": "closes it and opens nothing",
+    "rightClickElsewhere": "closes it and opens the menu for whatever is under the new pointer"
+  },
+  "activation": {
+    "by": "a left click on the item's own row",
+    "Rename": "a centred modal — 'rename workspace', the current label prefilled, footer '↵ save    ^c clear    esc cancel'",
+    "Close": "a centred modal — 'Close workspace?', 'bravo — 1 pane', footer '↵ confirm    esc cancel'"
+  },
+  "leftClick": {
+    "menuButton": ["settings", "keybinds", "reload config", "detach"],
+    "newButton": "creates a workspace immediately, labelled from the cwd (`tmp`), and switches to it — no menu",
+    "workspaceRow": "switches to that workspace"
+  },
+  "notMeasured": [
+    "any screen narrower than 120 columns, where the 26-column sidebar is a larger fraction and the menu may be placed differently",
+    "the collapsed sidebar rail (prefix+b) — every reading here is with the sidebar expanded",
+    "a workspace with more than one tab's worth of agents, and whether the agents section gains rows that do respond",
+    "the middle button, double-click, and drag on any sidebar row",
+    "whether Close on the *last* workspace offers the same modal"
+  ]
+}

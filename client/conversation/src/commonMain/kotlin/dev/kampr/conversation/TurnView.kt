@@ -8,10 +8,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.selection.DisableSelection
+import dev.kampr.conversation.md.Breaks
 import dev.kampr.conversation.md.Markdown
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
@@ -38,16 +40,57 @@ sealed interface Piece {
     data class Prose(val text: String) : Piece
     data class Fence(val lang: String?, val text: String) : Piece
     data class Patch(val path: String?, val text: String) : Piece
-    data class Call(val tool: Block.Tool, val detail: List<Block>, val sub: Block.Sub? = null) : Piece
+    data class Call(
+        val tool: Block.Tool,
+        val detail: List<Block>,
+        val sub: Block.Sub? = null,
+        val output: Block.Code? = null,
+    ) : Piece
     data class Attach(val att: Attachment) : Piece
+    // A picture the operator handed over, shown where they named it. The node writes the bytes on
+    // the pane's own machine and types the path in, so the transcript carries a path string and
+    // nothing else says a picture was ever handed over.
+    data class Picture(val att: Attachment) : Piece
     // A launched conversation with no call in front of it. The node writes the two together, so
     // this is the shape a page that opened between them arrives in rather than the ordinary one.
     data class Launch(val sub: Block.Sub) : Piece
 }
 
+// The wire's word for a tool's own result: a `code` block carrying `role: "output"`. It is the
+// *last* block of the call's own run — after the input, after any launch and any patch, and before
+// the next `tool` block — because a record can carry several calls and appending an answer to the
+// turn would file the first call's under the second. The run below is already walked exactly that
+// far, so the result arrives with the call it belongs to for free.
+//
+// The `tool` block's `lines` stays the **true** total against a body the node caps at 8 KiB or 120
+// lines, so a body shorter than the count is one that was cut and the card says so. Most cards
+// carry none: the node writes one for `Bash`, `Glob` and `Grep`, and for any tool that failed.
+const val TOOL_OUTPUT = "output"
+
+private fun isToolOutput(block: Block.Code): Boolean = block.role == TOOL_OUTPUT
+
+// How many pictures one paragraph may put on the screen without being asked for. Each is an
+// authorised fetch and, decoded, several megabytes of pixels — [AttachmentStore] holds four across
+// the whole pane — so two is the most one block can ask for and still leave room for the message
+// before it.
+private const val MOST_PICTURES_INLINE = 2
+
+// The pictures the operator's own message names, to be shown where it named them.
+//
+// Deliberately narrow, for the reason `filePathOf` refuses to search prose at all: a token is
+// offered only where it is an absolute or `~/`-anchored path **and** ends in one of the extensions
+// the node will serve inline. `/etc` in a sentence is not a picture; `/tmp/kampr-3f2.png` is.
+fun picturesIn(text: String): List<Attachment> = text
+    .split(' ', '\t', '\n', '\r')
+    .mapNotNull { filePathOf(it.trim('`', '"', '\'', '(', ')', ',', ';', ':')) }
+    .distinct()
+    .map(::fileTarget)
+    .filter { offerFor(it) == AttachmentOffer.Image }
+    .take(MOST_PICTURES_INLINE)
+
 // A tool call and the code or patch that follows it in the same turn are one thing to a reader,
 // so the call owns them and collapsing hides them together.
-fun groupBlocks(blocks: List<Block>): List<Piece> {
+fun groupBlocks(blocks: List<Block>, pictures: Boolean = false): List<Piece> {
     val out = mutableListOf<Piece>()
     var index = 0
     while (index < blocks.size) {
@@ -55,25 +98,36 @@ fun groupBlocks(blocks: List<Block>): List<Piece> {
             is Block.Tool -> {
                 val detail = mutableListOf<Block>()
                 var launched: Block.Sub? = null
+                var result: Block.Code? = null
                 index++
                 // The launch rides between the card and its output, so both are collected here:
                 // what an agent was told to do and what it wrote back are one thing to a reader,
                 // and collapsing the call has to take them together.
                 while (index < blocks.size) {
                     when (val next = blocks[index]) {
-                        is Block.Code, is Block.Diff -> detail += next
+                        is Block.Code -> if (isToolOutput(next)) result = result ?: next else detail += next
+                        is Block.Diff -> detail += next
                         is Block.Sub -> launched = launched ?: next
                         else -> break
                     }
                     index++
                 }
-                out += Piece.Call(block, detail, launched)
+                out += Piece.Call(block, detail, launched, result)
             }
             is Block.Md -> {
                 // The marker the node writes beside a header — `[image · png]` — is a fallback for
                 // a client that cannot fetch, and this one can: the card says the same thing and
                 // presses.
-                out += block.att?.let { Piece.Attach(it) } ?: Piece.Prose(block.text)
+                val att = block.att
+                if (att != null) {
+                    out += Piece.Attach(att)
+                } else {
+                    // The prose stays whatever it was. A picture is added *beside* the path rather
+                    // than in place of it, which is what makes a fetch that fails degrade to what
+                    // is on the screen today instead of to an empty frame (#233).
+                    out += Piece.Prose(block.text)
+                    if (pictures) for (shot in picturesIn(block.text)) out += Piece.Picture(shot)
+                }
                 index++
             }
             is Block.Code -> { out += Piece.Fence(block.lang, block.text); index++ }
@@ -99,7 +153,8 @@ fun TurnView(
     head: TurnHead = TurnHead.Full,
     edge: BlockEdge = BlockEdge.Only,
 ) {
-    val pieces = groupBlocks(turn.blocks)
+    val hand = typedByHand(turn)
+    val pieces = groupBlocks(turn.blocks, pictures = hand)
     // A folded turn is not composed rather than not painted, which is what keeps its text out of
     // a selection drag as well as off the screen. It unfolds itself around a search match for the
     // reason a run of tool calls does: a hit the counter promises and the screen hides is worse
@@ -113,7 +168,7 @@ fun TurnView(
     if (!framed) {
         Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (head is TurnHead.Stamp) StepStamp(head.text)
-            Body(turn, pieces, query, expanded, onToggle, attachments)
+            Body(turn, pieces, query, expanded, onToggle, attachments, hand)
         }
         return
     }
@@ -131,7 +186,7 @@ fun TurnView(
             is TurnHead.Stamp -> StepStamp(head.text)
             TurnHead.None -> Unit
         }
-        if (head !is TurnHead.Full || !folded) Body(turn, pieces, query, expanded, onToggle, attachments)
+        if (head !is TurnHead.Full || !folded) Body(turn, pieces, query, expanded, onToggle, attachments, hand)
     }
 }
 
@@ -143,9 +198,10 @@ private fun Body(
     expanded: List<String>,
     onToggle: (String) -> Unit,
     attachments: AttachmentStore,
+    hand: Boolean,
 ) {
     for ((index, piece) in pieces.withIndex()) {
-        PieceView(turn.id, index, piece, query, expanded, onToggle, attachments)
+        PieceView(turn.id, index, piece, query, expanded, onToggle, attachments, hand)
     }
 }
 
@@ -168,10 +224,17 @@ private fun PieceView(
     expanded: List<String>,
     onToggle: (String) -> Unit,
     attachments: AttachmentStore,
+    hand: Boolean,
 ) {
     when (piece) {
-        is Piece.Prose -> Markdown(piece.text, query, Modifier.fillMaxWidth())
+        is Piece.Prose -> Markdown(
+            piece.text,
+            query,
+            Modifier.fillMaxWidth(),
+            breaks = if (hand) Breaks.Hard else Breaks.Soft,
+        )
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
+        is Piece.Picture -> InlinePicture(piece.att, attachments, Modifier.fillMaxWidth())
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
         is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
         is Piece.Launch -> Surface(
@@ -189,6 +252,7 @@ private fun PieceView(
                 onToggle = { onToggle(key) },
                 sub = piece.sub,
                 attachments = attachments,
+                output = piece.output,
             )
         }
     }

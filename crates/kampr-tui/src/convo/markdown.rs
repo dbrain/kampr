@@ -211,8 +211,13 @@ fn step(doc: &mut Doc<'_>, event: Md<'_>) {
                 let width = doc.width as u16;
                 let theme = doc.t;
                 lay_block(
-                    &Block::Code { lang, text: body },
+                    &Block::Code {
+                        lang,
+                        text: body,
+                        role: None,
+                    },
                     &Laying::bare(width, theme),
+                    None,
                     &mut doc.out,
                 );
             }

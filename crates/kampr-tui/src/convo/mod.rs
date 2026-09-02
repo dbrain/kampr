@@ -34,6 +34,9 @@ const LIVE: &str = "live";
 /// The one `turn.kind` the wire carries.
 const COMPACT: &str = "compact";
 
+/// The one `code.role` the wire carries: the block is the call's result rather than its input.
+const OUTPUT: &str = "output";
+
 /// Kampr's own `kind`, and the one that never rides the wire: the node sends the queue as
 /// `convo.facets` and this is what a folded prompt is called once it is a turn.
 const QUEUED: &str = "queued";
@@ -78,6 +81,11 @@ pub(super) enum Block {
         lang: Option<String>,
         #[serde(default)]
         text: String,
+        /// Additive, and `output` is its one value today: this block is the call's own result
+        /// rather than its input. An open string rather than an enum, so a value this build has
+        /// never heard of renders as the code block it already renders instead of failing a page.
+        #[serde(default)]
+        role: Option<String>,
     },
     Tool {
         #[serde(default)]
@@ -731,8 +739,14 @@ fn lay_turn(turn: &Turn, at: &Laying<'_>, open: &HashSet<String>, out: &mut Vec<
         )));
         return;
     }
+    // What the card above a result claims the whole of it came to, which is the only way a block
+    // that was clipped on the node can say so.
+    let mut produced = None;
     for block in &turn.blocks {
-        lay_block(block, at, out);
+        if let Block::Tool { lines, .. } = block {
+            produced = *lines;
+        }
+        lay_block(block, at, produced, out);
     }
     if summary {
         out.push(Piece::Line(Line::styled(
@@ -756,7 +770,7 @@ fn lay_turn(turn: &Turn, at: &Laying<'_>, open: &HashSet<String>, out: &mut Vec<
     }
 }
 
-pub(super) fn lay_block(block: &Block, at: &Laying<'_>, out: &mut Vec<Piece>) {
+pub(super) fn lay_block(block: &Block, at: &Laying<'_>, produced: Option<u32>, out: &mut Vec<Piece>) {
     let (width, theme) = (at.width, at.theme);
     match block {
         Block::Md { text, att: None } => markdown(text, width, theme, out),
@@ -785,17 +799,32 @@ pub(super) fn lay_block(block: &Block, at: &Laying<'_>, out: &mut Vec<Piece>) {
                 }
             }
         }
-        Block::Code { lang, text } => {
-            let head = lang.clone().unwrap_or_else(|| "code".to_string());
+        Block::Code { lang, text, role } => {
+            let result = role.as_deref() == Some(OUTPUT);
+            let head = match (result, lang) {
+                (true, _) => OUTPUT.to_string(),
+                (false, Some(lang)) => lang.clone(),
+                (false, None) => "code".to_string(),
+            };
             let rule = (width as usize).saturating_sub(head.chars().count() + 4);
             out.push(Piece::Line(Line::styled(
                 format!("  {head} {}", "─".repeat(rule)),
                 Style::default().fg(theme.mute),
             )));
+            let mut shown = 0;
             for line in text.lines() {
+                shown += 1;
                 out.push(Piece::Line(Line::styled(
                     format!("  {}", clip(line, width.saturating_sub(2) as usize)),
                     Style::default().fg(theme.text).bg(theme.surface),
+                )));
+            }
+            // The node clips a result to the head of it and leaves the card counting all of it, so
+            // a total above what arrived is the rest still sitting on the host.
+            if let Some(total) = produced.filter(|total| result && *total as usize > shown) {
+                out.push(Piece::Line(Line::styled(
+                    format!("  ⟨ showing the first {shown} of {total} lines ⟩"),
+                    Style::default().fg(theme.mute),
                 )));
             }
         }

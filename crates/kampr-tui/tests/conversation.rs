@@ -305,6 +305,105 @@ fn a_tool_turn_revised_by_id_is_replaced_rather_than_appended() {
     assert!(screen.contains("48 lines"), "{screen}");
 }
 
+/// A card and its two `code` blocks. The command and the result are different things and the
+/// client that could not tell them apart drew the result as a second command.
+fn card(command: &str, output: Value, lines: Option<u32>) -> Value {
+    let mut blocks = vec![
+        json!({ "b": "tool", "name": "Bash", "summary": "probe key grammar", "state": "done" }),
+        json!({ "b": "code", "lang": "bash", "text": command }),
+    ];
+    if let Some(lines) = lines {
+        blocks[0]["lines"] = json!(lines);
+    }
+    blocks.push(output);
+    json!(blocks)
+}
+
+fn one_turn(blocks: Value) -> Convo {
+    let mut convo = Convo::new();
+    convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn("t_1", "assistant", None, blocks)]),
+    ));
+    convo
+}
+
+/// The `lines` on the card counts the *result*, and until the wire named the result there was no
+/// way to tell which of the two blocks under it the number was about.
+#[test]
+fn a_result_is_headed_as_output_and_its_command_is_not() {
+    let mut convo = one_turn(card(
+        "herdr pane list",
+        json!({ "b": "code", "text": "w3:p2\nw3:p3\nw3:p4", "role": "output" }),
+        Some(3),
+    ));
+
+    let screen = screen(&mut convo, 60, 24);
+    assert!(screen.contains("w3:p2"), "the result is drawn at all:\n{screen}");
+    let head = screen
+        .lines()
+        .nth(row_of(&screen, "w3:p2") - 1)
+        .expect("a rule above the result");
+    assert!(
+        head.trim_start().starts_with("output "),
+        "the result opens under its own name:\n{screen}"
+    );
+    let command = screen
+        .lines()
+        .nth(row_of(&screen, "herdr pane list") - 1)
+        .expect("a rule above the command");
+    assert!(
+        command.trim_start().starts_with("bash "),
+        "and the command keeps the one it had:\n{screen}"
+    );
+    assert!(
+        !screen.contains("showing the first"),
+        "nothing was held back:\n{screen}"
+    );
+}
+
+/// The node clips a result to the head of it and leaves the card counting all of it. A client
+/// that says nothing here is claiming a `seq 400` printed four lines.
+#[test]
+fn a_result_the_node_cut_says_how_much_of_it_is_on_screen() {
+    let mut convo = one_turn(card(
+        "seq 400",
+        json!({ "b": "code", "text": "row 0\nrow 1\nrow 2", "role": "output" }),
+        Some(400),
+    ));
+
+    let screen = screen(&mut convo, 60, 24);
+    assert!(screen.contains("showing the first 3 of 400 lines"), "{screen}");
+}
+
+/// Additive, both ways. A block with no `role` is the shape every installed node still sends, and
+/// a `role` this build has never heard of is one a later node may send — neither may cost the
+/// reader the block.
+#[test]
+fn a_code_block_with_no_role_or_an_unknown_one_is_drawn_as_it_always_was() {
+    for role in [None, Some("stderr")] {
+        let mut block = json!({ "b": "code", "lang": "bash", "text": "echo hi" });
+        if let Some(role) = role {
+            block["role"] = json!(role);
+        }
+        let mut convo = one_turn(json!([block]));
+
+        let screen = screen(&mut convo, 60, 24);
+        assert!(screen.contains("echo hi"), "{role:?}:\n{screen}");
+        let head = screen
+            .lines()
+            .nth(row_of(&screen, "echo hi") - 1)
+            .expect("a rule above the block");
+        assert!(
+            head.trim_start().starts_with("bash "),
+            "{role:?} is not a result:\n{screen}"
+        );
+    }
+}
+
 #[test]
 fn a_resumed_session_keeps_the_nodes_order_however_its_stamps_read() {
     let mut convo = Convo::new();

@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.252
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/kampr/research/probe/md-table/work
+
+
+❯ Without using any tools, answer with a markdown table and nothing else: a table of six
+  terminal control sequences with columns Sequence, Name, and a third column What it does
+  holding a full sentence of at least fifteen words each so the rows are long. Put one short
+  sentence of prose before the table.
+
+● These six sequences cover the cursor, screen, and mode changes a terminal client leans on
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✻ Choreographing… (2s · ↓ 8 tokens)
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents                /rc

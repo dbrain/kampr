@@ -16,6 +16,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -52,6 +54,17 @@ private fun Modifier.focusRing(shape: Shape = RectangleShape, tint: Color = Kamp
         .then(if (focused) Modifier.border(FOCUS_RING, tint, shape) else Modifier)
 }
 
+// Where there is a pointer at all — desktop and the browser — a control has to say it is one. A
+// sheet mounts its body in a `SelectionContainer`, every label a control paints is a `BasicText`,
+// and a `BasicText` that can be selected claims the I-beam for itself: so every chip in the pane
+// actions sheet hovered as prose. `overrideDescendants` is the load-bearing half — without it the
+// label inside the button still wins. Inert on a touch screen, which never asks for a cursor.
+//
+// Disabled resolves to the plain arrow rather than to nothing: a control that refuses the press is
+// still not text, and leaving it alone hands the I-beam back.
+fun Modifier.pressable(enabled: Boolean = true): Modifier =
+    pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default, overrideDescendants = true)
+
 // Every interactive control in Kampr goes through here. `label` names the action rather than the
 // glyph — "Zoom, currently 1.6×", never "magnifier" — and it replaces whatever text the control
 // paints, because a screen reader wants the action and the eye wants the abbreviation.
@@ -67,6 +80,7 @@ fun Modifier.action(
     onLongClick: (() -> Unit)? = null,
 ): Modifier = this
     .focusRing(shape)
+    .pressable(enabled)
     .semantics(mergeDescendants = true) {
         contentDescription = label
         this.role = role

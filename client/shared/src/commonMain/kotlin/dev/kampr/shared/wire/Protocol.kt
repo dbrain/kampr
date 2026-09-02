@@ -92,7 +92,12 @@ data class NodeInfo(
     // build a NodeInfo positionally.
     val reachable: Boolean? = null,
 ) {
-    val isReachable: Boolean get() = reachable ?: online
+    // The fallback is not `online`. A local node is answering by construction — it is the socket
+    // this device is talking over, and a node that could not answer would not be in this frame —
+    // so its *herdr* being down is no evidence at all about the node. Reading `online` there
+    // refused a cold local host on any node too old to send `reachable`, which is the machine
+    // #324/#325 exist for.
+    val isReachable: Boolean get() = reachable ?: (kind == "local" || online)
 
     // A named session is its own herdr server and joins the herd as its own node, named
     // `<host>/<session>`; the primary session carries the bare host name.
@@ -249,7 +254,7 @@ data class Attachment(
 @Serializable(with = BlockSerializer::class)
 sealed interface Block {
     data class Md(val text: String, val att: Attachment? = null) : Block
-    data class Code(val lang: String?, val text: String) : Block
+    data class Code(val lang: String?, val text: String, val role: String? = null) : Block
     data class Tool(val name: String, val summary: String?, val lines: Int?, val state: String?) : Block
     data class Diff(val path: String?, val text: String) : Block
 

@@ -13,13 +13,14 @@ use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Block, Role, ToolState, Turn};
+use crate::output;
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::count_lines;
+use crate::summary::{clip, count_lines};
 use crate::tail::TranscriptParser;
 
-use record::{Record, ToolCall, arg, diff, exit_failed, request, result_body, summarise};
+use record::{Record, ToolCall, arg, command_output, diff, exit_failed, request, result_body, summarise};
 
 pub use crate::presence::{flocks, holder_from};
 
@@ -209,6 +210,7 @@ impl AgyParser {
             turn.blocks.push(Block::Code {
                 lang: Some("bash".into()),
                 text: command.to_string(),
+                role: None,
             });
         }
         self.pending.push_back(Pending {
@@ -226,12 +228,18 @@ impl AgyParser {
         let body = result_body(content);
         let failed = exit_failed(body);
         let patch = diff(body);
+        let text = command_output(body);
         let Some(turn) = self.store.revise(&pending.turn) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(pending.card) {
+        let mut carry = false;
+        if let Some(Block::Tool {
+            state, lines, name, ..
+        }) = turn.tool_block_mut(pending.card)
+        {
             *state = if failed { ToolState::Error } else { ToolState::Done };
-            *lines = count_lines(body);
+            *lines = count_lines(text);
+            carry = lines.is_some() && (failed || RESULT_IS_THE_POINT.contains(&name.as_str()));
         }
         if let Some(text) = patch {
             turn.blocks.push(Block::Diff {
@@ -239,8 +247,36 @@ impl AgyParser {
                 text,
             });
         }
+        if carry {
+            // One card per turn: `agy` files every call in a turn of its own, so nothing else
+            // records a position inside these blocks for the insert to shift.
+            output::place(turn, pending.card, clip(text));
+        }
     }
 }
+
+/// The calls whose result *is* the point, and so the only ones worth the bytes above.
+///
+/// `agy` 1.1.18's whole vocabulary, counted over the three real transcripts on this machine that
+/// call anything: `view_file` 88, `run_command` 23, `find_by_name` 14, `list_dir` 13,
+/// `manage_task` 7, `grep_search` 7, `replace_file_content` 1. Two do not carry. `view_file`'s
+/// result is a file the client fetches whole from the path on the card, under a header of its own
+/// and with a line number stapled to every line; `replace_file_content`'s is the `diff` block
+/// already beside it. Everything else exists to print something, and its result is that.
+///
+/// **The error arm below is unreachable here and is kept anyway.** `agy` records no status:
+/// `exit_failed` reads `The command exited with code 1.` out of the *prose* of a result, and the
+/// only calls whose results carry a bare one are the command and the task whose log holds one —
+/// both already in this set. A `view_file` of a build log does not qualify, because the harness
+/// staples a line number in front of every line it hands back. So nothing measured on this
+/// machine reaches it, and no test can hold it down.
+const RESULT_IS_THE_POINT: &[&str] = &[
+    "run_command",
+    "grep_search",
+    "find_by_name",
+    "list_dir",
+    "manage_task",
+];
 
 /// `agy` 1.1.18 paints an answer *inside* the block it opened for its own reasoning: `▸ Thought
 /// for 4s` in column zero, the reasoning's one-line title under it, and then the message, all

@@ -19,11 +19,12 @@ use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn, TurnKind};
+use crate::output;
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
 use crate::sub::SubRef;
-use crate::summary::{count_lines, image_marker, marker_of, summarise};
+use crate::summary::{clip, count_lines, image_marker, marker_of, summarise};
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
 use record::{Content, ContentBlock, Record, image, image_subtype, result_atts, result_text, unified_patch};
@@ -347,6 +348,7 @@ impl ClaudeParser {
                     turn.blocks.push(Block::Code {
                         lang: Some("bash".into()),
                         text: command.to_string(),
+                        role: None,
                     });
                 }
                 self.tool_turns.insert(id, (turn_id.to_string(), at));
@@ -409,45 +411,67 @@ impl ClaudeParser {
         let launched = (!self.minted.contains(tool_use_id))
             .then(|| tool_use_result.and_then(|result| self.launched(result)))
             .flatten();
-        let Some(turn) = self.store.revise(&target) else {
-            return;
-        };
-        if let Some(Block::Tool {
-            state,
-            lines,
-            summary,
-            ..
-        }) = turn.tool_block_mut(at)
-        {
-            *state = if is_error {
-                ToolState::Error
-            } else {
-                ToolState::Done
+        let inserted = {
+            let Some(turn) = self.store.revise(&target) else {
+                return;
             };
-            *lines = count_lines(text);
-            if let Some(label) = launched.as_ref().and_then(|(_, found)| found.label()) {
-                *summary = Some(label);
+            let mut carry = false;
+            if let Some(Block::Tool {
+                state,
+                lines,
+                summary,
+                name,
+            }) = turn.tool_block_mut(at)
+            {
+                *state = if is_error {
+                    ToolState::Error
+                } else {
+                    ToolState::Done
+                };
+                *lines = count_lines(text);
+                carry = lines.is_some() && (is_error || RESULT_IS_THE_POINT.contains(&name.as_str()));
+                if let Some(label) = launched.as_ref().and_then(|(_, found)| found.label()) {
+                    *summary = Some(label);
+                }
             }
-        }
-        if let Some((id, found)) = launched {
-            turn.blocks.push(Block::Sub {
-                id,
-                kind: found.kind,
-                title: found.title,
-                depth: found.depth,
-            });
-        }
-        if let Some((path, text)) = patch {
-            turn.blocks.push(Block::Diff { path, text });
-        }
-        for att in images {
-            turn.blocks.push(Block::Md {
-                text: marker_of(&att),
-                att: Some(att),
-            });
+            if let Some((id, found)) = launched {
+                turn.blocks.push(Block::Sub {
+                    id,
+                    kind: found.kind,
+                    title: found.title,
+                    depth: found.depth,
+                });
+            }
+            if let Some((path, text)) = patch {
+                turn.blocks.push(Block::Diff { path, text });
+            }
+            for att in images {
+                turn.blocks.push(Block::Md {
+                    text: marker_of(&att),
+                    att: Some(att),
+                });
+            }
+            carry.then(|| output::place(turn, at, clip(text))).flatten()
+        };
+        // A card records where it sits, and one parallel call's result landing before another's
+        // would leave the second pointing at the block that was pushed in front of it.
+        if let Some(from) = inserted {
+            for (turn_id, other) in self.tool_turns.values_mut() {
+                if turn_id == &target && *other >= from {
+                    *other += 1;
+                }
+            }
         }
     }
 }
+
+/// The calls whose result *is* the point, and so the only ones worth the bytes above.
+///
+/// `Read` is absent because the client has a better surface for one already — it fetches the real
+/// file from the path on the card — and `Edit`/`Write` because their result is the `diff` block
+/// beside them. Repeating either costs a page's budget and tells a reader nothing new. An error
+/// is carried whatever the call was, because then the text is the whole message.
+const RESULT_IS_THE_POINT: &[&str] = &["Bash", "Glob", "Grep"];
 
 /// Claude 2.1.239 opens every assistant message with `●` in column zero and indents the wrapped
 /// remainder by two, and opens a tool card exactly the same way — `● Write(notes.md)` — so the

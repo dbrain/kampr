@@ -94,6 +94,10 @@ sealed interface Screen {
 sealed interface Sheet {
     data class New(val nodeId: String, val paneId: String?) : Sheet
     data class Actions(val paneId: String) : Sheet
+
+    // The list menu, off a row rather than off a screen. `at` is where it hangs from on a desk and
+    // null on a phone, which has no pointer and gets the bottom sheet instead.
+    data class Menu(val paneId: String, val at: MenuAnchor?) : Sheet
 }
 
 // One field carried both endings and one strip painted both, so a refusal arrived in the colour

@@ -6,8 +6,10 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import dev.kampr.terminal.render.Selection
 import dev.kampr.terminal.render.Target
+import kotlin.math.abs
 
 // Probe #60: re-shaping at every intermediate zoom collapses the run cache to ~51% and drops 8.5%
 // of frames at 200x50, so a pinch scales a layer and only the settled zoom re-shapes. Pan is a
@@ -39,6 +41,10 @@ class TerminalViewState {
     var selection by mutableStateOf<Selection?>(null)
     var blockSelect by mutableStateOf(false)
     var target by mutableStateOf<Target?>(null)
+
+    // Where a right-click landed, and the whole of the grid's context menu state. Session-local
+    // and never persisted: a menu is a gesture that has not finished yet.
+    var menuAt by mutableStateOf<Offset?>(null)
     var followCursor by mutableStateOf(true)
     var remembered by mutableStateOf(true)
 
@@ -47,10 +53,14 @@ class TerminalViewState {
     var minPanX = 0f
     var maxScroll = 0f
 
-    // The bottom of the grid is not the bottom of the surface a reader is allowed to rest on: on a
-    // grid taller than the viewport, resting there hides the caret and everything typed into it.
-    // `CaretBand.floor` is what this holds, and it is zero whenever the grid fits.
-    var minScroll = 0f
+    // Where the surface rests while it follows, and nothing else. It was also the *floor of the
+    // drag*, and that is the half that had to go: on a grid taller than the viewport with the
+    // caret above the bottom of it, clamping a hand at the floor put the last rows of the pane
+    // out of reach altogether — the wheel stopped early and every caret move re-clamped whatever
+    // the hand had won back. The report was "keeps bouncing around and landing back where i last
+    // typed instead of the bottom of the screen". A hand may travel the whole surface now; the
+    // band governs the surface only while it is following, which is the thing the band was for.
+    var band = CaretBand(0f, 0f)
 
     // Whether the viewport is riding the live edge rather than parked somewhere a reader put it.
     // A hand is the only thing that sets it: the surface itself rests anywhere in the caret band
@@ -82,7 +92,12 @@ class TerminalViewState {
     // however far the caret sits above it, so a hand that lets go at the edge of a shell pane lets
     // go at a positive scrollY — which is what every "did they land on the edge" test here has to
     // ask about, and the reason they all ask it through this.
-    private val atLiveEdge: Boolean get() = scrollY <= minScroll + FOLLOW_SLACK
+    //
+    // *At* the floor rather than at-or-below it, now that below it is somewhere a hand can be. A
+    // reader who dragged past the live edge to read the tail of the grid is parked there on
+    // purpose, and reading that as "back on the live edge" is what bounced them straight back to
+    // the caret. Typing is what re-arms it from anywhere — `followAgain`.
+    private val atLiveEdge: Boolean get() = abs(scrollY - band.floor) <= FOLLOW_SLACK
 
     // A change of cell size invalidates every distance across this surface, and the opening one is
     // measured twice: the first composition lays out at the placeholder 13sp and the font re-probe
@@ -92,6 +107,14 @@ class TerminalViewState {
     // reader who has taken the viewport keeps what they took.
     fun placeOnFloor(floor: Float) {
         if (following) scrollY = floor
+    }
+
+    // Typing is a request to be shown what you typed, and it is the only way back to the live edge
+    // from a viewport a hand has taken: a drag no longer lands on the floor by being clamped there,
+    // so nothing else can put a reader back on it exactly. Every byte this client sends the pane
+    // arms it, which is the same bargain the horizontal axis makes in `chaseCursor`.
+    fun followAgain() {
+        following = true
     }
 
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
@@ -114,7 +137,7 @@ class TerminalViewState {
         scrolled = true
         if (dx != 0f) pannedAway = true
         panX = (panX + dx).coerceIn(minPanX, 0f)
-        scrollY = (scrollY + dy).coerceIn(minScroll, maxScroll)
+        scrollY = (scrollY + dy).coerceIn(0f, maxScroll)
         following = atLiveEdge
     }
 
@@ -176,7 +199,7 @@ class TerminalViewState {
         val applied = if (zoom > 0f) target / zoom else 1f
         panX = panX * applied + tx
         scrollY = (scrollY * applied + ty + contentBottom * (applied - 1f))
-            .coerceIn(minScroll, maxScroll.coerceAtLeast(minScroll))
+            .coerceIn(0f, maxScroll.coerceAtLeast(0f))
         following = atLiveEdge
         zoom = target
     }

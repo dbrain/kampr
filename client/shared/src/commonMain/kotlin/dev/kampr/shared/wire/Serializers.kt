@@ -62,7 +62,11 @@ object BlockSerializer : KSerializer<Block> {
         val text = obj["text"]?.jsonPrimitive?.contentOrNull ?: ""
         return when (kind) {
             "md" -> Block.Md(text, attachmentOf(obj["att"]))
-            "code" -> Block.Code(obj["lang"]?.jsonPrimitive?.contentOrNull, text)
+            "code" -> Block.Code(
+                obj["lang"]?.jsonPrimitive?.contentOrNull,
+                text,
+                obj["role"]?.jsonPrimitive?.contentOrNull,
+            )
             "tool" -> Block.Tool(
                 name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "tool",
                 summary = obj["summary"]?.jsonPrimitive?.contentOrNull,
@@ -115,7 +119,10 @@ object BlockSerializer : KSerializer<Block> {
                     put("b", "md"); put("text", value.text)
                     value.att?.let { put("att", attachmentJson(it)) }
                 }
-                is Block.Code -> buildJsonObject { put("b", "code"); value.lang?.let { put("lang", it) }; put("text", value.text) }
+                is Block.Code -> buildJsonObject {
+                    put("b", "code"); value.lang?.let { put("lang", it) }; put("text", value.text)
+                    value.role?.let { put("role", it) }
+                }
                 is Block.Tool -> buildJsonObject {
                     put("b", "tool"); put("name", value.name)
                     value.summary?.let { put("summary", it) }

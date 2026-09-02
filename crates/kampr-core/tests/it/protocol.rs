@@ -184,6 +184,7 @@ fn convo_matches_the_shape_the_client_decodes() {
                 Block::Code {
                     lang: Some("ts".into()),
                     text: "send(pane)".into(),
+                    role: None,
                 },
                 Block::Diff {
                     path: Some("/tmp/x".into()),

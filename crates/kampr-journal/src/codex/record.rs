@@ -110,6 +110,10 @@ pub fn data_url_subtype(url: &str) -> Option<&str> {
 }
 
 /// Codex 0.147 moved shell output to an array of content items; older rollouts use a bare string.
+///
+/// The items are **chunks of one stream**, not lines: code mode files the `Script completed` /
+/// `Output:` header as one item and the bytes the script printed as the next, so joining them on
+/// a newline puts a blank line at the top of every result that was never in it.
 pub fn output_text(output: &Value) -> String {
     match output {
         Value::String(s) => s.clone(),
@@ -117,8 +121,13 @@ pub fn output_text(output: &Value) -> String {
             .iter()
             .filter_map(|i| i.get("text").and_then(Value::as_str))
             .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
+            .fold(String::new(), |mut whole, chunk| {
+                if !whole.is_empty() && !whole.ends_with('\n') {
+                    whole.push('\n');
+                }
+                whole.push_str(chunk);
+                whole
+            }),
         _ => String::new(),
     }
 }
@@ -138,6 +147,24 @@ pub fn output_failed(text: &str) -> bool {
         (l.starts_with("Process exited with code") && !l.ends_with(" 0"))
             || l.starts_with("apply_patch verification failed")
     })
+}
+
+/// The lines Codex 0.147 writes above a command's own output, measured over 1706 `exec_command`,
+/// 443 `write_stdin` and 33 `exec` results on this machine: `Chunk ID`, `Wall time`, the exit
+/// status or the session id of a process still running, `Original token count`, and `Output:`
+/// under them. The `exec` shape opens `Script completed` instead. A `write_stdin` that failed
+/// outright writes none of it, and is handed back whole.
+const COMMAND_HEADER: &[&str] = &[
+    "Chunk ID: ",
+    "Wall time",
+    "Process exited with code ",
+    "Process running with session ID ",
+    "Original token count: ",
+    "Script completed",
+];
+
+pub fn command_output(text: &str) -> &str {
+    crate::envelope::after_header(text, COMMAND_HEADER)
 }
 
 pub fn envelope_output(text: &str) -> String {

@@ -1,0 +1,40 @@
+
+
+❯ Without using any tools, answer with a markdown table and nothing else: a table of six
+  terminal control sequences with columns Sequence, Name, and a third column What it does
+  holding a full sentence of at least fifteen words each so the rows are long. Put one short
+  sentence of prose before the table.
+
+● These six sequences cover the cursor, screen, and mode changes a terminal client leans on
+  most.
+
+  ┌─────────────────┬───────────────┬────────────────────────────────────────────────────┐
+  │    Sequence     │     Name      │                    What it does                    │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │                 │ Erase in      │ Clears every character cell in the visible screen  │
+  │ ESC[2J          │ Display (all) │ area while leaving the cursor exactly where it was │
+  │                 │               │  sitting before the call.                          │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │                 │ Cursor        │ Moves the cursor to row one, column one of the     │
+  │ ESC[H           │ Position      │ current screen, which is the conventional starting │
+  │                 │ (home)        │  point for a full repaint.                         │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │                 │ Alternate     │ Switches the terminal to a separate screen buffer, │
+  │ ESC[?1049h      │ Screen Buffer │  saving the primary buffer so a full-screen        │
+  │                 │               │ program can restore it on exit.                    │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │                 │ Hide Cursor   │ Makes the text cursor invisible so that a redraw   │
+  │ ESC[?25l        │ (DECTCEM)     │ does not show it skipping across the screen as     │
+  │                 │               │ cells are written.                                 │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │                 │ Device Status │ Asks the terminal to reply on its input stream     │
+  │ ESC[6n          │  Report       │ with the cursor's current row and column, letting  │
+  │                 │               │ a program discover position.                       │
+  ├─────────────────┼───────────────┼────────────────────────────────────────────────────┤
+  │ ESC[38;2;R;G;Bm │               │                                                    │
+  └─────────────────┴───────────────┴────────────────────────────────────────────────────┘
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents                /rc

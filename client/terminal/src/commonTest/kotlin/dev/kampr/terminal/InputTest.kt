@@ -13,10 +13,14 @@ import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.input.ScrollKeys
+import dev.kampr.terminal.input.PaneChord
+import dev.kampr.terminal.input.chordSendsControl
+import dev.kampr.terminal.input.paneChord
 import dev.kampr.terminal.input.paneScrollKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private class Recorder : PaneIo {
@@ -294,5 +298,48 @@ class PaneScrollTest {
         scroll.rest()
         scroll.refused(90f, step = 100f, col = 0, row = 0)
         assertEquals(emptyList(), sent, "the last drag's leftovers arrived in this one")
+    }
+
+    // The whole table, because the defect was one row of it: `ctrl+shift+C` lowercased to `c` and
+    // went to the pane as `^C`, so copying interrupted the process, and `⌘C` did the same. Only C
+    // and V are taken, and only with shift or the command key — everything else is still a
+    // terminal's own control byte.
+    @Test
+    fun onlyTheCopyAndPasteChordsAreTakenOffThePane() {
+        val table = listOf(
+            Triple('c', "ctrl", null),
+            Triple('v', "ctrl", null),
+            Triple('c', "ctrl+shift", PaneChord.Copy),
+            Triple('C', "ctrl+shift", PaneChord.Copy),
+            Triple('v', "ctrl+shift", PaneChord.Paste),
+            Triple('V', "ctrl+shift", PaneChord.Paste),
+            Triple('c', "meta", PaneChord.Copy),
+            Triple('v', "meta", PaneChord.Paste),
+            Triple('a', "ctrl+shift", null),
+            Triple('a', "ctrl", null),
+            Triple('t', "meta", null),
+            Triple('c', "", null),
+            Triple('c', "shift", null),
+        )
+        for ((key, mods, wanted) in table) {
+            val got = paneChord(
+                key,
+                ctrl = mods.contains("ctrl"),
+                meta = mods.contains("meta"),
+                shift = mods.contains("shift"),
+            )
+            assertEquals(wanted, got, "$mods+$key")
+        }
+    }
+
+    // A chord carrying the platform's command key is the platform's: `⌘T`, `⌘W` and `⌘L` are the
+    // browser's, and turning one into `^T` both interrupted the pane and stole the new tab.
+    @Test
+    fun aCommandChordIsNeverAControlByte() {
+        assertTrue(chordSendsControl(ctrl = true, meta = false), "ctrl stopped making a control byte")
+        assertFalse(chordSendsControl(ctrl = true, meta = true), "a command chord made a control byte")
+        assertFalse(chordSendsControl(ctrl = false, meta = true), "a command chord made a control byte")
+        assertFalse(chordSendsControl(ctrl = false, meta = false))
+        assertNull(paneChord('x', ctrl = false, meta = true, shift = false))
     }
 }

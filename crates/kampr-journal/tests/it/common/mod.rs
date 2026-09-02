@@ -204,6 +204,13 @@ pub fn scratch_codex(tag: &str, records: &[serde_json::Value]) -> Scratch {
     })
 }
 
+pub fn scratch_agy(tag: &str, records: &[serde_json::Value]) -> Scratch {
+    let named = "brain/ded9537c-7c10-4c47-9b02-8f8f688b9938/.system_generated/logs/transcript_full.jsonl";
+    scratch_with(tag, named, &lines(records), |root| {
+        std::sync::Arc::new(kampr_journal::AgyAdapter::new(root))
+    })
+}
+
 pub fn lines(records: &[serde_json::Value]) -> String {
     records.iter().map(|r| r.to_string() + "\n").collect()
 }

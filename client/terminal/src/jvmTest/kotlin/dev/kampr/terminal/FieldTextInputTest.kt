@@ -56,7 +56,7 @@ private fun ComposeUiTest.rig(latches: Latches = Latches()): Pair<Typed, InputSi
     val sink = InputSink(PANE, io, latches)
     setContent {
         val session = remember { PaneSession(PANE).also { it.openKeyboard() } }
-        FieldTextInput(session, sink, enabled = true, modifier = Modifier.testTag(TAG))
+        FieldTextInput(session, sink, enabled = true, onChord = {}, modifier = Modifier.testTag(TAG))
     }
     waitForIdle()
     return io to sink

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -378,15 +379,17 @@ private fun AnswerChip(label: String, isDefault: Boolean, enabled: Boolean = tru
             .action(label, onClick, shape, enabled = enabled)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
-        KText(
-            label,
-            tokens.type.button,
-            when {
-                !enabled -> tokens.color.mute
-                isDefault -> tokens.color.onAccent
-                else -> tokens.color.text
-            },
-        )
+        DisableSelection {
+            KText(
+                label,
+                tokens.type.button,
+                when {
+                    !enabled -> tokens.color.mute
+                    isDefault -> tokens.color.onAccent
+                    else -> tokens.color.text
+                },
+            )
+        }
     }
 }
 

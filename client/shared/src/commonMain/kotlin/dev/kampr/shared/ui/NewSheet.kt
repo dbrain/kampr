@@ -272,13 +272,18 @@ fun NewSheet(
                 )
                 Step.Node -> Fields {
                     for (machine in nodes) {
-                        // A **local** machine that is offline is one whose herdr is stopped: the
-                        // wire to it is the connection this device is already talking over, and a
-                        // manage op arriving there starts the herdr it needs (#324, #325). A peer
-                        // that is offline may be that or a dead mesh link, and nothing here tells
-                        // them apart — so it stays unpickable rather than promising a herd it may
-                        // never reach.
-                        val cold = !machine.online && machine.kind == "local"
+                        // `online` is whether the machine's *herdr* answers; `isReachable` is
+                        // whether its *kampr* does. A manage op is served by the node, and the node
+                        // starts a stopped herdr for one (#324, #325) — so a machine with a node
+                        // behind it is something to create on however cold its herdr is, and one
+                        // with no node behind it is not, whoever it belongs to.
+                        //
+                        // This asked `kind == "local"`, which is a different question that happens
+                        // to share an answer on exactly one machine. The operator rebooted a peer,
+                        // its kampr came back, its herdr did not, and the one surface that could
+                        // have started it refused: the machine was listed with its herdr socket
+                        // error under it and no way to press it.
+                        val cold = !machine.online && machine.isReachable
                         SheetCard(
                             icon = null,
                             iconTint = null,
@@ -292,7 +297,7 @@ fun NewSheet(
                             },
                             selected = machine.id == node.id,
                             compact = breakpoint == Breakpoint.Landscape,
-                            onClick = if (!machine.online && !cold) null else ({
+                            onClick = if (!machine.isReachable) null else ({
                                 onNode(machine.id)
                                 step = Step.Menu
                                 refusal = null

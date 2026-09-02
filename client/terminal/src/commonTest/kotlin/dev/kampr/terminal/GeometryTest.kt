@@ -1,5 +1,6 @@
 package dev.kampr.terminal
 
+import dev.kampr.terminal.view.CaretBand
 import dev.kampr.terminal.view.PaintRect
 import dev.kampr.terminal.view.defaultZoom
 import dev.kampr.terminal.view.followCursorPan
@@ -217,10 +218,10 @@ class GeometryTest {
     fun aReaderRidingAFlooredLiveEdgeIsNotCarriedByHistoryArriving() {
         val view = TerminalViewState()
         view.maxScroll = 10_000f
-        view.minScroll = 17 * CELL_H
-        view.scrollY = view.minScroll
+        view.band = CaretBand(17 * CELL_H, 30 * CELL_H)
+        view.scrollY = view.band.floor
         view.carryHistory(400, CELL_H)
-        close(view.scrollY, view.minScroll)
+        close(view.scrollY, view.band.floor)
     }
 
     // And the same reader anywhere else the caret is still on screen. The floor is a minimum, so a
@@ -232,7 +233,7 @@ class GeometryTest {
     fun aReaderRestingAnywhereInTheBandIsNotCarriedByHistoryArriving() {
         val view = TerminalViewState()
         view.maxScroll = 10_000f
-        view.minScroll = 0f
+        view.band = CaretBand(0f, 40 * CELL_H)
         view.scrollY = 9 * CELL_H
         view.carryHistory(400, CELL_H)
         close(view.scrollY, 9 * CELL_H)
@@ -245,7 +246,6 @@ class GeometryTest {
     fun aReaderWhoTookTheViewportIsStillCarriedByHistoryArriving() {
         val view = TerminalViewState()
         view.maxScroll = 10_000f
-        view.minScroll = 0f
         view.scrollBy(0f, 9 * CELL_H)
         assertTrue(!view.following, "a hand nine rows off the floor has left the live edge")
         view.carryHistory(400, CELL_H)

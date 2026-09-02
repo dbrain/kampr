@@ -431,7 +431,8 @@ which happened.
                "blocks": [ { "b": "md", "text": "Six, and they are…\n\n| Key | … |" },
                            { "b": "tool", "name": "Bash", "summary": "probe key grammar",
                              "lines": 48, "state": "done" },
-                           { "b": "code", "lang": "ts", "text": "send(pane, \"\\u001b[5~\")" } ] } ] }
+                           { "b": "code", "lang": "bash", "text": "herdr key list" },
+                           { "b": "code", "text": "Home\nEnd\nPageUp\n…", "role": "output" } ] } ] }
 ```
 `b` is `md` | `code` | `tool` | `diff`. Markdown is passed through verbatim — the **client** renders
 it, so tables stay tables. A `diff` block carries `text` and an optional `path`. `cursor` is
@@ -690,6 +691,54 @@ hub  → peer  { "t":"att.stop",  "rid":7 }
 
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.
+
+**`lines` counts the *result*, never the `code` block beside it.** The two are different things and
+reading it as the code block's length is the defect this paragraph exists to stop: a `Bash` card
+reads `"lines": 48` over a one-line command, because 48 is what the command produced. It is absent
+until the result lands, and absent when the result was empty — a call that produced nothing claims
+nothing rather than claiming zero.
+
+A `code` block carries an optional **`role`**, whose one value is `output`: this block is the
+call's own result rather than its input. It rides in the tool's own run of blocks, after the input
+and the `sub` and `diff` blocks, and before the next `tool` block — a card owns the blocks between
+it and the card after it, which is what keeps one call's answer from being drawn under another's
+when a harness writes two calls in one record. `role` is **absent on every other `code` block**,
+so a client that has never heard of the field renders a result exactly as it renders a fenced
+block today, which is strictly more than the nothing it renders now.
+
+**`lines` is what says the block was cut.** A result has no bound of its own — probe #247 measured
+a single 2.22 MB record — and the socket a page rides on is the one carrying terminal frames, so a
+node clips the block to the head of the result. `lines` stays the true total either way, and a
+client seeing a total greater than the block's own line count knows the rest is on the host and
+says so rather than implying it has all of it.
+
+**A node emits `output` where the result is the point, and always on an error.** Not every call: a
+`Read`'s result is a file the client can fetch whole from the path on the card, and an `Edit`'s is
+the `diff` block beside it, so repeating either spends a page's bytes to tell a reader what it has
+already been told. An error carries its text whatever the call was, because then the text is the
+whole message. Which calls those are is the node's judgement and may widen — a client renders the
+block it is given and must not keep a list of its own.
+
+**All three adapters emit one, and each names its own calls**, read off that harness's own
+vocabulary and counted over the real transcripts on the machine it was measured on.
+
+| Adapter | Carries | Does not, and why |
+|---|---|---|
+| Claude | `Bash`, `Glob`, `Grep` | `Read` — the client fetches the file from the path on the card; `Edit`/`Write` — the `diff` block beside it |
+| Codex | `exec_command`, `write_stdin`, `exec`, `wait` | `apply_patch` — the `diff` block beside it; `view_image` — the result *is* the attachment; `update_plan` — its result is the string `Plan updated`, every time |
+| `agy` | `run_command`, `grep_search`, `find_by_name`, `list_dir`, `manage_task` | `view_file` — the file, which the client fetches by path; `replace_file_content` — the `diff` block beside it |
+
+**The result is stripped of the harness's own header before it is counted or carried.** Codex
+writes `Chunk ID` / `Wall time` / `Process exited with code 0` / `Original token count` and then a
+lone `Output:` above every command's bytes, and `agy` writes `The command exited with code 0.` and
+its own `Output:`; the status is already the card's `state`, so carrying the header would put four
+lines on a card over a one-line command — the same defect in a second dress. So `lines` counts the
+output rather than the wrapper, and the block under it is that same text. A result with no header
+on it — a `write_stdin` into a closed session — is carried whole.
+
+`agy` is the one harness where "always on an error" carries nothing extra: it records no status at
+all, and a failure is read out of the prose of the result — so every call whose result can say it
+failed is already in the set above.
 
 **A `diff` block is not one dialect.** Claude sends a unified diff rebuilt from `structuredPatch`;
 Codex sends its `*** Begin Patch` envelope verbatim; `agy` sends the unified diff its edit tool

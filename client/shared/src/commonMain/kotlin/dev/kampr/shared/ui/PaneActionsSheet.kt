@@ -29,6 +29,9 @@ import dev.kampr.shared.wire.ZoomMode
 import kotlinx.serialization.json.JsonObject
 import dev.kampr.shared.wire.workspaceIdOf
 
+// The in-session sheet, which is the half of this that may talk about the desk at all: it is
+// reached from the pane's own header and from a mosaic cell, so the operator is looking at the
+// screen every control here reshapes. The list menu (`PaneMenu`) carries none of it.
 @Composable
 fun PaneActionsSheet(
     breakpoint: Breakpoint,
@@ -36,6 +39,7 @@ fun PaneActionsSheet(
     outcome: ServerMsg.Managed?,
     onManage: (ManageOp) -> Unit,
     onDismiss: () -> Unit,
+    panes: List<PaneInfo> = emptyList(),
 ) {
     val tokens = Kampr.tokens
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -78,26 +82,37 @@ fun PaneActionsSheet(
                         at = tabId,
                         clearable = false,
                         zoomable = false,
+                        holds = panes.count { it.tabId == tabId },
                         onManage = ::send,
                     ) {
                         Chip(
-                            "snapshot shape", false, { send(ManageOp.LayoutExport(tabId)) },
-                            label = "Snapshot the split shape of this tab",
+                            "remember the splits", false, { send(ManageOp.LayoutExport(tabId)) },
+                            label = "Remember how this tab is split, so it can be put back",
                         )
                         snapshot?.let { tree ->
                             Chip(
-                                "put it back", false, { send(ManageOp.LayoutApply(tabId, tree)) },
-                                label = "Restore the snapshotted split shape",
+                                "put the splits back", false, { send(ManageOp.LayoutApply(tabId, tree)) },
+                                label = "Split this tab the way it was when you remembered it",
                             )
                         }
                     }
+                    if (snapshot != null) {
+                        KText(
+                            "The remembered splits live on this device, and only until this sheet closes.",
+                            tokens.type.captionSmall,
+                            tokens.color.mute,
+                            maxLines = 2,
+                        )
+                    }
                 }
+                val workspaceId = pane.workspaceId ?: workspaceIdOf(pane.id)
                 Target(
                     kind = "workspace",
                     name = pane.workspace ?: "this workspace",
-                    at = pane.workspaceId ?: workspaceIdOf(pane.id),
+                    at = workspaceId,
                     clearable = false,
                     zoomable = false,
+                    holds = panes.count { (it.workspaceId ?: workspaceIdOf(it.id)) == workspaceId },
                     onManage = ::send,
                 )
                 if (pane.tabId == null) {
@@ -117,6 +132,28 @@ fun PaneActionsSheet(
     }
 }
 
+// Herdr counts the panes before it will close a thing that holds any — `Close workspace?` over
+// `bravo — 1 pane` (#426). This is the same count from the herd the client already has.
+private fun held(kind: String, name: String, holds: Int): String =
+    when {
+        kind == "pane" || holds <= 0 -> name
+        holds == 1 -> "$name — 1 pane"
+        else -> "$name — $holds panes"
+    }
+
+// Focus is the one op that destroys herdr's `done` — the state it synthesises for a pane that
+// finished while nobody was looking, which is the operator's unread flag (#357), and `tab.focus`
+// and `workspace.focus` do it exactly as `pane.focus` does (#396). Every read leaves it standing,
+// so this is the only control in Kampr that can take it away, and it says so before it does.
+private fun focusNote(kind: String): String =
+    if (kind == "pane") {
+        "Puts this pane on the machine's own screen — and clears its done marker, the flag for an " +
+            "agent that finished while nobody was looking."
+    } else {
+        "Puts this $kind on the machine's own screen — and clears the done marker on whichever " +
+            "pane it lands on, the flag for an agent that finished while nobody was looking."
+    }
+
 @Composable
 private fun Target(
     kind: String,
@@ -125,11 +162,13 @@ private fun Target(
     clearable: Boolean,
     zoomable: Boolean,
     onManage: (ManageOp) -> Unit,
+    holds: Int = 0,
     extra: @Composable (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     var renaming by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf(false) }
+    var focusing by remember { mutableStateOf(false) }
     var label by remember(at) { mutableStateOf(TextFieldValue(name)) }
 
     Surface(Modifier.fillMaxWidth()) {
@@ -145,7 +184,10 @@ private fun Target(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Chip("focus", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) }, label = "Focus this $kind at the desk")
+                Chip(
+                    "focus at the desk", focusing, { focusing = !focusing },
+                    label = "Focus this $kind on the machine's own screen",
+                )
                 if (zoomable) {
                     // Not "zoom". Kampr's own zoom is one screen away in the pane header, it
                     // magnifies the rendered grid, and it is announced as "Zoom, currently 1.6x" —
@@ -164,6 +206,26 @@ private fun Target(
                     label = "Close this $kind",
                 )
                 extra?.invoke()
+            }
+            if (focusing) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    KText(
+                        focusNote(kind),
+                        tokens.type.captionSmall,
+                        tokens.color.mute,
+                        Modifier.weight(1f).announce(focusNote(kind), urgent = true),
+                        maxLines = 3,
+                    )
+                    Chip("cancel", false, { focusing = false }, quiet = true, label = "Leave the desk alone")
+                    Chip(
+                        "focus", true, { focusing = false; onManage(ManageOp.Focus(at)) },
+                        label = "Confirm — focus $name at the desk and clear its done marker",
+                    )
+                }
             }
             if (renaming) {
                 Row(
@@ -187,7 +249,7 @@ private fun Target(
                 }
                 if (clearable) {
                     KText(
-                        "An empty label clears it back to the pane's own name.",
+                        "An empty name puts back what the pane calls itself.",
                         tokens.type.captionSmall,
                         tokens.color.mute,
                         maxLines = 2,
@@ -200,22 +262,14 @@ private fun Target(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    KText(
-                        if (kind == "tab") "Closes every pane in it." else "Close $name?",
-                        tokens.type.captionSmall,
-                        tokens.color.blocked,
-                        Modifier.weight(1f).announce(
-                            if (kind == "tab") "Closing this tab closes every pane in it. Confirm or cancel."
-                            else "Close $name? Confirm or cancel.",
-                            urgent = true,
-                        ),
-                        maxLines = 2,
-                    )
+                    Column(Modifier.weight(1f).announce("Close $kind? ${held(kind, name, holds)}. Confirm or cancel.", urgent = true)) {
+                        KText("Close $kind?", tokens.type.captionSmall, tokens.color.blocked, maxLines = 1)
+                        KText(held(kind, name, holds), tokens.type.captionSmall, tokens.color.mute, maxLines = 2)
+                    }
                     Chip("cancel", false, { confirming = false }, quiet = true, label = "Do not close it")
                     Chip(
                         "close", true, { confirming = false; onManage(ManageOp.Close(at)) },
-                        label = if (kind == "tab") "Confirm — close the tab and every pane in it"
-                        else "Confirm — close $name",
+                        label = "Confirm — close ${held(kind, name, holds)}",
                     )
                 }
             }

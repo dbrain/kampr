@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -194,6 +195,12 @@ fun SheetSection(label: String, compact: Boolean = false) {
     }
 }
 
+// A sheet asks for its own selection, and where the line falls inside one is per element: **a
+// button's caption is chrome and a card's text is content.** A chip says "rename" because that is
+// what pressing it does — the word is the control, and dragging across the sheet must not splice it
+// into the paste. A card says what a thing *is*: a node's name, a session's path, the detail line
+// under an error. Those are the strings an operator drags across a sheet to quote, and disabling
+// them here would make the sheet's real content uncopyable to fix a button's caption.
 @Composable
 fun SheetCard(
     icon: Icon?,
@@ -259,14 +266,16 @@ fun Chip(
             .action(label ?: text, onClick, shape, selected = selected)
             .padding(horizontal = 13.dp, vertical = 7.dp),
     ) {
-        KText(
-            text,
-            tokens.type.pill,
-            when {
-                selected -> tokens.color.onAccent
-                quiet -> tokens.color.dim
-                else -> tokens.color.text
-            },
-        )
+        DisableSelection {
+            KText(
+                text,
+                tokens.type.pill,
+                when {
+                    selected -> tokens.color.onAccent
+                    quiet -> tokens.color.dim
+                    else -> tokens.color.text
+                },
+            )
+        }
     }
 }

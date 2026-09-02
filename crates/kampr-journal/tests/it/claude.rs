@@ -106,12 +106,17 @@ fn a_bash_command_becomes_a_code_block() {
         .iter()
         .find(|t| t.id == "b3721c3d-3c26-4165-922a-640d5adfcd2d")
         .unwrap();
-    assert_eq!(bash.blocks.len(), 2);
+    assert_eq!(
+        bash.blocks.len(),
+        3,
+        "the card, its command, and what the command produced"
+    );
     assert_eq!(
         bash.blocks[1],
         Block::Code {
             lang: Some("bash".into()),
             text: "herdr pane list --json".into(),
+            role: None,
         }
     );
 }

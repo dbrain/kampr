@@ -17,9 +17,11 @@ import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.net.filePathOf
@@ -40,6 +42,7 @@ fun ToolCard(
     modifier: Modifier = Modifier,
     sub: Block.Sub? = null,
     attachments: AttachmentStore = rememberAttachmentStore(""),
+    output: Block.Code? = null,
 ) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
@@ -49,11 +52,18 @@ fun ToolCard(
         TOOL_ERROR -> tokens.color.blocked
         else -> tokens.color.dim
     }
+    // #173: a label that has to be guessed is a failed label. The count is the size of what the
+    // tool wrote **back** — the node measures it off the result — and for a Bash call the body
+    // under the chevron is one line of command, so a card that said "13 lines" and opened on one
+    // was reporting two different things in the same breath.
     val outcome = when (tool.state) {
         TOOL_RUNNING -> "running"
         TOOL_ERROR -> "failed"
-        else -> tool.lines?.let { "$it lines" } ?: "finished"
+        else -> tool.lines?.let { "$it lines of output" } ?: "finished"
     }
+    // What opening it shows, which is the result only where the node carried one.
+    val opens = if (output != null) "the output of" else "what was sent to"
+    val body = detail.isNotEmpty() || output != null
     val named = toolLabel(tool, ", ")
     // Lifted off the block it sits in rather than level with it. A call is a box inside the
     // reply's box, and `surface` is what that reply is already painted in — a card the same colour
@@ -67,10 +77,10 @@ fun ToolCard(
                 Modifier
                     .fillMaxWidth()
                     .let {
-                        if (detail.isEmpty()) it.named("Tool $named, $outcome")
+                        if (!body) it.named("Tool $named, $outcome")
                         else it.touchable(LANDSCAPE_TOUCH).action(
-                            if (expanded) "Hide the output of $named, $outcome"
-                            else "Show the output of $named, $outcome",
+                            if (expanded) "Hide $opens $named, $outcome"
+                            else "Show $opens $named, $outcome",
                             onToggle,
                             selected = expanded,
                         )
@@ -97,9 +107,11 @@ fun ToolCard(
                 when {
                     running -> KText("running", tokens.type.micro, tokens.color.working)
                     tool.state == TOOL_ERROR -> KText("failed", tokens.type.micro, tokens.color.blocked)
-                    else -> tool.lines?.let { KText("$it lines", tokens.type.micro, tokens.color.mute) }
+                    else -> tool.lines?.let {
+                        KText("$it lines of output", tokens.type.micro, tokens.color.mute, maxLines = 2)
+                    }
                 }
-                if (detail.isNotEmpty()) {
+                if (body) {
                     IconGlyph(
                         if (expanded) ConversationIcons.chevronUp else ConversationIcons.chevronDown,
                         12.dp,
@@ -116,12 +128,18 @@ fun ToolCard(
                 if (sub != null) SubCard(sub)
                 if (path != null) FileAffordance(path, attachments)
             }
-            if (expanded && detail.isNotEmpty()) {
+            if (expanded && body) {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
                 Column(
                     Modifier.fillMaxWidth().padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
+                    // Named only where there are two things to tell apart. On a card carrying the
+                    // call and nothing else the header has already said so, and a label over the
+                    // only thing in the box is chrome.
+                    if (output != null && detail.isNotEmpty()) {
+                        LabelText("sent", tokens.type.metaSmall, tokens.color.mute)
+                    }
                     for (block in detail) {
                         when (block) {
                             is Block.Code -> CodeCard(block.lang, block.text, query)
@@ -129,8 +147,32 @@ fun ToolCard(
                             else -> Unit
                         }
                     }
+                    output?.let { ToolOutput(it, tool.lines, query, labelled = detail.isNotEmpty()) }
                 }
             }
         }
     }
 }
+
+// The tool's own result, and how much of it this is. The node caps what it carries and leaves the
+// `tool` block's `lines` as the true total, so a body shorter than the count is a body that was
+// cut — said the way the file viewer already says it rather than in a second wording.
+@Composable
+private fun ToolOutput(block: Block.Code, total: Int?, query: String, labelled: Boolean) {
+    val tokens = Kampr.tokens
+    if (labelled) LabelText("output", tokens.type.metaSmall, tokens.color.mute)
+    CodeCard(block.lang, block.text, query)
+    val shown = linesOf(block.text)
+    if (total != null && total > shown) {
+        KText(
+            "showing the first $shown of $total lines",
+            tokens.type.micro,
+            tokens.color.mute,
+            Modifier.announce("Showing the first $shown of $total lines"),
+            maxLines = 2,
+        )
+    }
+}
+
+internal fun linesOf(text: String): Int =
+    if (text.isEmpty()) 0 else text.trimEnd('\n').count { it == '\n' } + 1

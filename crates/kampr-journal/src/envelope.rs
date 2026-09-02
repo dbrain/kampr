@@ -70,6 +70,36 @@ pub fn push_text(turn: &mut Turn, text: String) {
     }
 }
 
+/// What is left of a command result once the harness's own header is taken off it.
+///
+/// Both shell harnesses write the same shape: a run of bookkeeping lines — the chunk id, the wall
+/// time, the exit status — and then a lone `Output:` opening the bytes the command actually
+/// produced. The status is already on the card's own `state`, and counting the header would put
+/// four lines on a card over a one-line command, which is the defect the result block exists to
+/// end. Text that opens with none of `heads` is not a header and is handed back whole.
+pub fn after_header<'a>(text: &'a str, heads: &[&str]) -> &'a str {
+    let mut rest = text;
+    let mut taken = 0;
+    loop {
+        let (line, after) = match rest.find('\n') {
+            Some(at) => (&rest[..at], &rest[at + 1..]),
+            None => (rest, ""),
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line == "Output:" {
+            return if taken == 0 { text } else { after };
+        }
+        if !heads.iter().any(|head| line.starts_with(head)) {
+            return if taken == 0 { text } else { rest };
+        }
+        rest = after;
+        taken += 1;
+        if rest.is_empty() {
+            return "";
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::spoken;

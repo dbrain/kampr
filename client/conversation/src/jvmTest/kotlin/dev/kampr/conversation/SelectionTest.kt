@@ -201,7 +201,7 @@ class SelectionTest {
             onAllNodesWithText("herdr pane list --json", substring = true).fetchSemanticsNodes().isEmpty(),
             "the tool card was already open",
         )
-        onNodeWithContentDescription("Show the output of Bash, list panes, 2 lines").performClick()
+        onNodeWithContentDescription("Show what was sent to Bash, list panes, 2 lines of output").performClick()
         // Scrolled to rather than asserted where it fell: expanding a card deliberately does not
         // move the transcript (AttachmentScrollTest), so a card opened near the end puts its own
         // output below the fold — which is the reader's scroll to make, not a card that failed.
@@ -213,7 +213,7 @@ class SelectionTest {
     @Test
     fun theCopyButtonOnACodeBlockStillPressesWhileTheTranscriptIsSelectable() = runComposeUiTest {
         setContent { Transcript(paneOf(CLAUDE_CONVO)) }
-        onNodeWithContentDescription("Show the output of Bash, list panes, 2 lines").performClick()
+        onNodeWithContentDescription("Show what was sent to Bash, list panes, 2 lines of output").performClick()
         onNodeWithContentDescription("Copy the bash block").performClick()
         onNodeWithContentDescription("Copied").assertIsDisplayed()
     }

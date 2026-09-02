@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -140,22 +141,26 @@ fun NodeCountPill(online: Int, connection: ConnectionStatus, compact: Boolean, o
             vertical = if (compact) 5.dp else 7.dp,
         ) {
             Mark(tone, connectionShape(connection), 7.dp)
-            KText(counted, tokens.type.pill, if (word == null) tokens.color.dim else tone)
+            DisableSelection { KText(counted, tokens.type.pill, if (word == null) tokens.color.dim else tone) }
         }
     }
 }
 
 // Four different pieces of news, and the operator can act on only some of them. Painting nothing
 // at all said the healthiest of the four to the device that had the worst of them.
-// A machine drawn with nothing under it, answering the question that leaves. `online` false on a
-// local node means its herdr is stopped rather than the machine being gone — and a manage op sent
-// there starts it (#324, #325), so the + in the bar is the answer and is worth naming: nothing
-// else on this screen says that starting a workspace on a cold host is a thing that works.
+// A machine drawn with nothing under it, answering the question that leaves. `online` false with a
+// node still answering means its herdr is stopped rather than the machine being gone — and a manage
+// op sent there starts it (#324, #325), so the + in the bar is the answer and is worth naming:
+// nothing else on this screen says that starting a workspace on a cold host is a thing that works.
+//
+// Asked of `isReachable` and not of `kind`. A rebooted peer whose kampr came back as a service and
+// whose herdr did not is exactly this case, and it was being shown its own herdr socket errno —
+// a sentence that answers a question nobody asked, in place of the one thing to do about it.
 @Composable
 fun NodeQuiet(node: NodeInfo, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val said = when {
-        !node.online && node.kind == "local" -> "herdr is not running on ${node.name} — New (+) starts it"
+        !node.online && node.isReachable -> "herdr is not running on ${node.name} — New (+) starts it"
         !node.online -> node.detail ?: "this machine is not reachable"
         else -> "nothing running on this machine"
     }
@@ -323,12 +328,12 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
     val manage = LocalManage.current
     Surface(
         modifier
-            .paneActions(pane.id)
+            .paneMenu(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
                 onClick,
                 shape,
-                onLongClick = if (manage.enabled) ({ manage.openActions(pane.id) }) else null,
+                onLongClick = if (manage.enabled) ({ manage.openMenu(pane.id) }) else null,
             )
     ) {
         Row(
@@ -352,8 +357,8 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                 KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
             }
             // The gesture is the shortcut and this is the way in. Without it the herd list was the
-            // one surface with pane actions on it and nothing a finger could press to reach them.
-            PaneManageAction(pane.id, LANDSCAPE_TOUCH)
+            // one surface with a pane menu on it and nothing a finger could press to reach it.
+            PaneMenuAction(pane.id, LANDSCAPE_TOUCH)
         }
     }
 }
@@ -370,14 +375,14 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
             .fillMaxWidth()
             .let { if (active) it.background(tokens.color.raise, shape) else it }
             .touchable(LANDSCAPE_TOUCH)
-            .paneActions(pane.id)
+            .paneMenu(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
                 onClick,
                 shape,
                 role = Role.Tab,
                 selected = active,
-                onLongClick = if (manage.enabled) ({ manage.openActions(pane.id) }) else null,
+                onLongClick = if (manage.enabled) ({ manage.openMenu(pane.id) }) else null,
             )
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -397,7 +402,7 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
         // The landscape floor rather than the full 44: the sidebar is 296 dp wide and every dp
         // this takes comes off the pane's own name.
-        PaneManageAction(pane.id, LANDSCAPE_TOUCH)
+        PaneMenuAction(pane.id, LANDSCAPE_TOUCH)
     }
 }
 

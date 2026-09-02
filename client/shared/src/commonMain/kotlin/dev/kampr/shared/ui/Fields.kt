@@ -152,7 +152,7 @@ fun EnvEditor(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             IconGlyph(KamprIcons.plus, 12.dp, tokens.color.accent)
-            KText("Add a variable", tokens.type.captionSmall, tokens.color.accent)
+            DisableSelection { KText("Add a variable", tokens.type.captionSmall, tokens.color.accent) }
         }
     }
 }

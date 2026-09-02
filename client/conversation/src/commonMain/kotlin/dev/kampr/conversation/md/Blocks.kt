@@ -7,9 +7,18 @@ private val BULLET = Regex("^(\\s*)([-*+])\\s+(.*)$")
 private val ORDERED = Regex("^(\\s*)(\\d{1,9})[.)]\\s+(.*)$")
 private val DELIMITER = Regex("^\\s*\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)*\\|?\\s*$")
 
-fun parseMarkdown(source: String): List<MdBlock> = Reader(source.replace("\r\n", "\n").split('\n')).blocks()
+// What a single newline inside a paragraph means. CommonMark says a space, and that is right for
+// an agent: it writes real markdown and wraps its own prose, so a line that ended because the
+// column did must not become a break. It is wrong for a prompt a person typed, where Enter was
+// pressed on purpose — which the wire says outright with `role: user`
+// (docs/04-wire-protocol.md). Nothing else about the parse changes: a person pastes fences,
+// bullets and tables into a reply and they go on rendering as what they are.
+enum class Breaks { Soft, Hard }
 
-private class Reader(private val lines: List<String>) {
+fun parseMarkdown(source: String, breaks: Breaks = Breaks.Soft): List<MdBlock> =
+    Reader(source.replace("\r\n", "\n").split('\n'), breaks).blocks()
+
+private class Reader(private val lines: List<String>, private val breaks: Breaks) {
     private var at = 0
 
     fun blocks(): List<MdBlock> {
@@ -58,7 +67,7 @@ private class Reader(private val lines: List<String>) {
             body += trimmed.removePrefix(">").removePrefix(" ")
             at++
         }
-        return MdBlock.Quote(Reader(body).blocks())
+        return MdBlock.Quote(Reader(body, breaks).blocks())
     }
 
     private fun isTable(): Boolean {
@@ -144,7 +153,7 @@ private class Reader(private val lines: List<String>) {
                 body += next.removePrefix(" ".repeat(minOf(leading(next), indent + 2)))
                 at++
             }
-            items += MdItem(if (ordered) "${counter}." else "•", Reader(body).blocks())
+            items += MdItem(if (ordered) "${counter}." else "•", Reader(body, breaks).blocks())
             counter++
         }
         return MdBlock.Bullets(items, ordered)
@@ -152,17 +161,23 @@ private class Reader(private val lines: List<String>) {
 
     private fun leading(line: String): Int = line.length - line.trimStart().length
 
+    // Two trailing spaces are CommonMark's own hard break, and they never worked here: the line was
+    // trimmed before anything could read them and the join put a space back. They are honoured in
+    // both modes now, which is what a writer who typed them asked for either way.
     private fun paragraph(): MdBlock {
-        val body = mutableListOf<String>()
+        val body = StringBuilder()
+        var broke = false
         while (at < lines.size) {
             val line = lines[at]
             if (line.isBlank() || FENCE.matches(line) || ATX.matches(line) || RULE.matches(line)) break
             if (line.trimStart().startsWith("> ")) break
             if (BULLET.matches(line) || ORDERED.matches(line)) break
             if (isTable()) break
-            body += line.trim()
+            if (body.isNotEmpty()) body.append(if (broke) '\n' else ' ')
+            body.append(line.trim())
+            broke = breaks == Breaks.Hard || line.endsWith("  ")
             at++
         }
-        return MdBlock.Paragraph(body.joinToString(" "))
+        return MdBlock.Paragraph(body.toString())
     }
 }

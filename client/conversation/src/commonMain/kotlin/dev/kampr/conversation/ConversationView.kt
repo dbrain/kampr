@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +88,11 @@ fun ConversationView(
     pane: PaneState,
     info: PaneInfo?,
     modifier: Modifier = Modifier,
+    // Hoisted only so a harness can seed it. Both gestures that fill it in are unreachable from a
+    // test on this platform — a desktop's file picker is a modal system dialog, and a desktop has
+    // no page-wide paste event at all — so the state has to be reachable from outside or the one
+    // transition that clears it can never be driven through the real view.
+    handover: MutableState<Handover> = remember(pane.id) { mutableStateOf(Handover.Idle) },
     // Injected only so an artboard can be drawn against a fixed one — a picture whose stopwatch
     // reads the real clock is a different picture every time it is rendered.
     clock: () -> Double = ::wallClockMillis,
@@ -165,15 +171,14 @@ fun ConversationView(
     val leading = if (pane.convoMore) 1 else 0
 
     val scope = rememberCoroutineScope()
-    var handover by remember(pane.id) { mutableStateOf<Handover>(Handover.Idle) }
     // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
     // write — and that error is quiet everywhere else by design, so this is the only place it can
     // be said.
-    LaunchedEffect(pane.refusal) { handover = handoverAfter(handover, pane.refusal) }
+    LaunchedEffect(pane.refusal) { handover.value = handoverAfter(handover.value, pane.refusal) }
     // The same handover as the attach button's, reached by the gesture a desk actually uses. A
     // clipboard with no file on it never gets here, so pasting words into the reply box is
     // untouched.
-    PastedFiles(!io.readOnly) { picked -> handover = handoverOf(pane, io, picked) }
+    PastedFiles(!io.readOnly) { picked -> handover.value = handoverOf(pane, io, picked) }
     val stillness = LocalReduceMotion.current
     LaunchedEffect(hits, focus) {
         val target = hits.getOrNull(focus) ?: return@LaunchedEffect
@@ -452,18 +457,21 @@ fun ConversationView(
                 agent = info?.agent,
                 enabled = !io.readOnly,
                 answering = answering(LocalConnectionStatus.current, pane.undelivered),
-                onSend = { text -> replyMessages(pane.id, text).forEach(io::send) },
+                onSend = { text ->
+                    replyMessages(pane.id, text).forEach(io::send)
+                    handover.value = handoverAfterSend(handover.value)
+                },
                 draft = pane.draft,
                 onDraft = { pane.draft = it },
                 onAttach = if (io.readOnly || !filePickAvailable) null else {
                     {
                         scope.launch {
                             val picked = pickFile() ?: return@launch
-                            handover = handoverOf(pane, io, picked)
+                            handover.value = handoverOf(pane, io, picked)
                         }
                     }
                 },
-                handover = handover,
+                handover = handover.value,
                 desk = pane.desk,
                 // The keystroke is the node's measurement and arrives with the line, so nothing
                 // here decides what empties a box on a machine it has never seen. It goes as
@@ -533,6 +541,19 @@ internal const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
 // base64, nowhere to write — and that error is deliberately quiet everywhere else, so the composer
 // is the only place it can be said. Nothing else the composer does produces one, and the pane's
 // refusal is cleared before the bytes go, so what lands next is the answer to this.
+// The line is a statement about the draft — *its path is typed in* — and the reply going is what
+// makes it false. Nothing used to take it down: the state had no transition back to idle at all,
+// so the green line stood over the composer for the life of the pane, still naming a screenshot
+// three messages ago. (The terminal view has the same missing transition, cleared there by the
+// pane's next input.)
+//
+// A refusal is not a statement about the draft. It is the node's only report that a file never
+// arrived — quiet everywhere else by design — and an error the operator has not read is not
+// something to sweep away with an action that has nothing to do with it. The next handover clears
+// it, which is the press that was going to fix it anyway.
+internal fun handoverAfterSend(handover: Handover): Handover =
+    if (handover is Handover.Refused) handover else Handover.Idle
+
 internal fun handoverAfter(handover: Handover, refusal: String?): Handover =
     if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
 

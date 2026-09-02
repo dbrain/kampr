@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -129,11 +130,13 @@ private fun GroundPicker(mode: ThemeMode, onMode: (ThemeMode) -> Unit, modifier:
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    LabelText(
-                        option.title,
-                        tokens.type.buttonSmall,
-                        if (active) tokens.color.onAccent else tokens.color.text,
-                    )
+                    DisableSelection {
+                        LabelText(
+                            option.title,
+                            tokens.type.buttonSmall,
+                            if (active) tokens.color.onAccent else tokens.color.text,
+                        )
+                    }
                 }
             }
         }

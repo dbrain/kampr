@@ -91,7 +91,7 @@ class FitWidthTest {
         val column = onNodeWithContentDescription("Put away the reply of", substring = true)
             .fetchSemanticsNode().boundsInRoot
         val prose = onNodeWithText(PROSE, substring = true).fetchSemanticsNode().boundsInRoot
-        val call = onNodeWithContentDescription("Tool Bash, ls, 3 lines").fetchSemanticsNode().boundsInRoot
+        val call = onNodeWithContentDescription("Tool Bash, ls, 3 lines of output").fetchSemanticsNode().boundsInRoot
         val copy = onNodeWithContentDescription("Copy the kotlin block").fetchSemanticsNode().boundsInRoot
 
         assertTrue(

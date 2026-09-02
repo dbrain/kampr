@@ -17,16 +17,17 @@ use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn};
+use crate::output;
 use crate::presence;
 use crate::process::PaneProcess;
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
-use crate::summary::{count_lines, image_marker, marker_of, one_line, summarise};
+use crate::summary::{clip, count_lines, image_marker, marker_of, one_line, summarise};
 use crate::tail::TranscriptParser;
 
 use record::{
-    PATCH_PREFIX, Payload, Record, data_url_att, data_url_subtype, envelope_output, output_failed,
-    output_text, patch_target,
+    PATCH_PREFIX, Payload, Record, command_output, data_url_att, data_url_subtype, envelope_output,
+    output_failed, output_text, patch_target,
 };
 
 pub const AGENT: &str = "codex";
@@ -253,6 +254,7 @@ impl CodexParser {
                     turn.blocks.push(Block::Code {
                         lang: Some("bash".into()),
                         text: cmd.to_string(),
+                        role: None,
                     });
                 }
                 self.tool_turns.insert(call_id, (id, card));
@@ -280,6 +282,7 @@ impl CodexParser {
                     Block::Code {
                         lang: None,
                         text: input,
+                        role: None,
                     }
                 });
                 self.tool_turns.insert(call_id, (id, card));
@@ -299,13 +302,18 @@ impl CodexParser {
             return;
         };
         let failed = output_failed(raw);
-        let text = envelope_output(raw);
+        let text = command_output(&envelope_output(raw)).to_string();
         let Some(turn) = self.store.revise(&target) else {
             return;
         };
-        if let Some(Block::Tool { state, lines, .. }) = turn.tool_block_mut(card) {
+        let mut carry = false;
+        if let Some(Block::Tool {
+            state, lines, name, ..
+        }) = turn.tool_block_mut(card)
+        {
             *state = if failed { ToolState::Error } else { ToolState::Done };
             *lines = count_lines(&text);
+            carry = lines.is_some() && (failed || RESULT_IS_THE_POINT.contains(&name.as_str()));
         }
         for att in images {
             turn.blocks.push(Block::Md {
@@ -313,8 +321,24 @@ impl CodexParser {
                 att: Some(att),
             });
         }
+        if carry {
+            // Codex files every call as a turn of its own, so this card is the only one in it and
+            // no other card's recorded position can be shifted by the insert.
+            output::place(turn, card, clip(&text));
+        }
     }
 }
+
+/// The calls whose result *is* the point, and so the only ones worth the bytes above.
+///
+/// Codex 0.147's whole vocabulary, counted over 11 real rollouts on this machine: `exec_command`
+/// 1706, `write_stdin` 443, `apply_patch` 431, `view_image` 67, `exec` 33, `update_plan` 19,
+/// `wait` 1. Four of those carry. `apply_patch` does not, because its result is
+/// `Success. Updated the following files:` over the `diff` block already beside it; `view_image`
+/// does not, because its result *is* the picture and arrives as an attachment; and `update_plan`
+/// does not, because its result is the literal string `Plan updated` on every one of the 19. An
+/// error is carried whatever the call was, because then the text is the whole message.
+const RESULT_IS_THE_POINT: &[&str] = &["exec_command", "write_stdin", "exec", "wait"];
 
 /// The turn one `message` payload becomes, or nothing where it becomes no turn at all.
 ///

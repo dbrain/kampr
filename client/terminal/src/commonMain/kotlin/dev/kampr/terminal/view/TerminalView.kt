@@ -31,6 +31,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -69,11 +74,13 @@ import dev.kampr.terminal.file.handoverName
 import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.InputSink
+import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.PaneTextInput
 import dev.kampr.terminal.render.GridRenderer
 import dev.kampr.terminal.render.ModeSelector
 import dev.kampr.terminal.render.LogicalText
 import dev.kampr.terminal.render.ResolvedStyles
+import dev.kampr.terminal.render.GridPoint
 import dev.kampr.terminal.render.Selection
 import dev.kampr.terminal.render.Target
 import dev.kampr.terminal.render.TargetKind
@@ -89,6 +96,7 @@ import dev.kampr.terminal.review.historyWarning
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -108,6 +116,12 @@ private const val FONT_SETTLE_FRAMES = 120
 // ADR 0010. The cursor line is the unit of speech, and a live region wired straight to `revision`
 // would speak over itself at frame rate — so it settles first and speaks the line once.
 private const val SPEECH_SETTLE_MS = 450L
+
+// How long the caret has to hold still before the band is moved to it. Long enough to cover a
+// repaint's whole sweep — #380 measured those at several a second, and one is a single batch of
+// writes — and short enough that a caret that really did move somewhere off screen is fetched
+// back inside one repaint interval.
+internal const val CARET_SETTLE_MS = 200L
 
 // Mirrors the header PaneScreen floats over this surface and the answer strip it shows while a
 // prompt is outstanding. Chrome insets the scrollable content; it never insets the paint.
@@ -265,29 +279,68 @@ fun TerminalView(
             carriedTotal = rows.total
         }
 
+        // Where the caret has *stopped*, counted from the bottom of the surface, which is the only
+        // coordinate the band is a function of and the only one history arriving leaves alone.
+        //
+        // The live caret cannot be used. The band translates with it one pixel per pixel, so an
+        // excursion wider than the band drags the viewport in both directions once per frame — and
+        // a full-screen redraw is exactly that excursion the moment the grid is taller than the
+        // rectangle it is shown in. #380 fixed the shallow case; the operator on a zoomed-in desk
+        // watched the deep one: "sometimes it flashes and sort of scrolls up then down". A repaint
+        // walks the caret home and back inside one batch of writes and rests where it stops, so
+        // waiting for it to hold still tells the sweep and the destination apart with nothing else
+        // to go on.
+        //
+        // Re-seeded rather than settled on the pane's first real grid: before `painted` the buffer
+        // is the 80x24 placeholder, and waiting out an interval on that would open every pane on
+        // the wrong band.
+        val below = rows.liveRows - pane.cursor.row
+        var settledBelow by remember(pane.id, pane.painted) { mutableIntStateOf(below) }
+        // Keyed on the reading rather than collected from a `snapshotFlow`, because `CellBuffer`
+        // is not snapshot state: a resize changes how many rows sit below the caret without
+        // moving the caret, and only a composition sees that. Re-keying is the cancellation —
+        // a caret that has not stopped never reaches the assignment.
+        LaunchedEffect(pane.id, below) {
+            delay(CARET_SETTLE_MS)
+            settledBelow = below
+        }
+
         // Where the surface is allowed to rest. Re-derived every frame rather than placed once,
         // because the two things that move it — the caret, and the height of the rectangle the
         // keyboard leaves behind — both move long after the first paint. Placing it once is why
         // raising the keyboard took the prompt off the top and left the operator typing blind.
-        val band = caretBand(paint, rows.total, rows.historyRows + pane.cursor.row, metrics.height)
-        view.minScroll = band.floor
+        val band = caretBand(paint, rows.total, rows.total - settledBelow, metrics.height)
+        view.band = band
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
         if (placedCell != metrics.height) {
             placedCell = metrics.height
             view.placeOnFloor(band.floor)
         }
         // A reader who is following stays exactly where they are for as long as the caret is on
-        // screen, and is moved the least the band allows when it is not. A reader who has scrolled
-        // away keeps the floor only, which is what brings the caret back when they type into it.
+        // screen, and is moved the least the band allows when it is not.
+        //
+        // A reader who has parked is not moved at all. The floor used to be held under them as
+        // well — `max(scrollY, floor)` — and that is the other half of the report: the bottom of a
+        // tall grid sits below the floor, so every hand that reached it was thrown back to the
+        // caret by the next frame. Typing is what puts a parked reader back on the live edge, and
+        // it is the only thing that does.
         //
         // Review positions the viewport from the row being read and reaches rows the band holds
         // off, so it is the one surface the band does not govern.
         LaunchedEffect(band, review.active, view.following) {
             if (review.active) return@LaunchedEffect
-            view.scrollY = if (view.following) {
-                view.scrollY.coerceIn(band.floor, band.ceiling)
-            } else {
-                max(view.scrollY, band.floor)
+            if (view.following) view.scrollY = view.scrollY.coerceIn(band.floor, band.ceiling)
+        }
+
+        // Every byte this client sends the pane, and the two things that owe it an answer. The
+        // viewport goes back to following, because typing is a request to be shown what you typed
+        // and a hand that parked below the live edge has no other way back. And the handover line
+        // stands down: "<name> is on the agent's machine, and its path is typed in" is a fact about
+        // a composer that stops being true the moment anything else is typed into it.
+        LaunchedEffect(sink, session) {
+            snapshotFlow { sink.sends }.drop(1).collect {
+                view.followAgain()
+                if (session.handover is Handover.Sent) session.handover = Handover.Idle
             }
         }
 
@@ -360,7 +413,43 @@ fun TerminalView(
         probe.cols = cols.coerceAtLeast(1)
         probe.totalRows = rows.total.coerceAtLeast(1)
 
+        // One copy and one paste on this surface, reached three ways: the selection pill, the
+        // keyboard chord, and the grid's own context menu. A second implementation of either is
+        // how two of them come to disagree about bracketing, about the read-only rule, or about
+        // whether the pill goes away afterwards.
+        fun copySelection() {
+            val selection = view.selection ?: return
+            clipboard.setText(AnnotatedString(logical.copy(selection)))
+            view.selection = null
+        }
+
+        // Bracketed by `InputSink.paste`, so a multi-line paste reaches a shell as one block rather
+        // than executing line by line (#9), and inspected by the guard on the way past like
+        // anything else that arrives carrying its own Enter. The selection goes first: the read is
+        // what raises Android's clipboard notice, and leaving the pill up under it reads as a press
+        // that did nothing.
+        //
+        // Null on a read-only device rather than present-and-refusing, which is `ManageLayer`'s
+        // rule for everything a write can reach — the pill and the menu both read it as "offer
+        // nothing", and the chord as "do nothing".
+        val pasteIntoPane: (() -> Unit)? = if (io.readOnly) {
+            null
+        } else {
+            {
+                view.selection = null
+                scope.launch {
+                    val text = readClipboard()
+                    if (text.isNullOrEmpty()) {
+                        session.handover = Handover.Refused("Nothing on the clipboard to paste.")
+                    } else {
+                        sink.paste(text)
+                    }
+                }
+            }
+        }
+
         fun tapped(position: Offset) {
+            view.menuAt = null
             if (view.selection != null) {
                 view.selection = null
                 view.target = null
@@ -425,6 +514,18 @@ fun TerminalView(
         Box(
             Modifier
                 .fillMaxSize()
+                // The grid paints into a Canvas, so nothing under the pointer asks for a cursor
+                // and the whole terminal hovered as a plain arrow. It is a surface a mouse selects
+                // text on — `mouseGesture` drags a selection out of it — so it wears the I-beam,
+                // selection or no selection, menu or no menu. `pressable` is for controls and
+                // would be wrong here.
+                //
+                // On this box rather than on the layer inside it, which is the same rectangle and
+                // is this box's only child: a hover icon is only ever readable off the layout node
+                // that carries a node's semantics, and the layer carries none — so put on the
+                // layer, the one cursor on this screen that is not a control's was the one cursor
+                // no test could see.
+                .pointerHoverIcon(PointerIcon.Text)
                 .gestureAction(
                     label = gridSummary,
                     onClick = { session.openKeyboard() },
@@ -442,11 +543,31 @@ fun TerminalView(
                 // cannot steal the tap the scrim needs — and ctrl+wheel while the zoom sheet is
                 // open is the sheet's own readout moving, which is the point of having it there.
                 .pointerInput(pane.id, scrollToPane != null) { terminalWheel(view, probe, presets, scrollToPane) }
+                // A right-click over the text, which is the one surface on this screen that had
+                // no menu at all. On the **Main** pass and only on an unconsumed press, which is
+                // what keeps it out of a mosaic: `Modifier.paneActions` on a cell runs on the
+                // Initial pass and consumes, so inside a mosaic the cell's own sheet still wins
+                // and the grid never sees the gesture.
+                //
+                // The raw event rather than `awaitFirstDown`, for `paneActions`' reason: on skiko
+                // a first down refers to the primary button alone and never returns for a press
+                // carrying the second one.
+                .pointerInput(pane.id) {
+                    awaitEachGesture {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Press) return@awaitEachGesture
+                        if (event.changes.any { it.isConsumed }) return@awaitEachGesture
+                        if (!event.buttons.isSecondaryPressed) return@awaitEachGesture
+                        event.changes.forEach { it.consume() }
+                        view.target = null
+                        view.menuAt = event.changes.first().position
+                    }
+                }
                 // The touch detector does not. A sheet over this surface is modal, and the grid's
                 // detector consumes the release — so leaving *it* live is what let a tap meant for
                 // the scrim raise the keyboard instead of closing the sheet.
                 .then(
-                    if (view.sheetOpen || session.confirm.held != null || peek.path != null) {
+                    if (view.sheetOpen || view.menuAt != null || session.confirm.held != null || peek.path != null) {
                         Modifier
                     } else {
                         Modifier.pointerInput(pane.id, scrollToPane != null) {
@@ -536,6 +657,12 @@ fun TerminalView(
             session = session,
             sink = sink,
             enabled = !io.readOnly && !view.sheetOpen && session.confirm.held == null && peek.path == null,
+            onChord = { chord ->
+                when (chord) {
+                    PaneChord.Copy -> copySelection()
+                    PaneChord.Paste -> pasteIntoPane?.invoke()
+                }
+            },
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),
         )
 
@@ -596,35 +723,29 @@ fun TerminalView(
                 accent = tokens.color.accent,
                 onAnchor = { view.selection = selection.copy(anchor = probe.cellAt(it)) },
                 onHead = { view.selection = selection.copy(head = probe.cellAt(it)) },
-                onCopy = {
-                    clipboard.setText(AnnotatedString(logical.copy(selection)))
-                    view.selection = null
-                },
-                // Bracketed by `InputSink.paste`, so a multi-line paste reaches a shell as one
-                // block rather than executing line by line (#9), and inspected by the guard on the
-                // way past like anything else that arrives carrying its own Enter. The pill goes
-                // first: the read is what raises Android's clipboard notice, and leaving the pill
-                // up under it reads as a press that did nothing.
-                onPaste = if (io.readOnly) {
-                    null
-                } else {
-                    {
-                        view.selection = null
-                        scope.launch {
-                            val text = readClipboard()
-                            if (text.isNullOrEmpty()) {
-                                session.handover = Handover.Refused("Nothing on the clipboard to paste.")
-                            } else {
-                                sink.paste(text)
-                            }
-                        }
-                    }
-                },
+                onCopy = { copySelection() },
+                onPaste = pasteIntoPane,
                 onBlock = {
                     view.blockSelect = !view.blockSelect
                     view.selection = selection.copy(block = view.blockSelect)
                 },
                 block = view.blockSelect,
+            )
+        }
+
+        view.menuAt?.let { at ->
+            GridMenu(
+                at = at,
+                onCopy = if (view.selection == null) null else ({ copySelection() }),
+                onPaste = pasteIntoPane,
+                onSelectAll = {
+                    view.selection = Selection(
+                        GridPoint(0, 0),
+                        GridPoint((rows.total - 1).coerceAtLeast(0), (cols - 1).coerceAtLeast(0)),
+                        view.blockSelect,
+                    )
+                },
+                onDismiss = { view.menuAt = null },
             )
         }
 

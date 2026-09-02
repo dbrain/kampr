@@ -58,10 +58,10 @@ class ToolRunSurfaceTest {
         onNodeWithContentDescription("Show $FAILING_RUN").performClick()
         waitForIdle()
         onNodeWithContentDescription("Hide $FAILING_RUN").assertExists()
-        onNodeWithContentDescription("Show the output of $FIRST_CARD", substring = true).assertExists()
+        onNodeWithContentDescription("Show what was sent to $FIRST_CARD", substring = true).assertExists()
         onAllNodesWithContentDescription(CARD_DETAIL).assertCountEquals(0)
 
-        onNodeWithContentDescription("Show the output of $FIRST_CARD", substring = true).performClick()
+        onNodeWithContentDescription("Show what was sent to $FIRST_CARD", substring = true).performClick()
         waitForIdle()
         onAllNodesWithContentDescription(CARD_DETAIL).assertCountEquals(1)
     }
@@ -87,7 +87,7 @@ class ToolRunSurfaceTest {
         setContent { Transcript(store) }
         waitForIdle()
         onNodeWithContentDescription("Show $FAILING_RUN").performClick()
-        onNodeWithContentDescription("Show the output of $FIRST_CARD", substring = true).performClick()
+        onNodeWithContentDescription("Show what was sent to $FIRST_CARD", substring = true).performClick()
         waitForIdle()
 
         store.accept(ServerMsg.ConvoTurn(PANE_ID, listOf(proseTurn("r-9", "All green apart from the lint."))))

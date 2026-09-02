@@ -5,9 +5,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
@@ -139,6 +142,37 @@ class HandingAFileToAPaneTest {
         store.accept(ServerMsg.Failure("bad_request", "that is larger than this node will take", Phone.PANE))
         waitForIdle()
         onNodeWithText("that is larger than this node will take").assertExists()
+    }
+
+    // Nothing ever put the line back down. `Handover.Sent` was set when the bytes went and no path
+    // in the client set it back to `Idle`, so the green line stood for the life of the pane
+    // session — and what it says is a fact about the pane's composer: "<name> is on the agent's
+    // machine, and its path is typed in". The next thing typed into that composer makes it false.
+    //
+    // The conversation surface is having the same transition added on its own trigger, which
+    // there is the send.
+    @Test
+    fun theLineComesDownWhenTheOperatorTypesIntoThePane() = runComposeUiTest {
+        val (_, pane) = storedPane()
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(pane, session, io = Node())
+        session.handover = Handover.Sent("shot.png")
+        session.openKeyboard()
+        waitForIdle()
+        onNodeWithText("shot.png is on the pane's machine, and its path is typed in").assertExists()
+
+        onNode(hasSetTextAction()).performTextInput("l")
+        waitForIdle()
+        assertEquals(
+            Handover.Idle,
+            session.handover,
+            "the pane took a keystroke and went on saying where a file it has moved past is",
+        )
+        assertTrue(
+            onAllNodesWithText("shot.png is on the pane's machine, and its path is typed in")
+                .fetchSemanticsNodes().isEmpty(),
+            "the line was still on the chrome after the operator typed",
+        )
     }
 
     // The store is what carries the node's refusal to the pane it is about, and the strip reads it

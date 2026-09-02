@@ -15,3 +15,4 @@ mod registry;
 mod scratch;
 mod subagents;
 mod tail;
+mod tool_output;
