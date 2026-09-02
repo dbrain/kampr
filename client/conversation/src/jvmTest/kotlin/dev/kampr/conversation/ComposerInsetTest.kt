@@ -287,7 +287,6 @@ class ComposerInsetTest {
                             readOnly = false,
                             onBack = {},
                             onView = {},
-                            onAnswer = {},
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

@@ -68,7 +68,6 @@ private fun Desk(keyboard: Boolean, view: PaneView = PaneView.Terminal) {
                 surfaces = KeyRowProbe,
                 readOnly = false,
                 onView = {},
-                onAnswer = {},
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -157,7 +156,6 @@ class DeskKeyRowTest {
                                 readOnly = false,
                                 onBack = {},
                                 onView = {},
-                                onAnswer = {},
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }

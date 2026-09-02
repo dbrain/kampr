@@ -354,7 +354,6 @@ internal fun AppScaffold(
                                     surfaces = surfaces,
                                     readOnly = readOnly,
                                     onView = state::setPaneView,
-                                    onAnswer = { answer(screen.paneId, it) },
                                 )
                                 Screen.Setup -> SetupScreen(
                                     status = auth.setup,
@@ -414,7 +413,6 @@ internal fun AppScaffold(
                             readOnly = readOnly,
                             onBack = state::back,
                             onView = state::setPaneView,
-                            onAnswer = { answer(screen.paneId, it) },
                         )
                         Screen.Setup -> SetupScreen(
                             status = auth.setup,
@@ -470,7 +468,6 @@ internal fun AppScaffold(
                             readOnly = readOnly,
                             onBack = state::back,
                             onView = state::setPaneView,
-                            onAnswer = { answer(screen.paneId, it) },
                         )
                         Screen.Setup -> SetupScreen(
                             status = auth.setup,

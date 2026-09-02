@@ -383,7 +383,6 @@ class PaneSwitchOrderTest {
                         surfaces = ProbeSurfaces(),
                         readOnly = false,
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

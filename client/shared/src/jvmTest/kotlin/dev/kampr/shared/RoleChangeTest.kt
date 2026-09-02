@@ -172,7 +172,6 @@ class RoleChangeTest {
                         readOnly = store.readOnly,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                     store.roleNote?.let { RoleNotice(it, store::dismissRoleNote) }

@@ -268,7 +268,6 @@ class AnsiArtboardTest {
                                         readOnly = false,
                                         onBack = {},
                                         onView = {},
-                                        onAnswer = {},
                                     )
                                 }
                             }

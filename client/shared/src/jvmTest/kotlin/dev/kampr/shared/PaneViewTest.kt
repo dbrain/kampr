@@ -100,7 +100,6 @@ private fun ComposeUiTest.mobile(width: Dp, height: Dp, landscape: Boolean, view
                     readOnly = false,
                     onBack = {},
                     onView = {},
-                    onAnswer = {},
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -121,7 +120,6 @@ private fun ComposeUiTest.desktop(view: PaneView, conversation: Boolean) {
                     surfaces = SurfaceProbe(),
                     readOnly = false,
                     onView = {},
-                    onAnswer = {},
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -273,7 +271,6 @@ class PaneViewTransitionTest {
                         readOnly = false,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -304,7 +301,6 @@ class PaneViewTransitionTest {
                         readOnly = false,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

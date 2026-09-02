@@ -138,7 +138,6 @@ class WatchersUiTest {
                         readOnly = false,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                     )
                 }
             }

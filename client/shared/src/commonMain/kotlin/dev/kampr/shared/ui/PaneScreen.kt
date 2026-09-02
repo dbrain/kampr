@@ -1,7 +1,6 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -159,7 +157,6 @@ fun PaneScreenMobile(
     gone: PaneGone? = null,
     onBack: () -> Unit,
     onView: (PaneView) -> Unit,
-    onAnswer: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -298,11 +295,15 @@ fun PaneScreenMobile(
         // chrome stands down rather than stacking a second one underneath it.
         // Nothing typed here can reach a pane the node no longer has, and a row of keys that
         // works perfectly and delivers nothing is the shape this codebase has paid for twice.
+        //
+        // **No answer chips here, on purpose.** The dialog is on the grid a few rows up, and the
+        // key row under it types into the pane — so a chip is a second way to press a key the
+        // reader can already see and already reach, taking a band of a phone screen off the grid
+        // that is showing them what they are answering. The status badge in the header says
+        // `blocked`, which is the part a terminal cannot say for itself. The conversation is where
+        // the question has to be carried, because there the dialog is not on the screen at all.
         if (shown != PaneView.Conversation && gone == null) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
-                if (!readOnly) pane.pending?.let {
-                    PendingBar(it, answering(LocalConnectionStatus.current, pane.undelivered), onAnswer)
-                }
                 surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
             }
         }
@@ -395,68 +396,6 @@ private fun geometryLine(info: PaneInfo?, pane: PaneState, others: Int): String 
         .joinToString(" · ")
 }
 
-// The strip appears because the agent asked something, not because anyone touched the screen, so
-// it announces itself and carries the question a reader would otherwise have to go looking for.
-@Composable
-private fun PendingBar(pending: ServerMsg.Pending, answering: Answering, onAnswer: (String) -> Unit) {
-    val tokens = Kampr.tokens
-    val question = pending.question ?: "The agent is waiting for an answer"
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .announce(
-                "$question. ${pending.options.size} answers: " +
-                    pending.options.joinToString(", ") { "${it.key} ${it.label}" },
-                urgent = true,
-            ),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(start = 10.dp, top = 11.dp, end = 10.dp, bottom = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
-        ) {
-            pending.options.forEachIndexed { index, option ->
-                val primary = index == 0 && answering.enabled
-                val shape = RoundedCornerShape(tokens.radii.md)
-                Box(
-                    Modifier
-                        .background(if (primary) tokens.color.accent else tokens.color.surface, shape)
-                        .edge(tokens.card, shape)
-                        .touchable()
-                        .action(
-                            "Answer ${option.key}, ${option.label}",
-                            { onAnswer(option.key) },
-                            shape,
-                            enabled = answering.enabled,
-                        )
-                        .padding(horizontal = 17.dp, vertical = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    KText(
-                        "${option.key} · ${option.label}",
-                        tokens.type.buttonSmall,
-                        when {
-                            !answering.enabled -> tokens.color.mute
-                            primary -> tokens.color.onAccent
-                            else -> tokens.color.text
-                        },
-                    )
-                }
-            }
-        }
-        answering.note?.let {
-            KText(
-                it,
-                tokens.type.micro,
-                tokens.color.blocked,
-                Modifier.padding(start = 10.dp, end = 10.dp, bottom = 9.dp),
-                maxLines = 2,
-            )
-        }
-    }
-}
 
 @Composable
 fun PaneScreenDesktop(
@@ -467,7 +406,6 @@ fun PaneScreenDesktop(
     readOnly: Boolean,
     gone: PaneGone? = null,
     onView: (PaneView) -> Unit,
-    onAnswer: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -578,9 +516,6 @@ fun PaneScreenDesktop(
         // second input surface laid over the first.
         if (shown == PaneView.Terminal && gone == null) {
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().readingOrder(1f)) {
-                if (!readOnly) pane.pending?.let {
-                    PendingBar(it, answering(LocalConnectionStatus.current, pane.undelivered), onAnswer)
-                }
                 if (keyRowNeeded()) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())
             }
         }

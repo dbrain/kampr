@@ -93,7 +93,6 @@ private fun ComposeUiTest.screen(
                             gone = gone,
                             onBack = {},
                             onView = {},
-                            onAnswer = {},
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -142,7 +141,6 @@ class PaneClosedTest {
                                 gone = gone,
                                 onBack = {},
                                 onView = {},
-                                onAnswer = {},
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -202,7 +200,6 @@ class PaneClosedTest {
                                 gone = gone,
                                 onBack = {},
                                 onView = {},
-                                onAnswer = {},
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }

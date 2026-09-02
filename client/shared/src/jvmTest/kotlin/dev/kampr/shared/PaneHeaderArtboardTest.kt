@@ -66,7 +66,6 @@ class PaneHeaderArtboardTest {
             readOnly = readOnly,
             onBack = {},
             onView = {},
-            onAnswer = {},
             modifier = Modifier.fillMaxSize(),
         )
     }

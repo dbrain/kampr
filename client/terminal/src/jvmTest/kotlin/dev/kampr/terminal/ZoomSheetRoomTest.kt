@@ -114,7 +114,7 @@ class ZoomSheetRoomTest {
                 ) {
                     PaneScreenMobile(
                         Phone.shell(), ROOM_INFO, PaneView.Terminal, surfaces, landscape, false,
-                        onBack = {}, onView = {}, onAnswer = {}, modifier = Modifier.fillMaxSize(),
+                        onBack = {}, onView = {}, modifier = Modifier.fillMaxSize(),
                     )
                 }
             }

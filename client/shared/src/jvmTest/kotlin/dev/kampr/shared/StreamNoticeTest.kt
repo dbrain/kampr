@@ -84,7 +84,6 @@ private fun Screen(pane: PaneState, info: PaneInfo?) {
             readOnly = false,
             onBack = {},
             onView = {},
-            onAnswer = {},
             modifier = Modifier.fillMaxSize(),
         )
     }

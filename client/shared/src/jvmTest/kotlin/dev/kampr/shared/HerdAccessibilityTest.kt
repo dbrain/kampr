@@ -159,7 +159,6 @@ class HerdAccessibilityTest {
                     readOnly = false,
                     onBack = {},
                     onView = {},
-                    onAnswer = {},
                 )
             }
         }

@@ -47,7 +47,6 @@ class ArtboardTest {
             readOnly = false,
             onBack = {},
             onView = {},
-            onAnswer = {},
         )
     }
 
@@ -193,7 +192,6 @@ class ArtboardTest {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }
@@ -217,7 +215,6 @@ class ArtboardTest {
                 surfaces = ConversationSurfaces(),
                 readOnly = false,
                 onView = {},
-                onAnswer = {},
             )
         }
     }
@@ -244,7 +241,6 @@ class ArtboardTest {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }
@@ -281,7 +277,6 @@ class ArtboardTest {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }
@@ -354,7 +349,6 @@ class ArtboardTest {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }

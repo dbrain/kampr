@@ -89,9 +89,9 @@ class ZoomSlotArtboardTest {
                     val surfaces = RealZoom(PaneSession(PANE))
                     CompositionLocalProvider(LocalPaneIo provides Io, LocalManage provides Manage) {
                         if (board.desktop) {
-                            PaneScreenDesktop(pane, INFO, view, surfaces, board.crowded, onView = {}, onAnswer = {})
+                            PaneScreenDesktop(pane, INFO, view, surfaces, board.crowded, onView = {})
                         } else {
-                            PaneScreenMobile(pane, INFO, view, surfaces, board.landscape, board.crowded, onBack = {}, onView = {}, onAnswer = {})
+                            PaneScreenMobile(pane, INFO, view, surfaces, board.landscape, board.crowded, onBack = {}, onView = {})
                         }
                     }
                 }

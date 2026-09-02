@@ -115,7 +115,6 @@ private fun SkikoComposeUiTest.header(board: Board, view: MutableState<PaneView>
                         surfaces = ZoomProbe,
                         readOnly = board.crowded,
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -128,7 +127,6 @@ private fun SkikoComposeUiTest.header(board: Board, view: MutableState<PaneView>
                         readOnly = board.crowded,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

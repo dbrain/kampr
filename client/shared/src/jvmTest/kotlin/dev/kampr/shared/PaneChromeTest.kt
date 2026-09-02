@@ -100,7 +100,6 @@ private fun ComposeUiTest.screen(
                     readOnly = false,
                     onBack = {},
                     onView = {},
-                    onAnswer = {},
                     modifier = Modifier.fillMaxSize(),
                 )
             }

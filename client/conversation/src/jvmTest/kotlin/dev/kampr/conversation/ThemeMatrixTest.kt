@@ -159,7 +159,6 @@ class ThemeMatrixTest {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }
@@ -219,7 +218,6 @@ class ThemeMatrixTest {
                         surfaces = ConversationSurfaces(),
                         readOnly = false,
                         onView = {},
-                        onAnswer = {},
                     )
                 }
             }

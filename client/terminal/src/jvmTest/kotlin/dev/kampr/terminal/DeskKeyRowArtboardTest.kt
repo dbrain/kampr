@@ -107,7 +107,6 @@ class DeskKeyRowArtboardTest {
                         surfaces = DeskSurfaces(PaneSession(PANE)),
                         readOnly = false,
                         onView = {},
-                        onAnswer = {},
                     )
                 }
             }

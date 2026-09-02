@@ -78,7 +78,6 @@ private fun ComposeUiTest.header(case: Header) {
                         readOnly = case.readOnly,
                         onBack = {},
                         onView = {},
-                        onAnswer = {},
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

@@ -59,7 +59,6 @@ private fun PaneScreen(landscape: Boolean) = PaneScreenMobile(
     readOnly = false,
     onBack = {},
     onView = {},
-    onAnswer = {},
     modifier = Modifier.fillMaxSize(),
 )
 

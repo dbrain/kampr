@@ -134,7 +134,6 @@ class ConfirmArtboardTest {
                     readOnly = false,
                     onBack = {},
                     onView = {},
-                    onAnswer = {},
                 )
             }
         }

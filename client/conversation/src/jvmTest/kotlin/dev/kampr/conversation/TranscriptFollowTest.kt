@@ -97,7 +97,6 @@ private fun WholePane(store: KamprStore, view: PaneView) {
                 readOnly = false,
                 onBack = {},
                 onView = {},
-                onAnswer = {},
             )
         }
     }
