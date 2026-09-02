@@ -12,6 +12,7 @@ use std::time::SystemTime;
 
 use crate::common;
 use crate::common::*;
+use kampr_journal::Started;
 use kampr_journal::{
     AgyAdapter, Block, JournalAdapter, JournalError, PaneProcess, Role, SessionRef, ToolState,
     TranscriptRoot, Turn,
@@ -319,7 +320,7 @@ fn me() -> PaneProcess {
     PaneProcess {
         pid: std::process::id(),
         start: None,
-        started: Some(SystemTime::UNIX_EPOCH),
+        started: Started::At(SystemTime::UNIX_EPOCH),
     }
 }
 

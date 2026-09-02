@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 use crate::common;
 use crate::common::scratch_dir;
 use kampr_journal::{
-    ClaudeAdapter, Harness, JournalError, PaneProcess, Registry, SessionRef, TranscriptRoot,
+    ClaudeAdapter, Harness, JournalError, PaneProcess, Registry, SessionRef, Started, TranscriptRoot,
 };
 
 const CWD: &str = "/tmp/kident/proj";
@@ -36,6 +36,9 @@ const CWD: &str = "/tmp/kident/proj";
 const LIVE_PID: u32 = 1_463_543;
 const LIVE_START: &str = "28776850";
 const LIVE_STARTED: u64 = 1_787_395_452;
+/// The same session's `startedAt`, which is the harness's own answer rather than the kernel's and
+/// lands 1.26 s after it — measured again on two live markers at +0.71 s and +2.36 s.
+const LIVE_STARTED_AT: u64 = 1_787_395_453_263;
 
 const RUNNING: &str = "c5eec836-44cf-4563-829c-cfdc322b3254.jsonl";
 const QUIT: &str = "8ae22034-2bfc-42e0-a09f-0a79c080dcba.jsonl";
@@ -84,7 +87,7 @@ fn live_process() -> PaneProcess {
     PaneProcess {
         pid: LIVE_PID,
         start: Some(LIVE_START.into()),
-        started: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED)),
+        started: Started::At(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED)),
     }
 }
 
@@ -190,7 +193,7 @@ fn a_session_file_left_behind_by_a_dead_process_is_not_this_ones() {
     let adapter = ClaudeAdapter::new(TranscriptRoot::new(&home).unwrap());
     let reused = PaneProcess {
         start: Some("99999999".into()),
-        started: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED + 3_600)),
+        started: Started::At(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED + 3_600)),
         ..live_process()
     };
 
@@ -235,7 +238,7 @@ fn a_harness_that_names_no_session_still_gets_the_transcripts_written_since_it_s
 
     // Started later than every record on disk: the directory has nothing this process wrote.
     let later = PaneProcess {
-        started: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED + 3_600)),
+        started: Started::At(SystemTime::UNIX_EPOCH + Duration::from_secs(LIVE_STARTED + 3_600)),
         ..unmapped
     };
     assert_eq!(located(&home, &Harness::Running(later.clone())).as_deref(), None);
@@ -255,7 +258,7 @@ fn a_transcript_written_in_the_second_the_harness_started_is_still_the_one_it_is
     std::fs::remove_file(home.join("sessions").join(format!("{LIVE_PID}.json"))).unwrap();
     // `c5eec836`'s last record is 2026-08-22T10:45:36.462Z.
     let same_second = |millis: u64| PaneProcess {
-        started: Some(SystemTime::UNIX_EPOCH + Duration::from_millis(1_787_395_536_000 + millis)),
+        started: Started::At(SystemTime::UNIX_EPOCH + Duration::from_millis(1_787_395_536_000 + millis)),
         ..live_process()
     };
 
@@ -322,7 +325,7 @@ fn an_unknown_pid_names_no_session() {
     let unknown = PaneProcess {
         pid: 4_294_967_295,
         start: None,
-        started: None,
+        started: Started::Unknown,
     };
     assert!(matches!(
         kampr_journal::JournalAdapter::locate_by_process(&adapter, &unknown),
@@ -439,7 +442,10 @@ fn a_process_start_is_read_from_the_field_claude_records() {
     // Fields are 1-based and the slice starts at field 3, so `starttime` is field 22 here.
     let expected = fields[22 - 3];
     assert_eq!(looked.start.as_deref(), Some(expected));
-    assert!(looked.started.is_some(), "procfs gives this process a start time");
+    assert!(
+        matches!(looked.started, Started::At(_)),
+        "procfs gives this process a start time"
+    );
 
     assert!(looked.owns(Some(expected)));
     assert!(looked.owns(None), "nothing recorded contradicts nothing");
@@ -447,6 +453,114 @@ fn a_process_start_is_read_from_the_field_claude_records() {
         !looked.owns(Some("0")),
         "a different start is a different process"
     );
+}
+
+/// The other half of the same read, and it was answering with the wrong quantity entirely.
+///
+/// `PaneProcess::started` used to be the `/proc/<pid>` directory's modification time. procfs
+/// stamps that inode when the **dentry is instantiated**, not when the process forks, and it is
+/// minted again after every eviction — so it is the process's start only for a process nothing has
+/// evicted since. Measured on this machine at 14 days of uptime: 426 of 545 live pids disagreed
+/// with their own start by more than five seconds, the disagreeing ones clustering onto a handful
+/// of microsecond-identical stamps (141 sharing one, eight days after the boot they all started
+/// at); `init` read eleven hours younger than the machine and a six-day-old `herdr` read as five
+/// minutes. Always *younger*, which for every bound built on this is the direction that hides a
+/// real conversation.
+///
+/// So it is derived instead from field 22 against `/proc/uptime`, both counted from the same boot
+/// clock, and this asserts that over every process on the machine rather than over one.
+#[test]
+fn a_process_start_is_when_the_process_started_and_not_when_procfs_minted_its_directory() {
+    let hz = seconds_per_tick();
+    let mut checked = 0;
+    for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Some(ticks) = field_22(pid) else { continue };
+        let Some(uptime) = uptime() else { continue };
+        let Started::At(read) = PaneProcess::look_up(pid).started else {
+            continue;
+        };
+        let age = Duration::from_secs_f64(uptime - ticks * hz);
+        let expected = SystemTime::now() - age;
+        let apart = expected
+            .duration_since(read)
+            .or_else(|_| read.duration_since(expected))
+            .expect("two instants");
+        assert!(
+            apart < Duration::from_secs(2),
+            "pid {pid} was read as starting {apart:?} away from its own field 22"
+        );
+        checked += 1;
+    }
+    assert!(checked > 10, "only {checked} processes were readable");
+}
+
+fn field_22(pid: u32) -> Option<f64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(") ")? + 2..]
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+fn uptime() -> Option<f64> {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn seconds_per_tick() -> f64 {
+    let ticks = String::from_utf8(
+        std::process::Command::new("getconf")
+            .arg("CLK_TCK")
+            .output()
+            .expect("getconf")
+            .stdout,
+    )
+    .expect("a number");
+    1.0 / ticks.trim().parse::<f64>().expect("a number")
+}
+
+/// **What the marker says about itself, which Kampr decoded none of until now.** `startedAt` is
+/// wall-clock milliseconds stamped when the run opens and never rewritten — `updatedAt` is the
+/// field that moves — and it is the only thing anywhere that separates work *this* run launched
+/// from work its predecessor left open, because the transcript carries no mark at the seam.
+#[test]
+fn the_marker_says_when_this_run_of_the_harness_started() {
+    let home = home_with("marker-started", &[RUNNING]);
+
+    let marker = registry(&home).marker(&[live_process()]).expect("a marker");
+
+    assert_eq!(
+        marker.started,
+        Started::At(SystemTime::UNIX_EPOCH + Duration::from_millis(LIVE_STARTED_AT)),
+    );
+    assert!(
+        Duration::from_secs(LIVE_STARTED + 5) > Duration::from_millis(LIVE_STARTED_AT),
+        "the harness stamps it a second or two after its own fork, never before"
+    );
+}
+
+/// A harness old enough not to write the field is the [#233] case in its purest form: nothing has
+/// been learned, and a marker that answered anything else would be inventing a cutoff.
+#[test]
+fn a_marker_from_a_harness_that_never_wrote_startedat_says_it_does_not_know() {
+    let home = home_with("marker-unstarted", &[RUNNING]);
+    let record = home.join(format!("sessions/{LIVE_PID}.json"));
+    let text = std::fs::read_to_string(&record).unwrap();
+    let mut session: serde_json::Value = serde_json::from_str(&text).unwrap();
+    session.as_object_mut().unwrap().remove("startedAt");
+    std::fs::write(&record, session.to_string()).unwrap();
+
+    let marker = registry(&home).marker(&[live_process()]).expect("a marker");
+
+    assert_eq!(marker.started, Started::Unknown);
 }
 
 /// The pane is an agent pane the moment the agent opens, and that is minutes before there is
@@ -492,7 +606,7 @@ fn a_pane_whose_visible_command_is_only_bash_is_still_matched_on_pid() {
     let shell = PaneProcess {
         pid: 1_463_000,
         start: Some("28770000".into()),
-        started: None,
+        started: Started::Unknown,
     };
     let pager = PaneProcess {
         pid: 1_463_001,

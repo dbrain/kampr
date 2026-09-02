@@ -5,7 +5,7 @@ mod subagent;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
@@ -20,7 +20,7 @@ use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, Role, ToolState, Turn, TurnKind};
 use crate::output;
-use crate::process::PaneProcess;
+use crate::process::{PaneProcess, Started};
 use crate::root::TranscriptRoot;
 use crate::store::TurnStore;
 use crate::sub::SubRef;
@@ -87,7 +87,22 @@ impl ClaudeAdapter {
             name_source: field("nameSource"),
             status: field("status"),
             transcript: self.find_by_id(id).ok(),
+            started: started(&session),
         })
+    }
+}
+
+/// `startedAt`, which the harness writes as wall-clock milliseconds when the session opens and
+/// never rewrites — `nameSince` beside it carries the same value, and `updatedAt` is the field that
+/// moves. Measured against the same marker's `procStart`: **0.7 s and 2.4 s after** the process
+/// itself, being the harness's own boot, so it is a hair *later* than the fork rather than earlier.
+///
+/// A marker without it is a harness older than the one this was measured on, and that is
+/// [`Started::Unknown`] rather than a guess ([#233](#)).
+fn started(session: &Value) -> Started {
+    match session.get("startedAt").and_then(Value::as_u64) {
+        Some(millis) => Started::At(SystemTime::UNIX_EPOCH + Duration::from_millis(millis)),
+        None => Started::Unknown,
     }
 }
 

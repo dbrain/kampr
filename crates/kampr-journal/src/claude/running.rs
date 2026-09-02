@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::facet::Running;
+use crate::process::Started;
 
 /// The work a session has started and has not been told is over.
 ///
@@ -36,10 +37,28 @@ pub struct Watch {
 }
 
 impl Watch {
-    pub fn running(&self) -> Vec<Running> {
+    /// What is open, less whatever the process running this session cannot have launched.
+    ///
+    /// **A launch has no expiry of its own, and the transcript cannot give it one.** Both endings
+    /// above are records somebody writes; when the harness process dies, neither is ever written —
+    /// a background shell dies with its parent and nobody files a completion — so the launch stands
+    /// open for the rest of the file. Measured on this machine's own archive: a `Client gate` shell
+    /// that the transcript went on being written to for **2,025 minutes** after, and a
+    /// `Claude code review` agent still open **4,219 minutes** on, 8 such launches across 6
+    /// transcripts. The operator saw five dead shells aged 44 h, 44 h, 26 h, 7 h and 6 h beside two
+    /// real agents, while the harness in the same pane listed no background shells at all.
+    ///
+    /// Nothing in the file separates a restart from a pause — one `sessionId` and one `version`
+    /// across the whole 70 hours, 59 gaps over ten minutes, and no record at the seam. The process
+    /// is what separates them: a launch cannot have happened before the process that made it, so a
+    /// launch older than [`Started`] is over, exactly and with no heuristic. A launch *younger* is
+    /// left alone however old it is in absolute terms — a 44-hour bench under a harness that has
+    /// itself been up 44 hours is really running, and that is the case this must not break.
+    pub fn running(&self, started: Started) -> Vec<Running> {
         self.order
             .iter()
             .filter_map(|call| self.open.get(call))
+            .filter(|open| !started.predates(open.since.as_deref()))
             .cloned()
             .collect()
     }
@@ -170,7 +189,7 @@ mod tests {
             Some(&json!({ "stdout": "", "backgroundTaskId": "buanpuhrj" })),
             None,
         );
-        let open = watch.running();
+        let open = watch.running(Started::Unknown);
         assert_eq!(open.len(), 1, "the launch acknowledgement ended the run");
         assert_eq!(open[0].kind, "shell");
         assert_eq!(open[0].title.as_deref(), Some("the build"));
@@ -195,7 +214,7 @@ mod tests {
             None,
         );
         watch.notified(Some(&notification("t1", "completed")));
-        assert!(watch.running().is_empty());
+        assert!(watch.running(Started::Unknown).is_empty());
     }
 
     /// `killed` and `failed` are both endings — the operator wants them off the list of what is
@@ -214,7 +233,10 @@ mod tests {
                 Some("t"),
             );
             watch.notified(Some(&notification("t1", status)));
-            assert!(watch.running().is_empty(), "{status} left it running");
+            assert!(
+                watch.running(Started::Unknown).is_empty(),
+                "{status} left it running"
+            );
         }
     }
 
@@ -232,13 +254,13 @@ mod tests {
             None,
             Some("t"),
         );
-        assert_eq!(watch.running().len(), 1);
+        assert_eq!(watch.running(Started::Unknown).len(), 1);
         watch.record(
             Some(&result("t1")),
             Some(&json!({ "content": "here is the plan" })),
             None,
         );
-        assert!(watch.running().is_empty());
+        assert!(watch.running(Started::Unknown).is_empty());
     }
 
     /// An asynchronous agent's result is an acknowledgement in the same way a shell's is, and the
@@ -260,7 +282,7 @@ mod tests {
             Some(&json!({ "status": "async_launched", "agentId": "a1" })),
             None,
         );
-        assert_eq!(watch.running().len(), 1);
+        assert_eq!(watch.running(Started::Unknown).len(), 1);
     }
 
     /// An ordinary call is not a launch, and the list must not fill up with every `Read` and `Bash`
@@ -287,7 +309,7 @@ mod tests {
             None,
             Some("t"),
         );
-        assert!(watch.running().is_empty());
+        assert!(watch.running(Started::Unknown).is_empty());
     }
 
     /// Order is the order they were launched in, so the list does not reshuffle under a reader
@@ -307,7 +329,11 @@ mod tests {
             );
         }
         watch.notified(Some(&notification("t2", "completed")));
-        let titles: Vec<_> = watch.running().iter().filter_map(|r| r.title.clone()).collect();
+        let titles: Vec<_> = watch
+            .running(Started::Unknown)
+            .iter()
+            .filter_map(|r| r.title.clone())
+            .collect();
         assert_eq!(titles, vec!["first", "third"]);
     }
 
@@ -324,10 +350,13 @@ mod tests {
         );
         watch.record(Some(&launch), None, Some("first"));
         watch.notified(Some(&notification("t1", "completed")));
-        assert!(watch.running().is_empty());
+        assert!(watch.running(Started::Unknown).is_empty());
         watch.record(Some(&launch), None, Some("second"));
-        assert_eq!(watch.running().len(), 1);
-        assert_eq!(watch.running()[0].since.as_deref(), Some("second"));
+        assert_eq!(watch.running(Started::Unknown).len(), 1);
+        assert_eq!(
+            watch.running(Started::Unknown)[0].since.as_deref(),
+            Some("second")
+        );
     }
 
     #[test]
@@ -345,6 +374,6 @@ mod tests {
         watch.notified(Some(&notification("somebody-else", "completed")));
         watch.notified(Some(&json!("a prompt a person typed")));
         watch.notified(None);
-        assert_eq!(watch.running().len(), 1);
+        assert_eq!(watch.running(Started::Unknown).len(), 1);
     }
 }

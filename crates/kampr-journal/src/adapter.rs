@@ -322,7 +322,7 @@ impl Registry {
         if !harness.may_search() {
             return Ok(None);
         }
-        let since = process.and_then(|p| p.started);
+        let since = process.and_then(|p| p.started.at());
         match cwd.map(|cwd| adapter.locate_by_cwd(cwd, since)) {
             Some(Ok(path)) => Ok(Some(path)),
             Some(Err(JournalError::NotFound(_))) | None => Ok(None),

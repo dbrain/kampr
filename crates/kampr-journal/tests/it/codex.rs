@@ -215,7 +215,7 @@ fn an_attached_image_is_named_rather_than_dropped() {
 // Identity: the thread a pid is on.
 // ---------------------------------------------------------------------------------------------
 
-use kampr_journal::PaneProcess;
+use kampr_journal::{PaneProcess, Started};
 use std::fs::File;
 use std::path::Path;
 
@@ -245,7 +245,7 @@ fn me() -> PaneProcess {
     PaneProcess {
         pid: std::process::id(),
         start: None,
-        started: None,
+        started: Started::Unknown,
     }
 }
 

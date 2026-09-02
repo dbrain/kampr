@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::common::*;
 use kampr_journal::{
-    AgyAdapter, ClaudeAdapter, CodexAdapter, FacetFeed, Facets, JournalAdapter, Registry, SessionMarker,
-    TitleSource, TranscriptRoot,
+    AgyAdapter, ClaudeAdapter, CodexAdapter, FacetFeed, Facets, JournalAdapter, PaneProcess, Registry,
+    SessionMarker, Started, TitleSource, TranscriptRoot,
 };
 
 fn claude() -> ClaudeAdapter {
@@ -24,6 +24,7 @@ fn marker_named(name: &str, source: Option<&str>) -> SessionMarker {
         name_source: source.map(str::to_string),
         status: Some("busy".into()),
         transcript: None,
+        started: Started::Unknown,
     }
 }
 
@@ -747,4 +748,334 @@ fn a_harness_nobody_has_measured_a_launch_on_reports_none() {
     let agy = AgyAdapter::new(TranscriptRoot::new(agy_root()).expect("a root"));
     assert_eq!(codex.facets(&codex_transcript(), None).running, []);
     assert_eq!(agy.facets(&agy_transcript(), None).running, []);
+}
+
+// The operator, on 0.1.50: *"is saying 8 running while Claude itself only says 3"*. A fold holds a
+// byte cursor and the accumulator that cursor produced; the transcript is a per-call argument, so
+// nothing tied the two together. Pointed at a *different* file that happens to be longer — a
+// `--resume`, a `/clear`, a harness restarted in the same pane — it seeked into a file the offset
+// means nothing in and kept every launch the previous transcript had left open. Those strays can
+// never close: the notifications that would name them are behind the cursor.
+#[test]
+fn a_fold_moved_to_another_transcript_reports_that_ones_launches_and_not_the_last_ones() {
+    let dir = scratch_dir("facets-moved");
+    let root = dir.join("projects/-home-u-facets");
+    std::fs::create_dir_all(&root).expect("a project directory");
+    let adapter = ClaudeAdapter::new(TranscriptRoot::new(&dir).expect("a root"));
+
+    let before = root.join("before.jsonl");
+    std::fs::copy(facets_transcript(FACETS_RUNNING), &before).expect("the session it was reading");
+
+    let after = root.join("after.jsonl");
+    let mut records = vec![prompt("the session it moved to")];
+    while lines(&records).len() <= std::fs::metadata(&before).expect("a file").len() as usize {
+        records.push(prompt(&format!("padding {}", records.len())));
+    }
+    records.push(serde_json::json!({
+        "type": "assistant", "timestamp": "2026-08-27T11:00:00.000Z",
+        "message": { "content": [{
+            "type": "tool_use", "id": "toolu_next", "name": "Agent",
+            "input": { "subagent_type": "Explore", "description": "the one thing it did launch" }
+        }] }
+    }));
+    std::fs::write(&after, lines(&records)).expect("a longer transcript");
+
+    let mut fold = adapter.fold().expect("claude folds");
+    assert_eq!(fold.facets(&before, None).running.len(), 2);
+
+    let moved = fold.facets(&after, None);
+    assert_eq!(
+        moved.running.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+        ["toolu_next"],
+        "the two it was holding were launched by a conversation it is no longer reading"
+    );
+    assert_eq!(
+        moved,
+        adapter.facets(&after, None),
+        "and the answer is the one a fold that had never seen the other file gives"
+    );
+}
+
+// A path is not an identity: a transcript can be replaced under one, and the replacement can be
+// longer than what has already been read — so neither the path nor the length settles it.
+#[test]
+fn a_transcript_replaced_at_the_same_path_by_a_longer_one_is_read_from_the_start() {
+    let dir = scratch_dir("facets-swapped");
+    let root = dir.join("projects/-home-u-facets");
+    std::fs::create_dir_all(&root).expect("a project directory");
+    let adapter = ClaudeAdapter::new(TranscriptRoot::new(&dir).expect("a root"));
+
+    let path = root.join("session.jsonl");
+    std::fs::copy(facets_transcript(FACETS_RUNNING), &path).expect("the session it was reading");
+    let mut fold = adapter.fold().expect("claude folds");
+    assert_eq!(fold.facets(&path, None).running.len(), 2);
+
+    let replacement = dir.join("replacement.jsonl");
+    let mut records = vec![serde_json::json!({ "type": "ai-title", "aiTitle": "the session after it" })];
+    while lines(&records).len() <= std::fs::metadata(&path).expect("a file").len() as usize {
+        records.push(prompt(&format!("padding {}", records.len())));
+    }
+    std::fs::write(&replacement, lines(&records)).expect("a longer transcript");
+    std::fs::rename(&replacement, &path).expect("swapped in under the same name");
+
+    let moved = fold.facets(&path, None);
+    assert_eq!(
+        moved.running,
+        [],
+        "the launches belonged to the file that was replaced"
+    );
+    assert_eq!(
+        moved.title.as_ref().expect("a title").text,
+        "the session after it"
+    );
+}
+
+// The cursor's whole purpose, and the thing a fix for the above could quietly trade away. The
+// records already folded are overwritten in place with different ones of exactly the same length,
+// so a fold that re-read the file from the start would report the replacements — and one that
+// resumed reports what it folded the first time and only the record that was appended.
+#[test]
+fn an_append_costs_the_appended_record_and_does_not_re_read_what_the_cursor_is_past() {
+    let dir = scratch_dir("facets-resumed-cheaply");
+    let root = dir.join("projects/-home-u-facets");
+    std::fs::create_dir_all(&root).expect("a project directory");
+    let adapter = ClaudeAdapter::new(TranscriptRoot::new(&dir).expect("a root"));
+
+    let path = root.join("session.jsonl");
+    let folded = lines(&[serde_json::json!({ "type": "ai-title", "aiTitle": "aaaaaaaaaaaa" })]);
+    let rewritten = lines(&[serde_json::json!({ "type": "ai-title", "aiTitle": "bbbbbbbbbbbb" })]);
+    assert_eq!(
+        folded.len(),
+        rewritten.len(),
+        "the rewrite has to leave the length alone"
+    );
+
+    std::fs::write(&path, &folded).expect("a transcript");
+    let mut fold = adapter.fold().expect("claude folds");
+    assert_eq!(
+        fold.facets(&path, None).title.expect("a title").text,
+        "aaaaaaaaaaaa"
+    );
+
+    std::fs::write(&path, &rewritten).expect("the prefix rewritten under the cursor");
+    append(
+        &path,
+        &lines(&[enqueue("and copy the config across", "2026-08-28T02:10:59.658Z")]),
+    );
+
+    let moved = fold.facets(&path, None);
+    assert_eq!(
+        moved.title.as_ref().expect("a title").text,
+        "aaaaaaaaaaaa",
+        "the fold read the file again instead of the records it had grown by"
+    );
+    assert_eq!(queued_texts(&moved), ["and copy the config across"]);
+}
+
+// Claude's fold is not the only one holding a cursor across reads, and the identity that pairs the
+// two belongs where every harness picks it up rather than in the three folds that exist today.
+#[test]
+fn a_fold_moved_to_a_transcript_with_nothing_in_it_says_nothing_for_every_harness() {
+    let dir = scratch_dir("facets-moved-harness");
+    let harnesses: [(&str, Box<dyn JournalAdapter>, PathBuf); 3] = [
+        ("claude", Box::new(claude()), facets_transcript(FACETS_RUNNING)),
+        (
+            "codex",
+            Box::new(CodexAdapter::new(
+                TranscriptRoot::new(harness_facets_root("codex")).expect("a root"),
+            )),
+            codex_facets_transcript(),
+        ),
+        (
+            "agy",
+            Box::new(AgyAdapter::new(
+                TranscriptRoot::new(harness_facets_root("agy")).expect("a root"),
+            )),
+            agy_facets_transcript(),
+        ),
+    ];
+
+    for (agent, adapter, fixture) in harnesses {
+        let before = dir.join(format!("{agent}-before.jsonl"));
+        std::fs::copy(&fixture, &before).expect("the session it was reading");
+        let after = dir.join(format!("{agent}-after.jsonl"));
+        let mut records = Vec::new();
+        while lines(&records).len() <= std::fs::metadata(&before).expect("a file").len() as usize {
+            records.push(serde_json::json!({ "type": "nothing-any-harness-records" }));
+        }
+        std::fs::write(&after, lines(&records)).expect("a longer transcript");
+
+        let mut fold = adapter.fold().expect("a resumable fold");
+        assert_ne!(
+            fold.facets(&before, None),
+            Facets::default(),
+            "{agent} read nothing"
+        );
+        assert_eq!(
+            fold.facets(&after, None),
+            Facets::default(),
+            "{agent} carried one transcript's facets into another"
+        );
+    }
+}
+
+fn marker_started(started: Started) -> SessionMarker {
+    SessionMarker {
+        started,
+        ..marker_named("kampr-fb", Some("derived"))
+    }
+}
+
+fn run_started(stamp: &str) -> Started {
+    let at =
+        time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).expect("a stamp");
+    Started::At(std::time::UNIX_EPOCH + std::time::Duration::from_nanos(at.unix_timestamp_nanos() as u64))
+}
+
+fn calls(facets: &Facets) -> Vec<&str> {
+    facets.running.iter().map(|r| r.call.as_str()).collect()
+}
+
+// The operator, on 0.1.50: *"7 still running"* — five shells aged 44 h 45 m, 44 h 27 m, 26 h 20 m,
+// 7 h 50 m and 6 h 50 m beside two agents a minute old, while the harness in the same pane at the
+// same moment listed one foreground command, two agents, and **no background shells at all**.
+//
+// Reproduced end to end rather than reasoned about: `claude -p` launched `sleep 900` in the
+// background at 10:43:10.979Z and exited, taking the shell with it — measured, no `sleep` survived
+// — and `claude -p --continue` appended to the *same* transcript under the same `sessionId` at
+// 10:43:30.021Z. A launch has no expiry of its own, both of its endings are records the dead
+// process was the one to write, so it stands open for the rest of the file. Nothing in the file
+// marks the seam: one `sessionId`, one `version`, and 59 gaps over ten minutes across the 70-hour
+// transcript this was first seen on.
+#[test]
+fn a_launch_the_run_that_is_here_now_could_not_have_made_is_no_longer_running() {
+    let marker = marker_started(run_started("2026-08-27T09:03:30.000Z"));
+
+    assert_eq!(
+        calls(&facets_of(FACETS_RUNNING, Some(&marker))),
+        ["toolu_shell"],
+        "the agent was launched half a minute before the run that is here now started"
+    );
+}
+
+// The guard against a fix that is merely broad, and it is the operator's own case: a harness that
+// has itself been up 44 hours really is running the bench it started 44 hours ago. Both of these
+// launches are days old in wall-clock terms, and both belong to the run in hand.
+#[test]
+fn a_launch_is_still_running_however_old_it_is_when_the_run_that_made_it_is_older_still() {
+    let marker = marker_started(run_started("2026-08-27T08:59:59.999Z"));
+
+    assert_eq!(
+        facets_of(FACETS_RUNNING, Some(&marker)).running,
+        facets_of(FACETS_RUNNING, None).running,
+        "a cutoff before every launch may not take one off the list"
+    );
+    assert_eq!(calls(&facets_of(FACETS_RUNNING, Some(&marker))).len(), 2);
+}
+
+// **The [#233] guard, and the first thing to break when doubting any of the rest.** Not knowing
+// when the run started is not the same as knowing it started after the launch. A marker that is
+// not there at all, one from a harness too old to write `startedAt`, and a host that could not
+// answer must every one of them leave the list exactly as it stands today — dropping something
+// that is genuinely running because a read failed is a worse bug than the one being fixed.
+#[test]
+fn a_run_whose_start_nobody_could_read_leaves_every_launch_exactly_where_it_was() {
+    let today = facets_of(FACETS_RUNNING, None).running;
+    assert_eq!(today.len(), 2, "there is something here to have dropped");
+
+    let unknown = marker_started(Started::Unknown);
+    for (case, facets) in [
+        ("no marker at all", facets_of(FACETS_RUNNING, None)),
+        (
+            "a marker with no startedAt",
+            facets_of(FACETS_RUNNING, Some(&unknown)),
+        ),
+    ] {
+        assert_eq!(facets.running, today, "{case} dropped a launch");
+    }
+}
+
+// The other half of the same guard: the cutoff is known and the launch's own instant is not. A
+// harness that recorded no timestamp, or one this cannot parse, is a launch that has not been
+// disproved — so it stays listed rather than being compared against nothing and losing.
+#[test]
+fn a_launch_with_no_readable_instant_of_its_own_outlives_a_cutoff_it_cannot_be_compared_to() {
+    let launch = |id: &str| {
+        serde_json::json!({
+            "type": "tool_use", "id": id, "name": "Agent",
+            "input": { "subagent_type": "Explore", "description": id }
+        })
+    };
+    let scratch = scratch_claude(
+        "facets-uncomparable",
+        &[
+            serde_json::json!({ "type": "assistant", "message": { "content": [launch("toolu_untimed")] } }),
+            serde_json::json!({
+                "type": "assistant", "timestamp": "half past three",
+                "message": { "content": [launch("toolu_unreadable")] }
+            }),
+        ],
+    );
+    let marker = marker_started(run_started("2030-01-01T00:00:00.000Z"));
+
+    let mut fold = scratch.journals.folder(Some("claude"));
+    assert_eq!(
+        calls(&fold.facets(&scratch.transcript, Some(&marker))),
+        ["toolu_untimed", "toolu_unreadable"],
+        "a cutoff five years after both of them still took neither off the list"
+    );
+}
+
+fn epoch_millis(stamp: &str) -> u64 {
+    let at =
+        time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).expect("a stamp");
+    (at.unix_timestamp_nanos() / 1_000_000) as u64
+}
+
+// The seam between the two halves, and nothing else covers it: injecting a [`Started`] proves the
+// rule, and reading a marker file proves the decode, but only a marker read off disk and folded
+// onto a transcript proves they are wired to each other. This is the shape measured end to end —
+// `claude -p` launched a background shell and exited, and `claude -p --continue` appended to the
+// same transcript under the same session id with a `startedAt` of its own.
+#[test]
+fn a_marker_on_disk_takes_the_previous_runs_launches_off_this_runs_list() {
+    let home = scratch_dir("facets-resumed-run");
+    std::fs::create_dir_all(home.join("projects/-home-u-facets")).expect("a project directory");
+    std::fs::create_dir_all(home.join("sessions")).expect("a sessions directory");
+    std::fs::copy(
+        facets_transcript(FACETS_RUNNING),
+        home.join(format!("projects/-home-u-facets/{FACETS_RUNNING}.jsonl")),
+    )
+    .expect("the transcript both runs wrote");
+    std::fs::write(
+        home.join("sessions/4242.json"),
+        serde_json::json!({
+            "pid": 4242,
+            "sessionId": FACETS_RUNNING,
+            "cwd": "/home/u/facets",
+            "startedAt": epoch_millis("2026-08-27T09:03:30.000Z"),
+            "status": "busy",
+        })
+        .to_string(),
+    )
+    .expect("what the resumed run wrote about itself");
+
+    let mut registry = Registry::new();
+    registry.register(std::sync::Arc::new(ClaudeAdapter::new(
+        TranscriptRoot::new(&home).expect("a root"),
+    )));
+    let marker = registry
+        .marker(&[PaneProcess {
+            pid: 4242,
+            ..PaneProcess::default()
+        }])
+        .expect("a marker");
+    let transcript = marker.transcript.clone().expect("the run's own transcript");
+
+    let mut fold = registry.folder(Some("claude"));
+    assert_eq!(
+        calls(&fold.facets(&transcript, Some(&marker))),
+        ["toolu_shell"],
+        "the agent was launched by the run this one replaced"
+    );
 }

@@ -763,6 +763,7 @@ mod tests {
             name_source: source.map(str::to_string),
             status: None,
             transcript: None,
+            started: kampr_journal::Started::Unknown,
         }
     }
 

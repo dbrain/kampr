@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::running::Watch;
 use crate::facet::{Compaction, FacetFold, Facets, Mode, Queued, Timing, Titles};
 use crate::marker::SessionMarker;
+use crate::process::Started;
 use crate::scan::{Appended, Cursor};
 use crate::sub;
 
@@ -36,7 +37,7 @@ impl FacetFold for Fold {
         Facets {
             title: self.levels(transcript, marker).resolve(),
             queued: self.queue.clone(),
-            running: self.watch.running(),
+            running: self.watch.running(marker.map_or(Started::Unknown, |m| m.started)),
             mode: (self.mode != Mode::default()).then(|| self.mode.clone()),
             ..self.accumulated.clone()
         }

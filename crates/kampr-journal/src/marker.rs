@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::process::Started;
+
 /// What a harness writes down about a session while it is running, keyed on the pid running it.
 ///
 /// **It exists before the transcript does.** `~/.claude/sessions/<pid>.json` is written when the
@@ -22,4 +24,17 @@ pub struct SessionMarker {
     /// harness has stopped writing to the terminal.
     pub status: Option<String>,
     pub transcript: Option<PathBuf>,
+    /// When *this run* of the harness started, from the marker's own `startedAt`.
+    ///
+    /// **The one fact the transcript does not hold, and the harness has been writing it all
+    /// along.** A restart leaves nothing in the file that separates it from a pause — one
+    /// `sessionId` and one `version` across a 70-hour transcript, 59 gaps over ten minutes, and no
+    /// record at the seam — so nothing read from the transcript alone can tell work the current run
+    /// launched from work its predecessor left open. `startedAt` tells it exactly, and it is the
+    /// harness's own answer rather than an inference about its process, so it says the same thing
+    /// on a host with no procfs.
+    ///
+    /// It is the *run*, not the conversation: a `--continue` appends to the transcript it resumes
+    /// and stamps its own marker with the resume, measured end to end.
+    pub started: Started,
 }

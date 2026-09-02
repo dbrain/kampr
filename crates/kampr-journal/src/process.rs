@@ -17,12 +17,49 @@ pub struct PaneProcess {
     /// When the process started. For the harnesses that publish no process-to-session map at all,
     /// this is still a bound worth having: a transcript whose last word was written before the
     /// process existed cannot be that process's.
-    pub started: Option<SystemTime>,
+    pub started: Started,
+}
+
+/// When a process started, and the answer that is neither an instant nor "it has gone".
+///
+/// **`Unknown` is not "long ago" and it is not "just now".** A host with no procfs — every darwin
+/// build ships without one — a pid that has already been reaped, a read the kernel refuses: each
+/// of them means *nothing has been learned*, and a caller that folds that into an instant answers
+/// a question it cannot answer ([#233](#)). Every branch has to be named at the call site, which
+/// is the point of it being an enum rather than an `Option` somebody can `unwrap_or`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Started {
+    At(SystemTime),
+    #[default]
+    Unknown,
+}
+
+impl Started {
+    pub fn at(self) -> Option<SystemTime> {
+        match self {
+            Self::At(at) => Some(at),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Whether `stamp` names an instant before this process existed — which is a thing the process
+    /// cannot have done, and therefore the work of a process that is no longer here.
+    ///
+    /// **`Unknown` answers `false` to everything, and so does a stamp that will not parse.** The
+    /// alternative is dropping a launch that is genuinely running because a read failed, which is
+    /// a worse bug than the one this exists to fix.
+    pub fn predates(self, stamp: Option<&str>) -> bool {
+        let (Self::At(started), Some(at)) = (self, stamp.and_then(parse_rfc3339)) else {
+            return false;
+        };
+        at < started
+    }
 }
 
 impl PaneProcess {
-    /// Reads what procfs knows about a live local pid. Everything is optional because a platform
-    /// without procfs must degrade to a weaker rule rather than to no conversation at all.
+    /// Reads what procfs knows about a live local pid. Every field can come back unanswered
+    /// because a platform without procfs must degrade to a weaker rule rather than to no
+    /// conversation at all.
     pub fn look_up(pid: u32) -> Self {
         Self {
             pid,
@@ -60,13 +97,46 @@ fn start_ticks(pid: u32) -> Option<String> {
     fields.split_whitespace().nth(19).map(str::to_string)
 }
 
-/// The `/proc/<pid>` directory is stamped when the process is created and not touched again, so
-/// its modification time is the process's start — to the second, rounded *down*, which is the
-/// safe direction for a bound that must not hide a real conversation.
-fn started_at(pid: u32) -> Option<SystemTime> {
-    std::fs::metadata(Path::new("/proc").join(pid.to_string()))
-        .and_then(|m| m.modified())
-        .ok()
+/// The process's age subtracted from now: field 22 of `/proc/<pid>/stat` against `/proc/uptime`,
+/// both of which are counted from the same boot clock.
+///
+/// **It is emphatically not the `/proc/<pid>` directory's mtime, which is what this used to read.**
+/// procfs stamps that inode when the *dentry* is instantiated, not when the process forks, and it
+/// is instantiated again after every eviction — so it is the process's start only for a process
+/// nobody has evicted since. Measured on this machine at 14 days of uptime: **426 of 545 live pids
+/// disagreed with their own start by more than five seconds**, and the disagreeing ones clustered
+/// onto a handful of microsecond-identical stamps (141 pids sharing one, eight days after the boot
+/// they all started at). `init` read as eleven hours younger than the machine, `herdr` as six days
+/// younger. Always younger, which is the direction that takes a live launch off the running list.
+///
+/// `btime` + ticks — what `ps` does — is the other way to a wall clock and it carries a constant
+/// error: 0.92 s here, being the whole-second floor `btime` is recorded at plus fourteen days of
+/// the wall clock drifting away from `CLOCK_BOOTTIME`. Subtracting the age from `now` carries
+/// neither, and lands inside **0.5 ms** of a fork bracketed by two `clock_gettime` calls.
+fn started_at(pid: u32) -> Started {
+    match age_of(pid).and_then(|age| SystemTime::now().checked_sub(age)) {
+        Some(at) => Started::At(at),
+        None => Started::Unknown,
+    }
+}
+
+/// `/proc/<pid>/stat` is read before anything else so that a host with no procfs at all stops here
+/// rather than in the arithmetic. A negative age — a `/proc/uptime` read that lost a race with the
+/// fork it is being subtracted from — fails `try_from_secs_f64` and is therefore unknown.
+fn age_of(pid: u32) -> Option<Duration> {
+    let ticks = start_ticks(pid)?.parse::<f64>().ok()?;
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+    let uptime = uptime.split_whitespace().next()?.parse::<f64>().ok()?;
+    Duration::try_from_secs_f64(uptime - ticks / clock_ticks()?).ok()
+}
+
+/// Field 22 is in `USER_HZ`, which is 100 everywhere this ships and is still not a thing to
+/// assume: a wrong divisor is a start time wrong by a factor, silently.
+fn clock_ticks() -> Option<f64> {
+    match unsafe { libc::sysconf(libc::_SC_CLK_TCK) } {
+        hz if hz > 0 => Some(hz as f64),
+        _ => None,
+    }
 }
 
 /// What a pane's host managed to learn about the harness running in it.
