@@ -45,6 +45,21 @@ jobs:
             exit 1
           fi
 
+  # The release builds two Apple targets and every other job here builds Linux, so a Linux-only
+  # libc constant compiled clean, passed CI, was tagged, and then failed both Apple jobs of the
+  # release workflow with the tag already pushed — `SOCK_NONBLOCK`/`SOCK_CLOEXEC`, which the BSDs
+  # do not have on `socket(2)`. This cannot be a cross-check from the Linux job: `openssl-sys`,
+  # `ring` and `aws-lc-sys` compile C, so an Apple target needs an Apple toolchain. `check` rather
+  # than `build` because what escapes this way is a name that does not exist on the platform, and
+  # that is a typecheck away rather than a link away.
+  darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
   client:
     runs-on: ubuntu-latest
     steps:

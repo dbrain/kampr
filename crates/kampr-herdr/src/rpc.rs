@@ -250,16 +250,18 @@ async fn write_request(stream: &mut (impl tokio::io::AsyncWrite + Unpin), line: 
     Ok(())
 }
 
-/// Connects and writes with nothing between, or declines.
+#[cfg(target_os = "linux")]
+const SEND_FLAGS: libc::c_int = libc::MSG_NOSIGNAL;
+#[cfg(not(target_os = "linux"))]
+const SEND_FLAGS: libc::c_int = 0;
+
+/// A connected-in-a-moment socket that is non-blocking, close-on-exec, and will not raise SIGPIPE.
 ///
-/// `Some((stream, written))` is a connection herdr's first look will find a request on; `written`
-/// is what the one `send(2)` took. `None` is every reason not to have tried, and the caller falls
-/// back to the async path rather than turning a decline into a failure.
-fn connect_and_write(socket: &Path, line: &[u8]) -> Option<(std::os::unix::net::UnixStream, usize)> {
-    let address = sockaddr_un(socket)?;
-    // Non-blocking and close-on-exec in the one syscall: this crate also spawns
-    // `herdr terminal session observe`, and a window where a fresh fd is inheritable is a
-    // descriptor leaked into somebody else's process.
+/// Close-on-exec matters here specifically: this crate also spawns `herdr terminal session
+/// observe`, and a window where a fresh fd is inheritable is a descriptor leaked into somebody
+/// else's process.
+#[cfg(target_os = "linux")]
+fn nonblocking_cloexec_socket() -> Option<OwnedFd> {
     let fd = unsafe {
         libc::socket(
             libc::AF_UNIX,
@@ -267,10 +269,47 @@ fn connect_and_write(socket: &Path, line: &[u8]) -> Option<(std::os::unix::net::
             0,
         )
     };
+    (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// The BSDs have neither flag on `socket(2)` and no `MSG_NOSIGNAL` the kernel honours, so all three
+/// properties are set afterwards. The inheritable window this reopens is the reason Linux does it
+/// in the one call; there is no way to close it here, and `libc`'s Apple bindings *define*
+/// `MSG_NOSIGNAL` while the kernel ignores it, so the flag compiles and silently does nothing —
+/// which is why this is `SO_NOSIGPIPE` on the socket rather than a flag on the send.
+#[cfg(not(target_os = "linux"))]
+fn nonblocking_cloexec_socket() -> Option<OwnedFd> {
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     if fd < 0 {
         return None;
     }
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let raw = fd.as_raw_fd();
+    let on: libc::c_int = 1;
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    let ok = flags >= 0
+        && unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0
+        && unsafe { libc::fcntl(raw, libc::F_SETFD, libc::FD_CLOEXEC) } == 0
+        && unsafe {
+            libc::setsockopt(
+                raw,
+                libc::SOL_SOCKET,
+                libc::SO_NOSIGPIPE,
+                std::ptr::addr_of!(on).cast::<libc::c_void>(),
+                size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        } == 0;
+    ok.then_some(fd)
+}
+
+/// Connects and writes with nothing between, or declines.
+///
+/// `Some((stream, written))` is a connection herdr's first look will find a request on; `written`
+/// is what the one `send(2)` took. `None` is every reason not to have tried, and the caller falls
+/// back to the async path rather than turning a decline into a failure.
+fn connect_and_write(socket: &Path, line: &[u8]) -> Option<(std::os::unix::net::UnixStream, usize)> {
+    let address = sockaddr_un(socket)?;
+    let fd = nonblocking_cloexec_socket()?;
     let connected = unsafe {
         libc::connect(
             fd.as_raw_fd(),
@@ -281,14 +320,15 @@ fn connect_and_write(socket: &Path, line: &[u8]) -> Option<(std::os::unix::net::
     if connected < 0 {
         return None;
     }
-    // `MSG_NOSIGNAL`, or a herdr that closed between the connect and the write kills this process
-    // with SIGPIPE rather than answering an error.
+    // Or a herdr that closed between the connect and the write kills this process with SIGPIPE
+    // rather than answering an error. Linux says so per send; the BSDs said it once on the socket,
+    // in `nonblocking_cloexec_socket`.
     let sent = unsafe {
         libc::send(
             fd.as_raw_fd(),
             line.as_ptr().cast::<libc::c_void>(),
             line.len(),
-            libc::MSG_NOSIGNAL,
+            SEND_FLAGS,
         )
     };
     if sent <= 0 {
