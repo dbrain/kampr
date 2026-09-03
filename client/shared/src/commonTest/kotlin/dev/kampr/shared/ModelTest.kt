@@ -4,6 +4,8 @@ import dev.kampr.shared.model.CellBuffer
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.model.CONVO_KEEP
+import dev.kampr.shared.model.SCROLLBACK_MAX_ROWS
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.wire.HerdDelta
@@ -18,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.test.assertTrue
 
 private fun pane(id: String, node: String, status: String = "idle") =
@@ -496,5 +499,101 @@ class ModelTest {
         assertEquals(listOf("t1", "t2"), turns.map { it.id })
         assertEquals("done", (turns[0].blocks[0] as dev.kampr.shared.wire.Block.Tool).state)
         assertEquals(2, turns[0].blocks.size)
+    }
+
+    // **A pane nobody is looking at holds its whole transcript in RAM.** Measured on the operator's
+    // own node: one four-hour agent pane pages back to 1053 turns and 1.9 MB of turn JSON, which is
+    // ~2.1 MB retained on Android and ~3.7 MB on the web, where Kotlin/Wasm strings are UTF-16 with
+    // no Latin-1 compaction — times every tile the mosaic watches. Nothing ever pruned it.
+    //
+    // Dropping them is free because they are one round trip away: `before` is resolved against the
+    // node's whole folded transcript by turn id (`kampr-journal/src/tail.rs`), and the `cursor` the
+    // node hands back is literally the first turn of the page. So the oldest turn still held *is* a
+    // valid cursor, and the whole 1053-turn walk took 15.4 ms.
+    @Test
+    fun leavingAPaneDropsTheOldestTurnsAndLeavesACursorThatFetchesThemBack() {
+        val store = KamprStore()
+        store.accept(page((0 until 300).toList(), cursor = "t0", more = false))
+        val pane = store.pane("p")
+        assertEquals(300, pane.turns.size)
+
+        store.releaseConversation("p")
+
+        val kept = pane.turns.map { it.id }
+        assertEquals(CONVO_KEEP, kept.size, "the pane kept its whole transcript after being left")
+        assertEquals("t${300 - CONVO_KEEP}", kept.first())
+        assertEquals("t299", kept.last(), "the newest turns are the ones that must never go")
+        assertEquals(
+            kept.first(),
+            pane.convoCursor,
+            "the cursor names a turn that is gone, so paging back would fetch the wrong window",
+        )
+        assertTrue(pane.convoMore, "the reader is offered no way back to what was just dropped")
+
+        // And the page that cursor asks for reassembles the transcript with no gap and no repeat.
+        val first = 300 - CONVO_KEEP
+        store.accept(page((first - 40 until first).toList(), cursor = "t${first - 40}", more = true))
+        assertEquals(
+            ((first - 40) until 300).map { "t$it" },
+            pane.turns.map { it.id },
+            "the refetched page did not land where the dropped turns were",
+        )
+    }
+
+    @Test
+    fun aPaneWithLessThanTheKeepDepthIsLeftAloneAndStillKnowsItHasNoOlderHalf() {
+        val store = KamprStore()
+        store.accept(page((0 until 10).toList(), cursor = "t0", more = false))
+        store.releaseConversation("p")
+        val pane = store.pane("p")
+
+        assertEquals(10, pane.turns.size)
+        assertEquals("t0", pane.convoCursor)
+        assertFalse(pane.convoMore, "a conversation that fits was told it had older turns to fetch")
+    }
+
+    private fun page(ids: List<Int>, cursor: String, more: Boolean): ServerMsg.Convo {
+        val turns = ids.joinToString(",") {
+            """{"id":"t$it","role":"user","blocks":[{"b":"md","text":"$it"}]}"""
+        }
+        return Wire.decode(
+            """{"t":"convo","pane":"p","cursor":"$cursor","more":$more,"turns":[$turns]}"""
+        ) as ServerMsg.Convo
+    }
+
+    // **The client held more history than the node did.** `send_history` re-bases every delta onto
+    // the client's own end, so a ring that trimmed is invisible from here, and `totalRows` was
+    // `maxOf(msg.totalRows, held, totalRows)` — monotonic by construction. Past the node's own
+    // 20 000 rows the client was the only copy of rows nothing could re-serve, and it grew for the
+    // life of the watch. There is no `scrollback.load` to fetch them back with (#51), so the honest
+    // bound is the one the node itself keeps.
+    @Test
+    fun scrollbackStopsAtTheDepthTheNodeItselfHolds() {
+        val store = KamprStore()
+        val pane = store.pane("p")
+        var next = 0
+        while (next < SCROLLBACK_MAX_ROWS + 500) {
+            val rows = (next until next + 500).map {
+                RowDiff(it, listOf(Run(0, "row $it")))
+            }
+            pane.applyScrollback(
+                ServerMsg.Scrollback("p", next, rows, rows.size, complete = true, capped = false)
+            )
+            next += 500
+        }
+
+        assertEquals(
+            SCROLLBACK_MAX_ROWS,
+            pane.scrollback.historyRows,
+            "the client kept a deeper ring than the node it is a view of",
+        )
+        assertEquals(next - SCROLLBACK_MAX_ROWS, pane.scrollback.fromTop)
+        assertNull(pane.scrollback.row(0), "the oldest row survived a trim")
+        assertNull(pane.scrollback.row(pane.scrollback.fromTop - 1))
+        assertEquals(
+            "row ${next - 1}",
+            pane.scrollback.row(next - 1)?.runs?.first()?.x,
+            "the newest row is the one thing a bound must never drop",
+        )
     }
 }

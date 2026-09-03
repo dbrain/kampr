@@ -19,8 +19,24 @@ import dev.kampr.shared.wire.Turn
 // Claude's wrapped buffer, and `ctrl+c` arms an exit on agy.
 data class DeskLine(val text: String, val clear: String?)
 
+// The depth a client keeps, and it is **the node's own** rather than a display cap.
+//
+// `send_history` re-bases every delta onto this client's end, so a ring the node trimmed is
+// invisible from here and `totalRows` was monotonic by construction — past this the client was the
+// only copy of rows nothing can re-serve, growing for the life of the watch. There is no
+// `scrollback.load` and there cannot be one (#51), so holding what the node holds is the deepest
+// honest bound: no pane that has genuinely produced this much loses a row that was ever fetchable.
+// Mirrored from `crates/kampr-core/src/scrollback.rs`.
+const val SCROLLBACK_MAX_ROWS = 20_000
+
+// How many turns a pane keeps once it has been left. Two `PAGE`s of the node's own, so a reader
+// coming back opens on a full screen and the fetch that follows is the one they asked for.
+const val CONVO_KEEP = 80
+private const val SCROLLBACK_MAX_BYTES = 8 * 1024 * 1024
+
 class ScrollbackStore {
     private val rows = LinkedHashMap<Int, RowDiff>()
+    private var bytes = 0
 
     var fromTop: Int = 0
         private set
@@ -58,17 +74,30 @@ class ScrollbackStore {
         if (restart) {
             fromTop = msg.fromTop
             rows.clear()
+            bytes = 0
             highestIndex = -1
             totalRows = 0
         }
         complete = msg.complete
         capped = msg.capped || capped
         for (row in msg.rows) {
-            rows[row.row] = row
+            rows.put(row.row, row)?.let { bytes -= it.weight() }
+            bytes += row.weight()
             if (row.row > highestIndex) highestIndex = row.row
         }
         val held = if (highestIndex >= fromTop) highestIndex - fromTop + 1 else 0
-        totalRows = maxOf(msg.totalRows, held, totalRows)
+        totalRows = maxOf(msg.totalRows, held)
+        trim()
+    }
+
+    // From the top, which is the same end and the same two bounds the node's own ring trims on.
+    private fun trim() {
+        while (totalRows > SCROLLBACK_MAX_ROWS || (bytes > SCROLLBACK_MAX_BYTES && totalRows > 1)) {
+            rows.remove(fromTop)?.let { bytes -= it.weight() }
+            fromTop++
+            totalRows--
+            capped = true
+        }
     }
 
     // Absolute ring indices run [fromTop, fromTop + totalRows); from_top advances when the
@@ -79,6 +108,7 @@ class ScrollbackStore {
 
     fun clear() {
         rows.clear()
+        bytes = 0
         fromTop = 0
         totalRows = 0
         highestIndex = -1
@@ -86,6 +116,8 @@ class ScrollbackStore {
         capped = false
     }
 }
+
+private fun RowDiff.weight(): Int = runs.sumOf { it.x.length }
 
 // Counted in herd sweeps rather than in seconds, because the sweep is what produces the evidence
 // and a wall-clock threshold would only be that number in disguise. The sweep runs every 3s for as
@@ -334,6 +366,26 @@ class PaneState(val id: String, val styles: StyleTable) {
     fun applySubConvo(msg: ServerMsg.Convo) {
         val handle = msg.sub ?: return
         sub(handle).apply(msg)
+        revision++
+    }
+
+    // What a pane keeps once nobody is looking at it.
+    //
+    // Enough to open on without a fetch, and the newest turns rather than the oldest. Dropping the
+    // rest costs one round trip and no wire change: `convo.load`'s `before` is resolved against the
+    // node's whole folded transcript by turn id, so the oldest turn still held is itself a valid
+    // cursor — and the whole 1053-turn walk of the operator's own transcript took 15.4 ms.
+    //
+    // Only ever on a pane that has been left. Pruning one on screen would race the conversation's
+    // own "load earlier", which re-asks whenever the cursor moves and the reader is near the top.
+    fun pruneConversation(keep: Int = CONVO_KEEP) {
+        subs.clear()
+        val over = turns.size - keep
+        if (over > 0) {
+            turns.subList(0, over).clear()
+            convoMore = true
+        }
+        convoCursor = turns.firstOrNull()?.id ?: convoCursor
         revision++
     }
 

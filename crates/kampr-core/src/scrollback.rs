@@ -1,10 +1,16 @@
 use crate::provider::RawScrollback;
 use kampr_term::{Emulator, RowDiff, column_bound};
 
-/// A memory bound, not a display one. Clients must not impose a row cap of their own: a terminal
-/// surface fills the viewport and scrolls as far back as the node actually holds. At roughly 200
-/// bytes of raw ANSI per row this is ~4 MB for a pane that has genuinely produced this much, and
-/// most panes never approach it.
+/// A memory bound, not a display one. At roughly 200 bytes of raw ANSI per row this is ~4 MB for a
+/// pane that has genuinely produced this much, and most panes never approach it.
+///
+/// **No client may impose a cap of its own, and the client mirrors this one.** A surface that
+/// stopped short of what the node holds would hide rows the operator can still be shown, which is
+/// what this rule has always forbidden. But `send_history` re-bases every delta onto the client's
+/// end, so a ring that trimmed here is invisible from there — a client whose depth only ever grew
+/// ended up the sole copy of rows nothing could re-serve, since there is no `scrollback.load` and
+/// [#51](#) says there cannot be one. `SCROLLBACK_MAX_ROWS` in `client/shared`'s `PaneState.kt` is
+/// this number, and the two move together.
 pub const DEFAULT_MAX_ROWS: usize = 20_000;
 
 /// The other half of that bound, because a row has no length. A pane that writes one enormous line

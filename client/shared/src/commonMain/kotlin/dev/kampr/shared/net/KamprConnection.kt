@@ -128,7 +128,7 @@ class KamprConnection(
         val owners = watched[pane] ?: return
         if (!owners.remove(owner) || owners.isNotEmpty()) return
         watched.remove(pane)
-        store.noteConversationUnconfirmed(pane)
+        store.releaseConversation(pane)
         send(ClientMsg.Unwatch(pane))
     }
 

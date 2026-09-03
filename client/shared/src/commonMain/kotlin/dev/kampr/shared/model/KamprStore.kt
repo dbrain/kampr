@@ -147,6 +147,15 @@ class KamprStore {
         paneStates[pane]?.convoConfirmed = false
     }
 
+    // Leaving a pane is also the one safe moment to let go of its transcript: nothing is drawing
+    // it, so nothing can race the fetch that brings it back. A pane held its whole conversation
+    // for the life of the app — 1053 turns and ~3.7 MB retained on the web for one four-hour pane,
+    // times every tile the mosaic watches — and every turn of it is one `convo.load` away.
+    fun releaseConversation(pane: String) {
+        noteConversationUnconfirmed(pane)
+        paneStates[pane]?.pruneConversation()
+    }
+
     fun markStale() {
         _herd.value = _herd.value.copy(stale = true)
         paneStates.values.forEach { it.markStale() }
