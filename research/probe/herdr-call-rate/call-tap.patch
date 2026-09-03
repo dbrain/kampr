@@ -1,0 +1,44 @@
+Counts what the node asks herdr for, by method and by the params that separate one caller
+from another. Apply to crates/kampr-herdr/src/rpc.rs, build, and run the node with
+KAMPR_CALL_LOG pointing at a file; `phases.py` drives the herd through its states and
+`tally.py` slices the log by phase. Revert by writing the file back, never by renaming it —
+cargo's fingerprint is mtime-based (docs/09-toolchain.md).
+
+--- a/crates/kampr-herdr/src/rpc.rs
++++ b/crates/kampr-herdr/src/rpc.rs
+@@ impl Herdr {
++fn call_log() -> Option<&'static std::sync::Mutex<std::fs::File>> {
++    static LOG: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> =
++        std::sync::OnceLock::new();
++    LOG.get_or_init(|| {
++        let path = std::env::var("KAMPR_CALL_LOG").ok()?;
++        let f = std::fs::OpenOptions::new().create(true).append(true).open(path).ok()?;
++        Some(std::sync::Mutex::new(f))
++    })
++    .as_ref()
++}
++
++fn tap(method: &str, params: &serde_json::Value) {
++    let Some(log) = call_log() else { return };
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|d| d.as_secs_f64())
++        .unwrap_or_default();
++    let pane = params.get("pane_id").and_then(|v| v.as_str()).unwrap_or("-");
++    let source = params.get("source").and_then(|v| v.as_str()).unwrap_or("-");
++    let format = params.get("format").and_then(|v| v.as_str()).unwrap_or("-");
++    let lines = params.get("lines").map(|v| v.to_string()).unwrap_or_else(|| "-".into());
++    use std::io::Write;
++    if let Ok(mut f) = log.lock() {
++        let _ = writeln!(f, "{now:.6}\t{method}\t{pane}\t{source}\t{format}\t{lines}");
++    }
++}
++
+ impl Herdr {
+     pub async fn call<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value) -> Result<T> {
++        tap(method, &params);
+         let req = serde_json::json!({ "id": "kampr", "method": method, "params": params });
+@@ pub async fn subscribe
++        tap("events.subscribe", &serde_json::json!({}));
+         let req = serde_json::json!({
+             "id": "kampr-events", "method": "events.subscribe",

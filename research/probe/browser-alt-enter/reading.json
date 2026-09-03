@@ -1,0 +1,22 @@
+{
+  "question": "alt+enter in a Claude pane sometimes opens a line and sometimes sends the message. Where does the alt go?",
+  "browserHalf": {
+    "how": "probe.py — Chrome 152.0.7977.64 headless, CDP Input.dispatchKeyEvent (the browser's own input pipeline, not a synthesised DOM event) against handler.js, which is the installDom block copied verbatim out of PaneTextInput.wasmJs.kt",
+    "firstChordAfterFocus": "altKey true, queued \\u001b\\r",
+    "secondChord": "altKey true, queued \\u001b\\r",
+    "firstChordAfterTheReclaimTookTheFocusBack": "altKey true, queued \\u001b\\r",
+    "chordAfterALoneAltPress": "altKey true, queued \\u001b\\r",
+    "chordWhileTheCanvasHoldsTheFocus": "keydown lands on the canvas, the handler never sees it, nothing is queued at all",
+    "chordWhileATextFieldHoldsTheFocus": "same — nothing queued",
+    "verdict": "The browser is not the bug. Chrome carries altKey on the first keydown after a focus change exactly as on the tenth, and a focus strand produces silence rather than a bare Enter, so it cannot be what drops the alt."
+  },
+  "ptyHalf": {
+    "how": "ptysplit.py — a child blocked in read(0) on a raw pty, its read boundaries logged; ESC and CR written one way or another, 5 trials each",
+    "oneWrite": "b'\\x1b\\r' — one read, 5/5",
+    "twoWritesNoGap": "b'\\x1b\\r' — one read, 5/5 (the writer beats the reader to the scheduler)",
+    "twoWrites1ms": "b'\\x1b' then b'\\r' — two reads, 5/5",
+    "twoWrites3ms": "b'\\x1b' then b'\\r' — two reads, 5/5",
+    "verdict": "ESC and CR are alt+enter only while they arrive in one read. The threshold is somewhere under 1 ms, and a node-to-herdr pane.send_text round trip is 1-3 ms (#273)."
+  },
+  "cause": "InputSink.raw cut every payload carrying \\r or \\n in two whenever a SubmitGuard was attached — which is every pane on screen — and emitted each half as its own `input` message, whether or not the guard actually held anything back."
+}

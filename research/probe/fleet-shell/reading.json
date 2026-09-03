@@ -1,0 +1,40 @@
+{
+  "_": [
+    "Readings behind the fleet run's shell. `shellpty.py` forks each case onto a pty set up",
+    "exactly as `kampr_fleet::exec::Supervisor::spawn` sets one up — setsid AND TIOCSCTTY — and",
+    "samples the master's termios and the /proc state of the whole tree.",
+    "",
+    "Machine: comingclean, bash 5.x, ble.sh installed and sourced from ~/.bashrc.",
+    "Reproduce: python3 research/probe/fleet-shell/shellpty.py"
+  ],
+  "the password signal, with a shell in front of it": {
+    "no shell, getpass": "ECHO OFF, ICANON on; python3 parked in read(fd 3 -> /dev/tty)",
+    "bash -c getpass": "ECHO OFF, ICANON on — identical",
+    "bash -c 'read -s'": "ECHO OFF, ICANON on; bash parked in read(fd 0 -> /dev/pts/N)",
+    "bash -c 'true && getpass'": "ECHO OFF, ICANON on; one process, bash exec'd it",
+    "bash -c 'echo hi | getpass'": "ECHO OFF, ICANON on",
+    "bash -c 'su -'": "ECHO OFF, ICANON on; syscall <EPERM 13>, as #339 says",
+    "bash -c idle (cat, sleep)": "ECHO on, ICANON on — NOT a secret",
+    "bash -i idle at its own prompt": "ECHO OFF, ICANON OFF — this is #333, and it needs -i",
+    "bash -lic 'sleep 30'": "ECHO on, ICANON on — a -c invocation is not a line-editing prompt",
+    "BLE_VERSION under bash -c": "unset; $- reads `hBc`, no `i`, so .bashrc returns at its guard",
+    "BLE_VERSION under bash -ic on a pty": "STILL unset — ble.sh sets _ble_init_exit=1 when BASH_EXECUTION_STRING is set (/usr/share/blesh/ble.sh:143), so it declines to load into ANY -c invocation"
+  },
+  "the process tree, and whose fd 0 is the pty": {
+    "bash -c 'cat'": "one pid [cat], WAITING on fd 0 -> /dev/pts/N. bash exec'd it",
+    "bash -c 'true && cat'": "one pid [cat] — an && chain of simple commands is still exec'd",
+    "bash -c 'sleep 30'": "one pid [sleep], busy (clock_nanosleep)",
+    "bash -c 'cat | cat'": "bash in wait4 (busy), cat #1 WAITING on fd 0 -> /dev/pts/N, cat #2 WAITING on fd 0 -> pipe:[…]",
+    "bash -c 'sleep 30 | cat'": "bash in wait4, sleep busy, cat WAITING on fd 0 -> pipe:[…] — NOBODY holds the terminal, and rung 1 keyed on the syscall alone calls this host a question",
+    "bash -c 'sleep 30 & cat'": "bash in wait4, sleep busy, cat WAITING on fd 0 -> /dev/pts/N",
+    "bash -c 'sleep 30 & wait'": "bash in wait4, sleep busy — correctly no question"
+  },
+  "the PATH each invocation answers, from env -i": {
+    "bash -c": "/usr/local/sbin:/usr/local/bin:/usr/bin — the service manager's (#392)",
+    "bash -lc": "+ ~/.local/bin, flatpak, jvm, perl, rustup, JetBrains Toolbox",
+    "bash -ic": "~/.local/bin, ~/.nvm/versions/node/v24.5.0/bin, ~/go/bin, ~/dev/houseofdoge/hod-scripts, Android SDK cmake + emulator, then the system three",
+    "bash -lic": "the union of both",
+    "cost, median of 5": "-lc 107 ms, -ic 176 ms, -lic 398 ms (max 513 ms). Paid once per node process.",
+    "stderr of an interactive read with no tty": "`cannot set terminal process group`, `no job control in this shell`, `stty: standard input` — discarded; stdout was clean and the NUL markers hold either way"
+  }
+}

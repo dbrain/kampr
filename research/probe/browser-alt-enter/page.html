@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>alt+enter probe</title>
+<style>html,body{margin:0;height:100%} canvas{width:100%;height:200px;background:#222;display:block}</style>
+<canvas id="canvas" tabindex="0"></canvas>
+<textarea id="rival" style="position:fixed;top:210px;left:0"></textarea>
+<script src="handler.js"></script>
+<script>
+  window.__log = [];
+  window.__delivered = [];
+  // Recorded ahead of the product handler on the same element, so it sees exactly the event the
+  // product handler will see, before any preventDefault of ours could change it.
+  document.addEventListener('keydown', function (e) {
+    window.__log.push({
+      phase: 'document', key: e.key, code: e.code, keyCode: e.keyCode,
+      alt: e.altKey, ctrl: e.ctrlKey, shift: e.shiftKey, meta: e.metaKey,
+      composing: e.isComposing, repeat: e.repeat,
+      target: e.target && (e.target.id || e.target.tagName),
+      active: document.activeElement && (document.activeElement.id || document.activeElement.tagName)
+    });
+  }, true);
+  installDom(function () {
+    var s = globalThis.__kamprInput;
+    if (!s.queue.length) return;
+    window.__delivered.push(s.queue.join(''));
+    s.queue.length = 0;
+  }, function () { return 'pass'; });
+  window.__kamprInput.el.addEventListener('keydown', function (e) {
+    window.__log.push({ phase: 'el', key: e.key, alt: e.altKey, keyCode: e.keyCode });
+  }, true);
+  window.__reset = function () { window.__log = []; window.__delivered = []; };
+</script>
