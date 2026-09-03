@@ -4,6 +4,9 @@
 - **Date:** 2026-08-28
 - **Supersedes:** [ADR 0002](./0002-kampr-never-resizes-a-pane.md), in part — the invariant it
   states is narrowed, not abandoned
+- **Amended by:** [ADR 0013](./0013-a-standing-intent-to-match-the-view.md), which adds a second way
+  to *ask for* this op — a standing intent, defaulted on for desk-sized terminal views — and leaves
+  the op, the floor and the panel below exactly as they are
 - **Evidence:** probes [#14, #17–#21, #219, #221, #265, #298](../03-probe-log.md), and the two rows
   measured for this decision
 

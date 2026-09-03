@@ -49,10 +49,18 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    itself, and `control` takes the PTY with no way to decline (#17), overrides that desk while held
    (#18) and leaves it rendering wrong without being told (#298). So nothing may claim one — no
    watch, zoom, pan, fit, reconnect or layout — and exactly one path reshapes it on purpose: the
-   `pane.size` op, behind a panel, with a confirmation and an 80x24 floor
-   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). Small screens are handled
-   by rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
-   looking at.
+   `pane.size` op, with an 80x24 floor
+   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). There are **two ways to
+   ask for that one path, and no third**: the panel, which resizes once and lets go; and a standing
+   intent to match the view for as long as a desk-sized terminal is open, owned by the socket that
+   claimed it and put back on release
+   ([ADR 0013](./docs/adr/0013-a-standing-intent-to-match-the-view.md)). The second is defaulted on
+   above a desk threshold, so it pays for its silence three ways — the pane goes back to the
+   geometry it was found at unless something else moved it meanwhile, a dropped socket releases it
+   without the client having to remember anything (#298 is what happens when it does not), and the
+   hold is visible with an off switch wherever it is held. Small screens are still handled by
+   rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
+   looking at, and a view too small to ask never asks.
 
    **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is the only thing
    that destroys herdr's `done` marker — the state herdr synthesises for a pane that finished
@@ -90,8 +98,10 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
   and `fd/0` too (#332) — so the node can see *nothing* about a `sudo` command in a herdr pane.
   This is why a fleet run is a pty the node forked rather than a pane it asked herdr for.
 - **ble.sh leaves an idle pane's tty with ECHO already off** (#333), so the termios bit that looks
-  like a definitive password signal means nothing on a shell pane. It is honest only on a pty with
-  no shell on it (#337).
+  like a definitive password signal means nothing on a shell pane. It is honest on a pty with no
+  shell on it (#337) — and on a fleet run's, which does have one: ble.sh declines to load into any
+  `-c` invocation, so the confound needs a shell that is reading a line and a fleet run never has
+  one. `docs/13-fleet-runs.md` §"The shell, and the three things it was not allowed to break".
 - **A node reaches herdr two ways** — a socket, and a spawned `herdr terminal session observe`. They
   fail independently, and every surface a person can see is served by the socket, so a node whose
   binary half is broken looks completely healthy with every pane blank (#233). `kampr doctor`'s

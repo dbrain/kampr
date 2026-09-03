@@ -79,3 +79,5 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0009](./0009-the-terminal-keeps-its-own-ground.md) | The terminal keeps its own dark ground, and only its 16 slots are themed | Accepted |
 | [0010](./0010-the-grid-is-described-not-read-out.md) | The terminal grid is described, and only the cursor line is spoken | Accepted |
 | [0011](./0011-the-client-fits-itself-to-the-pane.md) | The client fits itself to the pane, and asks before it touches a pane's mouse | Accepted |
+| [0012](./0012-one-deliberate-resize-behind-a-panel.md) | One deliberate resize, behind a panel | Accepted, amended by 0013 |
+| [0013](./0013-a-standing-intent-to-match-the-view.md) | A standing intent to match the view | Accepted |
