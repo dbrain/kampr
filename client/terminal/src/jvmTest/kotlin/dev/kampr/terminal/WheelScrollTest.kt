@@ -16,10 +16,14 @@ import kotlin.test.assertTrue
 
 // A grid taller than the window, which is the ordinary case for a phone-sized viewport against a
 // desktop-sized pane and the only one where scrolling means anything.
+//
+// Written to the last row of it, because a wheel goes as far as there is anything to read and no
+// further: the same 90-row grid with seven lines at the top of it has its whole record on the
+// screen at once and a wheel that moves it anywhere would be moving it through blank tail.
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.deepPane(): PaneSession {
     val session = PaneSession(Phone.PANE)
-    phoneTerminal(Phone.shell(rows = 90, caretRow = 6), session)
+    phoneTerminal(Phone.filled(rows = 90, caretRow = 6), session)
     assertTrue(session.view.maxScroll > 0f, "the grid has to overflow, or nothing is tested")
     return session
 }

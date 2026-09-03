@@ -76,6 +76,7 @@ fun ZoomSheet(
     sizing: PaneSizing? = null,
     onResize: (Int, Int) -> Unit = { _, _ -> },
     onHoldSize: (Boolean) -> Unit = {},
+    onMatchView: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -215,7 +216,7 @@ fun ZoomSheet(
 
                         if (sizing != null) {
                             Divider()
-                            ResizePanel(sizing, onResize, onHoldSize)
+                            ResizePanel(sizing, onResize, onHoldSize, onMatchView)
                             Divider()
                         }
 

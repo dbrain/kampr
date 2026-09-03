@@ -206,6 +206,12 @@ struct PaneEntry {
     watchers: AtomicU64,
     state: Arc<Mutex<PaneState>>,
     history: Arc<Mutex<ScrollbackRing>>,
+    /// Bumped by [`accumulate_history`] whenever the ring's *document* moved — a row added, the
+    /// base advanced, or `capped` turning true. It is what a watcher waits on instead of polling,
+    /// and it is deliberately not "an ingest happened": an ingest that stitched a read it already
+    /// held changes nothing a client could see, and waking every socket for it would put the poll
+    /// back with extra steps.
+    history_rev: Arc<tokio::sync::watch::Sender<u64>>,
     status: Arc<Mutex<HistoryStatus>>,
     tx: broadcast::Sender<PaneUpdate>,
     /// Whether [`pump`] is still running. The entry owns a `Sender` of its own so the broadcast
@@ -272,42 +278,36 @@ impl PaneRegistry {
         self.provider.write_pane(pane_id, input).await
     }
 
-    /// Reads once more before rendering, so a client's history is current at the moment it asks
-    /// and the ring gets one more chance to stitch.
+    /// The ring as it stands, rendered.
+    ///
+    /// **No read of its own for a pane that is being watched.** [`accumulate_history`] already
+    /// keeps that ring current, at a cadence derived from the pane's own row rate and chosen so
+    /// two reads always overlap — and this used to poll the *same* `read_scrollback` beside it on
+    /// a three-second timer **per watching socket**, measured at 22 calls a minute against 2 with
+    /// scrollback off (#448). Three phones on one pane were three duplicated streams of it, and
+    /// none of them made the ring any more current than the accumulator already had.
+    ///
+    /// An **unwatched** pane has no accumulator, so there the read is the only source there is
+    /// and it gets a ring of its own. The `superseded` answer — the harness that took the
+    /// screen, and whose ring holds the shell session that ran before it — belongs to
+    /// [`accumulate_history`], which is the only place a ring exists to be superseded.
     pub async fn scrollback(&self, pane_id: &str) -> Result<Option<ScrollbackDoc>> {
-        let Some(raw) = self.provider.read_scrollback(pane_id).await? else {
-            return Ok(self.superseded(pane_id));
-        };
-        match self.lookup(pane_id) {
-            Some(entry) => {
-                let mut ring = entry.history.lock().unwrap();
-                ring.ingest(&raw);
-                Ok(Some(ring.render()))
-            }
-            None => {
-                let mut ring = ScrollbackRing::new(self.config.scrollback_max_rows);
-                ring.ingest(&raw);
-                Ok(Some(ring.render()))
-            }
+        if let Some(entry) = self.lookup(pane_id) {
+            return Ok(Some(entry.history.lock().unwrap().render()));
         }
+        let Some(raw) = self.provider.read_scrollback(pane_id).await? else {
+            return Ok(None);
+        };
+        let mut ring = ScrollbackRing::new(self.config.scrollback_max_rows);
+        ring.ingest(&raw);
+        Ok(Some(ring.render()))
     }
 
-    /// Nothing to read, because a harness has the pane's screen: what the ring holds is the shell
-    /// session that ran before it, and it is not this pane's history any more. Dropping it says
-    /// *could not reach it* — `capped`, with `complete` gone — which is the one thing that must
-    /// not round to "there is none" (#233).
-    ///
-    /// `None` for every other silent pane, and for a pane nobody is watching: a ring nothing has
-    /// accumulated into has nothing to supersede, and an empty document from one would claim a
-    /// complete history of no rows.
-    fn superseded(&self, pane_id: &str) -> Option<ScrollbackDoc> {
-        if !self.provider.harness_owns_the_screen(pane_id) {
-            return None;
-        }
-        let entry = self.lookup(pane_id)?;
-        let mut ring = entry.history.lock().unwrap();
-        ring.superseded();
-        Some(ring.render())
+    /// Bumps when a watched pane's history document moves, so a client can be sent it when there
+    /// is something to send rather than on a timer of its own. `None` for a pane nobody is
+    /// watching: there is no accumulator behind one and so nothing to be told about.
+    pub fn scrollback_changes(&self, pane_id: &str) -> Option<tokio::sync::watch::Receiver<u64>> {
+        Some(self.lookup(pane_id)?.history_rev.subscribe())
     }
 
     /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed,
@@ -380,6 +380,7 @@ impl PaneRegistry {
         }));
         let (tx, _) = broadcast::channel(self.config.broadcast_capacity);
         let history = Arc::new(Mutex::new(ScrollbackRing::new(self.config.scrollback_max_rows)));
+        let history_rev = Arc::new(tokio::sync::watch::channel(0u64).0);
         let activity = Arc::new(Activity::default());
         let status = Arc::new(Mutex::new(HistoryStatus {
             poll: self.config.history.fastest,
@@ -399,6 +400,7 @@ impl PaneRegistry {
                 self.provider.clone(),
                 pane_id.to_string(),
                 history.clone(),
+                history_rev.clone(),
                 status.clone(),
                 activity,
                 self.config.history,
@@ -409,6 +411,7 @@ impl PaneRegistry {
             watchers: AtomicU64::new(0),
             state,
             history,
+            history_rev,
             status,
             tx,
             alive,
@@ -667,10 +670,19 @@ async fn accumulate_history(
     provider: Arc<dyn Provider>,
     pane_id: String,
     ring: Arc<Mutex<ScrollbackRing>>,
+    revision: Arc<tokio::sync::watch::Sender<u64>>,
     status: Arc<Mutex<HistoryStatus>>,
     activity: Arc<Activity>,
     policy: HistoryPolicy,
 ) {
+    /// The whole of what a rendered document is. Compared either side of a read rather than
+    /// inferred from the [`Ingest`] answer, because `capped` can move on a pass that added no
+    /// rows at all — a trim, a read herdr truncated — and a watcher that never heard about that
+    /// is a client claiming a complete history it does not have.
+    fn document(ring: &ScrollbackRing) -> (u32, usize, bool) {
+        (ring.base(), ring.len(), ring.capped())
+    }
+
     let mut previous = Instant::now();
     let mut seen_frames = activity.count();
     let mut rate = RowRate::default();
@@ -687,6 +699,7 @@ async fn accumulate_history(
 
         let mut gapped = false;
         let mut failed = false;
+        let before = document(&ring.lock().unwrap());
         let added = match outcome {
             Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
                 Ingest::Fresh { rows } => rows,
@@ -740,6 +753,11 @@ async fn accumulate_history(
         if !failed && failures > 0 {
             info!(pane = %pane_id, failures, "scrollback reads are answering again");
             failures = 0;
+        }
+        // Told once, to whoever is watching, at the moment there is something to tell. Every
+        // socket used to find this out for itself with a read of its own on a timer of its own.
+        if document(&ring.lock().unwrap()) != before {
+            revision.send_modify(|r| *r += 1);
         }
 
         let rows_per_sec = rate.observe(added, elapsed);

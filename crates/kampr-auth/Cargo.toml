@@ -19,6 +19,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+ulid.workspace = true
 url.workspace = true
 webauthn-rs.workspace = true
 

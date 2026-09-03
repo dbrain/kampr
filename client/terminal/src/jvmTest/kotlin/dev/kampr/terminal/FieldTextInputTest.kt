@@ -16,9 +16,17 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.text.AnnotatedString
+import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PanePrefs
+import dev.kampr.shared.wire.Run
+import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.terminal.guard.ConfirmState
+import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.FieldTextInput
 import dev.kampr.terminal.input.InputSink
@@ -48,12 +56,36 @@ private class Typed : PaneIo {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.field(latches: Latches = Latches()): Typed = rig(latches).first
+private fun ComposeUiTest.field(
+    latches: Latches = Latches(),
+    guard: (PaneIo) -> SubmitGuard? = { null },
+): Typed = rig(latches, guard).first
+
+// The shape every pane on screen actually has: `TerminalView` and `TerminalSurfaces` both build
+// their sink with a guard, and the guard is the only thing that ever cuts a payload up. A rig
+// without one cannot see what the wire is handed.
+private fun guarded(io: PaneIo): SubmitGuard {
+    val pane = PaneState(PANE, StyleTable())
+    pane.applyReset(
+        ServerMsg.GridReset(
+            pane = PANE,
+            cols = 80,
+            rows = 1,
+            rowsData = listOf(RowDiff(0, listOf(Run(0, "> ")))),
+            cursor = Cursor(2, 0, true),
+            links = emptyList(),
+        ),
+    )
+    return SubmitGuard(pane, io, ConfirmState())
+}
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.rig(latches: Latches = Latches()): Pair<Typed, InputSink> {
+private fun ComposeUiTest.rig(
+    latches: Latches = Latches(),
+    guard: (PaneIo) -> SubmitGuard? = { null },
+): Pair<Typed, InputSink> {
     val io = Typed()
-    val sink = InputSink(PANE, io, latches)
+    val sink = InputSink(PANE, io, latches, guard(io))
     setContent {
         val session = remember { PaneSession(PANE).also { it.openKeyboard() } }
         FieldTextInput(session, sink, enabled = true, onChord = {}, modifier = Modifier.testTag(TAG))
@@ -278,4 +310,23 @@ class FieldTextInputTest {
         )
         assertFalse(latches.alt.active(), "and it is spent on that keystroke, not left standing")
     }
+
+    // The same chord off a hardware keyboard, through the sink shape a real pane has. `ESC` and
+    // `CR` are one keystroke only while they arrive in one `read`, and the guard used to cut every
+    // payload carrying a submit in two whether it kept anything back or not — so the pane got an
+    // Escape and then an Enter, a `pane.send_text` round trip apart, and the agent submitted the
+    // message rather than opening a line in it.
+    @Test
+    fun alt_enter_reaches_the_pane_as_one_keystroke_rather_than_an_escape_and_an_enter() =
+        runComposeUiTest {
+            val io = field(guard = ::guarded)
+
+            onNodeWithTag(TAG).performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.Enter) } }
+            waitForIdle()
+            assertEquals(
+                listOf(Esc.ESCAPE + Esc.ENTER),
+                io.sent,
+                "alt+enter was cut into an Escape and an Enter on its way to the pane",
+            )
+        }
 }

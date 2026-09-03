@@ -21,7 +21,15 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-const SCROLLBACK_POLL: Duration = Duration::from_secs(3);
+/// The least time between two `scrollback` frames on one socket.
+///
+/// Not a poll any more — the ring says when it has moved ([`kampr_core::PaneRegistry::
+/// scrollback_changes`]) and this socket is woken then. What it still is, is a **floor**: a busy
+/// pane's ring moves ten times a second and laying twenty thousand rows out per socket per move
+/// is a tokio worker with no `.await` in it. Three seconds is the cadence the poll it replaced
+/// ran at, so the rendering cost per watcher is exactly what it was, and the frame now arrives
+/// *when there is one* rather than up to three seconds later.
+const SCROLLBACK_FLOOR: Duration = Duration::from_secs(3);
 
 /// How often, and how many times, a blocked pane is re-read for a question its screen had not
 /// finished painting. Bounded so a harness whose dialog Kampr cannot parse costs a handful of
@@ -197,6 +205,7 @@ async fn run_on_watched<O: Outgoing, I: Incoming>(
         caller,
         panes: HashMap::new(),
         held: HashMap::new(),
+        matched: HashMap::new(),
         sending: HashMap::new(),
         unreadable: 0,
     };
@@ -210,6 +219,11 @@ async fn run_on_watched<O: Outgoing, I: Incoming>(
     session.greet(&greeting).await;
     let herd_task = tokio::spawn(herd_updates(herd_rx, greeting, wire.clone()));
     let _herd_guard = crate::mesh::AbortOnDrop(herd_task.abort_handle());
+
+    // The book is the node's rather than the device's, so a save made on the phone has to reach
+    // the desktop looking at the same node right now — not at its next connection.
+    let mut book_rx = node.subscribe_book();
+    book_rx.borrow_and_update();
 
     let mut changes = node.auth.device_changes();
     let mut recheck = tokio::time::interval(DEVICE_RECHECK);
@@ -239,6 +253,12 @@ async fn run_on_watched<O: Outgoing, I: Incoming>(
                 if !session.refresh().await {
                     break;
                 }
+            }
+            changed = book_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                session.publish_book().await;
             }
         }
         if outbox.is_closed() {
@@ -355,6 +375,65 @@ impl Drop for PaneHandle {
     }
 }
 
+/// One terminal view's standing claim on a pane's geometry, for as long as that view is open.
+///
+/// A lease is *scoped*, and that is the whole of "newest holder wins": a viewer displaced by a
+/// later one still runs this on the way out and it lands on nothing, so the earlier viewer never
+/// takes the later one's hold down with it and never fights back for the pane.
+///
+/// The peer arm sends the same scoped release down the mesh, because a hub's link to a peer
+/// outlives any one phone that was looking through it — without this a client that closed its
+/// laptop would leave a pane on another host held at that laptop's size until the link dropped.
+enum MatchLease {
+    Local {
+        node: Arc<Node>,
+        /// herdr's own id, which is what [`crate::holds::PaneHolds`] is keyed by.
+        local: String,
+        token: crate::holds::HoldToken,
+    },
+    Peer {
+        node: Arc<Node>,
+        target: String,
+        global: String,
+        token: u64,
+    },
+}
+
+impl MatchLease {
+    fn token(&self) -> u64 {
+        match self {
+            Self::Local { token, .. } | Self::Peer { token, .. } => *token,
+        }
+    }
+}
+
+impl Drop for MatchLease {
+    fn drop(&mut self) {
+        match self {
+            Self::Local { node, local, token } => {
+                node.holds.let_go(local, *token);
+            }
+            Self::Peer {
+                node,
+                target,
+                global,
+                token,
+            } => {
+                let (node, target, global, token) = (node.clone(), target.clone(), global.clone(), *token);
+                // Spawned rather than awaited, because this runs from a `Drop` that is itself
+                // often running inside a cancelled task. The runtime outlives the session.
+                tokio::spawn(async move {
+                    let release = json!({ "t": "manage", "op": "pane.size",
+                                          "at": global, "mode": "release", "lease": token });
+                    if let Err(e) = node.peers.manage(&target, release).await {
+                        warn!(pane = %global, error = %e, "letting go of a matched pane on a peer");
+                    }
+                });
+            }
+        }
+    }
+}
+
 /// Who is on the other end of a session.
 ///
 /// The whole of the difference is `att.*`: a browser has `GET /api/attachment` and must use it,
@@ -377,6 +456,15 @@ struct Session {
     /// What this client is holding from each pane's conversation, kept past the pump that sent it
     /// and past the `unwatch` that stopped the pump. See [`convo::Held`].
     held: HashMap<String, convo::Held>,
+    /// The panes this client's terminal views are holding at their own geometry, by global id.
+    ///
+    /// **This map is the release-on-disconnect.** Dropping a lease lets its hold go, and the map
+    /// is dropped on every path out of a session — the ordinary close below, a `break` in the
+    /// dispatch loop, the keepalive giving up on a peer that froze rather than closed (#284), and
+    /// the whole task being cancelled when the node stops. A closed laptop is a socket that stops
+    /// answering, and that is what ends the hold rather than anything the client remembered to
+    /// send. See [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
+    matched: HashMap<String, MatchLease>,
     sending: HashMap<u64, Sending>,
     unreadable: u32,
 }
@@ -389,14 +477,23 @@ struct Sending {
 }
 
 impl Session {
-    /// `hello`, the herd, and this device's stored preferences — unasked, because there is no
-    /// other way for a client to learn the zoom it left a pane at. A client that has to ask has
-    /// already rendered the pane at the wrong size.
+    /// `hello`, the herd, this device's stored preferences, and the fleet book — the last two
+    /// unasked, because there is no other way for a client to learn the zoom it left a pane at or
+    /// the commands it is about to offer. A client that has to ask has already painted.
+    ///
+    /// The book is last because it is the only one of the four that is not about this device: it
+    /// is the node's, so that it is the same list on the operator's phone and on their desktop.
     async fn greet(&self, herd: &crate::herd::HerdModel) {
         self.wire.send_json(&hello(&self.node, &self.device, self.caller));
         self.wire.send(&herd.message());
         self.wire.send_json(&self.stored_prefs().await);
+        self.publish_book().await;
         self.audit("session.opened", None, None);
+    }
+
+    async fn publish_book(&self) {
+        self.wire
+            .send_json(&crate::book::frame(self.node.auth.store()).await);
     }
 
     async fn stored_prefs(&self) -> Value {
@@ -896,6 +993,9 @@ impl Session {
     }
 
     fn unwatch(&mut self, pane: &str) {
+        // Before the handle, because a pane nobody is watching is a pane nobody has a terminal
+        // view of — and a hold that outlived its view is exactly the write rule 3 forbids.
+        self.matched.remove(pane);
         if let Some(handle) = self.panes.remove(pane) {
             handle.stop();
             self.audit("unwatch", Some(pane), None);
@@ -1125,8 +1225,8 @@ impl Session {
         // `managed` ack. A browser never needs it; a hub relaying for several clients at once
         // does, and it is additive to the protocol either way.
         let rid = value.get("rid").cloned();
-        let raw = value.clone();
-        let Ok(op) = serde_json::from_value::<ManageOp>(value) else {
+        let mut raw = value.clone();
+        let Ok(mut op) = serde_json::from_value::<ManageOp>(value) else {
             self.refuse(
                 raw["op"].as_str().unwrap_or_default(),
                 None,
@@ -1158,6 +1258,45 @@ impl Session {
         // what it ran, where, and against which tree — which is the whole question the log exists
         // to answer.
         self.audit("manage", op.at.as_deref(), Some(manage_detail(&op)));
+        // **Before routing, deliberately.** The book is this node's and names no host, so a
+        // `fleet.save` carrying a `node` must not be relayed to it — the operator's list would
+        // then live on whichever machine their last pane happened to be on. It reaches herdr for
+        // nothing either, so it must not wake one.
+        if crate::book::is_book_op(&op.op) {
+            let result = crate::book::apply(self.node.auth.store(), &op, kampr_auth::now()).await;
+            match result {
+                Ok(reply) => {
+                    let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
+                    if let Some(entry) = reply["entry"].as_str() {
+                        ack["id"] = json!(entry);
+                    }
+                    if let Some(rid) = &rid {
+                        ack["rid"] = rid.clone();
+                    }
+                    self.wire.send_json(&ack);
+                    self.node.book_changed();
+                }
+                Err(e) => self.refuse(&op.op, None, e.code(), &e.to_string(), rid.as_ref()),
+            }
+            return;
+        }
+        // **A release is scoped to this view's own hold, and only this view's.** The panel's
+        // release still lets go of whatever is standing — that is an operator asking by name —
+        // but a terminal view turning matching off is answering for its own claim, and a viewer
+        // that has already been displaced by a newer one must not take the newer one's hold down
+        // with it on the way past.
+        if op.op == "pane.size"
+            && op.mode.as_deref() == Some("release")
+            && let Some(token) = op
+                .at
+                .as_deref()
+                .and_then(|at| self.matched.get(at))
+                .map(MatchLease::token)
+        {
+            op.lease = Some(token);
+            raw["lease"] = json!(token);
+        }
+
         // Every session is its own herdr server, so an op is addressed at the session that owns
         // its target rather than at whichever socket the node happens to have started with.
         let target = op.at.as_deref().or(op.node.as_deref());
@@ -1183,7 +1322,7 @@ impl Session {
                 // else herdr creates is a container this node qualifies with its own id.
                 let id = match reply["session"].as_str() {
                     Some(name) => Some(name.to_string()),
-                    None => manage::created_id(&reply).map(|id| session.global_pane(&id)),
+                    None => manage::created_id(&op.op, &reply).map(|id| session.global_pane(&id)),
                 };
                 let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
                 if let Some(id) = id {
@@ -1192,6 +1331,13 @@ impl Session {
                 if op.op == "layout.export" {
                     ack["layout"] = reply["layout"].clone();
                 }
+                // What the op measured, which is not the same thing as whether it ran. `pane.size`
+                // claims the PTY, resizes, releases and then *checks* — and an ack that carried
+                // only `ok` said `true` about a resize herdr had already taken back (#19).
+                for (field, value) in manage::measured(&op.op, &reply) {
+                    ack[field] = value;
+                }
+                self.note_match(&op, &reply);
                 if let Some(rid) = &rid {
                     ack["rid"] = rid.clone();
                 }
@@ -1201,8 +1347,26 @@ impl Session {
                         self.wire.send_json(&ack);
                     }
                 }
+                self.note_fleet_run(&op).await;
             }
             Err(e) => self.refuse(&op.op, op.at.as_deref(), e.code(), &e.to_string(), rid.as_ref()),
+        }
+    }
+
+    /// A `fleet.run` the node accepted, written into this node's book.
+    ///
+    /// **On this node's book whether the run is local or relayed**, because a fan-out is one op
+    /// per host and the operator has one list. Deduplication is what collapses the four ops one
+    /// run produces into the one entry; the book is a list of commands, not of runs.
+    ///
+    /// After the ack rather than before it, so an op the node refused — an empty argv, a missing
+    /// cohort — is not written down as a command that ran.
+    async fn note_fleet_run(&self, op: &ManageOp) {
+        if op.op != "fleet.run" {
+            return;
+        }
+        if crate::book::record_run(self.node.auth.store(), op, kampr_auth::now()).await {
+            self.node.book_changed();
         }
     }
 
@@ -1264,7 +1428,7 @@ impl Session {
     /// A structural op against a pane on another host. Unlike input this one has an answer, so
     /// the hub waits for the peer's `managed` and hands it back — with the *caller's* correlation
     /// token, never the one the hub minted for its own bookkeeping.
-    async fn manage_peer(&self, target: &str, op: &ManageOp, mut raw: Value, rid: Option<Value>) {
+    async fn manage_peer(&mut self, target: &str, op: &ManageOp, mut raw: Value, rid: Option<Value>) {
         if let Some(object) = raw.as_object_mut() {
             object.remove("rid");
         }
@@ -1294,7 +1458,68 @@ impl Session {
                 }
             }
         }
+        let ran = reply["ok"] == true;
+        if ran {
+            self.note_peer_match(target, op, &reply);
+        }
         self.wire.send_json(&reply);
+        if ran {
+            self.note_fleet_run(op).await;
+        }
+    }
+
+    /// Takes ownership of a matched hold the node just took on this client's behalf, and gives one
+    /// up when the client says it is done with the view.
+    ///
+    /// Keyed by the *global* pane id because that is what an `unwatch` and a `release` name; the
+    /// local id inside the lease is what herdr and [`crate::holds::PaneHolds`] are keyed by.
+    fn note_match(&mut self, op: &ManageOp, reply: &Value) {
+        if op.op != "pane.size" {
+            return;
+        }
+        let Some(at) = op.at.clone() else { return };
+        match (reply["lease"].as_u64(), reply["pane_id"].as_str()) {
+            (Some(token), Some(local)) => {
+                self.matched.insert(
+                    at,
+                    MatchLease::Local {
+                        node: self.node.clone(),
+                        local: local.to_string(),
+                        token,
+                    },
+                );
+            }
+            // A `release` this session's own lease answered for. Dropping it here rather than
+            // before the op is what lets the ack say `was_held: true` honestly.
+            _ if op.mode.as_deref() == Some("release") => {
+                self.matched.remove(&at);
+            }
+            _ => {}
+        }
+    }
+
+    fn note_peer_match(&mut self, target: &str, op: &ManageOp, reply: &Value) {
+        if op.op != "pane.size" {
+            return;
+        }
+        let Some(at) = op.at.clone() else { return };
+        match reply["lease"].as_u64() {
+            Some(token) => {
+                self.matched.insert(
+                    at.clone(),
+                    MatchLease::Peer {
+                        node: self.node.clone(),
+                        target: target.to_string(),
+                        global: at,
+                        token,
+                    },
+                );
+            }
+            None if op.mode.as_deref() == Some("release") => {
+                self.matched.remove(&at);
+            }
+            None => {}
+        }
     }
 
     async fn caps(&self) {
@@ -1388,8 +1613,9 @@ fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: 
 
 fn manage_detail(op: &ManageOp) -> Value {
     let mut detail = json!({ "op": op.op });
-    let fields: [(&str, Value); 14] = [
+    let fields: [(&str, Value); 15] = [
         ("node", json!(op.node)),
+        ("entry", json!(op.entry)),
         ("label", json!(op.label)),
         ("cwd", json!(op.cwd)),
         ("env", op.env.clone().unwrap_or(Value::Null)),
@@ -1680,7 +1906,15 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         return;
     }
 
-    let mut blocked = false;
+    // **The state a watcher arrives into, not only the changes after it.** `blocked` used to start
+    // `false` and the strip was published only on a *transition*, so opening a pane that was
+    // already blocked showed nothing at all until the next one — and a dialog standing still
+    // produces no provider revisions, so that wait was bounded by the herd's reconcile sweep at
+    // thirty seconds. The operator's phone exists to answer blocked agents; it cannot be the last
+    // thing to hear that one is. This is the same reading the fault above already does, and for
+    // the same reason: the herd is state, and a client joining is arriving at it.
+    let mut blocked = herd.borrow().pane(&global).map(|p| p.agent_status)
+        == Some(kampr_core::provider::AgentStatus::Blocked);
     // A pane can be reported blocked before its dialog has finished painting, and the question is
     // read off the screen (probe #42). Latching on the first read would leave a blocked agent with
     // no prompt strip at all until its status happened to change again, so an unproductive read is
@@ -1690,8 +1924,26 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     let mut asked: Option<pending::Pending> = None;
     let mut ask = tokio::time::interval(PENDING_RETRY);
     ask.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut history = tokio::time::interval(SCROLLBACK_POLL);
-    history.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    if blocked {
+        asking = PENDING_ATTEMPTS;
+        // Exactly one screen read, and only for a pane herdr already calls blocked. An unblocked
+        // pane costs nothing here: `send_pending` finds nothing, matches what this socket has
+        // been told, and sends no frame — so this does not add a read or a frame per watch, and
+        // #448's `multi` re-arm is left exactly as it was.
+        match send_pending(&herdr, &wire, &global, &local, true, &mut asked).await {
+            None => return,
+            Some(published) => asking = keep_asking(published, &asked, asking),
+        }
+    }
+    // The ring's own signal, so this socket is told when there is history to send instead of
+    // asking herdr for it again on a timer. A pane with no accumulator behind it has none, and
+    // nothing on a quiet pane ever fires: the old timer rendered the whole ring every three
+    // seconds per socket whether or not a row had been added to it.
+    let mut history_moved = registry.scrollback_changes(&local);
+    // Armed, because the pane may already have a ring: a client joining a pane that has scrolled
+    // is arriving at history, and there is no change coming to tell it so.
+    let mut history_due = scrollback;
+    let mut history_at = tokio::time::Instant::now();
     let mut sent_rows = 0u32;
 
     loop {
@@ -1734,9 +1986,24 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                     Some(published) => asking = keep_asking(published, &asked, asking),
                 }
             }
-            _ = history.tick(), if scrollback => {
-                if !send_history(&registry, &wire, &global, &local, &mut sent_rows).await {
-                    return;
+            // Two arms rather than one, and the split is what keeps the wake cancel-safe: the
+            // first only *records* that the ring moved, so losing the race to another branch
+            // cannot lose the news with it.
+            _ = ring_moved(&mut history_moved), if scrollback && !history_due => {
+                history_due = true;
+            }
+            _ = tokio::time::sleep_until(history_at), if scrollback && history_due => {
+                history_due = false;
+                match send_history(&registry, &wire, &global, &local, &mut sent_rows).await {
+                    None => return,
+                    // The floor is spent only on a frame that actually went. A render that
+                    // found nothing new — the arm this loop starts with, before the ring has
+                    // anything in it — must not push the first real one three seconds out.
+                    Some(sent) => {
+                        if sent {
+                            history_at = tokio::time::Instant::now() + SCROLLBACK_FLOOR;
+                        }
+                    }
                 }
             }
             changed = herd.changed() => {
@@ -1771,21 +2038,37 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     }
 }
 
+/// Waits for the pane's history ring to move.
+///
+/// **Never returns for a pane that has no ring behind it, and never again once the accumulator
+/// has gone.** A `select!` arm that answered immediately would spin this loop for the life of the
+/// stream, which is the shape a closed `watch` already produced once here (`state.rs`'s `moved`).
+async fn ring_moved(rx: &mut Option<tokio::sync::watch::Receiver<u64>>) {
+    if let Some(rx) = rx.as_mut()
+        && rx.changed().await.is_ok()
+    {
+        return;
+    }
+    *rx = None;
+    std::future::pending().await
+}
+
+/// `None` if the socket is gone; otherwise whether a frame actually went.
 async fn send_history(
     registry: &kampr_core::PaneRegistry,
     wire: &Wire,
     global: &str,
     local: &str,
     sent_rows: &mut u32,
-) -> bool {
+) -> Option<bool> {
     let Ok(Some(mut doc)) = registry.scrollback(local).await else {
-        return true;
+        return Some(false);
     };
     // `total_rows` is a depth, so the ring ends here; `sent_rows` is the same index, one message
     // ago.
     let end = doc.from_top + doc.total_rows;
     if end == *sent_rows && doc.from_top <= *sent_rows {
-        return true;
+        return Some(false);
     }
     // The ring restarted — a gap it could not stitch, or a width change — so the client's copy is
     // no longer adjacent to what the node holds and the whole thing goes again.
@@ -1795,7 +2078,7 @@ async fn send_history(
         doc.total_rows = end - doc.from_top;
     }
     *sent_rows = end;
-    wire.send_scrollback(global, &doc)
+    wire.send_scrollback(global, &doc).then_some(true)
 }
 
 /// How many more times to re-read the screen, after one attempt at publishing a prompt.
@@ -1915,6 +2198,9 @@ mod tests {
         opens: AtomicUsize,
         feeds: std::sync::Mutex<Vec<mpsc::Sender<PaneEvent>>>,
         topology: watch::Sender<u64>,
+        /// What `pane.read recent` would answer. `None` is a pane with no ring yet, which is
+        /// where a watcher starts.
+        history: std::sync::Mutex<Option<RawScrollback>>,
     }
 
     #[async_trait::async_trait]
@@ -1941,11 +2227,65 @@ mod tests {
         }
 
         async fn read_scrollback(&self, _pane_id: &str) -> anyhow::Result<Option<RawScrollback>> {
-            Ok(None)
+            Ok(self.history.lock().unwrap().clone())
         }
 
         fn topology(&self) -> watch::Receiver<u64> {
             self.topology.subscribe()
+        }
+    }
+
+    /// A herdr socket that answers exactly one method — `pane.read visible` — and counts how
+    /// often it was asked.
+    ///
+    /// The count is the assertion that matters as much as the frame: a `multi` dialog re-arms its
+    /// twelve read attempts on **every** read (#421/#448), so a change that published the state a
+    /// watcher arrives into had to be proved not to have bought that with a second standing poll.
+    struct FakeHerdr {
+        reads: Arc<AtomicUsize>,
+        socket: std::path::PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    impl FakeHerdr {
+        fn showing(screen: &'static str) -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let socket = dir.path().join("herdr.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+            let reads = Arc::new(AtomicUsize::new(0));
+            tokio::spawn({
+                let reads = reads.clone();
+                async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        let reads = reads.clone();
+                        tokio::spawn(async move {
+                            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+                            let mut reader = tokio::io::BufReader::new(stream);
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                                return;
+                            }
+                            let request: Value = serde_json::from_str(&line).unwrap_or_default();
+                            if request["method"] == "pane.read" {
+                                reads.fetch_add(1, Ordering::SeqCst);
+                            }
+                            let reply = json!({ "id": "kampr",
+                                "result": { "read": { "text": screen, "truncated": false } } });
+                            let mut stream = reader.into_inner();
+                            let _ = stream.write_all(format!("{reply}\n").as_bytes()).await;
+                        });
+                    }
+                }
+            });
+            Self {
+                reads,
+                socket,
+                _dir: dir,
+            }
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(Ordering::SeqCst)
         }
     }
 
@@ -1956,6 +2296,11 @@ mod tests {
         wire: Arc<Wire>,
         panes: HashMap<String, PaneHandle>,
         herds: Vec<watch::Sender<Arc<crate::herd::HerdModel>>>,
+        /// What the herd already says about the pane when a watcher arrives, and where it is
+        /// read from — both of them the state, not a change.
+        arrives_at: kampr_core::provider::AgentStatus,
+        herdr: Option<Arc<FakeHerdr>>,
+        scrollback: bool,
     }
 
     impl Harness {
@@ -1964,6 +2309,7 @@ mod tests {
                 opens: AtomicUsize::new(0),
                 feeds: std::sync::Mutex::default(),
                 topology: watch::channel(0).0,
+                history: std::sync::Mutex::default(),
             });
             let registry = PaneRegistry::with_config(
                 provider.clone(),
@@ -1972,6 +2318,12 @@ mod tests {
                     // after it; the real 300 ms is a whole `observe` spawn wide.
                     reset_flush_after: Duration::from_millis(60),
                     first_grid_wait: Duration::from_millis(500),
+                    history: kampr_core::registry::HistoryPolicy {
+                        row_budget: 4,
+                        fastest: Duration::from_millis(20),
+                        quiet: Duration::from_millis(40),
+                        idle: Duration::from_millis(200),
+                    },
                     ..RegistryConfig::default()
                 },
             );
@@ -1984,7 +2336,51 @@ mod tests {
                 wire,
                 panes: HashMap::new(),
                 herds: Vec::new(),
+                arrives_at: kampr_core::provider::AgentStatus::Unknown,
+                herdr: None,
+                scrollback: false,
             }
+        }
+
+        /// The herd as it already stands when the watcher arrives — the state, never a change.
+        /// Nothing in the test sends a second model, so anything the client is told about the
+        /// prompt was published because this pump *read* the herd rather than watched it move.
+        fn already(mut self, status: kampr_core::provider::AgentStatus, screen: &'static str) -> Self {
+            self.arrives_at = status;
+            self.herdr = Some(Arc::new(FakeHerdr::showing(screen)));
+            self
+        }
+
+        fn with_history(mut self) -> Self {
+            self.scrollback = true;
+            self
+        }
+
+        /// What the pane's ring will hand back from now on.
+        fn scrolls(&self, lines: &[&str]) {
+            *self.provider.history.lock().unwrap() = Some(RawScrollback {
+                text: lines.iter().map(|l| format!("{l}\n")).collect(),
+                cols: Some(20),
+                viewport_rows: 1,
+                truncated: false,
+            });
+        }
+
+        fn standing(&self) -> Arc<crate::herd::HerdModel> {
+            Arc::new(crate::herd::HerdModel {
+                nodes: Vec::new(),
+                panes: vec![kampr_core::wire::PaneEntry::new(
+                    "01J",
+                    &PaneInfo {
+                        pane_id: LOCAL.into(),
+                        cols: Some(20),
+                        rows: 3,
+                        agent_status: self.arrives_at,
+                        ..PaneInfo::default()
+                    },
+                    false,
+                )],
+            })
         }
 
         /// Exactly what `watch` does once its checks have passed.
@@ -1995,17 +2391,23 @@ mod tests {
                 Streams::Local(&self.registry, LOCAL),
                 PANE,
             );
-            let (herd, herd_rx) = watch::channel(Arc::new(crate::herd::HerdModel::default()));
+            let (herd, herd_rx) = watch::channel(self.standing());
             self.herds.push(herd);
             let tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
                 registry: self.registry.clone(),
-                // Nothing in this test reaches herdr; a socket that does not exist proves it.
-                herdr: kampr_herdr::Herdr::new("/nonexistent/kampr-test.sock"),
+                // Nothing that does not name a herdr reaches one; a socket that does not exist
+                // proves it for every test but the arrival one.
+                herdr: kampr_herdr::Herdr::new(
+                    self.herdr
+                        .as_ref()
+                        .map(|h| h.socket.clone())
+                        .unwrap_or_else(|| "/nonexistent/kampr-test.sock".into()),
+                ),
                 herd: herd_rx,
                 wire: self.wire.clone(),
                 global: PANE.into(),
                 local: LOCAL.into(),
-                scrollback: false,
+                scrollback: self.scrollback,
             }))];
             self.panes.insert(
                 PANE.to_string(),
@@ -2034,6 +2436,26 @@ mod tests {
             .unwrap();
         }
 
+        /// Every frame of one kind the socket was handed inside a window.
+        ///
+        /// A window rather than a quiet period: the pane's first grid is up to `first_grid_wait`
+        /// behind the watch, and a drain that stopped at the first gap would stop before the pump
+        /// had even opened the pane.
+        async fn published(&self, tag: &str, window_ms: u64) -> Vec<Value> {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(window_ms);
+            let mut found = Vec::new();
+            while let Some(left) = deadline.checked_duration_since(tokio::time::Instant::now()) {
+                let Ok(Some(frame)) = tokio::time::timeout(left, self.outbox.next()).await else {
+                    break;
+                };
+                let message: Value = serde_json::from_str(&frame.json).unwrap();
+                if message["t"] == tag {
+                    found.push(message);
+                }
+            }
+            found
+        }
+
         async fn resets(&self) -> Vec<String> {
             let mut texts = Vec::new();
             while let Ok(Some(frame)) =
@@ -2057,6 +2479,94 @@ mod tests {
             }
             texts
         }
+    }
+
+    /// **The state a watcher arrives into, published — not only the changes after it.**
+    ///
+    /// `blocked` started `false` and the strip went out on a herd *transition*, so a client
+    /// opening a pane that was already blocked was told nothing at all. What normally covered
+    /// that is a coincidence rather than a mechanism: joining a pane moves the watcher count,
+    /// which rebuilds the herd, which looks like a transition from the `false` this pump had
+    /// assumed. Nothing here sends a second model — the channel is written once, before the pump
+    /// exists — so the prompt below can only have been published because the pump *read* the herd
+    /// it arrived at.
+    ///
+    /// Behind that coincidence is a dialog standing still, which produces no provider revision
+    /// and no herd rebuild of its own: the backstop is `HERD_RECONCILE`, thirty seconds, and the
+    /// operator's phone exists to answer blocked agents.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pane_that_was_already_blocked_gets_its_prompt_from_the_state_not_from_a_change() {
+        let mut h = Harness::new().already(
+            kampr_core::provider::AgentStatus::Blocked,
+            "\nDo you want to make this edit?\n\n 1. Yes\n 2. No\n",
+        );
+        h.watch();
+
+        let published = h.published("pending", 2000).await;
+        let strip = published
+            .first()
+            .expect("no prompt strip for an already-blocked pane");
+        assert_eq!(strip["pane"], PANE);
+        assert_eq!(strip["question"], "Do you want to make this edit?");
+        assert_eq!(strip["options"].as_array().unwrap().len(), 2);
+        assert_eq!(strip["source"], "screen");
+    }
+
+    /// And the other half, which is what stops the fix above from being a second standing poll.
+    ///
+    /// A pane nobody is blocked on must cost **no read at all** on arrival, and send no frame:
+    /// `pane.read[visible]` is already 2/s per socket for as long as a `multi` dialog stands
+    /// (#421, #448), and the cheapest way to make that worse is to read a screen per watch.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn arriving_at_a_pane_nobody_is_blocked_on_costs_no_read_and_no_frame() {
+        let mut h = Harness::new().already(
+            kampr_core::provider::AgentStatus::Idle,
+            "\nDo you want to make this edit?\n\n 1. Yes\n 2. No\n",
+        );
+        let herdr = h.herdr.clone().expect("a fake herdr");
+        h.watch();
+
+        assert!(
+            h.published("pending", 2000).await.is_empty(),
+            "a pane nobody is blocked on published a strip"
+        );
+        assert_eq!(
+            herdr.reads(),
+            0,
+            "arriving at an unblocked pane read its screen; #448 counts that per socket"
+        );
+    }
+
+    /// **History reaches a watching socket because the ring moved, not because a timer went off.**
+    ///
+    /// The pump used to poll `read_scrollback` on its own three-second timer, **per watching
+    /// socket** — the same read [`accumulate_history`] was already making, so three phones on one
+    /// pane were three duplicated streams of it (#448) and none of them made the ring any more
+    /// current. Now the accumulator says when its document moved and the socket renders what is
+    /// already in hand.
+    ///
+    /// The pane starts with no ring at all, which is where a watcher starts and is what makes
+    /// this test load-bearing: the frame below cannot have come from the arm the pump opens with,
+    /// because at that moment there was nothing to send.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn history_reaches_a_watcher_when_the_ring_moves_rather_than_on_a_timer_of_its_own() {
+        let mut h = Harness::new().with_history();
+        h.watch();
+        // Past the pump's opening arm, with the ring still empty: whatever it rendered then, it
+        // had nothing to render.
+        assert!(
+            h.published("scrollback", 300).await.is_empty(),
+            "a pane with no ring sent a history frame"
+        );
+
+        h.scrolls(&["one", "two", "v"]);
+        let frames = h.published("scrollback", 2000).await;
+        let first = frames
+            .first()
+            .expect("the ring gained rows and no watcher was told");
+        assert_eq!(first["pane"], PANE);
+        assert_eq!(first["from_top"], 0);
+        assert_eq!(first["total_rows"], 2, "{first}");
     }
 
     /// A resync re-watches every pane the client holds. Each of those is a stop and a start

@@ -70,6 +70,12 @@ val LocalPaneIo: ProvidableCompositionLocal<PaneIo> = staticCompositionLocalOf {
 // the inset from its own size unless something above it knows better — a mosaic cell's header
 // is a third of a screen header's, and a cell full of blank rows is the bug that follows from
 // guessing.
+// True inside a mosaic cell, where a pane is one thumbnail among several rather than the thing
+// being looked at. Two cells on a wide desktop each measure as a desk, and holding a pane at the
+// size of a tile in a grid is exactly the write rule 3 forbids — see ADR 0013, whose whole gate is
+// "is this window the terminal somebody is working in".
+val LocalMosaicCell = staticCompositionLocalOf { false }
+
 @Immutable
 data class PaneChrome(val top: Dp)
 

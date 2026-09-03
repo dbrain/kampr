@@ -6,6 +6,7 @@ use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provi
 use crate::reporter::Reporter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use kampr_herdr::{
     Command, ForegroundProcess, Herdr, Observer, ProcessInfo, Snapshot, StreamEvent, Sub, rpc::Subscription,
 };
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -63,6 +64,10 @@ const TOPOLOGY_EVENTS: &[&str] = &[
 /// entire `events.subscribe` call (probe #54). So it is subscribed once per agent pane, and the
 /// list is rebuilt whenever the agent-pane set moves.
 const STATUS_EVENT: &str = "pane.agent_status_changed";
+
+/// How many `pane.process_info` calls one sweep has in flight at a time. See the fan-out comment
+/// in [`Inner::refresh_processes`] for the measurement behind it (#450).
+const PROCESS_FANOUT: usize = 16;
 
 /// Well past herdr's 1000-line read cap; over-asking clamps rather than failing.
 const READ_CEILING: u64 = 4096;
@@ -157,6 +162,48 @@ impl Default for HerdrConfig {
     }
 }
 
+/// How long herdr takes to answer, as a number an operator can read.
+///
+/// **The last reading is not that number.** herdr looks at a freshly accepted connection once and,
+/// if the request is not whole at that instant, not again for ~100 ms — so *every* call is either
+/// ~0.2 ms or ~100 ms, with nothing in between, and which one is a coin flip on the window between
+/// this node's `connect(2)` and its finished write ([#445](#), narrowed to a 0.25 % stall rate by
+/// [#450](#)). A single sample therefore showed operators a 100 ms herd on a few per cent of herd
+/// rebuilds with nothing wrong at all.
+///
+/// The fast mode is the answer: 100 ms is a property of herdr's accept loop, not of the link. So
+/// this keeps the best of a handful of recent readings, which is the service time — at eight
+/// samples and #450's stall rate a reading that is all-slow is not a thing that happens, and a
+/// herdr that is genuinely slow has no fast mode to be found.
+#[derive(Debug, Default)]
+struct Rtt {
+    recent: [Option<f64>; Self::SAMPLES],
+    next: usize,
+}
+
+impl Rtt {
+    const SAMPLES: usize = 8;
+
+    fn record(&mut self, ms: f64) {
+        self.recent[self.next] = Some(ms);
+        self.next = (self.next + 1) % Self::SAMPLES;
+    }
+
+    fn best(&self) -> Option<f64> {
+        self.recent
+            .iter()
+            .flatten()
+            .copied()
+            .min_by(|a, b| a.total_cmp(b))
+    }
+
+    /// A herdr that went away and came back is a different server, and the readings taken of the
+    /// one before it describe nothing.
+    fn forget(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Whether herdr is answering, and whether it ever has.
 ///
 /// `ever` is the difference between "the herd is empty because everything closed" and "the herd
@@ -184,12 +231,17 @@ struct Inner {
     /// from the same `pane.process_info` round trip the harness does, and because six panes in one
     /// directory are otherwise indistinguishable.
     commands: Mutex<HashMap<String, Command>>,
-    /// Every foreground pid in each pane, herdr's and this machine's alike, newest read wins.
+    /// Every foreground pid in each pane, herdr's and this machine's alike, newest read wins —
+    /// each held **with the start time it had when it was read**.
     ///
-    /// **Held for a sweep and no longer.** It is what a pid-keyed session marker is intersected
-    /// with, and a pid the kernel has handed on to somebody else would hand back somebody else's
-    /// conversation — so it is re-walked on the sweep rather than accumulated.
-    pids: Mutex<HashMap<String, Vec<u32>>>,
+    /// It is what a pid-keyed session marker is intersected with, and a pid the kernel has handed
+    /// on to somebody else would hand back somebody else's conversation. Re-walking on the sweep
+    /// shrinks that window without closing it: the set is read on the sweep and used when the
+    /// herd is rebuilt, and a pid can be reaped and re-issued in between. The start time closes
+    /// it — [`HerdrProvider::pane_processes`] looks each pid up again and drops any whose start
+    /// no longer matches, so an entry that outlives its process yields *nothing* instead of a
+    /// stranger.
+    pids: Mutex<HashMap<String, Vec<PaneProcess>>>,
     /// This machine's own procfs. herdr answers what a pane is only where the job leaves the
     /// shell's process group, which on a machine that sources ble.sh is never (probe #297); this
     /// is how the node answers the rest, and it answers nothing where `/proc` is not readable.
@@ -207,6 +259,10 @@ struct Inner {
     /// probe re-measures at once rather than at the far end of its interval. Node-wide because
     /// the probe is per-stream and a resize is rare; the cost of a spurious wake is one read.
     resized: watch::Sender<u64>,
+    /// What herdr's round trip costs, taken from the sweep's own `session.snapshot` rather than
+    /// from a `ping` of its own — one per session per herd rebuild, 2/min quiet and 19/min with
+    /// four panes busy ([#448](#)), for a number the node was already in a position to know.
+    rtt: Mutex<Rtt>,
     /// Why no pane on this node can be streamed, once a spawn has proved it.
     ///
     /// **Node-scoped because the fault is.** `Observer::spawn` failing is the configured binary
@@ -426,6 +482,7 @@ impl HerdrProvider {
             processes: Mutex::new(HashMap::new()),
             commands: Mutex::new(HashMap::new()),
             pids: Mutex::new(HashMap::new()),
+            rtt: Mutex::new(Rtt::default()),
             procfs: Procfs::default(),
             reporter: Reporter::new(),
             desk_agents: DeskAgents::new(),
@@ -473,7 +530,19 @@ impl HerdrProvider {
             .lock()
             .unwrap()
             .get(pane_id)
-            .map(|pids| pids.iter().copied().map(PaneProcess::look_up).collect())
+            .map(|pids| {
+                pids.iter()
+                    .filter_map(|was| {
+                        let now = PaneProcess::look_up(was.pid);
+                        // The pid the kernel has handed on to somebody else, dropped rather than
+                        // answered: a marker keyed on it would resolve, and what it would resolve
+                        // to is another pane's conversation. Two `None`s pass, and deliberately —
+                        // a host with no readable procfs learns nothing either way, and refusing
+                        // every pipeline there would be a worse answer than the last look.
+                        (now.start == was.start).then_some(now)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -488,6 +557,14 @@ impl HerdrProvider {
 
     pub fn health(&self) -> Health {
         self.inner.health.borrow().clone()
+    }
+
+    /// What herdr's socket costs this node, in milliseconds, or `None` before the first answer.
+    ///
+    /// Read rather than measured: the sweep's `session.snapshot` is timed as it goes past. See
+    /// [`Rtt`] for why it is the best of a handful of readings and not the latest one.
+    pub fn rtt_ms(&self) -> Option<f64> {
+        self.inner.rtt.lock().unwrap().best()
     }
 
     pub fn watch_health(&self) -> watch::Receiver<Health> {
@@ -524,6 +601,18 @@ impl HerdrProvider {
         self.inner.resized.send_modify(|n| *n += 1);
     }
 
+    /// The width a wrap has actually proved for this pane, and `None` when nothing has.
+    ///
+    /// The one honest column count in the system. The layout rect is not one (#68) and no method
+    /// on the socket API reports one anywhere (#221), so a caller that needs the pane's *own*
+    /// width — to put it back after holding the pane at somebody's viewport, say — gets nothing
+    /// rather than the rect. Same rule as [`Inner::proven_cols`]: a proof taken against a
+    /// different rect is not this pane's width any more.
+    pub fn measured_cols(&self, pane_id: &str) -> Option<u16> {
+        let (rect, _) = self.inner.snapshot.borrow().geometry(pane_id)?;
+        self.inner.proven_cols(pane_id, rect as u16)
+    }
+
     /// `None` until herdr has answered once — an unknown version rather than a fabricated one.
     pub fn herdr_version(&self) -> Option<String> {
         let version = self.inner.snapshot.borrow().version.clone();
@@ -540,6 +629,7 @@ impl Inner {
     }
 
     async fn refresh(&self) -> Result<Arc<Snapshot>> {
+        let asked = Instant::now();
         let snapshot = match self.herdr.snapshot().await {
             Ok(s) => Arc::new(s),
             Err(e) => {
@@ -547,6 +637,12 @@ impl Inner {
                 return Err(e).with_context(|| format!("herdr socket {}", self.herdr.socket().display()));
             }
         };
+        // The round trip the node was making anyway. A failed call is not a reading — it is a
+        // timeout or a dead socket, and `online` is what says so.
+        self.rtt
+            .lock()
+            .unwrap()
+            .record(asked.elapsed().as_secs_f64() * 1000.0);
         self.came_online();
         let moved = self.refresh_processes(&snapshot).await;
         let changed = moved || fingerprint(&self.snapshot.borrow()) != fingerprint(&snapshot);
@@ -571,6 +667,7 @@ impl Inner {
     /// The log line an operator sees at the default level, once per outage rather than once per
     /// retry — a socket that has been down for a week must not be a week of identical warnings.
     fn went_offline(&self, error: &anyhow::Error) {
+        self.rtt.lock().unwrap().forget();
         let detail = format!("{}: {error}", self.herdr.socket().display());
         let first = {
             let h = self.health.borrow();
@@ -668,16 +765,41 @@ impl Inner {
             }
         }
 
+        // **Every pane, every pass.** The read is not on a cadence of its own, because the thing
+        // it answers has no cadence: a job starting in a pane is what changes `cmd`, and the same
+        // output that starts it is what wakes this sweep. Putting a timer in front of it drops
+        // exactly the read the event was asking for — measured at four runs in ten where a pane
+        // kept a name from its shell's own startup (`kampr · node`) for the whole of a fifteen
+        // second window, at a 3 s gate and at 30 s alike (#451). What the fan-out below buys is the
+        // right saving: N round trips concurrently rather than N in a row.
+        let asking: Vec<String> = snapshot.panes.iter().map(|pane| pane.pane_id.clone()).collect();
+
+        // **Fanned out, because N sequential round trips are N independent coin flips.** herdr
+        // looks at a freshly accepted connection once and then not again for ~100 ms (#445), so
+        // a herd of N panes took N chances of that stall one after another. Probe #450 measured
+        // 64 concurrent calls at 11.0 ms p50 against 12.7 ms sequential with **zero** stalls in
+        // either arm: herdr's accept path takes the fan-out. The bound is well inside what was
+        // measured rather than at it — a herd is not bounded and neither is the number of
+        // sessions this process serves, and 16 already collapses a twenty-pane sweep to two
+        // rounds. Ordering does not matter: every answer is keyed by its own pane.
+        let read: Vec<(String, Result<ProcessInfo>)> = futures_util::stream::iter(asking)
+            .map(|pane_id| async move {
+                let info = self.herdr.process_info(&pane_id).await;
+                (pane_id, info)
+            })
+            .buffer_unordered(PROCESS_FANOUT)
+            .collect()
+            .await;
+
         let mut found = Vec::new();
         let mut commands = Vec::new();
         let mut pids = Vec::new();
-        for pane in &snapshot.panes {
-            let pane_id = pane.pane_id.clone();
+        for (pane_id, info) in read {
             // An error is *not* an absent harness: one says nothing looked, the other says the
             // pane is empty, and the difference decides whether the working directory may be
             // searched at all. The same holds for the command — an unanswered pane keeps the
             // name it had rather than losing it to a socket that blinked.
-            match self.herdr.process_info(&pane_id).await {
+            match info {
                 Ok(info) => {
                     self.probed.store(true, Ordering::Relaxed);
                     // Walked every sweep and never held: a `children` file goes on naming a
@@ -692,7 +814,16 @@ impl Inner {
                     // case this answers.
                     let command = info.command().or_else(|| as_info(&walked.jobs).command());
                     commands.push((pane_id.clone(), command));
-                    pids.push((pane_id.clone(), foreground_pids(&info, &walked)));
+                    // Stamped as they are read. The start time is what makes the set safe to use
+                    // after the read that produced it, without ever handing back a pid the kernel
+                    // has re-issued.
+                    pids.push((
+                        pane_id.clone(),
+                        foreground_pids(&info, &walked)
+                            .into_iter()
+                            .map(PaneProcess::look_up)
+                            .collect(),
+                    ));
                     if let Some(agent) = wanted.get(&pane_id) {
                         let harness = info
                             .harness(agent)
@@ -766,7 +897,7 @@ impl Inner {
 
     /// Replaced wholesale rather than merged: a pane that was not read this pass has no pid set
     /// worth keeping, and a pane that closed has none at all.
-    fn record_pids(&self, snapshot: &Snapshot, read: Vec<(String, Vec<u32>)>) {
+    fn record_pids(&self, snapshot: &Snapshot, read: Vec<(String, Vec<PaneProcess>)>) {
         let live: std::collections::HashSet<&str> =
             snapshot.panes.iter().map(|p| p.pane_id.as_str()).collect();
         let mut pids = self.pids.lock().unwrap();

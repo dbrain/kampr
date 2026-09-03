@@ -126,6 +126,14 @@ impl ScrollbackRing {
         self.capped
     }
 
+    /// Absolute index of the ring's first row. Read beside [`Self::len`] and [`Self::capped`] as
+    /// the whole of what a rendered document is: a ring whose three of them have not moved
+    /// renders identically, so that triple is what tells a watcher there is something new to
+    /// send without laying twenty thousand rows out to find out.
+    pub fn base(&self) -> u32 {
+        self.base
+    }
+
     pub fn ingest(&mut self, raw: &RawScrollback) -> Ingest {
         let incoming = history_rows(raw);
         // A read that comes back as the live viewport and nothing else is not history that

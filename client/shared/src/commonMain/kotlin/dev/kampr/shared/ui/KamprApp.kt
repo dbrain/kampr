@@ -226,6 +226,7 @@ internal fun AppScaffold(
     }
     val hello by state.store.hello.collectAsState()
     val localRtt by state.store.localRttMs.collectAsState()
+    val book by state.store.book.collectAsState()
     val security = hello?.security ?: Security()
     // Off the store, not off `hello`: the role can move on a live socket and every affordance
     // below has to move with it.
@@ -389,6 +390,8 @@ internal fun AppScaffold(
                                     onStop = { state.manage(ManageOp.FleetStop(it)) },
                                     onRun = { state.runFleet(it) },
                                     canRun = !readOnly && state.store.canManage,
+                                    book = book,
+                                    onBook = state::manage,
                                 )
                                 Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                             }
@@ -448,6 +451,8 @@ internal fun AppScaffold(
                             onStop = { state.manage(ManageOp.FleetStop(it)) },
                             onRun = { state.runFleet(it) },
                             canRun = !readOnly && state.store.canManage,
+                            book = book,
+                            onBook = state::manage,
                         )
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
                             herd, connectionStatus, now, localRtt, triage, state::openPane, null,
@@ -503,6 +508,8 @@ internal fun AppScaffold(
                             onStop = { state.manage(ManageOp.FleetStop(it)) },
                             onRun = { state.runFleet(it) },
                             canRun = !readOnly && state.store.canManage,
+                            book = book,
+                            onBook = state::manage,
                         )
                         Screen.Herd, Screen.Mosaic -> HerdPortrait(
                             herd, connectionStatus, now, localRtt, triage,

@@ -966,32 +966,105 @@ async fn a_pane_a_harness_took_stops_serving_the_shell_session_that_came_before_
     let reg = PaneRegistry::with_config(
         p.clone(),
         RegistryConfig {
-            history: patient(),
+            history: brisk(),
             ..RegistryConfig::default()
         },
     );
     let _w = reg.watch("p").await.unwrap();
-
-    let doc = reg
-        .scrollback("p")
-        .await
-        .unwrap()
-        .expect("the shell era is this pane's history");
+    let doc = held(&reg, "p", |doc| doc.total_rows == 2).await;
     assert_eq!(lines_of(&doc), ["git-log-1", "git-log-2"]);
     assert!(doc.complete);
 
     p.no_ring.store(true, Ordering::SeqCst);
     p.harness.store(true, Ordering::SeqCst);
 
-    let doc = reg
-        .scrollback("p")
-        .await
-        .unwrap()
-        .expect("a pane whose history is unreachable still has something to say about it");
-    assert!(doc.rows.is_empty(), "the shell session is not the conversation");
+    let doc = held(&reg, "p", |doc| doc.rows.is_empty()).await;
     assert_eq!(doc.from_top, 2);
     assert!(doc.capped, "could not read it, not there is none (#233)");
     assert!(!doc.complete);
+}
+
+/// The document a watched pane answers with, polled until a condition holds.
+///
+/// The **poller** is what ingests now: asking for a document no longer reads herdr on the way
+/// past, because that read was the accumulator's read done a second time, once per watching
+/// socket (#448). So a test that changes what the provider will say waits for the ring to have
+/// heard it rather than triggering it by asking.
+async fn held(
+    reg: &PaneRegistry,
+    pane_id: &str,
+    until: impl Fn(&kampr_core::scrollback::ScrollbackDoc) -> bool,
+) -> kampr_core::scrollback::ScrollbackDoc {
+    for _ in 0..400 {
+        if let Ok(Some(doc)) = reg.scrollback(pane_id).await
+            && until(&doc)
+        {
+            return doc;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{pane_id}'s ring never reached the state this test is about");
+}
+
+/// **Asking a watched pane for its history costs no read at all.**
+///
+/// [`accumulate_history`] already keeps that ring current, at a cadence derived from the pane's
+/// own row rate — and this used to poll the *same* `read_scrollback` on the way past, once per
+/// asking, which on the node is once every three seconds **per watching socket**: 22 calls a
+/// minute against 2 with scrollback off, and three phones on one pane were three duplicated
+/// streams of it (#448). None of them made the ring any more current than the poller already had.
+///
+/// Counted rather than timed, because a timing assertion here is green on every quiet run.
+#[tokio::test]
+async fn asking_a_watched_pane_for_its_history_does_not_read_it_again() {
+    let p = Arc::new(Scripted::default());
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["one".into(), "two".into(), "v".into()], 1));
+    // `patient` parks the poller on its idle backstop the moment the pane goes quiet, so every
+    // read counted below is one an *ask* caused.
+    let (reg, _w) = watched(p.clone(), patient()).await;
+    let doc = held(&reg, "p", |doc| doc.total_rows == 2).await;
+    assert_eq!(lines_of(&doc), ["one", "two"]);
+
+    // Long enough that the poller has settled onto its idle wait rather than being between two
+    // polls, so the count below is stable for a reason and not by luck.
+    let mut settled = p.reads_done.load(Ordering::SeqCst);
+    loop {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let now = p.reads_done.load(Ordering::SeqCst);
+        if now == settled {
+            break;
+        }
+        settled = now;
+    }
+
+    for _ in 0..25 {
+        let doc = reg.scrollback("p").await.unwrap().expect("history");
+        assert_eq!(lines_of(&doc), ["one", "two"]);
+    }
+    assert_eq!(
+        p.reads_done.load(Ordering::SeqCst),
+        settled,
+        "twenty-five clients asking for the history read the pane twenty-five more times"
+    );
+}
+
+/// And the pane nobody is watching, which is the case that keeps the read: there is no poller
+/// behind one, so the ask is the only thing that could ever have looked.
+#[tokio::test]
+async fn asking_an_unwatched_pane_for_its_history_is_the_one_read_left() {
+    let p = Arc::new(Scripted::default());
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["one".into(), "two".into(), "v".into()], 1));
+    let reg = PaneRegistry::new(p.clone());
+
+    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    assert_eq!(lines_of(&doc), ["one", "two"]);
+    assert_eq!(p.reads_done.load(Ordering::SeqCst), 1);
 }
 
 /// The poller has to do it too, and without waiting to be asked for a document: it is the only
@@ -1012,8 +1085,7 @@ async fn the_history_poller_drops_the_pre_harness_era_on_its_own() {
         },
     );
     let _w = reg.watch("p").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(120)).await;
-    assert_eq!(reg.scrollback("p").await.unwrap().expect("history").total_rows, 2);
+    assert_eq!(held(&reg, "p", |doc| doc.total_rows == 2).await.from_top, 0);
 
     p.no_ring.store(true, Ordering::SeqCst);
     p.harness.store(true, Ordering::SeqCst);
@@ -1032,7 +1104,7 @@ async fn the_history_poller_drops_the_pre_harness_era_on_its_own() {
     p.harness.store(false, Ordering::SeqCst);
     p.no_ring.store(false, Ordering::SeqCst);
 
-    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    let doc = held(&reg, "p", |doc| !doc.rows.is_empty()).await;
     assert_eq!(lines_of(&doc), ["shell-1", "shell-2", "after-1"]);
     assert_eq!(
         doc.from_top, 2,
@@ -1054,21 +1126,28 @@ async fn a_pager_that_takes_the_screen_for_a_moment_does_not_cost_the_ring_its_h
     let reg = PaneRegistry::with_config(
         p.clone(),
         RegistryConfig {
-            history: patient(),
+            history: brisk(),
             ..RegistryConfig::default()
         },
     );
     let _w = reg.watch("p").await.unwrap();
-    assert_eq!(reg.scrollback("p").await.unwrap().expect("history").total_rows, 2);
+    assert_eq!(held(&reg, "p", |doc| doc.total_rows == 2).await.from_top, 0);
 
+    // Several reads that answer nothing at all, with the pane's own screen taken and given back
+    // under them. Silence about history is not news about it: the ring keeps every row and keeps
+    // saying so, and it never turns `capped` for a read that said nothing.
     p.no_ring.store(true, Ordering::SeqCst);
+    let polls = p.reads_done.load(Ordering::SeqCst);
+    while p.reads_done.load(Ordering::SeqCst) < polls + 3 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let quiet = reg.scrollback("p").await.unwrap().expect("history");
+    assert_eq!(lines_of(&quiet), ["shell-1", "shell-2"]);
+    assert_eq!(quiet.from_top, 0);
+    assert!(quiet.complete, "a pager holding the screen capped nothing");
 
-    assert!(
-        reg.scrollback("p").await.unwrap().is_none(),
-        "silence about history is not news about it"
-    );
     p.no_ring.store(false, Ordering::SeqCst);
-    let doc = reg.scrollback("p").await.unwrap().expect("history");
+    let doc = held(&reg, "p", |doc| !doc.rows.is_empty()).await;
     assert_eq!(lines_of(&doc), ["shell-1", "shell-2"]);
     assert_eq!(
         doc.from_top, 0,

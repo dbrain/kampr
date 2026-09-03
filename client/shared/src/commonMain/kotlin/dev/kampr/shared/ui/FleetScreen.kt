@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,7 +20,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Cohort
 import dev.kampr.shared.model.Herd
@@ -30,10 +28,11 @@ import dev.kampr.shared.model.cohorts
 import dev.kampr.shared.model.matching
 import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.recipients
-import dev.kampr.shared.model.splitCommand
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.Palette
 import dev.kampr.shared.wire.FleetInfo
+import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Question
 
@@ -50,8 +49,12 @@ fun FleetScreen(
     onOpenPane: (String) -> Unit,
     onAnswer: (paneId: String, text: String) -> Unit,
     onStop: (paneId: String) -> Unit,
-    onRun: (argv: List<String>) -> Unit,
+    onRun: (command: String) -> Unit,
     canRun: Boolean,
+    // The node's memory of what has been run here, and the two ops that curate it. It arrives
+    // unasked on the greeting and again after every change, so this screen never asks for it.
+    book: ServerMsg.FleetBook = ServerMsg.FleetBook(),
+    onBook: (ManageOp) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -68,7 +71,7 @@ fun FleetScreen(
         ) {
             KText("Fleet", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
             if (canRun && targets.isNotEmpty()) {
-                AnswerChip("Run", isDefault = true) { composing = true }
+                FleetChip("Run", isDefault = true) { composing = true }
             }
         }
         if (cohorts.isEmpty()) {
@@ -89,12 +92,14 @@ fun FleetScreen(
     if (composing) {
         RunSheet(
             hosts = targets.size,
+            book = book,
             breakpoint = breakpoint,
             onCancel = { composing = false },
             onRun = {
                 onRun(it)
                 composing = false
             },
+            onBook = onBook,
         )
     }
 
@@ -140,52 +145,6 @@ private fun EmptyBoard(hosts: Int, canRun: Boolean) {
             tokens.color.mute,
             maxLines = 2,
         )
-    }
-}
-
-// What the operator is about to run everywhere. The host count is on the button, because the
-// number of machines is the part of this decision that is easy to be wrong about.
-@Composable
-private fun RunSheet(
-    hosts: Int,
-    breakpoint: Breakpoint,
-    onCancel: () -> Unit,
-    onRun: (List<String>) -> Unit,
-) {
-    val tokens = Kampr.tokens
-    var entry by remember { mutableStateOf(TextFieldValue("")) }
-    val argv = splitCommand(entry.text)
-    val ready = !argv.isNullOrEmpty()
-
-    BottomSheet(breakpoint, onCancel) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            KText("Run on $hosts machine${if (hosts == 1) "" else "s"}", tokens.type.paneTitle, tokens.color.text)
-            KField(
-                hint = "pacman -Syu",
-                value = entry,
-                onSubmit = { if (argv != null && argv.isNotEmpty()) onRun(argv) },
-                onChange = { entry = it },
-            )
-            KText(
-                // No `sh -c` sits between the operator and the command, and saying so here is
-                // cheaper than explaining afterwards why `;` did not do what they meant.
-                if (argv == null) {
-                    "That command has a quote that never closes."
-                } else {
-                    "Runs directly, with no shell — `;` and `&&` are arguments. Use sh -c '…' for a pipeline."
-                },
-                tokens.type.captionSmall,
-                if (argv == null) tokens.color.blocked else tokens.color.mute,
-                maxLines = 3,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AnswerChip("Cancel", isDefault = false, onClick = onCancel)
-                if (argv != null && argv.isNotEmpty()) AnswerChip("Run everywhere", isDefault = true) { onRun(argv) }
-            }
-        }
     }
 }
 
@@ -327,7 +286,7 @@ private fun QuestionBlock(
         val reach = answering(LocalConnectionStatus.current, 0)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             question.answerable.forEach { option ->
-                AnswerChip(option.label, option.key == question.defaultKey, enabled = reach.enabled) {
+                FleetChip(option.label, option.key == question.defaultKey, enabled = reach.enabled) {
                     if (broadcasts) {
                         onBroadcast(pendingFor(match, herd, option.key, option.label, question.prompt))
                     } else {
@@ -369,30 +328,6 @@ private fun pendingFor(
     )
 }
 
-@Composable
-private fun AnswerChip(label: String, isDefault: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    val tokens = Kampr.tokens
-    val shape = RoundedCornerShape(tokens.radii.sm)
-    Box(
-        modifier = Modifier
-            .background(if (isDefault && enabled) tokens.color.accent else tokens.color.raise, shape)
-            .action(label, onClick, shape, enabled = enabled)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
-    ) {
-        DisableSelection {
-            KText(
-                label,
-                tokens.type.button,
-                when {
-                    !enabled -> tokens.color.mute
-                    isDefault -> tokens.color.onAccent
-                    else -> tokens.color.text
-                },
-            )
-        }
-    }
-}
-
 // One tap, several root shells. The hosts it will reach are named, and so are the ones it will
 // not — the silent third of a fleet is what bites you.
 @Composable
@@ -427,8 +362,8 @@ private fun BroadcastConfirm(
             val reach = answering(LocalConnectionStatus.current, 0)
             reach.note?.let { KText(it, tokens.type.caption, tokens.color.blocked, maxLines = 2) }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AnswerChip("Cancel", isDefault = false, onClick = onCancel)
-                AnswerChip("Send to all", isDefault = true, enabled = reach.enabled, onClick = onConfirm)
+                FleetChip("Cancel", isDefault = false, onClick = onCancel)
+                FleetChip("Send to all", isDefault = true, enabled = reach.enabled, onClick = onConfirm)
             }
         }
     }

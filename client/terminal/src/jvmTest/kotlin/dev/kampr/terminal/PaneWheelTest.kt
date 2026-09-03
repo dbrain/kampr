@@ -209,11 +209,15 @@ class PaneWheelTest {
 
     // Kampr's own surface comes first. A pane that keeps no ring can still be taller than the
     // window — or zoomed past it — and that scroll belongs here until it runs out.
+    //
+    // Written to its last row, because "runs out" is measured in rows there is something on: the
+    // same 90-row grid with seven lines at the top of it has spent its surface before the first
+    // notch arrives, and hands that notch straight to the program.
     @Test
     fun theSurfaceIsSpentBeforeTheProgramIsGivenTheNotch() = runComposeUiTest {
         val io = AgentIo("claude")
         val session = PaneSession(Phone.PANE)
-        phoneTerminal(Phone.shell(rows = 90, caretRow = 6), session, io = io)
+        phoneTerminal(Phone.filled(rows = 90, caretRow = 6), session, io = io)
         assertTrue(session.view.maxScroll > 0f, "the grid has to overflow, or nothing is tested")
 
         wheel(-1f)

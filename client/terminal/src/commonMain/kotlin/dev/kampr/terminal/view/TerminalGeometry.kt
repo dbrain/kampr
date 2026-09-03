@@ -6,6 +6,18 @@ import kotlin.math.min
 
 const val BASE_CELL_SP = 13f
 
+// The grid this view would show a pane at, in cells, measured at the **base** cell rather than at
+// the zoom it happens to be on.
+//
+// That is what stops a standing hold from chasing itself (ADR 0013). The fit ladder changes the
+// zoom to suit the pane's width, so a number taken at the current cell size is a function of the
+// pane — ask for it, the pane moves, the zoom moves, ask again. Taken at the base cell it is a
+// pure function of the window, and a pane getting wider cannot change it.
+fun viewGrid(paint: PaintRect, cellWidth: Float, cellHeight: Float): Pair<Int, Int> = Pair(
+    (paint.width / cellWidth).toInt().coerceAtLeast(1),
+    (paint.contentHeight / cellHeight).toInt().coerceAtLeast(1),
+)
+
 // Paint and content are two different rectangles. The terminal paints the whole viewport so rows
 // run under the header and the key row and nothing is ever blank; the scrollable content is inset
 // by that chrome so the pinned last row settles clear of it. Fill is computed against the paint
@@ -116,7 +128,8 @@ fun defaultZoom(
 )
 
 // Where the surface may rest while it is following: the band of scroll values that leave the
-// caret inside the content rectangle, floor first.
+// caret inside the content rectangle *and* the end of the record no higher than the bottom of it,
+// floor first.
 //
 // The floor is the least such scroll, and zero whenever the grid already fits. Pinning the bottom
 // of the grid to the bottom of the rectangle is right only while it does. A herdr pane is as tall
@@ -147,17 +160,45 @@ fun defaultZoom(
 // move, and a follower is never dragged by a reading that has gone stale.
 data class CaretBand(val floor: Float, val ceiling: Float)
 
+// The end of what there is to read, as a scroll: the last written row of the surface sitting on
+// the bottom of the content rectangle. Nothing below it is anything — the rows are there because
+// the desk made the pane that tall, and they are blank.
+//
+// It is the floor of a *hand*, which the caret's floor is not and never was (#428). Both floors
+// exist because they answer different questions and disagree in both directions: a shell pane's
+// content stops at the caret, so the caret floor sits a whole screenful *below* the end of the
+// record and would strand a reader in the tail; a full-screen redraw writes rows underneath a
+// caret that stayed put, so the caret floor sits *above* the end of it and would put the last
+// rows of the pane out of reach, which is exactly the defect #428 fixed.
+//
+// Clamped to `maxScroll` for the pane with less in it than the rectangle can show — four lines in
+// a ninety-row window — where the end of the content is above the top of the surface's travel and
+// the honest answer is that there is nowhere to go at all. A grid that fits its rectangle has no
+// travel to clamp and answers zero, as it did before there was a floor of any kind.
+fun contentFloor(paint: PaintRect, totalRows: Int, contentIndex: Int, cellHeight: Float): Float {
+    val maxScroll = max(0f, totalRows * cellHeight - paint.contentHeight)
+    return ((totalRows - 1 - contentIndex) * cellHeight).coerceIn(0f, maxScroll)
+}
+
 fun caretBand(
     paint: PaintRect,
     totalRows: Int,
     cursorIndex: Int,
+    contentIndex: Int,
     cellHeight: Float,
 ): CaretBand {
     val surfaceHeight = totalRows * cellHeight
     val maxScroll = max(0f, surfaceHeight - paint.contentHeight)
     if (maxScroll <= 0f) return CaretBand(0f, 0f)
     val pinnedTop = paint.contentBottom - surfaceHeight + cursorIndex * cellHeight
-    val floor = (paint.insetTop - pinnedTop).coerceIn(0f, maxScroll)
+    // Whichever of the two floors is the higher, because a follower may rest below neither: below
+    // the caret's it is typing off the top of the screen, and below the content's it is reading
+    // blank tail. They coincide on the ordinary shell pane whose grid the output has filled, which
+    // is why one of them served for as long as it did.
+    val floor = max(
+        paint.insetTop - pinnedTop,
+        contentFloor(paint, totalRows, contentIndex, cellHeight),
+    ).coerceIn(0f, maxScroll)
     return CaretBand(floor, (paint.contentBottom - cellHeight - pinnedTop).coerceIn(floor, maxScroll))
 }
 

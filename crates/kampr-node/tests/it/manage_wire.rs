@@ -19,7 +19,7 @@ fn op(case: &str) -> ManageOp {
 fn every_fixture_case_decodes_into_a_manage_op() {
     let all = fixture();
     let cases = all.as_object().expect("the fixture is an object");
-    assert!(cases.len() >= 19, "the fixture must cover every op");
+    assert!(cases.len() >= 22, "the fixture must cover every op");
     for (case, value) in cases {
         assert_eq!(value["t"], "manage", "{case} is not a manage message");
         let parsed: ManageOp =
@@ -39,6 +39,24 @@ fn the_four_non_string_fields_survive_the_wire() {
         vec!["--model".to_string(), "opus".to_string()]
     );
     assert_eq!(op("layout.apply").layout.unwrap()["root"]["direction"], "right");
+}
+
+/// The two book ops carry `entry` and never `at`. `at` is what routing reads, and a book entry
+/// names no host — putting one there would send `fleet.drop` down a mesh link looking for the node
+/// that owns an id no node owns.
+#[test]
+fn a_book_op_addresses_an_entry_and_never_a_routed_target() {
+    for case in ["fleet.save.entry", "fleet.drop"] {
+        let op = op(case);
+        assert_eq!(op.entry.as_deref(), Some("01JBOOK"), "{case}");
+        assert_eq!(op.at, None, "{case} put a book entry where routing would read it");
+        assert_eq!(op.node, None, "{case}");
+    }
+    assert_eq!(
+        op("fleet.save").args.unwrap(),
+        vec!["kampr".to_string(), "update".to_string()]
+    );
+    assert_eq!(op("fleet.save").label.as_deref(), Some("update everything"));
 }
 
 #[test]
@@ -81,7 +99,12 @@ fn each_target_lands_on_the_kind_its_op_requires() {
         parse_target(node, &at("focus")).unwrap(),
         Target::Workspace(_)
     ));
-    for case in ["pane.size", "pane.size.hold", "pane.size.release"] {
+    for case in [
+        "pane.size",
+        "pane.size.hold",
+        "pane.size.match",
+        "pane.size.release",
+    ] {
         assert!(
             matches!(parse_target(node, &at(case)).unwrap(), Target::Pane(_)),
             "{case} reshapes one pane's PTY and has to be addressed at one",
@@ -100,6 +123,13 @@ fn a_size_carries_its_two_numbers_and_a_release_carries_none() {
     );
     assert_eq!(op("pane.size").mode, None, "the safe mode is the default one");
     assert_eq!(op("pane.size.hold").mode.as_deref(), Some("hold"));
+    // A match carries both numbers, because it is a hold that names a size — the mode is what
+    // makes it the *view's* hold rather than the panel's, not a different kind of resize.
+    assert_eq!(op("pane.size.match").mode.as_deref(), Some("match"));
+    assert_eq!(
+        (op("pane.size.match").cols, op("pane.size.match").rows),
+        (Some(200), Some(50))
+    );
     assert_eq!(
         (op("pane.size.release").cols, op("pane.size.release").rows),
         (None, None),

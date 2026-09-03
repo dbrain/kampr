@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -55,6 +56,7 @@ import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
+import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
@@ -65,6 +67,8 @@ import dev.kampr.shared.ui.breakpointOf
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.MIN_PANE_COLS
+import dev.kampr.shared.wire.MIN_PANE_ROWS
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.talks
 import dev.kampr.terminal.PaneSession
@@ -131,6 +135,15 @@ private const val PENDING_BAR_DP = 52f
 // being read is the row sitting behind the controls that read it.
 private const val REVIEW_BAR_DP = 52f
 
+// The wash over the cells a click hit, and the rule under them. Light enough that the glyphs it
+// covers are still read through it, which a `selectionWash` sized for an unread block is not.
+private const val TARGET_WASH = 0.22f
+private const val TARGET_RULE = 2f
+
+// The card is placed at the click, not under it: a pointer sitting on its top-left corner hides
+// the first characters of the thing it is naming.
+private const val CARD_NUDGE = 10f
+
 private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
     Breakpoint.Desktop -> 56f
     Breakpoint.Landscape -> 44f
@@ -139,6 +152,41 @@ private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
 
 private fun pendingInsetPx(pane: PaneState, density: Density): Float =
     if (pane.pending != null) with(density) { PENDING_BAR_DP.dp.toPx() } else 0f
+
+// How long the window has to hold still before its size is asked for.
+//
+// A drag is hundreds of sizes, and each claim is a `herdr terminal session control` child. The
+// coroutine is cancelled by the next size, so a drag costs one claim at the end of it rather than
+// one per frame — and the `insetTop` this is measured against arrives a frame late, which this
+// also absorbs.
+private const val MATCH_SETTLE_MS = 250L
+
+// Holds the pane at this view's geometry for as long as this view is open, and lets go when it is
+// not — a switch to the conversation, a pane closed, a window that stopped being desk-sized, the
+// switch turned off. ADR 0013.
+//
+// **The release the operator cannot send is the node's**, not this: a closed laptop never reaches
+// here. What this covers is the ordinary end of a view; `session.rs` covers the rest.
+@Composable
+private fun MatchTheView(paneId: String, io: PaneIo, on: Boolean, cols: Int, rows: Int) {
+    LaunchedEffect(paneId, on, cols, rows) {
+        if (!on) return@LaunchedEffect
+        delay(MATCH_SETTLE_MS)
+        io.send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
+    }
+    // The status strip is what stops this being a shape change nobody was told about: it says the
+    // pane is being held while it is, whether the operator ticked the switch or their screen size
+    // did.
+    DisposableEffect(paneId, on) {
+        io.holding(paneId, on)
+        onDispose {
+            if (on) {
+                io.holding(paneId, false)
+                io.send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
+            }
+        }
+    }
+}
 
 @Composable
 fun TerminalView(
@@ -264,6 +312,22 @@ fun TerminalView(
             )
             if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(fill)
         }
+        // **The standing intent, and the only automatic claim in the product.** It is 0012's op
+        // under a setting the operator can see and turn off, not a second way to resize —
+        // ADR 0013. The gate is the viewport *this surface* measured for itself rather than the
+        // window's, so a split half and a phone in landscape fall out on the same test a phone
+        // does; a mosaic cell can be desk-sized and is named separately.
+        val (viewCols, viewRows) = viewGrid(paint, base.width, base.height)
+        val roomToMatch = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
+        val matchAsked = view.matchView ?: io.prefs(pane.id).matchView
+        // A fleet pane is a pty this node forked for a job of its own, with its geometry fixed
+        // when the run started and no operator desk to trample — rule 3's other half. It is not a
+        // herdr pane either, so `pane.size` refuses one outright.
+        val ownPane = io.info(pane.id)?.fleet != null
+        val matching = !io.readOnly && !ownPane && roomToMatch && !LocalMosaicCell.current &&
+            (matchAsked ?: (breakpoint == Breakpoint.Desktop))
+        MatchTheView(pane.id, io, matching, viewCols, viewRows)
+
         val zoom = if (view.zoom > 0f) view.zoom else 1f
         val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }
         LaunchedEffect(cache, zoom) {
@@ -305,12 +369,45 @@ fun TerminalView(
             settledBelow = below
         }
 
+        // And where the *record* stops, which on a herdr pane is a different row: the desk chose
+        // the height, the shell filled as much of it as it filled, and the rest is blank tail.
+        //
+        // Settled for the same reason the caret is, and on the same clock. A redraw that blanks a
+        // block and rewrites it takes the content end to the top of that block and back inside one
+        // batch of writes, and a floor that followed it would drag a following viewport up and
+        // straight back down — which is #428's flash arriving by the other of the two floors.
+        // `collectLatest` is the whole of that rule: a reading that does not survive the interval
+        // is never taken.
+        //
+        // Off the cells and therefore out of an effect, never out of the composition. The walk is
+        // cheap but `pane.revision` is not a thing this composable reads today, and reading one to
+        // key a walk on would put every line of this function behind every frame the pane paints.
+        // What it costs instead is one walk per quiet interval — and none at all while a pane is
+        // painting, because a flow that is restarted never reaches its own body.
+        var settledContent by remember(pane.id, pane.painted) {
+            mutableIntStateOf(rows.contentBelow(pane.cursor.row))
+        }
+        LaunchedEffect(pane, rows) {
+            snapshotFlow { pane.revision }.collectLatest {
+                delay(CARET_SETTLE_MS)
+                settledContent = rows.contentBelow(pane.cursor.row)
+            }
+        }
+
         // Where the surface is allowed to rest. Re-derived every frame rather than placed once,
         // because the two things that move it — the caret, and the height of the rectangle the
         // keyboard leaves behind — both move long after the first paint. Placing it once is why
         // raising the keyboard took the prompt off the top and left the operator typing blind.
-        val band = caretBand(paint, rows.total, rows.total - settledBelow, metrics.height)
+        //
+        // The caret is content wherever it is, so the content can never end above it — the two
+        // readings settle on their own clocks and only the smaller of the two is a distance the
+        // surface may be held off the bottom by.
+        val contentBelow = min(settledContent, settledBelow)
+        val band = caretBand(
+            paint, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
+        )
         view.band = band
+        view.contentFloor = contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height)
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
         if (placedCell != metrics.height) {
             placedCell = metrics.height
@@ -452,13 +549,13 @@ fun TerminalView(
             view.menuAt = null
             if (view.selection != null) {
                 view.selection = null
-                view.target = null
+                view.aimOff()
                 return
             }
             val cell = probe.cellAt(position)
             val declared = pane.links.getOrNull(logical.linkAt(cell.row, cell.col))
             if (declared != null) {
-                view.target = Target(declared, TargetKind.Link)
+                view.aim(Target(declared, TargetKind.Link), logical.linkSpan(cell.row, cell.col), position)
                 return
             }
             val (line, offset) = logical.lineAt(cell.row, cell.col)
@@ -466,11 +563,12 @@ fun TerminalView(
             // The route is gated on a device that may send input, and the whole argument for a
             // client-minted file id is that such a device can already `cat` the file. A device
             // that may not type is offered the string instead of the bytes.
-            view.target = if (found?.kind == TargetKind.File && io.readOnly) {
+            val offered = if (found?.kind == TargetKind.File && io.readOnly) {
                 found.copy(kind = TargetKind.Path)
             } else {
                 found
             }
+            view.aim(offered, offered?.let { logical.spanOf(cell.row, it.range) }, position)
             if (found == null) session.openKeyboard()
         }
 
@@ -559,7 +657,7 @@ fun TerminalView(
                         if (event.changes.any { it.isConsumed }) return@awaitEachGesture
                         if (!event.buttons.isSecondaryPressed) return@awaitEachGesture
                         event.changes.forEach { it.consume() }
-                        view.target = null
+                        view.aimOff()
                         view.menuAt = event.changes.first().position
                     }
                 }
@@ -611,6 +709,28 @@ fun TerminalView(
                                 topLeft = Offset(0f, top),
                                 size = androidx.compose.ui.geometry.Size(size.width, metrics.height),
                             )
+                        }
+                        // What was hit, marked where it is. Without it the affordance names a path
+                        // and the screen holds forty of them. A wash the text still reads through
+                        // and a rule under it: `accentSoft` is opaque in half the themes and this
+                        // is drawn over the glyphs, not behind them.
+                        view.targetSpan?.let { span ->
+                            for (row in span.start.row..span.end.row) {
+                                val cells = span.span(row, cols) ?: continue
+                                val left = geometry.originX + cells.first * metrics.width
+                                val top = geometry.originY + row * metrics.height
+                                val wide = (cells.last - cells.first + 1) * metrics.width
+                                drawRect(
+                                    tokens.color.accent.copy(alpha = TARGET_WASH),
+                                    topLeft = Offset(left, top),
+                                    size = androidx.compose.ui.geometry.Size(wide, metrics.height),
+                                )
+                                drawRect(
+                                    tokens.color.accent,
+                                    topLeft = Offset(left, top + metrics.height - TARGET_RULE),
+                                    size = androidx.compose.ui.geometry.Size(wide, TARGET_RULE),
+                                )
+                            }
                         }
                         if (pane.stale) drawRect(tokens.color.bg.copy(alpha = 0.45f), size = size)
                     },
@@ -750,25 +870,56 @@ fun TerminalView(
         }
 
         view.target?.let { target ->
-            TargetStrip(
-                target = target,
-                onAct = {
-                    when (target.kind) {
-                        TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
-                        TargetKind.File -> scope.launch { peek.open(io, pane.id, target.text) }
-                        else -> uris.openUri(target.text)
-                    }
-                    view.target = null
-                },
-                onDismiss = { view.target = null },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),
-            )
+            val act = {
+                when (target.kind) {
+                    TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
+                    TargetKind.File -> scope.launch { peek.open(io, pane.id, target.text) }
+                    else -> uris.openUri(target.text)
+                }
+                view.aimOff()
+            }
+            val anchor = view.targetAt
+            // By form factor, not by platform. A desk clicks a path at the top of a nine-hundred
+            // pixel pane and the bottom of the screen is nowhere near it; a phone has no room to
+            // put a card beside the tap without putting it under the thumb that made it, and its
+            // bottom edge is a finger's travel away rather than a mouse's. `Breakpoint.Desktop` is
+            // already the line between the two — a phone in landscape is not one of them.
+            if (breakpoint == Breakpoint.Desktop && anchor != null) {
+                TargetCard(
+                    target = target,
+                    at = Offset(
+                        anchor.x - CARD_NUDGE,
+                        max(anchor.y + metrics.height, with(density) { chromeTop.toPx() }),
+                    ),
+                    onAct = act,
+                    onDismiss = { view.aimOff() },
+                )
+            } else {
+                TargetStrip(
+                    target = target,
+                    onAct = act,
+                    onDismiss = { view.aimOff() },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),
+                )
+            }
         }
 
         peek.path?.let { at ->
-            FileSheet(path = at, state = peek.state, onClose = peek::close)
+            FileSheet(
+                path = at,
+                state = peek.state,
+                onClose = peek::close,
+                onCopy = { clipboard.setText(AnnotatedString(it)) },
+                // The pane header floats over this surface rather than sitting above it, so a
+                // sheet that fills the surface and puts its controls at its own top edge puts
+                // them underneath the header. That is where the Close button has been: painted,
+                // reachable by tab, and covered by an opaque bar — which reads as no close button
+                // at all, and left Escape as the only way out.
+                chromeTop = chromeTop,
+                chromeBottom = with(density) { chromeBottom.toDp() },
+            )
         }
 
         session.confirm.held?.let { held ->
@@ -822,6 +973,10 @@ fun TerminalView(
                         fitCols = (paint.width / metrics.width).toInt().coerceAtLeast(1),
                         fitRows = visibleRows,
                         held = view.sizeHeld,
+                        matchCols = viewCols,
+                        matchRows = viewRows,
+                        matching = matching,
+                        canMatch = roomToMatch && !ownPane,
                     )
                 },
                 onResize = { c, r ->
@@ -835,6 +990,13 @@ fun TerminalView(
                             ),
                         ),
                     )
+                },
+                onMatchView = { on ->
+                    view.matchView = on
+                    io.send(ClientMsg.SetPrefs(pane.id, mapOf("match" to if (on) "on" else "off")))
+                    // The claim itself is `MatchTheView`'s, on both edges: it is the one place
+                    // that knows the size, and a release sent from here as well would let go of a
+                    // hold it had not yet taken.
                 },
                 onHoldSize = { on ->
                     view.sizeHeld = on

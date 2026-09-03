@@ -81,6 +81,24 @@ private fun typeKey(key: String) {
     )
 }
 
+// A hardware chord with alt held, as a real Chrome delivers one. Measured through CDP against
+// the handler itself: Chrome carries `altKey` on the *first* keydown after a focus change exactly
+// as it does on the tenth, on a fresh page, and after a lone Alt press — so the modifier is never
+// the thing that goes missing here.
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun altKey(key: String) {
+    js(
+        """
+        (function () {
+            var s = globalThis.__kamprInput;
+            s.el.dispatchEvent(new KeyboardEvent('keydown', {
+                key: key, altKey: true, bubbles: true, cancelable: true,
+            }));
+        })()
+        """
+    )
+}
+
 // What a printable key produces on this path: an IME and a soft keyboard both report keyCode 229
 // to keydown, so `beforeinput` is the one that carries the character.
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -360,6 +378,30 @@ class BrowserInputTest {
         typeKey("ArrowUp")
         assertEquals("\u001b[A", drainInput(), "a hardware arrow never reached the pane")
         focusInput(false)
+    }
+
+    // The report: alt+enter in a Claude prompt box sometimes opens a line and sometimes sends the
+    // message. `ESC CR` is one keystroke to a terminal program only while the two bytes arrive in
+    // one `read`, so what this half owes the rest of the path is one hand-over carrying both —
+    // never an `ESC` delivered on its own with the `CR` behind it.
+    @Test
+    fun altEnterLeavesTheBrowserAsOneKeystrokeRatherThanAnEscapeAndAnEnter() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val delivered = mutableListOf<String>()
+        deliverInputTo { delivered += it }
+        try {
+            altKey("Enter")
+            assertEquals(
+                listOf("\u001b\r"),
+                delivered,
+                "alt+enter left the browser as something other than one Escape-Return keystroke",
+            )
+        } finally {
+            deliverInputTo(null)
+            focusInput(false)
+        }
     }
 
     // The report: every keystroke waited up to a frame — 16.7 ms at 60 Hz — before it was even

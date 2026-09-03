@@ -65,6 +65,10 @@ pub struct Supervisor {
     child: Child,
     tail: Arc<Mutex<Tail>>,
     procfs: Procfs,
+    /// The slave side's path, so rung 1 can tell a job reading *this terminal* from one reading a
+    /// pipe. A shell runs pipelines and the tail of one parks in exactly the syscall a question
+    /// does — see [`Procfs::waiting`].
+    tty: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +97,7 @@ impl Supervisor {
         geometry: Geometry,
         path: Option<&str>,
     ) -> io::Result<Self> {
-        let (master, slave) = open_pty(geometry)?;
+        let (master, slave, tty) = open_pty(geometry)?;
 
         let mut command = Command::new(
             argv.first()
@@ -147,6 +151,7 @@ impl Supervisor {
             child,
             tail: Arc::new(Mutex::new(Tail::default())),
             procfs: Procfs::default(),
+            tty,
         })
     }
 
@@ -226,7 +231,7 @@ impl Supervisor {
                 silent_since = Instant::now();
             }
 
-            let waiting = self.procfs.waiting(self.pid());
+            let waiting = self.procfs.waiting(self.pid(), self.tty.as_deref());
             if waiting == Waiting::Unknown {
                 readable_streak = 0;
             } else {
@@ -419,7 +424,7 @@ impl Writer {
     }
 }
 
-fn open_pty(geometry: Geometry) -> io::Result<(OwnedFd, OwnedFd)> {
+fn open_pty(geometry: Geometry) -> io::Result<(OwnedFd, OwnedFd, Option<String>)> {
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
     grantpt(&master)?;
@@ -431,7 +436,8 @@ fn open_pty(geometry: Geometry) -> io::Result<(OwnedFd, OwnedFd)> {
         rustix::fs::Mode::empty(),
     )?;
     set_winsize(master.as_fd(), geometry)?;
-    Ok((master, slave))
+    let tty = name.to_str().ok().map(str::to_string);
+    Ok((master, slave, tty))
 }
 
 fn set_winsize(fd: BorrowedFd<'_>, geometry: Geometry) -> io::Result<()> {

@@ -145,6 +145,54 @@ class LogicalText(private val rows: SurfaceRows) {
         if (!read(index) || col !in 0 until rows.cols) return -1
         return links[col]
     }
+
+    // The cells a declared link owns, which is the run around the tapped one carrying its id. By
+    // cell rather than by string: an OSC 8 link's label is arbitrary text and its URI is nowhere
+    // in the line, so there is no substring to find.
+    fun linkSpan(index: Int, col: Int): Selection? {
+        val cols = rows.cols
+        if (!read(index) || col !in 0 until cols) return null
+        val id = links[col]
+        var lo = col
+        while (lo > 0 && links[lo - 1] == id) lo--
+        var hi = col
+        while (hi + 1 < cols && links[hi + 1] == id) hi++
+        return Selection(GridPoint(index, lo), GridPoint(index, hi))
+    }
+
+    // The inverse of `lineAt`'s offset: given a range in the logical line, the cells it was built
+    // from. It walks the same rows in the same order and accumulates the same `units`, because a
+    // second arithmetic for the same mapping is how the wash comes to sit a glyph off a CJK line.
+    // A wrapped line answers with a span across rows, which is what `Selection.span` already draws.
+    fun spanOf(index: Int, range: IntRange): Selection? {
+        val cols = rows.cols
+        if (cols == 0 || range.isEmpty()) return null
+        var first = index
+        while (first > 0 && wraps(first - 1)) first--
+        var start: GridPoint? = null
+        var end: GridPoint? = null
+        var offset = 0
+        var row = first
+        while (true) {
+            if (!read(row)) break
+            val ink = lastInk()
+            for (col in 0..ink) {
+                val width = units(col)
+                if (width == 0) continue
+                if (offset < range.last + 1 && offset + width > range.first) {
+                    var wide = col
+                    while (wide + 1 <= ink && glyphs[wide + 1] == TAIL) wide++
+                    if (start == null) start = GridPoint(row, col)
+                    end = GridPoint(row, wide)
+                }
+                offset += width
+            }
+            if (!wraps(row)) break
+            row++
+        }
+        val head = start ?: return null
+        return Selection(head, end ?: head)
+    }
 }
 
 // Pane output is attacker-influenceable, so detection is a strict scheme match rather than
@@ -164,7 +212,11 @@ private val LOCATION = Regex(""":\d+(?::\d+)?$""")
 // nothing can resolve, because a relative path has no directory to be relative to from here.
 enum class TargetKind { Link, Url, Path, File }
 
-data class Target(val text: String, val kind: TargetKind)
+// `range` is the target's own place in the logical line `detectTarget` was handed, and it is what
+// lets the grid wash the cells that were hit rather than leaving the operator to guess which of
+// forty paths on screen the affordance belongs to. Empty when nothing measured it — a declared
+// OSC 8 link is found by cell, not by string, and carries its span separately.
+data class Target(val text: String, val kind: TargetKind, val range: IntRange = IntRange.EMPTY)
 
 private fun breaks(c: Char): Boolean = c.isWhitespace() || c in BREAKS
 
@@ -172,23 +224,29 @@ private fun breaks(c: Char): Boolean = c.isWhitespace() || c in BREAKS
 // off it, and only if `filePathOf` — the same arbiter the conversation surface uses — will have it.
 // Deliberately not a search through prose: a bare `foo.rs` is a guess about English, and a guess
 // that offers to fetch a file is worse than not offering one.
-fun detectPath(line: String, offset: Int): String? {
+// The path *and* where it starts, because the two readers want different halves: opening it wants
+// the string, washing it on the grid wants the columns. `filePathOf` only ever trims, so the
+// returned text is a prefix of the token and `start until start + length` is its place in the line.
+private fun pathAt(line: String, offset: Int): Target? {
     if (offset !in line.indices || breaks(line[offset])) return null
     var start = offset
     while (start > 0 && !breaks(line[start - 1])) start--
     var end = offset + 1
     while (end < line.length && !breaks(line[end])) end++
     val token = line.substring(start, end).trimEnd('.', ',', ';', ':', '!', '?')
-    return filePathOf(LOCATION.replace(token, ""))
+    val path = filePathOf(LOCATION.replace(token, "")) ?: return null
+    return Target(path, TargetKind.File, start until start + path.length)
 }
 
 fun detectTarget(line: String, offset: Int): Target? {
     for (match in URL.findAll(line)) {
-        if (offset in match.range) return Target(match.value.trimEnd('.', ',', ';', ':', '!', '?'), TargetKind.Url)
+        if (offset !in match.range) continue
+        val text = match.value.trimEnd('.', ',', ';', ':', '!', '?')
+        return Target(text, TargetKind.Url, match.range.first until match.range.first + text.length)
     }
-    detectPath(line, offset)?.let { return Target(it, TargetKind.File) }
+    pathAt(line, offset)?.let { return it }
     for (match in PATH.findAll(line)) {
-        if (offset in match.range) return Target(match.value, TargetKind.Path)
+        if (offset in match.range) return Target(match.value, TargetKind.Path, match.range)
     }
     return null
 }

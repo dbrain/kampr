@@ -66,8 +66,10 @@ on a LAN IP is not. `caps.push` says whether this *node* can actually send one: 
 path most likely to be interrupted. `GET /api/push` carries the same value for clients that want
 it without a socket.
 
-**The greeting is three frames, in this order: `hello`, `herd`, `prefs`.** The third is pushed
-unasked so a client can restore per-pane zoom and view before it paints — see `prefs` below.
+**The greeting is four frames, in this order: `hello`, `herd`, `prefs`, `fleet.book`.** The last
+two are pushed unasked so a client can restore per-pane zoom and view before it paints, and offer
+the commands this node remembers without asking for them — see `prefs` and `fleet.book` below. A
+client that has never heard of `fleet.book` ignores it, as it ignores any unknown `t`.
 
 ### `role` — this device's role changed mid-connection
 
@@ -1116,11 +1118,20 @@ the same path but is **not** an error and does not close anything — it arrives
 // against the device, so they follow you between browsers on the same enrolled device.
 { "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
 //   -> { "t": "prefs", "panes": { "01J.../w3:p2": { "zoom": 1.6, "view": "terminal" } } }
+// `match` is the standing intent behind `pane.size`'s `match` mode (ADR 0013): "on" or "off", and
+// *absent* means neither — the client's own viewport decides, and a desk-sized terminal view holds
+// where a phone does not. An operator who touches the switch is stored as having touched it, which
+// is what stops a default changing an answer they already gave.
+{ "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "match": "off" } }
 // A write with no `pane` (or no `prefs`) stores nothing and just asks for the current set.
 // `pane` must be a pane this node is serving (`unknown_pane` otherwise) and the *stored* blob must
 // fit in 2 KiB (`bad_request`). Unbounded rows under an arbitrary id is a disk-fill, whatever the
 // role, so the bound is on the write rather than on `readonly`. A node keeps at most 256 panes'
 // preferences per device and drops the least recently updated first.
+
+// The fleet book: commands run across this herd, and commands kept. Server -> client only; the
+// writes are `manage` ops. See "The fleet book" below.
+{ "t": "fleet.book", "recent": [ … ], "saved": [ … ] }
 
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
@@ -1129,6 +1140,8 @@ the same path but is **not** an error and does not close anything — it arrives
 There is **no resize message on the client socket**, and there will not be one: a resize is not
 something a viewing client does. Reshaping a pane is a `manage` op — `pane.size` — asked for
 explicitly, like every other structural action ([ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md)).
+A desk-sized terminal view holding a pane at its own geometry is the same op under a standing
+intent the operator set, not a second path ([ADR 0013](adr/0013-a-standing-intent-to-match-the-view.md)).
 
 **A `prefs` write is a merge, not a replacement.** It names the keys it is changing and leaves the
 rest of that pane's blob alone, so a client that stores a zoom does not thereby forget the view.
@@ -1150,6 +1163,89 @@ request, and must not treat the first one on a socket as the answer to its own w
 
 Values are opaque to the node: it stores and returns whatever JSON it is given, so `"1.6"` and
 `1.6` both round-trip and a client should read either.
+
+### The fleet book
+
+What this node remembers about fleet runs: up to five commands recently run, and however many the
+operator has kept. Pushed unasked as the fourth frame of the greeting and again after **every**
+change, from whichever socket made it — so two devices looking at the same node at once do not
+disagree about what is saved.
+
+```jsonc
+{ "t": "fleet.book",
+  "recent": [ { "id": "01JBOOK…", "args": ["pacman -Syu && reboot"], "at": 1774000000 } ],
+  "saved":  [ { "id": "01JBOOK…", "args": ["kampr","update"], "cwd": null,
+                "label": "update everything", "at": 1774000000 } ] }
+```
+
+**An entry is rendered by joining `args` with spaces, and a typed line is stored as its single
+argument.** That is what keeps the book readable on a client from before `fleet.run` had a
+`command`: `["pacman -Syu && reboot"]` joins back to exactly what was typed, pipe, quotes and all,
+with no new field for an old client to not know about. Splitting such a line into words to make it
+look argv-shaped would render `echo "hello world"` as `echo hello world` and lose the thing that
+made it one argument. An entry written by an older client is still a real argv and still renders the
+same way; pressing it stages its joined text, which is what a client sends now.
+
+**The book belongs to the node, not to the device.** Every other stored thing on this wire —
+`prefs`, push subscriptions, push rules — hangs off the device row, and a device row *is* the
+identity in the node's schema: there is no account above it, so an operator's phone and their
+desktop are two of them. A book kept that way would be empty on whichever one they picked up
+second, and following them between devices is the whole point of storing it on the server. It is
+also why it is not per-herd: a peer dials outbound to a hub and has no inbound path
+([ADR 0007](adr/0007-peers-dial-outbound-to-a-hub.md)), so every device is paired against the one
+reachable node and the book lives there.
+
+**An entry is a command, not a run and not a host selection.** The stored `args` and the working
+directory are what make two entries the same; nothing about which machines it reached is stored. A run is
+fanned out to every host reachable when it starts, that set is different next week, and an entry
+pinning last week's would offer to run somewhere that no longer exists. The count a run is about to
+reach is resolved fresh and shown before it goes.
+
+**`recent` is written when a `fleet.run` is acknowledged, not when it finishes.** Whether a command
+worked is knowable only per host and only on the host that ran it, so a node deciding for five
+machines having seen one would be a check answering its own question ([#233](./03-probe-log.md)) —
+and it would be wrong where it *could* see, because answering `n` to `sudo pacman -Syu` exits
+non-zero everywhere and is a perfectly good command. What bounds a list of typos instead is that it
+holds five, deduplicates, and every entry can be deleted.
+
+A command already in the book is **moved, not copied**: one fan-out is one `fleet.run` per host and
+one entry, re-running a command lifts it to the top, and re-running a *saved* one leaves it saved
+rather than putting it in both lists.
+
+**A secret-shaped command is not written to `recent` by itself.** A command line can carry a
+credential — `TOKEN=… ./deploy`, `--password=…`, `Authorization: Bearer …` — and nothing the
+operator pressed asked for the history, so the automatic half declines the shapes it recognises.
+**This is a blast-radius reduction and not a filter**: a positional secret (`./deploy hunter2`) is
+invisible to it, and the shapes it cannot see are enumerated in
+`crates/kampr-node/tests/fixtures/secretish.json`, which the node and the Compose client both read
+so their behaviour and their warning cannot drift. An *explicit* `fleet.save` of such a command is
+accepted — the operator pressed it, and a rule they cannot get past on their own machine is one
+that gets removed — and the client says what it saw before they press.
+
+Three things curate it, and the writes are `manage` ops so they get the role gate, the audit line
+and the `managed` ack every other write on this socket gets:
+
+```jsonc
+{ "t":"manage", "op":"fleet.save", "args":["kampr","update"], "cwd":null,
+  "label":"update everything" }                                   // keep a command
+{ "t":"manage", "op":"fleet.save", "entry":"01JBOOK…", "label":"…" }  // keep one already in the book
+{ "t":"manage", "op":"fleet.drop", "entry":"01JBOOK…" }               // remove one, either list
+```
+
+**`entry` and never `at`.** `at` is what the node routes on, and a book entry names no host — a
+`fleet.drop` carrying one in `at` would be relayed down a mesh link looking for the node that owns
+an id no node owns. For the same reason a book op carrying a `node` is **not** relayed: it is
+always this node's book. `fleet.save` acks the entry's id.
+
+Promotion is by `entry` rather than by argv so a command cannot end up in both lists: re-deriving
+"the same command" from a re-typed line is a second chance for the two ends to disagree. A saved
+entry keeps its id when it is promoted, and `label` is optional — it never replaces the command,
+which a client must always show, because a name that hides what is about to run on every machine in
+the herd is a trap.
+
+A read-only device is sent the book and refused both writes with `not_writer`. It can already read
+every command in every pane, so hiding the list would cost a feature and fix nothing; the refusal
+is on the write.
 
 ## Ordering and recovery
 
@@ -1251,6 +1347,18 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 { "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50 }
 { "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50, "mode": "hold" }
 { "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "mode": "release" }
+
+// "match" is "hold" with an owner and an undo, and it is what a desk-sized terminal view sends to
+// keep a pane at its own geometry for as long as it is open (ADR 0013). The hold belongs to *this
+// websocket*, so it ends when the socket does however it ends — a closed laptop is a socket that
+// stops answering, and nothing the client remembered to send is what releases it. The ack carries
+// `lease`, and a `release` that names one lets go of that hold and no other, so a viewer displaced
+// by a newer one cannot take the newer one's hold down with it. Same floor, same measurement rule.
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50, "mode": "match" }
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "mode": "release", "lease": 7 }
+// A `release` with no `lease` lets go of whatever is standing, which is the panel's meaning of it.
+// A node scopes its own clients' releases for them: a socket that is matching a pane has its bare
+// `release` narrowed to that socket's hold before it runs.
 { "t": "manage", "op": "rename",           "at": "01J.../w3:p2", "label": "build" }   // null clears, panes only
 { "t": "manage", "op": "close",            "at": "01J.../w3:p2" }                     // pane | tab | workspace
 { "t": "manage", "op": "focus",            "at": "01J.../w3:p2" }
@@ -1325,17 +1433,37 @@ controlling terminal and the pty's ECHO and ICANON then describe the relay rathe
 `free` means nothing was recognised and the operator types. **Failing to recognise a prompt never
 hides a host that is waiting** — that half comes from the kernel, not from the wording.
 
-Three ops start and end them. There is no `fleet.answer`:
+Three ops start and end them, and two more curate what the node *remembers* about them — see
+"The fleet book" above. There is no `fleet.answer`:
 
 ```jsonc
 { "t":"manage", "op":"fleet.run", "node":"01J…", "cohort":"01JT…",
-  "args":["pacman","-Syu"], "cwd":null, "cols":100, "rows":30 }   // cols/rows both or neither
+  "command":"pacman -Syu && reboot", "cwd":null, "cols":100, "rows":30 }  // cols/rows both or neither
+{ "t":"manage", "op":"fleet.run", "node":"01J…", "cohort":"01JT…",
+  "args":["pacman","-Syu"] }                                      // what an older client sends
 { "t":"manage", "op":"fleet.stop",   "at":"01J…/fleet:01JX…" }    // hang it up
 { "t":"manage", "op":"fleet.forget", "at":"01J…/fleet:01JX…" }    // drop a FINISHED run from the list
 ```
 
-`args` is an argv, not a shell line: nothing runs `sh -c` for it, so `;` and `&&` are arguments. The
-client assigns `cohort`, because a run spans hosts and no single node can name one. Setting the
+**`command` and `args` are two different things and both are live.** `command` is the line the
+operator typed, handed to the host's own login shell as `<shell> -c <line>` — non-login and
+non-interactive — so `&&`, `|`, `;`, quotes, globs, `~` and redirection all mean there what they
+mean in their terminal. `args` is an argv, `exec`ed with nothing in front of it, which is what
+`fleet.run` has always meant and what every client built before this one sends. A node given both
+takes `command`, because only a client that knows the field sends it; a node given neither refuses
+with a message naming both.
+
+**Additive in both directions.** A client too old to know `command` goes on sending `args` and goes
+on getting the behaviour it was built against. A *node* too old to know it — a mesh peer running an
+older build — refuses the op with "fleet.run needs `args`", which the operator reads, rather than
+running half of something.
+
+`kampr_fleet::env` reads the operator's `PATH` **once** per node process, from `$SHELL -lic` and
+failing that `$SHELL -lc`, and puts it in the child's environment; the per-run shell reads no
+profile at all. See [`13-fleet-runs.md`](./13-fleet-runs.md) for why the reading is interactive and
+why the run is not.
+
+The client assigns `cohort`, because a run spans hosts and no single node can name one. Setting the
 geometry here is the one place Kampr chooses a pane's size, and it is allowed because the pane is
 Kampr's own — a pty the node forked, with no desk attached (see rule 3 in `AGENTS.md`).
 
@@ -1354,6 +1482,30 @@ a read-only device's `not_writer`, an unreadable op's `bad_request`, and a targe
 herd does not serve — and each carries the `rid` it was sent with. A refusal that arrived as an
 `error` alone left a client's in-flight state set forever.
 `layout.export` puts the exported tree on its ack as `layout`.
+
+**`pane.size` puts what it *measured* on its ack**, because `ok` does not answer the question the
+op exists to ask. It claims the PTY, resizes, releases and then looks: on an attached pane the desk
+takes the geometry straight back inside a second (#19), and an ack carrying only `ok: true` told a
+client a resize had happened when it had not — [#233](#)'s shape on the one op ADR 0012 permits.
+
+| field | on | means |
+|---|---|---|
+| `kept` | `once` | whether the pane really has the size it was given. `false` is routine on an attached pane |
+| `measured_rows` | `once` | the PTY's own rows, read back after the release. **Absent** when herdr would not answer — a row count that is not a row count must not travel as `null` |
+| `held` | every mode | whether a controller is being held open on this pane |
+| `was_held` | `release` | whether there was a hold to let go of |
+| `cols`, `rows` | `once`, `hold`, `match` | what was asked for, echoed beside what was measured |
+| `matched` | `match` | this hold is owned by the socket that asked for it and dies with it |
+| `lease` | `match` | names this hold. A client need not keep it — the node scopes that socket's own `release` for it — but a **hub** must, because the hold lives on the peer and the hub is the only thing that can let go of *that* hold rather than whatever is standing |
+| `found_cols`, `found_rows` | `match` | the pane's own geometry, which the release will put back. **Absent** when the node has nothing honest to put back — columns are proved by a wrap and nothing else (#84, #221), so a pane that has never wrapped keeps the viewer's size until something deliberate moves it |
+
+All additive: a client that has never heard of them is left exactly where it was, which is what
+every build before this one does. Columns are reported by nothing anywhere (#221), so `kept` turns
+on the rows — the half herdr answers honestly (#84) — and is the only evidence the width went with
+them.
+
+**`fleet.run` acks the pane it made.** A fleet run is the one creating op herdr never sees, so its
+`id` is this node's own pane id; every other creating op's comes out of the record herdr echoed.
 
 Every `manage` op is acknowledged with `{"t":"managed","op":…,"ok":true,"id":"<new id, when one was created>"}`
 and the resulting structure change arrives as an ordinary `herd.patch`. `id` is a **node-qualified

@@ -77,12 +77,23 @@ class InputSink(
             emit(text)
             return
         }
-        // Anything ahead of the Enter in the same payload is ordinary typing and goes now, but the
-        // pane has not echoed it yet, so it is appended to the line the guard reads.
+        // **A payload is cut in two only when the guard actually keeps half of it back.** Every
+        // `emit` is one `input` message, one `pane.send_text` and one write to the pty, and a
+        // terminal program tells alt+enter (`ESC CR`) from Escape-then-Enter by nothing except
+        // their arriving in one `read`: measured on a pty, two writes with no gap between them
+        // always coalesce into one and two writes 1 ms apart never do. A second `pane.send_text`
+        // is a socket round trip behind the first — #273 measures that round trip at p50 1.2 ms —
+        // so cutting unconditionally broke the one chord that is two bytes, and left it working
+        // only when the second write happened to beat the program to the scheduler.
+        //
+        // Asked before anything leaves, because what is ahead of the Enter has not been echoed
+        // yet and so has to be appended to the line the guard reads either way.
         val typed = text.take(submit)
+        if (!guard.hold(guard.commandLine() + typed, text.substring(submit), paste = false)) {
+            emit(text)
+            return
+        }
         emit(typed)
-        val rest = text.substring(submit)
-        if (!guard.hold(guard.commandLine() + typed, rest, paste = false)) emit(rest)
     }
 
     fun confirmed(payload: String) {

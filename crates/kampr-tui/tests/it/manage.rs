@@ -1134,3 +1134,61 @@ async fn a_resize_says_which_way_it_can_go_before_it_claims_anything() {
         "a resize does not hold unless asked: {sent}"
     );
 }
+
+/// **The one claim this client makes without being asked, and the switch that turns it off.**
+///
+/// A desk holds the pane it is looking at at its own size for as long as it is looking (ADR 0013).
+/// That is a shape change on somebody else's screen (#298), so the two things that keep it inside
+/// rule 3 are both asserted here: it never asks for a size the node's floor would refuse, and the
+/// way out of it is a row in the menu the resize already lives in rather than an environment
+/// variable nobody will find.
+#[tokio::test]
+async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    // A window too small to give a pane asks for nothing. `pane.size` refuses below 80x24 and an
+    // op that is always refused is a toast the operator cannot act on.
+    app.match_view(Some(at), 40, 12);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 40, 12);
+    conn.sent_nothing().await;
+
+    // The window has to hold still first: a drag is a run of resize events and every one of them
+    // would otherwise claim the PTY again.
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+    app.match_view(Some(at), 120, 40);
+    let claimed = conn.op().await;
+    assert_eq!(claimed["op"], "pane.size");
+    assert_eq!(claimed["at"], at);
+    assert_eq!(claimed["mode"], "match");
+    assert_eq!((&claimed["cols"], &claimed["rows"]), (&json!(120), &json!(40)));
+
+    // Said on the screen while it is happening, not only inside a menu somebody has to open. The
+    // desk at the other machine is rendering wrong for as long as this stands (#298).
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        screen.contains("holding 120x40"),
+        "the pane is being held and nothing on the screen says so:\n{screen}"
+    );
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'r');
+    let menu = painted(&mut app, 110, 24);
+    assert!(
+        menu.contains("stop matching"),
+        "a pane is being held and the menu does not say how to stop:\n{menu}"
+    );
+
+    // And pressing it is a real op rather than a switch with no wire behind it — which is also
+    // what stops the next fit claiming the pane straight back.
+    ch(&mut app, 'm');
+    let released = conn.op().await;
+    assert_eq!(released["mode"], "release", "{released}");
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+}

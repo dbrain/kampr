@@ -69,25 +69,15 @@ impl Session {
     }
 }
 
+/// One removal after a fixed 300 ms races the herdr that is still letting go of its own directory
+/// (#242), and the loser is a throwaway session listed forever: three of six loaded runs left a
+/// `kampr-mesh-hub-*` and a `kampr-mesh-peer-*` behind, and a node serves every session it can
+/// find (#97). `live`'s teardown already waits for the socket to go and keeps removing until the
+/// directory stays gone, so there is one of these rather than two.
 impl Drop for Session {
     fn drop(&mut self) {
-        let socket = self.socket.clone();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("teardown runtime");
-            runtime.block_on(async {
-                let _ = kampr_herdr::Herdr::new(&socket)
-                    .call::<Value>("server.stop", json!({}))
-                    .await;
-            });
-        })
-        .join()
-        .ok();
-        std::thread::sleep(Duration::from_millis(300));
         if let Some(dir) = self.socket.parent() {
-            let _ = std::fs::remove_dir_all(dir);
+            crate::live::forget_session(dir);
         }
     }
 }

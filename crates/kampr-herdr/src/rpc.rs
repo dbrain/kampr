@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -69,12 +71,7 @@ impl Herdr {
         let req = serde_json::json!({ "id": "kampr", "method": method, "params": params });
         let line = self
             .within_the_timeout(method, async {
-                let mut stream = UnixStream::connect(&self.socket)
-                    .await
-                    .with_context(|| format!("connecting to herdr socket {}", self.socket.display()))?;
-                stream.write_all(serde_json::to_string(&req)?.as_bytes()).await?;
-                stream.write_all(b"\n").await?;
-                stream.flush().await?;
+                let stream = dial(&self.socket, &req).await?;
                 let mut line = String::new();
                 BufReader::new(stream).read_line(&mut line).await?;
                 Ok(line)
@@ -113,10 +110,7 @@ impl Herdr {
         // meant to sit open for hours.
         let (reader, ack) = self
             .within_the_timeout("events.subscribe", async {
-                let mut stream = UnixStream::connect(&self.socket).await?;
-                stream.write_all(serde_json::to_string(&req)?.as_bytes()).await?;
-                stream.write_all(b"\n").await?;
-                stream.flush().await?;
+                let stream = dial(&self.socket, &req).await?;
                 let mut reader = BufReader::new(stream);
                 let mut ack = String::new();
                 reader.read_line(&mut ack).await?;
@@ -194,6 +188,135 @@ impl Subscription {
     }
 }
 
+/// One connection carrying one whole request, by the shortest path that cannot block a runtime
+/// worker.
+///
+/// herdr looks at a fresh connection **once** — within tens of microseconds of the client's
+/// `connect(2)` — and if the request is not whole by then it does not look again until ~100.5 ms
+/// after the connect (#445). Every reply is therefore 0.2 ms or 100-107 ms, on every method
+/// alike, and the only quantity this end owns is how wide the window between its connect and its
+/// finished write is.
+///
+/// `UnixStream::connect(..).await` completes on the reactor, so the write after it runs only once
+/// a worker has been woken and scheduled: 25 us at p50 idle and 85 us loaded, against the ~5 us a
+/// client that connects and writes in one breath achieves. The timer never moves, so widening
+/// that window is the whole of the load sensitivity — 1-17 % of calls stalling as the machine
+/// fills up.
+///
+/// So the socket is made non-blocking *before* it is connected, and the connect and the write
+/// happen back to back on this thread with nothing between them. Non-blocking is the point rather
+/// than an optimisation: a synchronous `connect(2)` on a unix socket whose listen backlog is full
+/// blocks the calling thread, and blocking a runtime worker is far worse than the 100 ms it would
+/// save. `EAGAIN` there is a decline, not an error — the async path below takes it, exactly as
+/// before.
+///
+/// Everything else declines the same way and for the same reason: a socket that will not open, a
+/// path too long for `sun_path`, a connect that refuses. The fallback re-runs the whole exchange
+/// and produces the error message this crate's callers already match on.
+async fn dial(socket: &Path, req: &serde_json::Value) -> Result<UnixStream> {
+    let line = request_line(req)?;
+    if let Some((connected, written)) = connect_and_write(socket, &line) {
+        let mut stream = UnixStream::from_std(connected)?;
+        // A request is a few hundred bytes into an empty socket buffer, so a short write means
+        // the kernel is under pressure rather than that the shape is wrong. The rest goes the
+        // ordinary way; the connection is already made and the stall, if any, is already taken.
+        if written < line.len() {
+            stream.write_all(&line[written..]).await?;
+        }
+        return Ok(stream);
+    }
+    let mut stream = UnixStream::connect(socket)
+        .await
+        .with_context(|| format!("connecting to herdr socket {}", socket.display()))?;
+    write_request(&mut stream, &line).await?;
+    Ok(stream)
+}
+
+/// The request as herdr must find it: the JSON and its terminating newline, one buffer.
+fn request_line(req: &serde_json::Value) -> Result<Vec<u8>> {
+    let mut line = serde_json::to_vec(req)?;
+    line.push(b'\n');
+    Ok(line)
+}
+
+/// The whole request, terminating newline included, in **one** write.
+///
+/// A request written as body-then-newline puts a second `.await` inside the window herdr is
+/// looking through. Two writes 200 us apart stalled 191 of 200 calls where one write stalled none
+/// (#445). The gap is the runtime's, so it is nothing on a quiet machine and milliseconds on a
+/// loaded one — which is why the test below asserts on the writes rather than on a clock.
+async fn write_request(stream: &mut (impl tokio::io::AsyncWrite + Unpin), line: &[u8]) -> Result<()> {
+    stream.write_all(line).await?;
+    Ok(())
+}
+
+/// Connects and writes with nothing between, or declines.
+///
+/// `Some((stream, written))` is a connection herdr's first look will find a request on; `written`
+/// is what the one `send(2)` took. `None` is every reason not to have tried, and the caller falls
+/// back to the async path rather than turning a decline into a failure.
+fn connect_and_write(socket: &Path, line: &[u8]) -> Option<(std::os::unix::net::UnixStream, usize)> {
+    let address = sockaddr_un(socket)?;
+    // Non-blocking and close-on-exec in the one syscall: this crate also spawns
+    // `herdr terminal session observe`, and a window where a fresh fd is inheritable is a
+    // descriptor leaked into somebody else's process.
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let connected = unsafe {
+        libc::connect(
+            fd.as_raw_fd(),
+            std::ptr::addr_of!(address).cast::<libc::sockaddr>(),
+            size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    if connected < 0 {
+        return None;
+    }
+    // `MSG_NOSIGNAL`, or a herdr that closed between the connect and the write kills this process
+    // with SIGPIPE rather than answering an error.
+    let sent = unsafe {
+        libc::send(
+            fd.as_raw_fd(),
+            line.as_ptr().cast::<libc::c_void>(),
+            line.len(),
+            libc::MSG_NOSIGNAL,
+        )
+    };
+    if sent <= 0 {
+        return None;
+    }
+    Some((std::os::unix::net::UnixStream::from(fd), sent as usize))
+}
+
+/// The address `connect(2)` needs, or `None` for a path `sun_path` cannot hold.
+///
+/// `sun_path` is 108 bytes including its terminator and there is no error for overrunning it —
+/// the path is silently truncated and the connect goes somewhere else. herdr itself refuses to
+/// start on a session socket past that length, saying only "local socket name length exceeds
+/// capacity", so a path this long is a misconfiguration rather than a case to handle here: it
+/// declines, and the async path reports it.
+fn sockaddr_un(socket: &Path) -> Option<libc::sockaddr_un> {
+    let path = socket.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    if path.is_empty() || path.len() >= address.sun_path.len() {
+        return None;
+    }
+    for (slot, byte) in address.sun_path.iter_mut().zip(path) {
+        *slot = *byte as libc::c_char;
+    }
+    Some(address)
+}
+
 fn dirs_config() -> Result<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
         && !x.is_empty()
@@ -250,6 +373,151 @@ mod tests {
             .to_string();
         assert!(said.contains("session.snapshot"), "{said}");
         assert!(said.contains("within"), "{said}");
+    }
+
+    /// **The newline is part of the request, not a second one.**
+    ///
+    /// herdr reads a fresh connection once and then leaves it alone for 100 ms, so a request that
+    /// arrives as body-then-newline can be caught between the two and costs a whole poll
+    /// interval. The gap is the one between two `.await`s, which is nothing on an idle machine
+    /// and milliseconds on a loaded one — which is why this is asserted on the writes rather than
+    /// on a clock: a timing test here would be green on every quiet run and prove nothing.
+    #[tokio::test]
+    async fn a_request_reaches_herdr_in_one_write_because_a_second_one_waits_out_the_poll() {
+        #[derive(Default)]
+        struct Writes(Vec<Vec<u8>>);
+
+        impl tokio::io::AsyncWrite for Writes {
+            fn poll_write(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                self.0.push(buf.to_vec());
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+
+        let req = json!({ "id": "kampr", "method": "pane.send_text", "params": { "text": "a" } });
+        let mut writes = Writes::default();
+        let line = request_line(&req).expect("serialised");
+        write_request(&mut writes, &line).await.expect("written");
+
+        assert_eq!(
+            writes.0.len(),
+            1,
+            "the request went out in {} writes, so herdr can look between them: {:?}",
+            writes.0.len(),
+            writes
+                .0
+                .iter()
+                .map(|w| String::from_utf8_lossy(w).to_string())
+                .collect::<Vec<_>>()
+        );
+        let sent = String::from_utf8(writes.0[0].clone()).expect("utf-8");
+        assert_eq!(sent, format!("{req}\n"));
+    }
+
+    /// **The connect and the write must not have a scheduling hop between them.**
+    ///
+    /// herdr looks at a fresh connection once and then not again for ~100.5 ms (#445), so the
+    /// window between this end's `connect(2)` and its finished write is the whole of the stall
+    /// rate. `UnixStream::connect(..).await` completes on the reactor, which puts a worker wakeup
+    /// in that window: 79-152 us at p50 on a loaded machine against 26-34 us for a connect and a
+    /// write back to back, and 3.2-24.1 % of calls stalling against 0-0.5 %.
+    ///
+    /// Asserted as **one poll**, not as a duration. A future that reaches the write without ever
+    /// returning `Pending` cannot have yielded to the runtime in between, and that is the property
+    /// — where a timing assertion would be green on every quiet run and prove nothing.
+    #[tokio::test]
+    async fn dialling_herdr_never_yields_between_the_connect_and_the_write() {
+        let (_dir, socket) = listening(Some(json!({ "result": {} }).to_string()));
+        let req = json!({ "id": "kampr", "method": "pane.list", "params": {} });
+
+        let dialling = std::pin::pin!(dial(&socket, &req));
+        let waker = std::task::Waker::noop();
+        let polled = dialling.poll(&mut std::task::Context::from_waker(waker));
+
+        assert!(
+            matches!(polled, std::task::Poll::Ready(Ok(_))),
+            "dial yielded to the runtime before the request was written, \
+             so herdr's one look can land in the gap"
+        );
+    }
+
+    /// **The hazard the eager path must not introduce.** A `connect(2)` on a unix socket whose
+    /// listen backlog is full blocks the calling thread, and blocking a runtime worker is far
+    /// worse than the 100 ms it saves. The socket is therefore non-blocking *before* it is
+    /// connected, so a full backlog is `EAGAIN` — a decline the async path picks up — and never a
+    /// stalled worker.
+    ///
+    /// The flag itself is the assertion, because it is what makes blocking impossible; a test that
+    /// filled a backlog and waited would be asserting on a clock. It is load-bearing twice over:
+    /// `UnixStream::from_std` is documented to require a non-blocking socket, so a blocking fd
+    /// handed to the runtime would stall a worker on every read as well.
+    #[tokio::test]
+    async fn the_socket_is_non_blocking_before_it_is_connected() {
+        use std::os::fd::AsRawFd;
+
+        let (_dir, socket) = listening(None);
+        let line = request_line(&json!({ "id": "kampr", "method": "ping", "params": {} })).expect("line");
+        let (connected, written) = connect_and_write(&socket, &line).expect("a listening socket dials");
+
+        assert_eq!(
+            written,
+            line.len(),
+            "the request was not whole when the connect returned"
+        );
+        let flags = unsafe { libc::fcntl(connected.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "F_GETFL failed");
+        assert_eq!(
+            flags & libc::O_NONBLOCK,
+            libc::O_NONBLOCK,
+            "a blocking socket parks a runtime worker whenever herdr's backlog is full"
+        );
+    }
+
+    /// A decline is not a failure. Everything the eager path will not do — a socket that is not
+    /// there, a path too long for `sun_path` — falls through to the async path, which is what
+    /// produces the message every caller of this crate already reads.
+    #[tokio::test]
+    async fn a_socket_the_eager_path_declines_still_fails_with_the_message_callers_read() {
+        let dir = tempfile::tempdir().expect("a dir");
+        let missing = dir.path().join("herdr.sock");
+        assert!(
+            connect_and_write(&missing, b"{}\n").is_none(),
+            "nothing is listening"
+        );
+
+        let said = Herdr::new(&missing)
+            .call::<Value>("session.snapshot", json!({}))
+            .await
+            .expect_err("a socket that is not there is not a success")
+            .to_string();
+        assert!(said.contains("connecting to herdr socket"), "{said}");
+        assert!(said.contains(&missing.display().to_string()), "{said}");
+
+        let too_long = PathBuf::from("/tmp").join("x".repeat(200));
+        assert!(
+            sockaddr_un(&too_long).is_none(),
+            "sun_path holds 108 bytes and there is no error for overrunning it: \
+             a path copied in short dials whatever the truncation names"
+        );
+        assert!(connect_and_write(&too_long, b"{}\n").is_none());
     }
 
     /// `ack.contains("\"error\"")` is a substring scan over the whole line: it misses an error

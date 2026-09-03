@@ -27,10 +27,11 @@ pub enum FanOutError {
 /// either, because a command that runs when a host comes back hours later is a command nobody is
 /// watching.
 pub fn fan_out(command: &str, herd: &Herd) -> Result<Vec<Value>, FanOutError> {
-    let argv = split(command)?;
-    if argv.is_empty() {
+    let line = command.trim();
+    if line.is_empty() {
         return Err(FanOutError::Empty);
     }
+    balanced(line)?;
     let cohort = ulid::Ulid::generate().to_string();
     let ops: Vec<Value> = herd
         .nodes
@@ -41,7 +42,7 @@ pub fn fan_out(command: &str, herd: &Herd) -> Result<Vec<Value>, FanOutError> {
                 "op": "fleet.run",
                 "node": node.id,
                 "cohort": cohort,
-                "args": argv,
+                "command": line,
             })
         })
         .collect();
@@ -51,46 +52,44 @@ pub fn fan_out(command: &str, herd: &Herd) -> Result<Vec<Value>, FanOutError> {
     Ok(ops)
 }
 
-/// Splits on whitespace, honouring quotes.
+/// The one thing checked before a line reaches five machines: that its quotes close.
 ///
-/// **Not a shell, and deliberately not one.** There is no `sh -c` between the operator and the
-/// command, so a `;` or a `&&` or a `$(…)` is an argument rather than something that runs — which
-/// is the behaviour to want when one keystroke reaches every machine in the herd. An operator who
-/// really wants a pipeline asks for `sh -c '…'` and can see that they did.
-fn split(command: &str) -> Result<Vec<String>, FanOutError> {
-    let mut argv = Vec::new();
-    let mut current = String::new();
-    let mut started = false;
+/// **The shell does the rest, deliberately.** `&&`, `|`, `;`, globs, `~` and redirection all mean
+/// what they mean in the operator's own terminal, because that is what they asked for and because
+/// re-implementing a shell's word splitting in two languages to *avoid* a shell was the more
+/// dangerous of the two options. What is worth catching here is the typo, because an unclosed
+/// quote is a mistake every host would report identically and a run nobody meant to start.
+///
+/// A backslash escapes the next character outside single quotes, so `echo \"` is balanced and
+/// `echo "a \" b"` is too. Inside `'…'` nothing escapes, which is the shell's rule.
+///
+/// Kept in step with `dev.kampr.shared.model.balanced`.
+fn balanced(command: &str) -> Result<(), FanOutError> {
     let mut quote: Option<char> = None;
-    for c in command.chars() {
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
         match (quote, c) {
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), _) => {}
+            (Some(q), '\\') => {
+                chars.next();
+                let _ = q;
+            }
             (Some(q), c) if c == q => quote = None,
-            (Some(_), c) => current.push(c),
-            (None, '\'') | (None, '"') => {
-                quote = Some(c);
-                started = true;
+            (Some(_), _) => {}
+            (None, '\\') => {
+                chars.next();
             }
-            (None, c) if c.is_whitespace() => {
-                if started {
-                    argv.push(std::mem::take(&mut current));
-                    started = false;
-                }
-            }
-            (None, c) => {
-                current.push(c);
-                started = true;
-            }
+            (None, '\'') | (None, '"') => quote = Some(c),
+            (None, _) => {}
         }
     }
-    if quote.is_some() {
-        return Err(FanOutError::Unbalanced(
+    match quote {
+        Some(_) => Err(FanOutError::Unbalanced(
             "that command has a quote that never closes".into(),
-        ));
+        )),
+        None => Ok(()),
     }
-    if started {
-        argv.push(current);
-    }
-    Ok(argv)
 }
 
 /// Which other hosts in this run are asking **exactly** the same thing.
@@ -203,7 +202,7 @@ mod tests {
     fn one_command_becomes_one_op_per_online_node_sharing_a_cohort() {
         let ops = fan_out("pacman -Syu", &herd(&[("a", true), ("b", true)])).expect("ops");
         assert_eq!(ops.len(), 2);
-        assert_eq!(ops[0]["args"], json!(["pacman", "-Syu"]));
+        assert_eq!(ops[0]["command"], json!("pacman -Syu"));
         assert_eq!(ops[0]["cohort"], ops[1]["cohort"], "one run, one cohort");
         assert_ne!(ops[0]["node"], ops[1]["node"]);
     }
@@ -253,33 +252,35 @@ mod tests {
         assert_eq!(fan_out("   ", &herd(&[("a", true)])), Err(FanOutError::Empty));
     }
 
+    /// The operator's line reaches the node as they typed it, and nothing here splits it. That is
+    /// the whole change: a pipeline is a pipeline.
     #[test]
-    fn quoted_arguments_stay_one_argument() {
-        assert_eq!(
-            split(r#"sh -c "echo one two""#).expect("argv"),
-            vec!["sh", "-c", "echo one two"]
+    fn a_pipeline_reaches_the_node_as_one_line_rather_than_as_words() {
+        let ops = fan_out(r#"find . -name "*.rs" | wc -l"#, &herd(&[("a", true)])).expect("ops");
+        assert_eq!(ops[0]["command"], json!(r#"find . -name "*.rs" | wc -l"#));
+        assert!(
+            ops[0].get("args").is_none(),
+            "an argv would be a second answer to disagree with"
         );
-        assert_eq!(split("git commit -m 'a message'").expect("argv").len(), 4);
     }
 
     #[test]
-    fn an_empty_quoted_argument_survives_being_empty() {
-        assert_eq!(split(r#"foo "" bar"#).expect("argv"), vec!["foo", "", "bar"]);
-    }
-
-    #[test]
-    fn an_unclosed_quote_is_refused_rather_than_guessed_at() {
+    fn an_unclosed_quote_is_refused_rather_than_fanned_out() {
         assert!(matches!(
-            split(r#"sh -c "echo oops"#),
+            fan_out(r#"echo "oops"#, &herd(&[("a", true)])),
             Err(FanOutError::Unbalanced(_))
         ));
     }
 
+    /// A backslash escapes a quote, and a run that would have worked in their own terminal must
+    /// not be refused by a checker that is cruder than the shell it stands in front of.
     #[test]
-    fn shell_metacharacters_are_arguments_and_do_not_run() {
-        // No `sh -c` sits between the operator and the command, so `; rm -rf /` is a word that
-        // pacman will complain about rather than a second command on every machine in the herd.
-        let argv = split("pacman -Syu ; reboot").expect("argv");
-        assert_eq!(argv, vec!["pacman", "-Syu", ";", "reboot"]);
+    fn an_escaped_quote_is_not_an_unclosed_one() {
+        assert!(balanced(r#"echo \""#).is_ok());
+        assert!(balanced(r#"echo "a \" b""#).is_ok());
+        assert!(balanced(r#"echo "don't""#).is_ok());
+        assert!(balanced(r#"grep 'a "b" c'"#).is_ok());
+        // Inside single quotes a backslash is a literal backslash, which is the shell's rule.
+        assert!(balanced(r#"echo 'a\'"#).is_ok());
     }
 }

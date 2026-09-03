@@ -445,13 +445,14 @@ class AppState(
     // One command, one op per machine that can be reached, all sharing a cohort so the board can
     // gather them. The cohort is minted here because a run spans hosts and no single node can name
     // one.
-    fun runFleet(argv: List<String>) {
-        if (argv.isEmpty()) return
+    fun runFleet(command: String) {
+        val line = command.trim()
+        if (line.isEmpty()) return
         val targets = fleetTargets(store.herd.value.nodes)
         if (targets.isEmpty()) return
         val cohort = newCohortId(wallClockMillis().toLong())
         targets.forEach { node ->
-            connection.manage(ManageOp.FleetRun(node = node.id, cohort = cohort, args = argv))
+            connection.manage(ManageOp.FleetRun(node = node.id, cohort = cohort, command = line))
         }
         go(Screen.Fleet)
     }

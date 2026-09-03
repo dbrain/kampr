@@ -8,22 +8,55 @@
 //! already records for the herdr binary, one layer out: a service manager's `PATH` is not the
 //! installing shell's.
 //!
-//! **Read once, then exec directly.** Running every command under `sh -lc` would work too and
-//! costs three things this does not: the argv is re-parsed by a shell, so a filename with a space
-//! in it stops being one argument; whatever the profile prints lands in the middle of the run's
-//! output; and a slow profile is paid on every host on every run. Capturing the value once and
-//! handing it to an ordinary `exec` keeps the argv exactly as the operator wrote it.
+//! **Read once, hand it to a shell that reads no profile at all.** Running every command under
+//! `sh -lc` would work and costs two things this does not: whatever the profile prints lands in
+//! the middle of the run's output, and a slow profile is paid on every host on every run —
+//! measured here at 107 ms for `-lc` and 398 ms for `-lic`, per command. Capturing the value once
+//! per node process and putting it in the child's environment pays it once, and [`crate::job`]
+//! holds why the shell that then runs the command is neither a login nor an interactive one.
+//!
+//! **And the reading is interactive, which is #419 closing.** `-l` reads `.bash_profile` and
+//! `.profile`; `~/.local/bin` — where `kampr` and `herdr` are installed on all four hosts in this
+//! herd — is added by `.bashrc`, which only an interactive shell reads. Measured on this machine
+//! from `env -i`, which is the environment a service manager actually presents:
+//!
+//! | invocation | answers |
+//! |---|---|
+//! | `bash -c` | `/usr/local/sbin:/usr/local/bin:/usr/bin` — the service manager's (#392) |
+//! | `bash -lc` | that, plus `~/.local/bin`, flatpak, jvm, perl, rustup, Toolbox |
+//! | `bash -ic` | `~/.local/bin`, **`~/.nvm/.../bin`, `~/go/bin`, `~/dev/houseofdoge/hod-scripts`**, the Android SDK, then the system three |
+//! | `bash -lic` | the union of both, and the only reading that is a superset of the shell the operator types into |
+//!
+//! So `-lic` is asked first and `-lc` is the fallback for a shell that will not take it. The two
+//! run concurrently under one deadline, because a fallback that only starts when the first has
+//! given up doubles the worst case at node start.
+//!
+//! The stderr of an interactive shell with no tty is noisy — `cannot set terminal process group`,
+//! `no job control in this shell`, `stty: standard input` — and it is discarded, as it already
+//! was. Its **stdout** was measured clean, and the NUL markers below hold either way.
 
 use std::sync::OnceLock;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 /// How long the login shell is given to say what its `PATH` is. A profile that waits on something
 /// is a profile that would otherwise hang the first fleet run on that host for ever; overrunning
 /// this is not fatal, it just means the run gets this process's `PATH`, which is what it got
 /// before any of this existed.
+///
+/// One deadline for both readings rather than one each — see the module header.
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How the operator's shell is asked, best answer first.
+///
+/// `-lic` reads the profile **and** `.bashrc`, and `.bashrc` is where `~/.local/bin` comes from on
+/// half this herd (#419). `-lc` is what answers on a shell that refuses `-i` with no tty, and it
+/// is what this read has always done.
+const READINGS: [&str; 2] = ["-lic", "-lc"];
+
+/// Asked between NUL markers, because a profile prints things and an interactive one prints more.
+const PROBE: &str = "printf '\\0%s\\0' \"$PATH\"";
 
 /// Every place a fleet `PATH` can come from, as values rather than environment reads, so the order
 /// is a table test rather than a process the suite has to fork. Same shape, and the same reason,
@@ -141,6 +174,10 @@ pub fn login_path() -> &'static Option<String> {
 
 /// `$SHELL`, then the passwd entry, then `/bin/sh`. A service manager often sets no `$SHELL` at
 /// all, which is exactly the case this has to answer.
+///
+/// This names two things: the shell whose `PATH` is read, and the shell a fleet run's command line
+/// is handed to. The operator's own, so the bashisms they type work — see [`crate::job`] for the
+/// flags it is *not* given.
 pub fn login_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -166,23 +203,51 @@ fn passwd_shell() -> Option<String> {
 }
 
 /// The marker exists because a profile prints things — a message of the day, a version notice, a
-/// `direnv` line. What is wanted is between the two NULs and everything else on the stream is
-/// somebody saying hello.
+/// `direnv` line, and an interactive shell's own hello. What is wanted is between the two NULs and
+/// everything else on the stream is somebody saying hello.
 fn capture(shell: &str) -> Option<String> {
-    let shell = shell.to_string();
-    let (tx, rx) = mpsc::sync_channel(1);
-    // On a thread, and abandoned rather than killed if it overruns: `output()` drains the child's
+    let (tx, rx) = mpsc::channel();
+    // On threads, and abandoned rather than killed if they overrun: `output()` drains the child's
     // pipes, which is what stops a chatty profile from deadlocking the read, and a child left to
     // finish a profile costs one short-lived process against a node that hangs.
-    std::thread::spawn(move || {
-        let out = std::process::Command::new(&shell)
-            .args(["-lc", "printf '\\0%s\\0' \"$PATH\""])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
-        let _ = tx.send(out);
-    });
-    let out = rx.recv_timeout(CAPTURE_TIMEOUT).ok()?.ok()?;
+    for (rank, flags) in READINGS.iter().enumerate() {
+        let shell = shell.to_string();
+        let flags = flags.to_string();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((rank, ask(&shell, &flags)));
+        });
+    }
+    drop(tx);
+
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    let mut best: Option<(usize, String)> = None;
+    for _ in 0..READINGS.len() {
+        let Ok((rank, answer)) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+            break;
+        };
+        let Some(answer) = answer else { continue };
+        if best.as_ref().is_none_or(|(seen, _)| rank < *seen) {
+            best = Some((rank, answer));
+        }
+        // Nothing can beat the first reading, so waiting for the other is waiting for nothing.
+        if rank == 0 {
+            break;
+        }
+    }
+    best.map(|(rank, answer)| {
+        debug!(%shell, flags = READINGS[rank], "read a PATH");
+        answer
+    })
+}
+
+fn ask(shell: &str, flags: &str) -> Option<String> {
+    let out = std::process::Command::new(shell)
+        .args([flags, PROBE])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -354,5 +419,67 @@ mod tests {
     #[test]
     fn a_shell_is_always_named_even_with_nothing_in_the_environment() {
         assert!(!login_shell().is_empty());
+    }
+
+    /// **#419 closed, on this machine, against this machine's own shell.**
+    ///
+    /// A tool the operator installed works in their terminal and was invisible to a fleet run,
+    /// because the reading was `-lc` and the directory is added by `.bashrc`. So the assertion is
+    /// about *their* shell rather than about a string: whatever an interactive shell has and a
+    /// login shell does not, the first reading in [`READINGS`] must carry.
+    ///
+    /// **From a cleared environment, which is the whole point.** A shell inherits the `PATH` it
+    /// was started with and appends to it, so asking any of these from a terminal answers with the
+    /// terminal's own value and every reading looks identical. #392 measured the difference from
+    /// `env -i`, which is what a service manager actually presents, and so does this.
+    ///
+    /// It skips loudly rather than passing quietly when there is nothing to prove — a machine
+    /// whose `.bashrc` adds no directory cannot fail this however it is broken, and a test that
+    /// says `ok` for that reason is the [#233](../../../docs/03-probe-log.md) shape again.
+    #[test]
+    fn the_first_reading_asked_for_carries_what_the_operators_own_terminal_resolves() {
+        let shell = login_shell();
+        let from_a_service_manager = |flags: &str| -> Option<String> {
+            let out = std::process::Command::new(&shell)
+                .env_clear()
+                .env("HOME", std::env::var("HOME").unwrap_or_default())
+                .args([flags, PROBE])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| between_markers(&String::from_utf8_lossy(&out.stdout)))
+                .flatten()
+        };
+        let (Some(first), Some(interactive), Some(login)) = (
+            from_a_service_manager(READINGS[0]),
+            from_a_service_manager("-ic"),
+            from_a_service_manager("-lc"),
+        ) else {
+            eprintln!("SKIPPED: {shell} did not answer all three readings; nothing was asserted");
+            return;
+        };
+        let only_interactive: Vec<&str> = interactive
+            .split(':')
+            .filter(|dir| !login.split(':').any(|d| d == *dir))
+            .collect();
+        if only_interactive.is_empty() {
+            eprintln!(
+                "SKIPPED: this machine's interactive shell adds no directory a login shell lacks, \
+                 so nothing was asserted"
+            );
+            return;
+        }
+        let missing: Vec<&str> = only_interactive
+            .into_iter()
+            .filter(|dir| !first.split(':').any(|d| d == *dir))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "a fleet run cannot resolve anything in {missing:?}, which {shell} resolves when the \
+             operator types into it",
+        );
     }
 }

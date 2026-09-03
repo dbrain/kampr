@@ -8,6 +8,7 @@
 pub mod assetlinks;
 pub mod assets;
 pub mod attach;
+pub mod book;
 pub mod caps;
 pub mod config;
 pub mod convo;
@@ -23,6 +24,7 @@ pub mod pasted;
 pub mod pending;
 pub mod push;
 pub mod relay;
+pub mod restore;
 pub mod session;
 pub mod sessions;
 pub mod state;

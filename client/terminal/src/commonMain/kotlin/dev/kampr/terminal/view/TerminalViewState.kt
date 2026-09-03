@@ -10,6 +10,8 @@ import androidx.compose.ui.geometry.Offset
 import dev.kampr.terminal.render.Selection
 import dev.kampr.terminal.render.Target
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 // Probe #60: re-shaping at every intermediate zoom collapses the run cache to ~51% and drops 8.5%
 // of frames at 200x50, so a pinch scales a layer and only the settled zoom re-shapes. Pan is a
@@ -38,9 +40,31 @@ class TerminalViewState {
     // persisted, unlike `remembered`: a held pane is one the desk cannot reshape (#18) and renders
     // wrong at (#298), so it has to be asked for again every time rather than remembered into.
     var sizeHeld by mutableStateOf(false)
+
+    // The operator's answer to "hold this pane at my view's size", ahead of the stored one so a
+    // flick of the switch is felt before the node's `prefs` frame comes back. `null` is nobody
+    // having answered yet, which is what lets the viewport decide (ADR 0013).
+    var matchView by mutableStateOf<Boolean?>(null)
     var selection by mutableStateOf<Selection?>(null)
     var blockSelect by mutableStateOf(false)
+    // The three halves of one gesture, set together because they are read together: what was hit,
+    // where it sits on the grid so it can be washed, and where the pointer was so the affordance
+    // can be put beside it rather than a screen away. Kept private-set for that reason — a target
+    // with a stale span is a wash over the wrong path, which is worse than no wash at all.
     var target by mutableStateOf<Target?>(null)
+        private set
+    var targetSpan by mutableStateOf<Selection?>(null)
+        private set
+    var targetAt by mutableStateOf<Offset?>(null)
+        private set
+
+    fun aim(target: Target?, span: Selection?, at: Offset?) {
+        this.target = target
+        targetSpan = if (target == null) null else span
+        targetAt = if (target == null) null else at
+    }
+
+    fun aimOff() = aim(null, null, null)
 
     // Where a right-click landed, and the whole of the grid's context menu state. Session-local
     // and never persisted: a menu is a gesture that has not finished yet.
@@ -53,13 +77,22 @@ class TerminalViewState {
     var minPanX = 0f
     var maxScroll = 0f
 
+    // Where a hand may go, and the half of the drag's clamp that `maxScroll` is not. Zero is the
+    // bottom of the *grid*, and a herdr pane is as tall as the desk made it — so on a pane whose
+    // output stops above the last row, everything between the end of the record and the end of the
+    // grid is blank tail, and letting a hand travel into it hands the operator a screenful of
+    // nothing and no way to tell that it is not the pane being broken. The end of what there is to
+    // read is the end of the travel.
+    var contentFloor = 0f
+
     // Where the surface rests while it follows, and nothing else. It was also the *floor of the
     // drag*, and that is the half that had to go: on a grid taller than the viewport with the
     // caret above the bottom of it, clamping a hand at the floor put the last rows of the pane
     // out of reach altogether — the wheel stopped early and every caret move re-clamped whatever
     // the hand had won back. The report was "keeps bouncing around and landing back where i last
-    // typed instead of the bottom of the screen". A hand may travel the whole surface now; the
-    // band governs the surface only while it is following, which is the thing the band was for.
+    // typed instead of the bottom of the screen". The band governs the surface only while it is
+    // following, which is the thing the band was for; a hand answers to `contentFloor`, which is
+    // the end of the record rather than the end of the grid.
     var band = CaretBand(0f, 0f)
 
     // Whether the viewport is riding the live edge rather than parked somewhere a reader put it.
@@ -137,9 +170,16 @@ class TerminalViewState {
         scrolled = true
         if (dx != 0f) pannedAway = true
         panX = (panX + dx).coerceIn(minPanX, 0f)
-        scrollY = (scrollY + dy).coerceIn(0f, maxScroll)
+        scrollY = clampScroll(scrollY + dy)
         following = atLiveEdge
     }
+
+    // The two ends of the surface a hand is allowed between. `contentFloor` is clamped under
+    // `maxScroll` rather than trusted against it because the two are written from different points
+    // of one composition, and a frame in which the content floor is a rectangle old is a frame in
+    // which it can be the larger of the two.
+    private fun clampScroll(value: Float): Float =
+        value.coerceIn(min(contentFloor, maxScroll), max(maxScroll, 0f))
 
     // The horizontal half of `following`, and it was missing. `followCursorPan` puts the caret a
     // margin in from the left, and a caret inside that margin lands the surface on `panX = 0` —
@@ -198,8 +238,7 @@ class TerminalViewState {
         val target = (zoom * scale).coerceIn(presets.minimum, presets.maximum)
         val applied = if (zoom > 0f) target / zoom else 1f
         panX = panX * applied + tx
-        scrollY = (scrollY * applied + ty + contentBottom * (applied - 1f))
-            .coerceIn(0f, maxScroll.coerceAtLeast(0f))
+        scrollY = clampScroll(scrollY * applied + ty + contentBottom * (applied - 1f))
         following = atLiveEdge
         zoom = target
     }

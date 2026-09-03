@@ -34,6 +34,13 @@ data class PaneSizing(
     val fitCols: Int,
     val fitRows: Int,
     val held: Boolean,
+    // What this view would ask for as a standing intent, which is measured at the base cell rather
+    // than at the zoom the operator happens to be on — see `viewGrid`.
+    val matchCols: Int = fitCols,
+    val matchRows: Int = fitRows,
+    val matching: Boolean = false,
+    // False on a view too small to ask, and on a pane Kampr forked for a job of its own.
+    val canMatch: Boolean = false,
 )
 
 internal fun PaneSizing.fitIsUsable() = fitCols >= MIN_PANE_COLS && fitRows >= MIN_PANE_ROWS
@@ -51,6 +58,7 @@ internal fun ResizePanel(
     sizing: PaneSizing,
     onResize: (Int, Int) -> Unit,
     onHold: (Boolean) -> Unit,
+    onMatchView: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -103,6 +111,20 @@ internal fun ResizePanel(
                 tokens.type.captionSmall,
                 tokens.color.mute,
                 maxLines = 3,
+            )
+        }
+
+        // **The switch behind the one automatic claim in the product** (ADR 0013), and the reason
+        // that claim is not the write rule 3 forbids: an operator who did not want it can find it
+        // and turn it off, and it says what it costs before they leave it on.
+        if (sizing.canMatch) {
+            Toggle(
+                on = sizing.matching,
+                title = "Match this view while it's open · ${sizing.matchCols}×${sizing.matchRows}",
+                detail = "Holds the pane at this window's size until you leave it. Their screen at " +
+                    "the desk is wrong while it is held, and the pane goes back to the size it was " +
+                    "when you let go.",
+                onChange = onMatchView,
             )
         }
 

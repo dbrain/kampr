@@ -43,16 +43,25 @@ internal const val BROWSER_PANE = "01JKAMPRNODE0000000000000/w1:p1"
 internal val DESK = 1600.dp to 900.dp
 internal val PHONE = 411.dp to 914.dp
 
-internal fun shellPane(rows: Int, caretRow: Int): PaneState {
+// A shell's pane: a few lines at the top, the caret on the last of them, and the rest of the grid
+// blank — the tail a hand must not be able to park in.
+internal fun shellPane(rows: Int, caretRow: Int): PaneState = pane(rows, caretRow, written = caretRow)
+
+// The same grid after a full-screen redraw, written to its last row with the caret left in the
+// middle. Here the bottom of the grid really is the end of the record, which is what #428's
+// unreachable bottom was about.
+internal fun writtenPane(rows: Int, caretRow: Int): PaneState = pane(rows, caretRow, written = rows - 1)
+
+private fun pane(rows: Int, caretRow: Int, written: Int): PaneState {
     val pane = PaneState(BROWSER_PANE, StyleTable())
-    val lines = (0..caretRow).map { "[20:36:31 dbrain@comingclean kampr]$ line $it" }
+    val lines = (0..written).map { "[20:36:31 dbrain@comingclean kampr]$ line $it" }
     pane.applyReset(
         ServerMsg.GridReset(
             pane = BROWSER_PANE,
             cols = 94,
             rows = rows,
             rowsData = lines.mapIndexed { index, text -> RowDiff(index, listOf(Run(0, text))) },
-            cursor = Cursor(lines.last().length, caretRow, true),
+            cursor = Cursor(lines.getOrElse(caretRow) { "" }.length, caretRow, true),
             links = emptyList(),
         ),
     )

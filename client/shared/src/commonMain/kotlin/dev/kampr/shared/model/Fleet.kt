@@ -120,36 +120,33 @@ fun Matching.recipients(): List<String> = listOf(target.id) + others.map { it.id
 // a machine whose herdr is down runs commands perfectly well.
 fun fleetTargets(nodes: List<NodeInfo>): List<NodeInfo> = nodes.filter { it.isReachable }
 
-// Splits on whitespace, honouring quotes. **Not a shell, and deliberately not one**: nothing runs
-// `sh -c` for this, so a `;` or a `&&` is an argument rather than something that runs on every
-// machine in the herd. Kept in step with `kampr_client::fleet::split`.
-fun splitCommand(command: String): List<String>? {
-    val argv = mutableListOf<String>()
-    val current = StringBuilder()
-    var started = false
+// The one thing checked before a line reaches five machines: that its quotes close.
+//
+// **The shell does the rest, deliberately.** `&&`, `|`, `;`, globs, `~` and redirection all mean
+// what they mean in the operator's own terminal, because that is what they asked for and because
+// re-implementing a shell's word splitting in two languages in order to *avoid* a shell was the
+// more dangerous of the two options. What is worth catching here is the typo: an unclosed quote is
+// a mistake every host would report identically, and a run nobody meant to start.
+//
+// A backslash escapes the next character outside single quotes, so `echo \"` is balanced and
+// `echo "a \" b"` is too. Inside `'…'` nothing escapes, which is the shell's rule.
+//
+// Kept in step with `kampr_client::fleet::balanced`.
+fun balanced(command: String): Boolean {
     var quote: Char? = null
-    for (c in command) {
+    var i = 0
+    while (i < command.length) {
+        val c = command[i]
         when {
-            quote != null && c == quote -> quote = null
-            quote != null -> current.append(c)
-            c == '\'' || c == '"' -> {
-                quote = c
-                started = true
-            }
-            c.isWhitespace() -> if (started) {
-                argv += current.toString()
-                current.clear()
-                started = false
-            }
-            else -> {
-                current.append(c)
-                started = true
-            }
+            quote == '\'' -> if (c == '\'') quote = null
+            quote != null && c == '\\' -> i++
+            quote != null -> if (c == quote) quote = null
+            c == '\\' -> i++
+            c == '\'' || c == '"' -> quote = c
         }
+        i++
     }
-    if (quote != null) return null
-    if (started) argv += current.toString()
-    return argv
+    return quote == null
 }
 
 // A name for one fan-out. Only two things are asked of it: that two runs started seconds apart do

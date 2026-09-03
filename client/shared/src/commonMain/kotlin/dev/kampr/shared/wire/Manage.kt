@@ -15,7 +15,14 @@ enum class ZoomMode(val wire: String) { Toggle("toggle"), On("on"), Off("off") }
 // `Once` resizes and hands the PTY straight back; `Hold` keeps the claim so the size survives on a
 // pane a desk is attached to, which restores its own geometry the moment a controller lets go;
 // `Release` gives a hold up. Off by default everywhere — a held pane is one the desk cannot reshape.
-enum class SizeMode(val wire: String) { Once("once"), Hold("hold"), Release("release") }
+enum class SizeMode(val wire: String) {
+    Once("once"),
+    Hold("hold"),
+    // `Hold` with an owner and an undo: the node ties it to this websocket, so it ends when
+    // the socket does however it ends, and letting go puts the pane back (ADR 0013).
+    Match("match"),
+    Release("release"),
+}
 
 // The smallest pane the node will produce, mirrored from `crates/kampr-node/src/manage.rs` so the
 // client can grey a control out rather than offer one the node refuses. A resize on a headless pane
@@ -130,12 +137,18 @@ sealed interface ManageOp {
     }
 
     // One command on one host, as part of a fan-out. `cohort` is assigned by the client because a
-    // run spans hosts and no single node can name one; `args` is an argv and not a shell line, so
-    // `;` and `&&` are arguments rather than things that run.
+    // run spans hosts and no single node can name one.
+    //
+    // `command` is the line the operator typed, handed to the host's own shell, so `&&`, `|`, `;`,
+    // quotes and globs mean there what they mean in their terminal. It is **additive beside**
+    // `args`, which older clients still send and which is still an argv `exec`ed with nothing in
+    // front of it — a node that receives both takes `command`, because only a client that knows
+    // about it sends it. A node too old to know the field answers that `fleet.run` needs `args`,
+    // which is a refusal the operator can read rather than a command half-run.
     data class FleetRun(
         val node: String,
         val cohort: String,
-        val args: List<String>,
+        val command: String,
         val cwd: String? = null,
     ) : ManageOp {
         override val op: String get() = "fleet.run"
@@ -149,6 +162,29 @@ sealed interface ManageOp {
     // leave nothing reading its pty and nobody able to answer it.
     data class FleetForget(val at: String) : ManageOp {
         override val op: String get() = "fleet.forget"
+    }
+
+    // Keeps a command in the node's fleet book: by `entry` when the operator pressed one already
+    // in the book, by `args` when they typed it. Promotion by id rather than by argv because
+    // re-deriving "the same command" from a re-typed line is a second chance to disagree, and a
+    // disagreement here means the command in the history *and* in Saved.
+    //
+    // Nothing about it runs anything. A saved command is staged into the run sheet and fires
+    // through the same confirmation a typed one does — one press across the whole herd should not
+    // be cheaper than typing it.
+    data class FleetSave(
+        val entry: String? = null,
+        val args: List<String> = emptyList(),
+        val cwd: String? = null,
+        val label: String? = null,
+    ) : ManageOp {
+        override val op: String get() = "fleet.save"
+    }
+
+    // Removes one book entry, history or saved. The rule that keeps credentials out of the
+    // automatic half is a reduction rather than a filter, so this is the part that actually holds.
+    data class FleetDrop(val entry: String) : ManageOp {
+        override val op: String get() = "fleet.drop"
     }
 }
 
@@ -224,11 +260,20 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.FleetRun -> {
             put("node", node)
             put("cohort", cohort)
-            put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            put("command", command)
             opt("cwd", cwd)
         }
         is ManageOp.FleetStop -> put("at", at)
         is ManageOp.FleetForget -> put("at", at)
+        is ManageOp.FleetSave -> {
+            // `entry` and not `at`: `at` is routed, and a book entry names no host, so putting one
+            // there would send this op down a mesh link looking for the node that owns it.
+            opt("entry", entry)
+            if (args.isNotEmpty()) put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            opt("cwd", cwd)
+            opt("label", label)
+        }
+        is ManageOp.FleetDrop -> put("entry", entry)
         is ManageOp.SessionStop -> {
             put("node", node)
             put("name", name)

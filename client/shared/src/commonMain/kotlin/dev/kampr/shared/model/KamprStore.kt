@@ -43,6 +43,11 @@ class KamprStore {
     private val _prefs = MutableStateFlow<Map<String, PanePrefs>>(emptyMap())
     val prefs: StateFlow<Map<String, PanePrefs>> = _prefs.asStateFlow()
 
+    // The node's fleet book, replaced whole on every frame. Not merged like `prefs`: a delete is
+    // an absence, and a merge cannot express one.
+    private val _book = MutableStateFlow(ServerMsg.FleetBook())
+    val book: StateFlow<ServerMsg.FleetBook> = _book.asStateFlow()
+
     private val _nodeCaps = MutableStateFlow<Map<String, ServerMsg.NodeCaps>>(emptyMap())
     val nodeCaps: StateFlow<Map<String, ServerMsg.NodeCaps>> = _nodeCaps.asStateFlow()
 
@@ -225,6 +230,7 @@ class KamprStore {
             is ServerMsg.ConvoComposer -> pane(msg.pane).applyComposer(msg)
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes
+            is ServerMsg.FleetBook -> _book.value = msg
             is ServerMsg.Failure -> {
                 _failure.value = msg
                 // Read without creating: a refusal about a pane nobody has open is not news about

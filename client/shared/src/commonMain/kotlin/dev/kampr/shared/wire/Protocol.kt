@@ -219,6 +219,25 @@ data class FleetInfo(
     val failed: Boolean get() = isFinished && !succeeded
 }
 
+// One command the node remembers: a run the operator issued, or one they kept.
+//
+// **No host selection on it, deliberately.** A run reaches every host that can be reached when it
+// starts; that set is different next week, and an entry pinning last week's would offer to run
+// somewhere that no longer exists. The count it is about to reach is resolved fresh and shown
+// before it goes.
+@Serializable
+data class FleetCommand(
+    val id: String,
+    val args: List<String> = emptyList(),
+    val cwd: String? = null,
+    // A name for a saved command. It never replaces the command: a label that hides what will run
+    // on every machine in the herd is a trap, so both are always on screen.
+    val label: String? = null,
+    val at: Long = 0,
+) {
+    val command: String get() = args.joinToString(" ")
+}
+
 @Serializable
 data class HerdDelta(
     val nodes: List<NodeInfo> = emptyList(),
@@ -478,6 +497,15 @@ sealed interface ServerMsg {
 
     data class Prefs(val panes: Map<String, PanePrefs>) : ServerMsg
 
+    // The node's fleet book, pushed unasked as the fourth frame of the greeting and again after
+    // every change. It belongs to the *node* rather than to this device, which is the whole point:
+    // the operator's phone and their desktop are two device rows in the node's own store, so a
+    // book kept the way `prefs` is kept would be empty on whichever one they picked up second.
+    data class FleetBook(
+        val recent: List<FleetCommand> = emptyList(),
+        val saved: List<FleetCommand> = emptyList(),
+    ) : ServerMsg
+
     data class Pong(val n: Int) : ServerMsg
 
 }
@@ -487,6 +515,11 @@ data class PanePrefs(val values: Map<String, String> = emptyMap()) {
     val zoom: Float? get() = values["zoom"]?.toFloatOrNull()
     val view: String? get() = values["view"]
     val confirm: Boolean get() = values["confirm"] != "off"
+
+    // Three states, and the third is the point: `null` means the operator has never said, so the
+    // viewport decides (ADR 0013). A default that overrode an answer already given would be the
+    // surprise the whole feature is shaped around avoiding.
+    val matchView: Boolean? get() = values["match"]?.let { it == "on" }
 }
 
 sealed interface ClientMsg {

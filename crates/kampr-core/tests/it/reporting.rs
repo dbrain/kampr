@@ -309,6 +309,8 @@ fn config() -> HerdrConfig {
         sweep: Duration::from_secs(3600),
         sweep_watched: Duration::from_secs(3600),
         settle: Duration::from_millis(5),
+        // Every pass reads the processes. These tests drive `refresh` by hand *as* the sweep and
+        // are about the naming pipeline, not about how often it runs — the shipped
         ..HerdrConfig::default()
     }
 }

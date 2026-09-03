@@ -35,6 +35,10 @@ pub struct Options {
     pub prefix: KeyEvent,
     /// Whether rung 2 of the fit ladder may write `CSI 8;rows;cols t` at all.
     pub resize: bool,
+    /// Whether a pane this client is looking at is held at this terminal's own size for as long as
+    /// it is open (ADR 0013). On, because this client is a desk; the operator turns it off per
+    /// pane from the size menu, or for the process with `KAMPR_TUI_MATCH=0`.
+    pub match_view: bool,
 }
 
 impl Default for Options {
@@ -43,6 +47,7 @@ impl Default for Options {
             theme: crate::theme::PHOSPHOR,
             prefix: crate::keymap::HERDR_PREFIX,
             resize: true,
+            match_view: true,
         }
     }
 }
@@ -64,6 +69,7 @@ impl Options {
                 .and_then(|name| prefix_named(&name))
                 .unwrap_or(crate::keymap::HERDR_PREFIX),
             resize: on("KAMPR_TUI_RESIZE", true),
+            match_view: on("KAMPR_TUI_MATCH", true),
         }
     }
 }
@@ -135,6 +141,15 @@ pub struct App {
     /// attacker-influenceable, so nothing here is navigated on a click.
     offered: Option<String>,
     watching: HashSet<String>,
+    /// The pane this client is holding at its own window's size, and the size it asked for.
+    matching: Option<(String, u16, u16)>,
+    /// What the window most recently measured, and when it settled there. A drag is hundreds of
+    /// sizes and each claim is a `herdr terminal session control` child, so the size has to hold
+    /// still before it is asked for.
+    settling: Option<((String, u16, u16), std::time::Instant)>,
+    /// Panes the operator has turned matching off for, session-local. A pane is added by the
+    /// release the size menu sends, which is a real op rather than a switch with no wire behind it.
+    unmatched: HashSet<String>,
     /// A drawn image is not in the buffer — its cells are `Skip` — so ratatui's diff has nothing
     /// to repaint them from and the pixels outlive the view. Tearing one down asks for a wipe.
     wipe: bool,
@@ -179,6 +194,9 @@ impl App {
             noted: std::time::Instant::now(),
             offered: None,
             watching: HashSet::new(),
+            matching: None,
+            settling: None,
+            unmatched: HashSet::new(),
             wipe: false,
             acked,
             acks,
@@ -257,6 +275,14 @@ impl App {
         }
         self.images.clear();
         self.wipe = true;
+    }
+
+    /// The size this client is holding `pane` at, if it is holding it at all.
+    pub fn matched(&self, pane: &str) -> Option<(u16, u16)> {
+        self.matching
+            .as_ref()
+            .filter(|(held, _, _)| held == pane)
+            .map(|(_, cols, rows)| (*cols, *rows))
     }
 
     pub fn rung(&self) -> Option<&Rung> {
@@ -533,7 +559,11 @@ impl App {
             return;
         }
         self.fitted = Some((need, size));
-        let rung = fit::climb(display, need, chrome, self.options.resize);
+        // **Not while this window is holding the pane at its own size.** The ladder's second rung
+        // asks the terminal to grow to the pane; a matched pane is already the size of the
+        // terminal, so the two would take turns for ever (ADR 0013).
+        let ask = self.options.resize && self.matching.is_none();
+        let rung = fit::climb(display, need, chrome, ask);
         // **Said when it happens, not for ever after.** The ladder climbs once per pane geometry
         // and terminal size, and its report is a long sentence about why a pane is being cropped —
         // as a standing tenant of the borrowed row that put it on screen permanently for any pane

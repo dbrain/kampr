@@ -116,9 +116,22 @@ enum Taken {
     Next(Next),
 }
 
+/// What this window could show the focused pane at, and whether it is holding it there right now.
+///
+/// The menu needs both to offer the switch: a view too small to ask never offers it, and the row
+/// reads "stop" rather than "start" when a hold is standing. Handed in from the fit ladder rather
+/// than read off the node, because it is a fact about this terminal (ADR 0013).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Matched {
+    pub cols: u16,
+    pub rows: u16,
+    pub on: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Manage {
     open: Option<Modal>,
+    matched: Matched,
     /// What the node said it can be *asked to make*, as opposed to what it can do. The kinds and
     /// the sessions both come from here rather than from a list compiled into this client.
     caps: NodeCaps,
@@ -131,6 +144,10 @@ pub struct Manage {
 impl Manage {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn observing(&mut self, matched: Matched) {
+        self.matched = matched;
     }
 
     /// A bind asked for an op. **`None` hides rather than disables**: a node that does not claim
@@ -178,7 +195,7 @@ impl Manage {
             return;
         };
         let rows = match target {
-            Target::Pane => pane_rows(entry),
+            Target::Pane => pane_rows(entry, self.matched),
             Target::Tab => tab_rows(entry),
             Target::Space => space_rows(entry),
         };
@@ -326,7 +343,7 @@ impl Manage {
     fn fleet_run(&self, herd: &Herd) -> Next {
         Next::Ask(Ask {
             prompt: format!("Run what on all {} online nodes?", online(herd)),
-            hint: "no shell: `;` and `&&` are arguments — ask for `sh -c '…'` if you mean one".into(),
+            hint: "runs through each host's own shell — `&&`, `|`, `;`, quotes and globs all work".into(),
             op: json!({ "op": "fleet.run" }),
             field: "command",
             empty: Empty::Refuse,
@@ -427,7 +444,7 @@ impl Manage {
                 key: Some('r'),
                 label: "size".into(),
                 note: "give this pane a real width, if it was born tiny".into(),
-                next: size_menu(at),
+                next: size_menu(at, self.matched),
             });
         }
         Next::Pick {
@@ -820,7 +837,7 @@ impl Manage {
 ///
 /// The complement to `zoom` above rather than a replacement for it: `pane.zoom` moves the PTY only
 /// when a client is attached and does nothing at all headless (#265), and this is the other half.
-fn size_menu(at: &str) -> Next {
+fn size_menu(at: &str, matched: Matched) -> Next {
     let rows = [(80, 24), (120, 40), (200, 50)]
         .into_iter()
         .map(|(cols, rows)| Row {
@@ -840,18 +857,54 @@ fn size_menu(at: &str) -> Next {
             },
         })
         .collect();
+    let mut rows: Vec<Row> = rows;
+    // **The standing intent, and its off switch** (ADR 0013). Offered only where it could be
+    // granted: `pane.size`'s floor is 80x24 and a window below it would be refused anyway.
+    if matched.cols >= MATCH_MIN_COLS && matched.rows >= MATCH_MIN_ROWS {
+        rows.push(match matched.on {
+            true => Row {
+                key: Some('m'),
+                label: "stop matching this window".into(),
+                note: "let the pane go back to the size it was".into(),
+                next: Next::Send(json!({ "op": "pane.size", "at": at, "mode": "release" })),
+            },
+            false => Row {
+                key: Some('m'),
+                label: format!("match this window · {}x{}", matched.cols, matched.rows),
+                note: "hold the pane at this terminal's size for as long as it is open".into(),
+                next: Next::Confirm {
+                    lines: vec![
+                        format!("Hold {at} at {}x{} while it is open?", matched.cols, matched.rows),
+                        "Kampr keeps the PTY claimed for as long as you are looking at the pane, \
+                         so the size sticks even on a pane somebody has open at their desk — and \
+                         their screen is wrong the whole time (#298). Letting go puts the pane back \
+                         to the size it is now, unless something else has moved it meanwhile."
+                            .into(),
+                    ],
+                    op: json!({ "op": "pane.size", "at": at,
+                                "cols": matched.cols, "rows": matched.rows, "mode": "match" }),
+                },
+            },
+        });
+    }
     Next::Pick {
         title: "pane size".into(),
         rows,
     }
 }
 
+/// The node's `manage::MIN_COLS`/`MIN_ROWS`, restated because this crate does not depend on it.
+/// A window below this is never offered the switch and never claims: `pane.size` refuses it, and
+/// an op that is always refused is a toast the operator cannot act on.
+pub const MATCH_MIN_COLS: u16 = 80;
+pub const MATCH_MIN_ROWS: u16 = 24;
+
 /// herdr's own pane menu, in its order: rename, the two splits, zoom, close — with `focus` and
 /// `size` from Kampr's own list because they are the two the pointer is the natural way to reach.
 ///
 /// `Send right-clicks to pane` is not here and cannot be: it is this client's passthrough toggle,
 /// which sends nothing and is `prefix m`. A pane that has it armed never opens this menu at all.
-fn pane_rows(entry: &PaneEntry) -> Vec<Row> {
+fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
     let at = entry.id.as_str();
     vec![
         Row {
@@ -888,7 +941,7 @@ fn pane_rows(entry: &PaneEntry) -> Vec<Row> {
             key: Some('w'),
             label: "size".into(),
             note: "give this pane a real width, if it was born tiny".into(),
-            next: size_menu(at),
+            next: size_menu(at, matched),
         },
         Row {
             key: Some('c'),

@@ -50,6 +50,14 @@
     "rows": 50,
     "mode": "hold"
   },
+  "pane.size.match": {
+    "t": "manage",
+    "op": "pane.size",
+    "at": "01JNODE/w3:p2",
+    "cols": 200,
+    "rows": 50,
+    "mode": "match"
+  },
   "pane.size.release": {
     "t": "manage",
     "op": "pane.size",
@@ -140,5 +148,24 @@
     "op": "session.stop",
     "node": "01JNODE",
     "name": "agents"
+  },
+  "fleet.save": {
+    "t": "manage",
+    "op": "fleet.save",
+    "args": [
+      "kampr",
+      "update"
+    ],
+    "label": "update everything"
+  },
+  "fleet.save.entry": {
+    "t": "manage",
+    "op": "fleet.save",
+    "entry": "01JBOOK"
+  },
+  "fleet.drop": {
+    "t": "manage",
+    "op": "fleet.drop",
+    "entry": "01JBOOK"
   }
 }

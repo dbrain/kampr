@@ -168,6 +168,39 @@ class SubmitGuardTest {
         assertNull(guard.state.held)
     }
 
+    // The report: alt+enter in a Claude prompt box sometimes opens a line and sometimes sends the
+    // message. Alt+enter is `ESC CR`, and the only thing that tells a terminal program apart from
+    // Escape-then-Enter is that the two bytes arrive in **one** `read`. Measured on a pty: written
+    // together they always do; written 1 ms apart they never do. The guard cut every payload
+    // carrying a submit in two whether or not it held anything, and each half crossed the wire as
+    // its own `input` message — so the pane got a lone `ESC` and then a lone `CR`, a
+    // `pane.send_text` round trip apart, which #273 measures at p50 1.2 ms. The chord survived
+    // only when the two writes happened to land before the program was scheduled.
+    //
+    // So the payload is cut only when something is actually held back, which is the one case that
+    // has two pieces to send at two different times.
+    @Test
+    fun aChordThatCarriesItsOwnSubmitCrossesTheWireInOnePiece() {
+        val pane = screen(80, "\$ ")
+        val (io, sink, guard) = rig(pane)
+        sink.raw(Esc.ESCAPE + Esc.ENTER)
+        assertNull(guard.state.held, "nothing here was destructive")
+        assertEquals(
+            listOf(Esc.ESCAPE + Esc.ENTER),
+            io.text,
+            "alt+enter reached the pane as an Escape and then an Enter",
+        )
+    }
+
+    @Test
+    fun aCommandTheGuardLetsThroughIsNotCutInTwoEither() {
+        val pane = screen(80, "\$ ")
+        val (io, sink, guard) = rig(pane)
+        sink.raw("ls" + Esc.ENTER)
+        assertNull(guard.state.held)
+        assertEquals(listOf("ls" + Esc.ENTER), io.text)
+    }
+
     @Test
     fun confirmingSendsExactlyWhatWasHeld() {
         val pane = screen(80, "\$ rm -rf build")

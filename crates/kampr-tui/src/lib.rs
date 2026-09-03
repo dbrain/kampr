@@ -205,8 +205,27 @@ async fn drive(
 
 fn fit(app: &mut App, client: &Arc<Client>, tty: &mut Tty) {
     let Some(pane) = app.focused().map(str::to_string) else {
+        app.match_view(None, 0, 0);
         return;
     };
+    let Some(body) = app.layout.pane(&pane).map(|placed| placed.rect) else {
+        return;
+    };
+    let Ok((cols, rows)) = crossterm::terminal::size() else {
+        return;
+    };
+    // The pane's own box, inside kampr's borders. `chrome` is the rest of the terminal, which is
+    // what a resize *request* has to ask for on top of the pane; the same two numbers the other
+    // way round are what the pane would have to be for this window to show all of it.
+    let (grid_cols, grid_rows) = (body.width.saturating_sub(2), body.height.saturating_sub(2));
+    let chrome = Chrome {
+        cols: cols.saturating_sub(grid_cols),
+        rows: rows.saturating_sub(grid_rows),
+    };
+    // **Before the ladder, and it decides what the ladder is allowed to do.** Holding the pane at
+    // this window's size and asking the window to grow to the pane are the same argument had from
+    // both ends, and running both is the ping-pong ADR 0013 exists to have thought about.
+    app.match_view(Some(&pane), grid_cols, grid_rows);
     let need = {
         let state = client.state();
         let cols = state.herd.pane(&pane).and_then(|e| e.cols);
@@ -216,16 +235,6 @@ fn fit(app: &mut App, client: &Arc<Client>, tty: &mut Tty) {
             (None, Some((cols, rows))) if cols > 0 => Need { cols, rows },
             _ => return,
         }
-    };
-    let Some(body) = app.layout.pane(&pane).map(|placed| placed.rect) else {
-        return;
-    };
-    let Ok((cols, rows)) = crossterm::terminal::size() else {
-        return;
-    };
-    let chrome = Chrome {
-        cols: cols.saturating_sub(body.width.saturating_sub(2)),
-        rows: rows.saturating_sub(body.height.saturating_sub(2)),
     };
     app.fit(tty, need, chrome);
 }

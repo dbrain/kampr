@@ -8,6 +8,7 @@
 
 use crate::env::FleetPath;
 use crate::exec::{Geometry, Killer, RunEvent, State, Supervisor, Writer};
+use crate::job::Job;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use kampr_core::provider::AgentStatus;
@@ -32,6 +33,10 @@ pub struct FleetProvider {
     /// Resolved once, at construction, so `kampr doctor` and the first run agree and neither pays
     /// for a login shell in the middle of doing something else.
     path: Option<FleetPath>,
+    /// The shell a [`Job::Shell`] is handed to. Resolved beside the `PATH` and for the same
+    /// reason: reading the operator's `$SHELL`, and failing that their passwd entry, is a thing to
+    /// do once per process and never in the middle of a fan-out.
+    shell: String,
 }
 
 struct Run {
@@ -58,6 +63,7 @@ impl FleetProvider {
     pub fn with_path(configured: Option<String>) -> Self {
         Self {
             path: crate::env::fleet_path(configured),
+            shell: crate::env::login_shell(),
             runs: Mutex::new(HashMap::new()),
             topology: watch::channel(0).0,
         }
@@ -70,15 +76,16 @@ impl FleetProvider {
     pub fn start(
         self: &Arc<Self>,
         cohort: &str,
-        argv: &[String],
+        job: &Job,
         cwd: Option<&str>,
         geometry: Geometry,
     ) -> Result<String> {
-        if argv.is_empty() {
+        if job.is_empty() {
             return Err(anyhow!("a fleet run needs a command"));
         }
+        let argv = job.argv(&self.shell);
         let supervisor =
-            Supervisor::spawn(argv, cwd, geometry, self.path.as_ref().map(|p| p.value.as_str()))?;
+            Supervisor::spawn(&argv, cwd, geometry, self.path.as_ref().map(|p| p.value.as_str()))?;
         let pane_id = format!("fleet:{}", ulid::Ulid::generate());
         // **Blind until proven otherwise.** Whether the node can read this job is an observation
         // the supervisor makes over the run, not something knowable the instant after a fork — see
@@ -89,7 +96,7 @@ impl FleetProvider {
             pane_id: pane_id.clone(),
             info: Mutex::new(FleetPane {
                 cohort: cohort.to_string(),
-                command: argv.join(" "),
+                command: job.line(),
                 state: State::Running,
                 blind,
                 started_unix: now_unix(),

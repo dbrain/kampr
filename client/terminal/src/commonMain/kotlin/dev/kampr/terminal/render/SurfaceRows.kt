@@ -21,6 +21,41 @@ class SurfaceRows(private val pane: PaneState) {
     val capped: Boolean get() = pane.scrollback.capped
     val complete: Boolean get() = pane.scrollback.complete
 
+    // How far the end of what there is to read sits from the end of the surface, counted the way
+    // the caret is — the row itself included, so a pane whose last row is written answers 1 and a
+    // pane with nothing below its caret answers what the caret answers.
+    //
+    // A herdr pane is as tall as the desk made it and the shell fills as much of it as it likes,
+    // so the grid's last row and the content's last row are two different rows on a pane that has
+    // just been cleared, or has four lines in a ninety-row window. Everything below the second is
+    // blank tail: it is drawn, because the surface paints the whole viewport, but there is nothing
+    // in it to travel to.
+    //
+    // **The caret is content**, which is what makes this a live-grid scan and never a history one:
+    // a cleared shell is a prompt and a place to type, both on a live row, and the caret cannot be
+    // in history — so the answer is always a row at or below it and the walk stops there. That
+    // bounds the cost by the blank tail itself, which is the only case that has any: a pane whose
+    // last row is written costs one row of comparisons, and a pane with none costs zero.
+    //
+    // Blank is the glyph *and* the pen: a full-width run of spaces in a program's own colours is a
+    // status bar, not an empty row, and stopping above one would put it out of reach.
+    fun contentBelow(cursorRow: Int): Int {
+        val width = cols
+        val live = liveRows
+        val caret = cursorRow.coerceIn(0, (live - 1).coerceAtLeast(0))
+        if (width == 0) return live - caret
+        val cells = pane.cells
+        var row = live - 1
+        while (row > caret) {
+            val base = row * width
+            for (cell in base until base + width) {
+                if (cells.glyphs[cell] != BLANK || cells.styles[cell].toInt() != 0) return live - row
+            }
+            row--
+        }
+        return live - caret
+    }
+
     // One code point per column, with TAIL where a column is the right half of the double-width
     // glyph beside it, and `marks` carrying whatever each cell wears on top of that code point.
     // Scrollback rows are decoded from their runs the same way the live buffer decodes them, so

@@ -7,6 +7,7 @@
 //!
 //! Nothing here needs herdr and nothing here touches the operator's sessions.
 
+use kampr_fleet::Job;
 use kampr_fleet::exec::{Geometry, RunEvent, State, Supervisor};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -21,7 +22,22 @@ struct Run {
 }
 
 fn start(script: &str) -> Run {
-    let argv = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+    spawn(&Job::Argv(vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        script.to_string(),
+    ]))
+}
+
+/// The same, through the shell a real fleet run is given: the operator's own, from `$SHELL` or
+/// their passwd entry, with neither `-l` nor `-i`. On this machine that is a `bash` whose
+/// `.bashrc` sources ble.sh, which is the whole reason these assertions exist.
+fn typed(line: &str) -> Run {
+    spawn(&Job::Shell(line.to_string()))
+}
+
+fn spawn(job: &Job) -> Run {
+    let argv = job.argv(&kampr_fleet::env::login_shell());
     let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
     let writer = supervisor.writer();
     let killer = supervisor.killer();
@@ -367,4 +383,94 @@ fn passwordless_sudo() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// **The dangerous half of putting a shell on a fleet pty, and it holds.**
+///
+/// #337 says ECHO going off is an honest password signal here *because there is no shell on the
+/// pty*; #333 says ble.sh leaves a shell's tty with ECHO already off before anything asks for
+/// anything. A run that understands `&&` has a shell on that pty, so this asserts the signal
+/// against the operator's real shell on the machine where ble.sh is installed.
+///
+/// The measurement behind it: a `bash -c` fleet pty reads `BLE_VERSION` unset and `$-` as `hBc` —
+/// no `i`, so `.bashrc` returns at its own guard — and reads `ECHO on, ICANON on` at idle against
+/// `ECHO OFF, ICANON on` at a prompt, which is what a pty with nothing on it reads. `bash -i` on
+/// the same pty reads `ECHO OFF, ICANON OFF` while merely sitting there, which is #333.
+#[tokio::test]
+async fn a_password_prompt_through_the_operators_own_shell_is_still_a_secret() {
+    let mut run = typed("stty -echo; printf 'Password: '; read p; stty echo; echo");
+    let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
+    let State::Waiting(question) = state else {
+        unreachable!()
+    };
+    assert!(
+        question.secret(),
+        "a shell on the pty put #333's ECHO confound back: {:?}",
+        question.shape
+    );
+    assert!(question.options().is_empty());
+    run.writer.write(b"hunter2\n").expect("the answer went in");
+    let end = run.finish().await;
+    assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
+}
+
+/// And the other direction: a shell sitting on the pty doing ordinary work must not read as a
+/// secret, or every fleet run would render as a password box. This is the assertion #333 would
+/// break — an interactive shell fails it before it asks anything at all.
+#[tokio::test]
+async fn a_shell_merely_running_a_command_is_never_reported_as_a_secret() {
+    let mut run = typed("printf 'ready\n'; sleep 1; printf 'Continue? [Y/n] '; read a; echo ok");
+    let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
+    let State::Waiting(question) = state else {
+        unreachable!()
+    };
+    assert!(
+        !question.secret(),
+        "an ordinary prompt read as a password: {:?}",
+        question.shape
+    );
+    assert_eq!(question.options().len(), 2, "{:?}", question.shape);
+    run.writer.write(b"y\n").expect("the answer went in");
+    let end = run.finish().await;
+    assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
+}
+
+/// **A pipeline is not a question.** Measured: `bash -c 'sleep 30 | cat'` parks `cat` in
+/// `splice(2)` on fd 0 — byte for byte the line a `cat` at a terminal produces — and fd 0 there is
+/// a pipe. Rung 1 keyed on the syscall alone puts this host on the board as needing somebody, for
+/// as long as the pipeline runs, with nothing to answer.
+#[tokio::test]
+async fn a_host_running_a_pipeline_is_not_reported_as_one_waiting_for_an_answer() {
+    let mut run = typed("sleep 2 | cat; echo done");
+    let mut seen = Vec::new();
+    let collect = tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(event) = run.events.recv().await {
+            if let RunEvent::State(state) = event {
+                let finished = state.finished();
+                seen.push(state);
+                if finished {
+                    return;
+                }
+            }
+        }
+    });
+    let _ = collect.await;
+    assert!(
+        !seen.iter().any(|s| matches!(s, State::Waiting(_))),
+        "the tail of a pipeline was reported as a host asking something: {seen:?}",
+    );
+    run.killer.kill();
+}
+
+/// And the front of a pipeline, which does hold the terminal, is still a question — so the
+/// narrowing above removed a false answer rather than a true one.
+#[tokio::test]
+async fn the_end_of_a_pipeline_that_reads_the_terminal_is_still_a_question() {
+    let mut run = typed("printf 'Proceed? [Y/n] '; read a | cat; echo got");
+    let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
+    let State::Waiting(question) = state else {
+        unreachable!()
+    };
+    assert_eq!(question.prompt, "Proceed? [Y/n]");
+    run.killer.kill();
 }

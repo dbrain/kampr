@@ -60,6 +60,7 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneIo
@@ -195,6 +196,7 @@ fun MosaicCell(
         CompositionLocalProvider(
             LocalPaneIo provides io,
             LocalPaneChrome provides PaneChrome(header),
+            LocalMosaicCell provides true,
         ) {
             surfaces.Terminal(pane, info, Modifier.fillMaxSize())
         }

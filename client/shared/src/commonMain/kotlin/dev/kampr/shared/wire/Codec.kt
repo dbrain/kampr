@@ -131,6 +131,10 @@ object Wire {
                     )
                 } ?: emptyMap()
             )
+            "fleet.book" -> ServerMsg.FleetBook(
+                recent = obj.decodeList<FleetCommand>("recent"),
+                saved = obj.decodeList<FleetCommand>("saved"),
+            )
             "pong" -> ServerMsg.Pong(obj.int("n") ?: 0)
             else -> null
         }

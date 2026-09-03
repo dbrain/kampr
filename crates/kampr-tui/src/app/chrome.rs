@@ -611,6 +611,14 @@ impl App {
             if let Some(watchers) = state.herd.pane(pane).and_then(|e| e.watchers).filter(|w| *w > 1) {
                 parts.push(format!("{watchers} watching"));
             }
+            // **Said out loud, always.** The hold is the one thing this client does to a pane
+            // without being asked each time (ADR 0013), and while it stands the desk at that
+            // machine renders wrong and is told nothing (#298). An operator who did not want it
+            // has to be able to see it before they can find the switch — which is `size` in the
+            // manage menu, one row down from where this sentence sends them.
+            if let Some((cols, rows)) = self.matched(pane) {
+                parts.push(format!("holding {cols}x{rows}"));
+            }
             if let Some(held) = state.pane(pane) {
                 let (cols, _) = held.geometry();
                 let pan = self.pans.get(pane).copied().unwrap_or_default();

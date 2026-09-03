@@ -4,13 +4,18 @@
 use super::{App, Screen, View, navigable, open_url};
 use crate::input::Outcome;
 use crate::keymap::{Action, Dir, Mode};
-use crate::manage::Progress;
+use crate::manage::{MATCH_MIN_COLS, MATCH_MIN_ROWS, Progress};
 use crate::mouse::Link;
 use crate::render::fit;
 use crate::sidebar::{self, Row};
 use crossterm::event::KeyEvent;
 use kampr_client::{Event, ManageError, Managed};
 use kampr_term::Cell;
+use serde_json::json;
+use std::time::Duration;
+
+/// How long the window has to hold still before its size is asked for.
+const MATCH_SETTLE: Duration = Duration::from_millis(250);
 
 impl App {
     pub fn key(&mut self, key: KeyEvent) {
@@ -202,7 +207,93 @@ impl App {
             }
             return;
         }
+        // **The off switch, and it is a real op rather than a switch with no wire behind it.** The
+        // size menu's release is what an operator presses to stop a pane being matched, so this is
+        // where the answer is remembered — otherwise the next `fit` would claim it straight back.
+        if op["op"] == "pane.size"
+            && let Some(at) = op["at"].as_str()
+        {
+            match op["mode"].as_str() {
+                Some("release") => {
+                    self.unmatched.insert(at.to_string());
+                    if self.matching.as_ref().is_some_and(|(p, _, _)| p == at) {
+                        self.matching = None;
+                    }
+                    self.settling = None;
+                }
+                Some("match") => {
+                    self.unmatched.remove(at);
+                }
+                _ => {}
+            }
+        }
         self.send_manage(op);
+    }
+
+    /// The standing intent to hold the focused pane at this window's own size, and the one place
+    /// in this client that asks for a resize nobody typed.
+    ///
+    /// It is ADR 0012's op under a setting, not a second path: the same `pane.size`, the same
+    /// 80x24 floor, and a hold the node ties to this websocket so that a client which dies takes
+    /// the hold with it. See [ADR 0013](../../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
+    ///
+    /// **A fleet pane is skipped and needs to be.** It is a pty this node forked for a job of its
+    /// own, sized when the run started, with no operator desk to trample — rule 3's other half.
+    pub fn match_view(&mut self, pane: Option<&str>, cols: u16, rows: u16) {
+        self.matching_step(pane, cols, rows);
+        // What the size menu offers, and whether it offers "start" or "stop".
+        self.manage.observing(crate::manage::Matched {
+            cols,
+            rows,
+            on: self.matching.is_some(),
+        });
+    }
+
+    fn matching_step(&mut self, pane: Option<&str>, cols: u16, rows: u16) {
+        let want = pane.filter(|pane| {
+            self.options.match_view
+                && !self.unmatched.contains(*pane)
+                && cols >= MATCH_MIN_COLS
+                && rows >= MATCH_MIN_ROWS
+                && self
+                    .client
+                    .state()
+                    .herd
+                    .pane(pane)
+                    .is_some_and(|entry| entry.fleet.is_none())
+        });
+        let target = want.map(|pane| (pane.to_string(), cols, rows));
+        if self.matching != target
+            && let Some((held, _, _)) = self.matching.take()
+        {
+            self.send_manage(json!({ "op": "pane.size", "at": held, "mode": "release" }));
+        }
+        let Some(target) = target else {
+            self.settling = None;
+            return;
+        };
+        if self.matching.as_ref() == Some(&target) {
+            return;
+        }
+        // The window has to hold still first. A drag arrives as a run of `Resize` events and every
+        // one of them would otherwise claim the PTY again.
+        let now = std::time::Instant::now();
+        match &self.settling {
+            Some((seen, since)) if *seen == target => {
+                if now.duration_since(*since) < MATCH_SETTLE {
+                    return;
+                }
+            }
+            _ => {
+                self.settling = Some((target, now));
+                return;
+            }
+        }
+        let (pane, cols, rows) = self.settling.take().expect("a settled size").0;
+        self.matching = Some((pane.clone(), cols, rows));
+        self.send_manage(json!({
+            "op": "pane.size", "at": pane, "cols": cols, "rows": rows, "mode": "match"
+        }));
     }
 
     fn send_manage(&mut self, op: serde_json::Value) {

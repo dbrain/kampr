@@ -36,6 +36,14 @@ pub struct ManageOp {
     pub name: Option<String>,
     #[serde(default)]
     pub args: Option<Vec<String>>,
+    /// A fleet run written the way the operator would type it into their own shell, with `&&`,
+    /// `|`, quotes and globs meaning what they mean there.
+    ///
+    /// Additive beside `args`, never instead of it: a client that has never heard of this field
+    /// goes on sending an argv and that argv goes on being `exec`ed with nothing in front of it.
+    /// When both arrive this one wins, because only a client that knows about it sends it.
+    #[serde(default)]
+    pub command: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
     #[serde(default)]
@@ -52,6 +60,16 @@ pub struct ManageOp {
     /// and no single node can name it.
     #[serde(default)]
     pub cohort: Option<String>,
+    /// A fleet book entry. A field of its own rather than `at`, which is routed: a book entry id
+    /// names no host, and putting one in `at` would send `fleet.drop` down a mesh link looking for
+    /// the node that owns it.
+    #[serde(default)]
+    pub entry: Option<String>,
+    /// Names the hold a `pane.size` release is letting go of, so that a viewer which has already
+    /// been displaced by a newer one cannot take the newer one's hold down with it. Absent on
+    /// every release an operator makes by hand, which lets go of whatever is standing.
+    #[serde(default)]
+    pub lease: Option<u64>,
 }
 
 /// The smallest pane `pane.size` will produce.
@@ -95,6 +113,20 @@ pub fn checked_size(cols: u32, rows: u32) -> Result<(u32, u32), ManageError> {
 /// geometry to lose. It is not `pane.size`, it never reaches herdr, and no view switch, fit,
 /// reconnect or layout can call it — the size is fixed when the run starts and the only other
 /// caller is the operator asking for a different one on a new run.
+/// What a `fleet.run` asks to have run, in whichever of the two shapes the client sent.
+///
+/// **`command` first, and it is not a reinterpretation of `args`.** The two mean different things
+/// and always have: `args` is an argv and is `exec`ed with nothing in front of it, `command` is a
+/// line the operator's own shell parses. A client sends one or the other, and one that sends both
+/// is a new client whose `args` is only there for something older to render.
+pub fn fleet_job(op: &ManageOp) -> Option<kampr_fleet::Job> {
+    if let Some(line) = op.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        return Some(kampr_fleet::Job::Shell(line.to_string()));
+    }
+    let argv = op.args.clone().filter(|a| !a.is_empty())?;
+    Some(kampr_fleet::Job::Argv(argv))
+}
+
 fn fleet_geometry(op: &ManageOp) -> Result<kampr_fleet::Geometry, ManageError> {
     let default = kampr_fleet::Geometry::default();
     let (cols, rows) = match (op.cols, op.rows) {
@@ -255,12 +287,11 @@ impl Manager<'_> {
     fn fleet_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
         match op.op.as_str() {
             "fleet.run" => {
-                let argv = op.args.clone().unwrap_or_default();
-                if argv.is_empty() {
-                    return Err(ManageError::BadRequest(
-                        "fleet.run needs `args`, the command to run".into(),
-                    ));
-                }
+                let job = fleet_job(op).ok_or_else(|| {
+                    ManageError::BadRequest(
+                        "fleet.run needs `command`, the line to run, or `args`, an argv".into(),
+                    )
+                })?;
                 let cohort = op.cohort.clone().ok_or_else(|| {
                     ManageError::BadRequest(
                         "fleet.run needs a `cohort` so its panes can be grouped with the rest of                          the run"
@@ -270,7 +301,7 @@ impl Manager<'_> {
                 let geometry = fleet_geometry(op)?;
                 let pane = self
                     .fleet
-                    .start(&cohort, &argv, op.cwd.as_deref(), geometry)
+                    .start(&cohort, &job, op.cwd.as_deref(), geometry)
                     .map_err(|e| ManageError::BadRequest(e.to_string()))?;
                 Ok(json!({ "pane_id": pane, "cohort": cohort }))
             }
@@ -549,6 +580,10 @@ impl Manager<'_> {
     ///   plausible-looking success, which is the failure this project has paid for before (#233).
     /// - `hold` keeps the claim so the size survives on an attached pane, at the cost of that desk
     ///   rendering wrong while it is held (#298). Never implicit; the operator ticks it.
+    /// - `match` is `hold` with an owner and an undo: the hold belongs to the websocket session
+    ///   that asked for it, so it ends when that view does however the view ends, and it records
+    ///   the geometry it found so that letting go puts the pane back. See
+    ///   [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
     /// - `release` lets a hold go.
     async fn size_pane(&self, op: &ManageOp) -> Result<Value, ManageError> {
         let Target::Pane(pane) = self.target(op)? else {
@@ -557,14 +592,17 @@ impl Manager<'_> {
         let mode = op.mode.as_deref().unwrap_or("once");
 
         if mode == "release" {
-            let held = self.holds.release(&pane);
+            let held = match op.lease {
+                Some(token) => self.holds.let_go(&pane, token),
+                None => self.holds.release(&pane),
+            };
             let rows = self.viewport_rows(&pane).await;
             return Ok(json!({ "pane_id": pane, "held": false, "was_held": held, "rows": rows }));
         }
 
         // Checked before the numbers, so an unknown mode is reported as an unknown mode rather
         // than as the missing `cols` it also happens to have.
-        if !matches!(mode, "hold" | "once") {
+        if !matches!(mode, "hold" | "once" | "match") {
             return Err(ManageError::BadRequest(format!("unknown size mode {mode}")));
         }
         let (cols, rows) = match (op.cols, op.rows) {
@@ -577,9 +615,31 @@ impl Manager<'_> {
         // the second with `already has an attached client` (#21), so a re-size while holding has to
         // release first or it fails outright — and the release is asynchronous, so this waits for
         // the pane to actually be free rather than racing it.
-        if self.holds.release(&pane) {
-            self.holds.wait_until_free(&pane).await;
-        }
+        //
+        // A match carries the displaced hold's restore forward instead of dropping it, which is
+        // what stops a window drag — or a handover to a second viewer — from turning the size
+        // Kampr set into the size Kampr puts back.
+        let carried = match mode {
+            "match" => {
+                let carried = self.holds.carry_for_match(&pane);
+                self.holds.wait_until_free(&pane).await;
+                carried
+            }
+            _ => {
+                if self.holds.release(&pane) {
+                    self.holds.wait_until_free(&pane).await;
+                }
+                None
+            }
+        };
+        // Read before the claim, because after it the answer is the claim's own (#18).
+        let found = match mode {
+            "match" => match carried {
+                Some(found) => Some(found),
+                None => self.found_geometry(&pane).await,
+            },
+            _ => None,
+        };
 
         let socket = self.herdr.socket().to_path_buf();
         let controller = kampr_herdr::Controller::claim(self.binary, &socket, &pane, cols, rows)
@@ -588,11 +648,31 @@ impl Manager<'_> {
 
         match mode {
             "hold" => {
-                self.holds.park(&pane, controller);
+                self.holds
+                    .park(&pane, controller, crate::holds::PANEL_LIMIT, None);
                 // A held controller *is* the pane's geometry until it lets go (#18), so there is
                 // nothing left to check: this is the width.
                 self.provider.resized(&pane, cols as u16);
                 Ok(json!({ "pane_id": pane, "cols": cols, "rows": rows, "held": true }))
+            }
+            "match" => {
+                let restore = found.map(|found| crate::restore::Restore {
+                    binary: self.binary.to_string(),
+                    herdr: self.herdr.clone(),
+                    provider: self.provider.clone(),
+                    found,
+                    applied_rows: rows,
+                });
+                // No deadline. A matched hold's ceiling is the websocket session that owns it,
+                // and that session releases it on every path out including a cancellation — so a
+                // clock would only ever fire on an operator who was still looking at the pane.
+                let token = self.holds.park(&pane, controller, None, restore);
+                self.provider.resized(&pane, cols as u16);
+                Ok(json!({
+                    "pane_id": pane, "cols": cols, "rows": rows,
+                    "held": true, "matched": true, "lease": token,
+                    "found_cols": found.map(|(c, _)| c), "found_rows": found.map(|(_, r)| r),
+                }))
             }
             _ => {
                 controller
@@ -617,6 +697,21 @@ impl Manager<'_> {
                 }))
             }
         }
+    }
+
+    /// The pane's own geometry before a matched hold claims it, and `None` unless **both** halves
+    /// are honest.
+    ///
+    /// Rows come from `viewport_rows`, which is the PTY's and not the rect's (#84, #207). Columns
+    /// come from a wrap the node has actually measured — the rect is fiction (#68) and nothing on
+    /// the socket API reports a column count anywhere (#221) — so a pane that has never wrapped
+    /// has no width worth putting back, and putting the rect back would be a resize to a number no
+    /// row was ever laid out at. Nothing is better than a guess here: the pane keeps the viewer's
+    /// size until something deliberate moves it, which is what `pane.size` is for.
+    async fn found_geometry(&self, pane: &str) -> Option<(u16, u16)> {
+        let cols = self.provider.measured_cols(pane)?;
+        let rows = u16::try_from(self.viewport_rows(pane).await?).ok()?;
+        (rows > 0).then_some((cols, rows))
     }
 
     /// The PTY's rows, or `None` if herdr will not say. Never an error: this is the *check* after
@@ -789,7 +884,15 @@ fn layout_root(layout: Option<&Value>) -> Result<Value, ManageError> {
 ///
 /// A session is deliberately not one of them: it is named, not addressed, and node-qualifying its
 /// name produced an `id` shaped exactly like a pane id for something no client can watch.
-pub fn created_id(reply: &Value) -> Option<String> {
+///
+/// **A fleet run is the one creating op herdr never sees**, so its pane id is this node's own and
+/// sits at the top level rather than inside a record. It is keyed on the op rather than found by
+/// widening the search, because `pane.size` answers a top-level `pane_id` too and it creates
+/// nothing — an `id` there would tell a client to wait for a herd patch that is never coming.
+pub fn created_id(op: &str, reply: &Value) -> Option<String> {
+    if op == "fleet.run" {
+        return reply["pane_id"].as_str().map(str::to_string);
+    }
     for (record, field) in [
         ("workspace", "workspace_id"),
         ("tab", "tab_id"),
@@ -801,6 +904,44 @@ pub fn created_id(reply: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// What an op *measured*, as against what it echoed back — the half of a reply that is news.
+///
+/// `id` and `layout` are the two the ack already carried, and both are facts about a thing that
+/// was created. This is the other kind: a fact about whether the op did what it was asked to.
+///
+/// **`pane.size` is the whole reason it exists.** It is the one op ADR 0012 lets reshape a pane,
+/// it claims the PTY and then *checks*, and on an attached pane the desk takes the geometry
+/// straight back inside a second (#19) — so `kept: false` is a routine answer and it was being
+/// dropped on the floor, leaving the client told `ok: true` about a resize that did not happen.
+/// That is [#233](#)'s shape on the one op that exists to be deliberate.
+///
+/// Additive, by rule: a client that has never heard of these fields is left exactly where it was.
+pub fn measured(op: &str, reply: &Value) -> Vec<(&'static str, Value)> {
+    const SIZE: &[&str] = &[
+        "cols",
+        "rows",
+        "held",
+        "kept",
+        "measured_rows",
+        "was_held",
+        "matched",
+        "lease",
+        "found_cols",
+        "found_rows",
+    ];
+    let fields: &[&'static str] = match op {
+        "pane.size" => SIZE,
+        _ => &[],
+    };
+    fields
+        .iter()
+        // A field herdr would not answer for is absent rather than null: `measured_rows` is
+        // `None` when `pane.get` did not answer, and a client cannot read a null as a row count.
+        .filter(|field| !reply[*field].is_null())
+        .map(|field| (*field, reply[*field].clone()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -911,25 +1052,147 @@ mod tests {
     fn a_created_id_is_found_wherever_herdr_put_it() {
         assert_eq!(
             created_id(
+                "workspace.create",
                 &json!({"type":"workspace_created","workspace":{"workspace_id":"w1"},
                                "tab":{"tab_id":"w1:t1"}})
             ),
             Some("w1".into())
         );
         assert_eq!(
-            created_id(&json!({"tab":{"tab_id":"w1:t2"}})),
+            created_id("tab.create", &json!({"tab":{"tab_id":"w1:t2"}})),
             Some("w1:t2".into())
         );
         assert_eq!(
-            created_id(&json!({"pane":{"pane_id":"w1:p3"}})),
+            created_id("pane.split", &json!({"pane":{"pane_id":"w1:p3"}})),
             Some("w1:p3".into())
         );
         assert_eq!(
-            created_id(&json!({"session":"agents"})),
+            created_id("session.create", &json!({"session":"agents"})),
             None,
             "a session name is not a pane id"
         );
-        assert_eq!(created_id(&json!({"type":"ok"})), None);
+        assert_eq!(created_id("close", &json!({"type":"ok"})), None);
+    }
+
+    /// A fleet run creates a pane herdr never hears about, and its id is the node's own — so it
+    /// sits at the top level and the record walk above cannot see it. Without this the one op
+    /// that makes a pane out of nothing acked with no `id` at all, while the wire promises one
+    /// for every op that creates something.
+    #[test]
+    fn a_fleet_run_acks_the_pane_it_made_and_a_resize_acks_no_id_at_all() {
+        assert_eq!(
+            created_id("fleet.run", &json!({"pane_id":"fleet:abc","cohort":"c1"})),
+            Some("fleet:abc".into())
+        );
+        // The reason it is keyed on the op: this reply has a top-level `pane_id` too, and it
+        // created nothing. An `id` here tells a client to wait for a herd patch that never comes.
+        assert_eq!(
+            created_id("pane.size", &json!({"pane_id":"w1:p1","cols":100,"rows":30})),
+            None
+        );
+    }
+
+    /// A matched hold has to say so, and has to say what letting go will put back — a client that
+    /// is told `held: true` and nothing else cannot tell the panel's hold from its own view's, and
+    /// cannot say what the release will do. `found_*` is absent rather than null when the node has
+    /// nothing honest to put back, because a rect is not a width (#68, #221).
+    #[test]
+    fn a_matched_hold_says_it_is_one_and_says_what_it_will_put_back() {
+        let fields = |reply: &Value| -> Vec<&'static str> {
+            measured("pane.size", reply).into_iter().map(|(f, _)| f).collect()
+        };
+        let carried = fields(&json!({"pane_id":"w1:p1","cols":200,"rows":50,"held":true,
+                                     "matched":true,"lease":7,"found_cols":93,"found_rows":40}));
+        assert!(
+            carried.contains(&"matched") && carried.contains(&"lease"),
+            "{carried:?}"
+        );
+        assert!(
+            carried.contains(&"found_cols") && carried.contains(&"found_rows"),
+            "{carried:?}"
+        );
+        // `lease` travels because a hub is a client of a peer: the hold lives on the peer, and the
+        // hub is the only thing that will ever be in a position to let go of *that* hold rather
+        // than whatever is standing. What must never travel is a `found_*` that is `null`, which
+        // is a column count that is not a column count.
+        let unproved = fields(&json!({"pane_id":"w1:p1","cols":200,"rows":50,"held":true,
+                                      "matched":true,"found_cols":null,"found_rows":null}));
+        assert!(!unproved.contains(&"found_cols"), "{unproved:?}");
+        assert!(!unproved.contains(&"found_rows"), "{unproved:?}");
+    }
+
+    /// The measurement `pane.size` makes and the ack used to throw away. `kept: false` is the
+    /// routine answer on an attached pane (#19) and it is the difference between a resize that
+    /// happened and one that did not.
+    #[test]
+    fn a_resize_ack_carries_what_it_measured_and_omits_what_it_could_not() {
+        let fields = |op, reply: &Value| -> Vec<(String, Value)> {
+            measured(op, reply)
+                .into_iter()
+                .map(|(f, v)| (f.to_string(), v))
+                .collect()
+        };
+
+        let took = fields(
+            "pane.size",
+            &json!({"pane_id":"w1:p1","cols":100,"rows":30,"held":false,
+                    "kept":true,"measured_rows":30}),
+        );
+        assert_eq!(
+            took,
+            vec![
+                ("cols".into(), json!(100)),
+                ("rows".into(), json!(30)),
+                ("held".into(), json!(false)),
+                ("kept".into(), json!(true)),
+                ("measured_rows".into(), json!(30)),
+            ]
+        );
+
+        // The failure this whole thing is about: herdr took the claim and gave the geometry
+        // straight back, so the numbers asked for are not the numbers the pane has.
+        let refused = fields(
+            "pane.size",
+            &json!({"pane_id":"w1:p1","cols":100,"rows":30,"held":false,
+                    "kept":false,"measured_rows":24}),
+        );
+        assert!(
+            refused.contains(&("kept".to_string(), json!(false))),
+            "{refused:?}"
+        );
+
+        // `pane.get` would not answer, so there is no measurement — and a null row count is not
+        // a row count. It goes absent rather than travelling as `null`.
+        let unmeasured = fields(
+            "pane.size",
+            &json!({"pane_id":"w1:p1","cols":100,"rows":30,"held":false,
+                    "kept":false,"measured_rows":null}),
+        );
+        assert!(
+            !unmeasured.iter().any(|(f, _)| f == "measured_rows"),
+            "{unmeasured:?}"
+        );
+        assert!(unmeasured.contains(&("kept".to_string(), json!(false))));
+
+        // A hold says it is held; a release says whether there was anything to let go of.
+        assert!(
+            fields(
+                "pane.size",
+                &json!({"pane_id":"w1:p1","cols":100,"rows":30,"held":true})
+            )
+            .contains(&("held".to_string(), json!(true)))
+        );
+        assert!(
+            fields(
+                "pane.size",
+                &json!({"pane_id":"w1:p1","held":false,"was_held":true,"rows":30})
+            )
+            .contains(&("was_held".to_string(), json!(true)))
+        );
+
+        // Every other op measures nothing, and an ack that grew fields for them would be a wire
+        // promise nothing keeps.
+        assert!(fields("pane.split", &json!({"pane":{"pane_id":"w1:p3"},"kept":true})).is_empty());
     }
 
     #[test]

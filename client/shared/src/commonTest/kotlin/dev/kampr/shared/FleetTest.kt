@@ -3,18 +3,23 @@ package dev.kampr.shared
 import dev.kampr.shared.model.AnswerRefusal
 import dev.kampr.shared.model.FleetRefused
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.cohorts
 import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.groups
+import dev.kampr.shared.model.balanced
 import dev.kampr.shared.model.matching
 import dev.kampr.shared.model.recipients
-import dev.kampr.shared.model.splitCommand
+import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.FleetInfo
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Question
 import dev.kampr.shared.wire.QuestionOption
 import dev.kampr.shared.wire.Wire
+import dev.kampr.shared.wire.fields
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -212,13 +217,32 @@ class FleetTest {
         assertEquals(0, fleetTargets(listOf(node("a", online = false, reachable = null))).size)
     }
 
+    // **The wire's two shapes, and why only one of them is sent now.** `command` is the line the
+    // operator typed, for the host's own shell; `args` is the argv `fleet.run` has always meant and
+    // is what clients built before this send. Sending both would be a second answer for the node to
+    // disagree with, and sending an argv now would put a `|` back in `find`'s hands.
     @Test
-    fun quotedArgumentsStayOneArgumentAndMetacharactersDoNotRun() {
-        assertContentEquals(listOf("sh", "-c", "echo one two"), splitCommand("""sh -c "echo one two"""")!!)
-        // No `sh -c` sits between the operator and the command, so `; reboot` is a word.
-        assertContentEquals(listOf("pacman", "-Syu", ";", "reboot"), splitCommand("pacman -Syu ; reboot")!!)
-        assertContentEquals(listOf("foo", "", "bar"), splitCommand("""foo "" bar""")!!)
-        assertNull(splitCommand("""sh -c "echo oops"""), "an unclosed quote is refused, not guessed at")
+    fun aFleetRunCarriesTheLineTheOperatorTypedAndNoArgv() {
+        val line = """find . -name "*.rs" | wc -l"""
+        val fields = ManageOp.FleetRun(node = "n1", cohort = "c1", command = line).fields()
+        assertEquals(line, (fields["command"] as JsonPrimitive).content)
+        assertNull(fields["args"], "an argv beside the line is a second answer to disagree with")
+    }
+
+    // The only thing checked before a line reaches every machine in the herd. Everything else is
+    // the host's own shell's, on purpose — `&&`, `|`, `;`, globs and quotes all mean there what
+    // they mean in the operator's terminal. Kept in step with `kampr_client::fleet::balanced`.
+    @Test
+    fun onlyAnUnclosedQuoteIsRefusedAndEverythingElseIsTheShellsToRead() {
+        assertTrue(balanced("""find . -name "*.rs" | wc -l"""))
+        assertTrue(balanced("pacman -Syu && reboot"))
+        assertTrue(balanced("""git commit -m 'a message'"""))
+        assertFalse(balanced("""sh -c "echo oops"""), "an unclosed quote is refused, not guessed at")
+        // A checker cruder than the shell it stands in front of would refuse a run that works.
+        assertTrue(balanced("""echo \""""), "an escaped quote is not an unclosed one")
+        assertTrue(balanced("""echo "a \" b""""))
+        assertTrue(balanced("""echo "don't""""))
+        assertTrue(balanced("""echo 'a\'"""), "inside single quotes a backslash is a backslash")
     }
 
     @Test
@@ -248,6 +272,49 @@ class FleetTest {
         assertEquals("y", question.defaultKey)
         assertEquals(2, question.answerable.size)
         assertFalse(fleet.succeeded)
+    }
+
+    // The frame the node pushes unasked, into the state the sheet renders. Without this the
+    // decode could be wrong in any way at all and only a running node would say so.
+    @Test
+    fun theFleetBookDecodesOffTheWireAndLandsInTheStore() {
+        val frame = """
+            {"t":"fleet.book",
+             "recent":[{"id":"b2","args":["pacman","-Syu"],"at":1774000000}],
+             "saved":[{"id":"b1","args":["kampr","update"],"cwd":"/srv",
+                       "label":"update everything","at":1774000001}]}
+        """.trimIndent()
+        val store = KamprStore()
+        store.accept(Wire.decode(frame)!!)
+        val book = store.book.value
+        assertEquals(listOf("pacman", "-Syu"), book.recent.single().args)
+        assertEquals("pacman -Syu", book.recent.single().command)
+        assertNull(book.recent.single().label)
+        assertEquals("update everything", book.saved.single().label)
+        assertEquals("/srv", book.saved.single().cwd)
+        assertEquals("b1", book.saved.single().id)
+    }
+
+    // A delete is an absence, and a merge cannot express one — so the book is replaced whole
+    // rather than merged the way `prefs` is.
+    @Test
+    fun aLaterBookReplacesTheOneBeforeItRatherThanMergingWithIt() {
+        val store = KamprStore()
+        store.accept(Wire.decode("""{"t":"fleet.book","recent":[{"id":"b2","args":["uptime"]}]}""")!!)
+        store.accept(Wire.decode("""{"t":"fleet.book","recent":[],"saved":[]}""")!!)
+        assertEquals(emptyList(), store.book.value.recent)
+    }
+
+    // The two ops carry `entry` and never `at`: `at` is what the node routes on, and a book entry
+    // names no host — one sent there would go down a mesh link looking for the node that owns it.
+    @Test
+    fun aBookOpAddressesAnEntryAndNeverARoutedTarget() {
+        val save = Wire.encode(ClientMsg.Manage(ManageOp.FleetSave(entry = "b1", label = "load")))
+        assertEquals("""{"t":"manage","op":"fleet.save","entry":"b1","label":"load"}""", save)
+        assertEquals(
+            """{"t":"manage","op":"fleet.drop","entry":"b1"}""",
+            Wire.encode(ClientMsg.Manage(ManageOp.FleetDrop("b1"))),
+        )
     }
 
     @Test

@@ -2348,6 +2348,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "ulid",
  "url",
  "webauthn-rs",
 ]
@@ -2413,6 +2414,7 @@ version = "0.1.53"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "kampr-herdr",
  "kampr-journal",
  "kampr-term",
@@ -2451,6 +2453,7 @@ version = "0.1.53"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

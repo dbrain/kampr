@@ -30,6 +30,21 @@ struct FakeHerdr {
     /// so that what the provider reads out of procfs is a real answer.
     agent: Mutex<Option<String>>,
     harness: Mutex<Option<u32>>,
+    /// Which panes the herd has. A list rather than the one pane, because every cost this fake
+    /// is used to count is per pane.
+    panes: Mutex<Vec<String>>,
+    /// What `pane.process_info` names in the pane's foreground besides any harness — a job the
+    /// operator started, which is the thing a pane's `cmd` is.
+    job: Mutex<Option<String>>,
+    /// How long `pane.process_info` takes to answer, and the deepest overlap ever seen while it
+    /// did. A hold is what makes concurrency observable at all: N calls that each answer
+    /// instantly overlap or not by luck, and N that each take a moment overlap only if they were
+    /// actually issued together.
+    process_hold: Mutex<Duration>,
+    /// How long `session.snapshot` takes to answer. #445's slow mode, on demand.
+    snapshot_hold: Mutex<Duration>,
+    inflight: AtomicUsize,
+    peak: AtomicUsize,
     _dir: tempfile::TempDir,
     socket: std::path::PathBuf,
 }
@@ -46,6 +61,12 @@ impl FakeHerdr {
             subscribes: AtomicUsize::new(0),
             agent: Mutex::new(None),
             harness: Mutex::new(None),
+            panes: Mutex::new(vec!["w1:p1".to_string()]),
+            job: Mutex::new(None),
+            process_hold: Mutex::new(Duration::ZERO),
+            snapshot_hold: Mutex::new(Duration::ZERO),
+            inflight: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
             _dir: dir,
             socket,
         });
@@ -87,18 +108,46 @@ impl FakeHerdr {
     }
 
     fn snapshot(&self) -> Value {
-        let mut snapshot = snapshot();
+        let mut snapshot = snapshot(&self.panes.lock().unwrap());
         if let Some(agent) = self.agent.lock().unwrap().as_deref() {
             snapshot["panes"][0]["agent"] = json!(agent);
         }
         snapshot
     }
 
+    /// The herd this fake has, replaced. Every pane after the first is an ordinary shell pane.
+    fn has_panes(&self, n: usize) {
+        *self.panes.lock().unwrap() = (1..=n).map(|i| format!("w1:p{i}")).collect();
+    }
+
+    fn snapshot_takes(&self, how_long: Duration) {
+        *self.snapshot_hold.lock().unwrap() = how_long;
+    }
+
+    /// Makes each `pane.process_info` take a moment, so overlap between them is a measurement
+    /// rather than a coincidence.
+    fn process_info_takes(&self, how_long: Duration) {
+        *self.process_hold.lock().unwrap() = how_long;
+    }
+
+    /// The most `pane.process_info` calls this fake ever had open at once.
+    fn peak_concurrency(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+
+    /// The job in the pane's foreground, started or finished.
+    fn runs_job(&self, name: Option<&str>) {
+        *self.job.lock().unwrap() = name.map(str::to_string);
+    }
+
     fn process_info(&self) -> Value {
-        let processes = match *self.harness.lock().unwrap() {
+        let mut processes = match *self.harness.lock().unwrap() {
             Some(pid) => vec![json!({ "pid": pid, "name": "claude", "argv": ["claude"] })],
             None => Vec::new(),
         };
+        if let Some(job) = self.job.lock().unwrap().as_deref() {
+            processes.push(json!({ "pid": 1, "name": job, "argv": [job] }));
+        }
         json!({ "process_info": { "foreground_processes": processes } })
     }
 
@@ -153,6 +202,22 @@ impl FakeHerdr {
             return;
         }
 
+        if method == "session.snapshot" {
+            let hold = *self.snapshot_hold.lock().unwrap();
+            if !hold.is_zero() {
+                tokio::time::sleep(hold).await;
+            }
+        }
+        if method == "pane.process_info" {
+            let open = self.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(open, Ordering::SeqCst);
+            let hold = *self.process_hold.lock().unwrap();
+            if !hold.is_zero() {
+                tokio::time::sleep(hold).await;
+            }
+            self.inflight.fetch_sub(1, Ordering::SeqCst);
+        }
+
         let result = match method.as_str() {
             "session.snapshot" => json!({ "snapshot": self.snapshot() }),
             "pane.process_info" => self.process_info(),
@@ -169,15 +234,15 @@ async fn write_line(stream: &mut UnixStream, value: &Value) -> std::io::Result<(
     stream.flush().await
 }
 
-fn snapshot() -> Value {
+fn snapshot(panes: &[String]) -> Value {
     json!({
         "version": "0.8.2",
         "protocol": 20,
         "focused_pane_id": "w1:p1",
         "workspaces": [{ "workspace_id": "w1", "number": 1, "label": "kampr" }],
         "tabs": [{ "tab_id": "w1:t1", "workspace_id": "w1", "label": "1" }],
-        "panes": [{
-            "pane_id": "w1:p1",
+        "panes": panes.iter().map(|pane_id| json!({
+            "pane_id": pane_id,
             "workspace_id": "w1",
             "tab_id": "w1:t1",
             "cwd": "/tmp",
@@ -186,11 +251,13 @@ fn snapshot() -> Value {
             "agent_status": "unknown",
             "agent_session": null,
             "scroll": { "offset_from_bottom": 0, "max_offset_from_bottom": 12, "viewport_rows": 40 },
-        }],
+        })).collect::<Vec<_>>(),
         "layouts": [{
             "tab_id": "w1:t1",
             "area": { "x": 0, "y": 0, "width": 94, "height": 40 },
-            "panes": [{ "pane_id": "w1:p1", "rect": { "x": 0, "y": 0, "width": 94, "height": 40 } }],
+            "panes": panes.iter().map(|pane_id| json!({
+                "pane_id": pane_id, "rect": { "x": 0, "y": 0, "width": 94, "height": 40 }
+            })).collect::<Vec<_>>(),
         }],
     })
 }
@@ -271,6 +338,154 @@ async fn a_watched_pane_puts_the_sweep_back_on_its_fast_cadence() {
         after <= 3,
         "the last watcher left and the sweep stayed fast: {after} in {window:?}"
     );
+}
+
+/// **N sequential round trips are N coin flips.**
+///
+/// herdr looks at a freshly accepted connection once and, if the request is not whole at that
+/// instant, not again for ~100 ms (#445) — so a herd of N panes read one after another took N
+/// independent chances of that stall. Probe #450 measured 64 concurrent calls at 11.0 ms p50
+/// against 12.7 ms sequential with zero stalls in either arm: herdr's accept path takes it.
+///
+/// Asserted on the deepest overlap the server ever saw rather than on how long the sweep took,
+/// because a duration here is a measurement of this machine's load.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sweeps_process_reads_are_issued_together_rather_than_one_after_another() {
+    let fake = FakeHerdr::start();
+    fake.has_panes(8);
+    // Long enough that eight sequential reads could not overlap by accident, and short enough
+    // that eight concurrent ones are one of them.
+    fake.process_info_takes(Duration::from_millis(50));
+    let provider = HerdrProvider::spawn(fake.herdr(), HerdrConfig { ..config() });
+    online(&provider).await;
+    for _ in 0..300 {
+        if fake.count("pane.process_info") >= 8 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        fake.count("pane.process_info"),
+        8,
+        "the sweep never read all eight panes"
+    );
+    assert!(
+        fake.peak_concurrency() > 1,
+        "eight panes were read strictly one at a time; each is an independent chance of #445's \
+         100 ms poll"
+    );
+}
+
+/// **`rtt_ms` is read off a call the node was making anyway, and it is never a `ping`.**
+///
+/// One `ping` per session per herd rebuild is 2/min quiet and 19/min with four panes busy (#448),
+/// for a number the sweep's own `session.snapshot` already establishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_round_trip_a_client_is_shown_costs_no_call_of_its_own() {
+    let fake = FakeHerdr::start();
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let rtt = provider
+        .rtt_ms()
+        .expect("no round trip after the herd came online");
+    assert!(
+        (0.0..10_000.0).contains(&rtt),
+        "{rtt} is not a millisecond figure"
+    );
+    assert_eq!(
+        fake.count("ping"),
+        0,
+        "the node pinged herdr for a number its own sweep had already measured"
+    );
+}
+
+/// And the honesty half. herdr answers a freshly accepted connection either in ~0.2 ms or ~100 ms
+/// and nothing in between (#445), so the *latest* reading is a coin flip — operators were shown a
+/// 100 ms herd on a few per cent of rebuilds with nothing wrong. The reported figure is the best
+/// of a handful, which is the service time; the 100 ms readings are herdr's accept loop.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_single_slow_answer_does_not_become_the_herds_round_trip() {
+    let fake = FakeHerdr::start();
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    // Several honest readings first, so there is a fast mode to find.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let quick = provider.rtt_ms().expect("a round trip");
+
+    // Then one answer that takes herdr's 100 ms poll, exactly as #445 describes it.
+    fake.snapshot_takes(Duration::from_millis(120));
+    let swept = fake.count("session.snapshot");
+    while fake.count("session.snapshot") < swept + 2 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    fake.snapshot_takes(Duration::ZERO);
+
+    let after = provider.rtt_ms().expect("a round trip");
+    assert!(
+        after < 100.0,
+        "one call that met herdr's 100 ms accept poll became the herd's latency: {quick} then \
+         {after}"
+    );
+}
+
+/// **A pane's command is re-read on every sweep, because a job starting has no cue of its own.**
+///
+/// Nothing in herdr's snapshot says a pane started a build: the fingerprint hashes cwd, label,
+/// agent, status and scroll, and `pane.process_info` is the only thing that answers it — herdr's
+/// per-pane `revision` does not move for a job starting or finishing ([#449](#)). So the read has
+/// to ride the sweep the pane's own output already wakes, and a cadence in front of it drops
+/// exactly the pass the event was asking for: with a thirty-second gate, a pane named from its
+/// shell's own startup kept `kampr · node` for a whole fifteen-second window in four live runs of
+/// ten, and a three-second gate lost the same four (#451).
+///
+/// The pane here is not an agent pane and has already been read once, so nothing else would ask
+/// about it — which is what makes the second reading below evidence rather than a coincidence.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_panes_command_is_re_read_on_every_sweep_because_a_job_starting_has_no_cue() {
+    let fake = FakeHerdr::start();
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    assert_eq!(named(&provider).await, None, "a pane at its prompt has no job");
+
+    fake.runs_job(Some("cargo"));
+    assert_eq!(
+        settles_on(&provider, Some("cargo")).await,
+        Some("cargo".to_string()),
+        "the job the pane started never reached its name"
+    );
+
+    fake.runs_job(None);
+    assert_eq!(
+        settles_on(&provider, None).await,
+        None,
+        "the pane kept the finished job's name"
+    );
+}
+
+/// What the herd would call the pane's command right now.
+async fn named(provider: &HerdrProvider) -> Option<String> {
+    provider
+        .list_panes()
+        .await
+        .expect("panes")
+        .first()
+        .and_then(|pane| pane.cmd.clone())
+}
+
+/// Three seconds is five of this config's sweeps — a bound on the sweep, not on the machine.
+async fn settles_on(provider: &HerdrProvider, want: Option<&str>) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut saw = None;
+    while tokio::time::Instant::now() < deadline {
+        saw = named(provider).await;
+        if saw.as_deref() == want {
+            return saw;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    saw
 }
 
 /// The sweep is a backstop; events are what make the herd current. One structural change has to
@@ -553,6 +768,52 @@ async fn a_new_harness_in_a_pane_that_had_none_is_published() {
         panic!("the pane still has no harness");
     };
     assert_eq!(process.pid, second.id());
+}
+
+/// **A pid set outlives the read that produced it, so a pid the kernel has handed on must not.**
+///
+/// The set is what a pid-keyed session marker is intersected with (#311), and being re-walked on
+/// the sweep only ever shrank the window without closing it: the set is read on the sweep and
+/// used when the herd is rebuilt, and a pid can be reaped and re-issued in between. So each pid
+/// is held with the start time it had when it was read, and a look-up whose start no longer
+/// matches yields **nothing** rather than a stranger: a pid the kernel re-issued to another
+/// pane's harness would otherwise resolve that pane's marker against this one.
+///
+/// Reuse cannot be forced in a test, but the mechanism can: a process that has gone is the same
+/// mismatch, and before the stamp the node went on offering its pid.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pid_whose_process_has_gone_is_dropped_from_the_panes_pipeline() {
+    let fake = FakeHerdr::start();
+    let mut child = spawn_harness();
+    let pid = child.id();
+    fake.runs_claude(pid);
+    let provider = HerdrProvider::spawn(fake.herdr(), config());
+    online(&provider).await;
+    for _ in 0..300 {
+        if provider.pane_processes("w1:p1").iter().any(|p| p.pid == pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let held = provider.pane_processes("w1:p1");
+    assert!(
+        held.iter().any(|p| p.pid == pid),
+        "the provider never read the pane's pipeline, so this proves nothing"
+    );
+    assert!(
+        held.iter().all(|p| p.start.is_some()),
+        "a pid was held with no start time, so nothing a later look finds can contradict it"
+    );
+
+    child.kill().expect("kill it");
+    child.wait().expect("reap it");
+    reaped(pid).await;
+
+    assert!(
+        provider.pane_processes("w1:p1").iter().all(|p| p.pid != pid),
+        "the pane still offers a pid whose process is gone; the next thing to hold it is \
+         somebody else"
+    );
 }
 
 /// Herdr looks into the pane, and this node asks it a moment later — so the pid it is handed can

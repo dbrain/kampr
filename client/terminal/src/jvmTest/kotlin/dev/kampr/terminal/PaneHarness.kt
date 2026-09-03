@@ -69,17 +69,30 @@ internal object Phone {
 
     // The desktop's row count, a few lines of output at the top, the caret on the last of them,
     // and the whole rest of the grid blank. The caret is nowhere near the bottom of the grid,
-    // which is the case a bottom-pinned surface gets wrong.
-    fun shell(rows: Int = 40, caretRow: Int = 3): PaneState {
+    // which is the case a bottom-pinned surface gets wrong — and everything under those few lines
+    // is blank tail, which is the case a surface a hand can drag to the end of the grid gets wrong.
+    fun shell(rows: Int = 40, caretRow: Int = 3): PaneState = grid(rows, caretRow, written = caretRow)
+
+    // The same grid after a full-screen redraw: every row of it written, and the caret left in the
+    // middle where the program put it. The record continues *below* the caret here, so the caret's
+    // floor sits above the end of it — which is the pane a hand clamped at that floor could not
+    // reach the last rows of (#428), and the pane whose bottom really is the bottom of the grid.
+    fun filled(rows: Int = 40, caretRow: Int = 3): PaneState = grid(rows, caretRow, written = rows - 1)
+
+    // Nothing on it at all but the place to type: a pane the desk made and no shell has written to
+    // yet. Its content is one row long and it is the caret's.
+    fun bare(rows: Int = 40): PaneState = grid(rows, caretRow = 0, written = -1)
+
+    private fun grid(rows: Int, caretRow: Int, written: Int): PaneState {
         val pane = PaneState(PANE, StyleTable())
-        val lines = (0..caretRow).map { "[20:36:31 dbrain@comingclean kampr]$ line $it" }
+        val lines = (0..written).map { "[20:36:31 dbrain@comingclean kampr]$ line $it" }
         pane.applyReset(
             ServerMsg.GridReset(
                 pane = PANE,
                 cols = 94,
                 rows = rows,
                 rowsData = lines.mapIndexed { index, text -> RowDiff(index, listOf(Run(0, text))) },
-                cursor = Cursor(lines.last().length, caretRow, true),
+                cursor = Cursor(lines.getOrElse(caretRow) { "" }.length, caretRow, true),
                 links = emptyList(),
             ),
         )

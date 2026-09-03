@@ -2,7 +2,7 @@
 
 use kampr_core::provider::{AgentStatus, Input, PaneEvent, PaneInfo, Provider};
 use kampr_fleet::exec::Geometry;
-use kampr_fleet::{FleetProvider, RunEvent, State, Supervisor};
+use kampr_fleet::{FleetProvider, Job, RunEvent, State, Supervisor};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +14,13 @@ fn provider() -> Arc<FleetProvider> {
     Arc::new(FleetProvider::new())
 }
 
-fn sh(script: &str) -> Vec<String> {
-    vec!["sh".into(), "-c".into(), script.into()]
+fn sh(script: &str) -> Job {
+    Job::Argv(vec!["sh".into(), "-c".into(), script.into()])
+}
+
+/// A line the way the operator would type it into their own terminal.
+fn typed(line: &str) -> Job {
+    Job::Shell(line.into())
 }
 
 async fn wait_for(provider: &Arc<FleetProvider>, pane_id: &str, want: impl Fn(&State) -> bool) -> PaneInfo {
@@ -294,13 +299,13 @@ async fn a_run_whose_state_cannot_be_read_says_so_instead_of_looking_idle() {
     let pane_id = provider
         .start(
             "c",
-            &[
+            &Job::Argv(vec![
                 "sudo".into(),
                 "-n".into(),
                 "sh".into(),
                 "-c".into(),
                 "read a".into(),
-            ],
+            ]),
             None,
             Geometry::default(),
         )
@@ -364,4 +369,193 @@ async fn a_command_is_found_on_the_path_the_run_was_given_and_not_on_this_proces
     driver.abort();
     let _ = driver.await;
     assert!(seen.contains("found-on-the-given-path"), "{seen:?}");
+}
+
+/// What the operator typed, run the way their own terminal would run it.
+///
+/// Each of these is a shape the fan-out used to hand to `execvp` as words, where `|` was an
+/// argument to `find` and `&&` was an argument to `make`. They are one table because the mechanism
+/// is one: [`Job::Shell`] is `<their shell> -c <line>`, and the shell does everything after that.
+///
+/// `~` is deliberately in the table rather than reasoned about: tilde expansion is the *shell's*,
+/// not `execvp`'s and not `getenv`'s, so it works here for the same reason `*` does and for no
+/// other.
+#[tokio::test]
+async fn a_line_the_operator_would_type_in_their_own_shell_runs_as_one() {
+    let dir = tempfile::tempdir().expect("a directory");
+    std::fs::write(dir.path().join("one.rs"), "").expect("a file");
+    std::fs::write(dir.path().join("two.rs"), "").expect("a file");
+    std::fs::write(dir.path().join("three.txt"), "").expect("a file");
+    let cwd = dir.path().to_str().expect("a utf-8 path").to_string();
+
+    let cases: &[(&str, &str, &str)] = &[
+        ("a pipeline", "printf 'a\\nb\\nc\\n' | wc -l", "3"),
+        ("an && chain", "true && echo chained", "chained"),
+        ("a ; sequence", "echo first; echo second", "second"),
+        (
+            "a quoted argument containing spaces",
+            r#"printf '%s\n' "one argument""#,
+            "one argument",
+        ),
+        ("a glob", "ls *.rs | wc -l", "2"),
+        (
+            "a redirection",
+            "echo redirected > out.txt && cat out.txt",
+            "redirected",
+        ),
+        ("a substitution", "echo \"count $(ls *.rs | wc -l)\"", "count 2"),
+    ];
+
+    for (what, line, expect) in cases {
+        let provider = provider();
+        let pane_id = provider
+            .start("typed", &typed(line), Some(&cwd), Geometry::default())
+            .unwrap_or_else(|e| panic!("{what}: {line} did not start: {e}"));
+        wait_for(&provider, &pane_id, |s| s.finished()).await;
+        let text = transcript(&provider, &pane_id).await;
+        assert!(
+            text.contains(expect),
+            "{what}: `{line}` should have printed {expect:?}; it printed {text:?}",
+        );
+    }
+
+    // `~` on its own, because it must expand against the shell's `HOME` rather than against the
+    // run's cwd, and a temp directory cannot stand in for it.
+    let provider = provider();
+    let pane_id = provider
+        .start("typed", &typed("cd ~ && pwd"), Some(&cwd), Geometry::default())
+        .expect("a run");
+    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let home = std::env::var("HOME").expect("a home directory");
+    let text = transcript(&provider, &pane_id).await;
+    assert!(text.contains(&home), "`cd ~ && pwd` printed {text:?}, not {home}");
+}
+
+/// A chain that stops reports the failing command's status, not the last one's and not a zero.
+///
+/// The mechanism is the shell's `&&` and this is here because the *consequence* is the board's:
+/// `Exited { code: 1 }` is what puts a red host in front of the operator, and a run that swallowed
+/// a mid-chain failure would show five green machines that had done half the work.
+#[tokio::test]
+async fn a_chain_that_fails_in_the_middle_reports_the_failure_and_does_not_run_the_rest() {
+    let provider = provider();
+    let pane_id = provider
+        .start(
+            "typed",
+            &typed("echo starting && false && echo never-printed"),
+            None,
+            Geometry::default(),
+        )
+        .expect("a run");
+    let pane = wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let state = pane.fleet.expect("a fleet marker").state;
+    assert!(
+        matches!(state, State::Exited { code: Some(1), .. }),
+        "a chain that stopped at `false` reported {state:?}",
+    );
+    let text = transcript(&provider, &pane_id).await;
+    assert!(text.contains("starting"), "the chain never began: {text:?}");
+    assert!(
+        !text.contains("never-printed"),
+        "the chain kept going past `false`: {text:?}"
+    );
+}
+
+/// **The half of the operator's request that is not the shell.** A tool installed into
+/// `~/.local/bin` works in their terminal and was invisible to a fleet run, because the login
+/// shell that was read does not read `.bashrc` and `.bashrc` is what adds that directory (#419).
+///
+/// This runs it through the shell the way a run does, on a `PATH` that has the directory and one
+/// that does not, so the assertion is about resolution rather than about a string.
+#[tokio::test]
+async fn a_binary_that_only_the_operators_own_path_resolves_is_still_found() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let name = "kampr-fleet-local-bin-probe";
+    let script = dir.path().join(name);
+    std::fs::write(&script, "#!/bin/sh\necho found-in-local-bin\n").expect("a script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+
+    let shell = kampr_fleet::env::login_shell();
+    let line = format!("{name} && echo after");
+
+    let without = Supervisor::spawn(
+        &Job::Shell(line.clone()).argv(&shell),
+        None,
+        Geometry::default(),
+        Some("/nonexistent-for-this-test"),
+    )
+    .expect("a pty and a child");
+    assert!(
+        !drain(without).await.contains("found-in-local-bin"),
+        "this process's PATH already resolves {name}, so the other half proves nothing",
+    );
+
+    let given = format!("/nonexistent-for-this-test:{}", dir.path().display());
+    let with = Supervisor::spawn(
+        &Job::Shell(line).argv(&shell),
+        None,
+        Geometry::default(),
+        Some(&given),
+    )
+    .expect("a pty and a child");
+    let text = drain(with).await;
+    assert!(text.contains("found-in-local-bin"), "the run printed {text:?}");
+    assert!(text.contains("after"), "the chain after it did not run: {text:?}");
+}
+
+/// The operator's own sentence, and never the shell that runs it. A board reading
+/// `/usr/bin/bash -c pacman -Syu` has put an implementation detail in front of them, and the book
+/// would remember it that way for ever.
+#[tokio::test]
+async fn a_pane_is_labelled_with_what_was_typed_and_not_with_the_shell_wrapper() {
+    let provider = provider();
+    let pane_id = provider
+        .start(
+            "typed",
+            &typed("uptime | tee /dev/null"),
+            None,
+            Geometry::default(),
+        )
+        .expect("a run");
+    let panes = provider.list_panes().await.expect("a list");
+    let pane = panes
+        .into_iter()
+        .find(|p| p.pane_id == pane_id)
+        .expect("the pane");
+    assert_eq!(
+        pane.fleet.expect("a fleet marker").command,
+        "uptime | tee /dev/null"
+    );
+    assert_eq!(pane.label.as_deref(), Some("uptime | tee /dev/null"));
+    assert_eq!(pane.cmd.as_deref(), Some("uptime"));
+    provider.stop(&pane_id).expect("stopped");
+}
+
+async fn transcript(provider: &Arc<FleetProvider>, pane_id: &str) -> String {
+    provider
+        .read_scrollback(pane_id)
+        .await
+        .expect("a read")
+        .expect("a transcript")
+        .text
+}
+
+/// Everything a supervisor printed, up to the moment its command exited.
+async fn drain(supervisor: Supervisor) -> String {
+    let (tx, mut events) = mpsc::channel(256);
+    let driver = tokio::spawn(supervisor.drive(tx));
+    let mut text = String::new();
+    let seen = tokio::time::timeout(PATIENCE, async {
+        while let Some(event) = events.recv().await {
+            match event {
+                RunEvent::Bytes(bytes) => text.push_str(&String::from_utf8_lossy(&bytes)),
+                RunEvent::State(state) if state.finished() => return,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(seen.is_ok(), "the run never finished; it printed {text:?}");
+    let _ = driver.await;
+    text
 }

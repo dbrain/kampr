@@ -53,7 +53,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         if (held != null) {
             val anchor = probe.cellAt(held.position)
             view.selection = Selection(anchor, anchor, view.blockSelect)
-            view.target = null
+            view.aimOff()
             var event: PointerEvent
             do {
                 event = awaitPointerEvent()
@@ -183,7 +183,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
                 if (travel > viewConfiguration.touchSlop) {
                     val anchor = probe.cellAt(down.position)
                     view.selection = Selection(anchor, anchor, view.blockSelect)
-                    view.target = null
+                    view.aimOff()
                     selecting = true
                 }
             }

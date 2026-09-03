@@ -175,7 +175,7 @@ impl Drop for CreatedSession {
 /// until something removes it (#242), and a herdr asked to stop still owns that directory for a
 /// moment: one removal races it, which is what leaves a throwaway session listed forever. So wait
 /// for the socket to go, then keep removing until the directory stays gone.
-fn forget_session(dir: &Path) {
+pub(crate) fn forget_session(dir: &Path) {
     if !dir.exists() {
         return;
     }
@@ -244,6 +244,105 @@ fn which(binary: &str) -> Option<PathBuf> {
     })
 }
 
+/// Leaves the session holding **only** the workspace this harness asked for.
+///
+/// herdr's headless server creates a startup workspace of its own (#452) — one login shell in `$HOME`,
+/// logged as `created startup workspace cwd=<home>`, before it accepts a single call — so a
+/// throwaway session is two panes and not one. That second pane is nobody's: its working
+/// directory is the operator's home rather than the `/tmp` this harness names, and its workspace
+/// carries herdr's own `~` label rather than `kampr`. Every test that asks the harness for "the
+/// pane" means the one it created, and `pane_id` takes the first the herd offers, so the startup
+/// pane silently answers for it — a conversation looked for under `~/.claude/projects/-tmp` in a
+/// pane whose cwd is `$HOME`, and a name reported as `~ · bash` where the workspace label is the
+/// assertion.
+///
+/// Waited out rather than assumed: `workspace.close` is answered `ok` from the API thread and the
+/// snapshot catches up after it, and the node builds its first herd off whatever the snapshot
+/// says at the moment it starts.
+async fn the_only_workspace(session: &Session, keep: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut standing = Vec::new();
+    // Two clear readings, not one. herdr creates its startup workspace ~50 ms *after* it starts
+    // listening, so on a loaded box it can appear after the first look — and a single clear
+    // reading would then be of a session that is about to gain a pane nobody asked for.
+    let mut clear = 0;
+    while tokio::time::Instant::now() < deadline {
+        // Never `Session::call` here, which panics on a socket that answered slowly. This runs
+        // while every harness in the suite is starting at once, and a herdr that took longer than
+        // its timeout to answer must cost a retry rather than the test.
+        let Ok(snapshot) = session.herdr().call::<Value>("session.snapshot", json!({})).await else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        standing = snapshot["snapshot"]["workspaces"]
+            .as_array()
+            .map(|ws| {
+                ws.iter()
+                    .filter_map(|w| w["workspace_id"].as_str())
+                    .filter(|id| *id != keep)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if standing.is_empty() {
+            clear += 1;
+            if clear == 2 {
+                return;
+            }
+        } else {
+            clear = 0;
+            for id in &standing {
+                let _ = session
+                    .herdr()
+                    .call::<Value>("workspace.close", json!({ "workspace_id": id }))
+                    .await;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    panic!("herdr would not give up {standing:?}, the workspaces this harness did not create");
+}
+
+/// Waits for the harness's pane to be a shell at a prompt and nothing else.
+///
+/// **A pane is not a fixture until its `.bashrc` has finished.** For the first second and a half
+/// of one, the foreground process group carries whatever the operator's profile spawns beside the
+/// shell — `node`, `dirname`, `tail`, `head`, `atuin` on this machine (probe #342) — and ble.sh is
+/// still to re-render the line it accepted, which lands *after* whatever a test drew and wipes it
+/// ([#446](#)). Both are why a test that types into this pane in its first seconds is measuring
+/// the profile: a name read then is `kampr · node` and stays it, and a screen painted then can be
+/// gone by the time the node reads it.
+///
+/// The condition is herdr's own: one foreground process, and it is the shell itself. Nothing here
+/// depends on what that shell is called, which `/bin/sh` being a different binary on half these
+/// machines has cost this suite before.
+///
+/// A give-up threshold on the environment rather than an assertion: every test that cares has its
+/// own budget, and a machine so loaded that a shell has not reached its prompt in a minute will
+/// say so in the test that needed it.
+async fn a_pane_at_its_shell(session: &Session, pane: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while tokio::time::Instant::now() < deadline {
+        let Ok(info) = session
+            .herdr()
+            .call::<Value>("pane.process_info", json!({ "pane_id": pane }))
+            .await
+        else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        let shell = info["process_info"]["shell_pid"].as_u64();
+        let foreground = info["process_info"]["foreground_processes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if shell.is_some() && foreground.len() == 1 && foreground[0]["pid"].as_u64() == shell {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn herdr_home() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -268,9 +367,11 @@ impl Drop for Harness {
 impl Harness {
     async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Option<Self> {
         let session = Session::start(tag).await?;
-        session
+        let created = session
             .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
             .await;
+        the_only_workspace(&session, created["workspace"]["workspace_id"].as_str()?).await;
+        a_pane_at_its_shell(&session, created["root_pane"]["pane_id"].as_str()?).await;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok()?;
         let port = listener.local_addr().ok()?.port();
@@ -1729,14 +1830,18 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
                 "text": "printf '\\nDo you want to make this edit?\\n\\n 1. Yes\\n 2. No\\n'\n" }),
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // **On the screen, not on the clock, and on both the screens the node reads.** A pane reported
+    // blocked before its dialog has finished painting is a pane the node reads with no question on
+    // it, and it retries a bounded twelve times over six seconds before it stops asking (#421's
+    // `PENDING_ATTEMPTS`) — after which nothing re-arms it, because the status does not move
+    // again. 1.2 s covered the paint on an idle box and not under sixteen spinners.
+    assert!(
+        drawn(&h, &local, "2. No", 60).await,
+        "the dialog never reached the screen",
+    );
 
-    h._session
-        .call(
-            "pane.report_agent",
-            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
-        )
-        .await;
+    report(&h._session, &local, "blocked").await;
+    until_herd(&h, &pane, "blocked").await;
 
     let pending = until_pane(&mut socket, "pending", &pane, 25).await;
     assert_eq!(pending["pane"], pane.as_str());
@@ -1760,7 +1865,12 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
         json!({ "t": "input", "pane": pane, "text": "echo kampr-answer-" }),
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // The line has to be on the pane before the key goes on the end of it, or what comes back is
+    // the two in the other order and the assertion below reads a screen that never held the word.
+    assert!(
+        drawn(&h, &local, "echo kampr-answer-", 60).await,
+        "the line the answer key lands on never reached the pane",
+    );
     send(&mut socket, json!({ "t": "answer", "pane": pane, "key": "1" })).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -1777,12 +1887,7 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     assert!(landed, "the key an answer carries never reached the pane's pty");
 
     // Leaving the blocked state clears the strip — the only way a client can know to drop it.
-    h._session
-        .call(
-            "pane.report_agent",
-            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
-        )
-        .await;
+    report(&h._session, &local, "idle").await;
     let cleared = until_pane(&mut socket, "pending", &pane, 25).await;
     assert!(cleared["question"].is_null(), "{cleared}");
     assert!(cleared["options"].as_array().unwrap().is_empty());
@@ -1802,15 +1907,11 @@ async fn a_node_told_to_report_names_puts_one_on_the_pane_at_the_desk() {
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
 
-    // The workspace this harness creates is labelled `kampr`, and its pane settles at a shell with
-    // no job in it — so the command section drops and the name is what is left.
-    //
-    // **Settled, not first.** For the first few hundred milliseconds a fresh pane's foreground job
-    // is a helper the operator's `bashrc` spawned beside the shell, and the node reports a name for
-    // *that* — `kampr · gawk`, `kampr · tail`, whatever ble.sh is doing as it starts (probe #342).
-    // Every one of those is a correct name for the instant it was read, so waiting for the shell is
-    // the assertion, and it proves the name is re-reported as the job goes rather than only that
-    // one arrived.
+    // The workspace this harness creates is labelled `kampr`, and the harness leaves its pane at a
+    // shell with no job in it — so the command section drops and the name is what is left. That
+    // the name *follows* a job rather than latching on the first one read is
+    // `kampr-core`'s `a_panes_command_is_re_read_on_every_sweep_because_a_job_starting_has_no_cue`,
+    // which can move a process under the provider on demand where this cannot.
     let mut title = Value::Null;
     let mut saw: Vec<String> = Vec::new();
     for _ in 0..60 {
@@ -2436,12 +2537,7 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
     let pty = filled_width(&h._session, &local).await;
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    let before = await_grid_at(&mut socket, &pane, pty).await;
-    assert_eq!(
-        before["cols"].as_u64().unwrap(),
-        pty as u64,
-        "unsplit: the grid is the PTY's width, not the rect"
-    );
+    await_grid_at(&mut socket, &pane, pty).await;
 
     let rect_before = rect_width(&h._session, &local).await;
     h._session
@@ -2450,8 +2546,7 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
             json!({ "target_pane_id": local, "direction": "right" }),
         )
         .await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let rect_after = rect_width(&h._session, &local).await;
+    let rect_after = a_halved_rect(&h._session, &local, rect_before).await;
     assert!(
         rect_after < rect_before,
         "the split must have halved the rect: {rect_before} -> {rect_after}"
@@ -2463,8 +2558,24 @@ async fn a_split_pane_is_observed_at_the_pty_width_not_the_rect() {
     );
 
     // The node must follow the PTY, not the rect it was just handed.
-    let after = await_grid_at(&mut socket, &pane, pty).await;
-    assert_eq!(after["cols"].as_u64().unwrap(), pty as u64);
+    await_grid_at(&mut socket, &pane, pty).await;
+}
+
+/// The rect after a split, waited for. A split is a request to herdr and the layout it produces
+/// arrives on herdr's own clock; three seconds covered that on an idle box, and the assertion
+/// that follows is about what the *PTY* did once the rect moved, which is nothing at all until it
+/// has. The give-up returns the last rect it saw so the assertion still names the failure.
+async fn a_halved_rect(session: &Session, pane: &str, was: u16) -> u16 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut rect = was;
+    while tokio::time::Instant::now() < deadline {
+        rect = rect_width(session, pane).await;
+        if rect < was {
+            return rect;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    rect
 }
 
 /// Probe #211. The width prober can prove a width nothing ever wrapped at, and the proof used to
@@ -2495,8 +2606,7 @@ async fn a_screen_of_wide_glyphs_is_not_streamed_at_half_the_pty_width() {
     let pty = filled_width(&h._session, &local).await;
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    let before = await_grid_at(&mut socket, &pane, pty).await;
-    assert_eq!(before["cols"].as_u64().unwrap(), pty as u64);
+    await_grid_at(&mut socket, &pane, pty).await;
 
     // The phases #211 was driven through, ending on the one that has no ASCII wrap left on it.
     for phase in [
@@ -2562,8 +2672,7 @@ async fn an_even_width_pane_of_wide_glyphs_keeps_the_width_its_wrap_proved() {
     assert_eq!(pty, 92, "the controller left the PTY at an even width");
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    let before = await_grid_at(&mut socket, &pane, pty).await;
-    assert_eq!(before["cols"].as_u64().unwrap(), pty as u64);
+    await_grid_at(&mut socket, &pane, pty).await;
 
     // Enough wide-glyph lines to push every ASCII row out of the read window: one unambiguous
     // break left in it settles the width on its own and proves nothing about the ambiguous ones.
@@ -2611,23 +2720,36 @@ async fn a_resized_pane_is_streamed_at_the_width_it_was_given_before_anything_wr
     let pane = h.pane_id();
     let local = pane.split_once('/').unwrap().1.to_string();
 
-    for line in ["exec /bin/sh\n", "PS1='$ '\n"] {
-        typed(&h._session, &local, line).await;
-    }
-    typed(&h._session, &local, "clear; printf '%.0s#' $(seq 1 400); echo\n").await;
-    let before = filled_width(&h._session, &local).await;
-
+    // **No shell on the pane at all.** The probe line used to be typed at the operator's own login
+    // prompt, and that shell loads ble.sh, which re-renders the accepted command line on its own
+    // schedule — under load it repaints over whatever was drawn, and a `PS1` set in one burst with
+    // the `exec` in front of it is one multi-line buffer the editor is still holding rather than
+    // two commands it ran. A painter draws the probe and takes it away again with nothing else
+    // ever touching the screen, which is also a *closer* reading of the case this test is about:
+    // an agent's pane with nothing on it to measure.
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    await_grid_at(&mut socket, &pane, before).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
 
-    // Now take the wrap away. What is left is a prompt no set of rows rebuilds and no line that
-    // spans two of them, which is exactly the reading that measures nothing.
-    typed(&h._session, &local, "clear\n").await;
+    // 400 `#` cannot fit on one row of any plausible pane, so what reaches the screen is a wrap.
+    paint_screen(&mut socket, &pane, &"#".repeat(400)).await;
+    let before = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, before).await;
+
+    // Now take the wrap away, and wait for it to be gone rather than allowing a fixed moment for
+    // it: herdr reflows what is on the pane when the PTY moves, so a wrap still standing when the
+    // resize lands re-proves the new width on the next poll and this test passes with the defect
+    // restored. What is left is a prompt no set of rows rebuilds and no line that spans two of
+    // them, which is exactly the reading that measures nothing.
+    paint_screen(&mut socket, &pane, "").await;
+    a_screen_with_no_wrap_on_it(&h._session, &local).await;
+
     let wider = before + 24;
+    let taller = viewport_rows(&h._session, &local).await + 1;
 
     send(
         &mut socket,
-        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": wider, "rows": 40 }),
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": wider, "rows": taller }),
     )
     .await;
 
@@ -2654,6 +2776,18 @@ async fn a_resized_pane_is_streamed_at_the_width_it_was_given_before_anything_wr
     let ack = ack.expect("no managed ack for pane.size");
     assert_eq!(ack["ok"], json!(true), "{ack}");
 
+    // **The environment half, and it is asked separately so a failure names the right half.**
+    // Columns are reported by nothing anywhere (#221) and rows are the half herdr answers
+    // honestly (#84), so the rows landing is the only evidence the claim took at all — it is what
+    // `size_pane` itself decides `kept` by, and the wire does not carry that. Without this, a
+    // resize herdr never applied read as the node refusing to stream a width it was never given.
+    let landed = viewport_rows(&h._session, &local).await;
+    assert_eq!(
+        landed, taller,
+        "herdr never took the resize: the pane is {landed} rows, not {taller}, so there is no \
+         width for the node to have adopted"
+    );
+
     // The clause the whole test turns on: nothing on this pane has wrapped since the resize, so
     // the only thing that could have carried the new width is the resize itself.
     let widest = widest_rendered_row(&h._session, &local).await;
@@ -2666,6 +2800,266 @@ async fn a_resized_pane_is_streamed_at_the_width_it_was_given_before_anything_wr
         widths.contains(&wider),
         "a pane resized to {wider} columns was still streamed at {widths:?}"
     );
+}
+
+/// Waits until the node has settled on `cols` for this pane, read off the herd it publishes.
+///
+/// **Not a `grid.reset`.** A reset is what a stream re-opening produces, so waiting for one is
+/// waiting for the node to have *guessed wrong first*: the first observe is sized from the layout
+/// rect and a proof that disagrees restarts it. A pane whose rect already equals its PTY — which
+/// is every pane herdr spawns at its layout width rather than at the headless 120 and then
+/// reflows (#452) — is guessed right, streams one reset before anything is painted on it, and never
+/// produces another. The claim this stands in for is the baseline the resize below moves off:
+/// the width the node is streaming at, which the herd carries.
+/// **The release nobody sent.**
+///
+/// A matched hold is claimed by a terminal view and let go when that view closes — but a closed
+/// laptop, a crashed tab and a dropped link never send the closing half. So the hold is owned by
+/// the websocket rather than by anything the client remembers to do, and this drops the socket
+/// without a word to prove it: no `release`, no close frame, just a client that stops being there.
+///
+/// The wrap is not decoration. A width is proved by a wrap and by nothing else (#84, #221), so a
+/// pane that has never wrapped has no geometry honest enough to put back and the node deliberately
+/// records none — this is what makes the restore possible at all. See
+/// [ADR 0013](../../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_matched_pane_is_put_back_when_the_socket_holding_it_stops_answering() {
+    let h = harness!("matchdrop");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
+    paint_screen(&mut socket, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let wider = found_cols + 24;
+    let taller = (found_rows + 3).max(30);
+    let ack = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": wider, "rows": taller, "mode": "match" }),
+        30,
+    )
+    .await;
+    assert_eq!(ack["held"], json!(true), "{ack}");
+    assert_eq!(ack["matched"], json!(true), "{ack}");
+    // The ack says what it will put back, or says nothing — never a rect, which is fiction (#68).
+    assert_eq!(
+        (&ack["found_cols"], &ack["found_rows"]),
+        (&json!(found_cols), &json!(found_rows)),
+        "the ack does not say what the release will put back: {ack}",
+    );
+    assert!(
+        rows_settle_at(&h._session, &local, taller, 20).await,
+        "the match never landed, so there is nothing for the release to undo; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    // No goodbye. The socket simply stops.
+    drop(socket);
+
+    assert!(
+        rows_settle_at(&h._session, &local, found_rows, 45).await,
+        "a pane held at the size of a window nobody is looking at any more was left there; it is \
+         {} rows and it was found at {found_rows}",
+        viewport_rows(&h._session, &local).await,
+    );
+}
+
+/// The other half of the rule, and the half that answers #298: a release puts the pane back
+/// **only** if the pane is still the shape this hold made it. Something else deliberately moving
+/// it — the operator through the panel, another client, herdr — is the last word, and a viewer
+/// closing a window it had open must not undo that behind them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_matched_pane_something_else_resized_is_left_where_that_resize_left_it() {
+    let h = harness!("matchkeep");
+    let token = h.token(Role::Full).await;
+    let mut viewer = h.connect(&token).await;
+    until(&mut viewer, "hello", 10).await;
+    until(&mut viewer, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut viewer, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut viewer, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut viewer, &pane, &local).await;
+    paint_screen(&mut viewer, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let matched_rows = (found_rows + 3).max(30);
+    ok(
+        &mut viewer,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": found_cols + 24, "rows": matched_rows, "mode": "match" }),
+        30,
+    )
+    .await;
+
+    // The panel, from somewhere else, asking for a size by name. It supersedes the hold, and the
+    // geometry it left is the one the pane keeps.
+    let mut panel = h.connect(&token).await;
+    until(&mut panel, "hello", 10).await;
+    let deliberate = matched_rows + 7;
+    let sized = ok(
+        &mut panel,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": found_cols + 8, "rows": deliberate }),
+        30,
+    )
+    .await;
+    assert_eq!(
+        sized["kept"],
+        json!(true),
+        "the panel's resize did not land: {sized}"
+    );
+
+    drop(viewer);
+
+    assert!(
+        rows_stay_at(&h._session, &local, deliberate, 20).await,
+        "a viewer closing a window undid a resize somebody asked for by name; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+}
+
+/// **Newest holder wins, and the earlier one does not fight back or take the later one with it.**
+///
+/// *"you might have something open on your phone but also on your desktop, if you switch between
+/// the two and both are set to 'match view' that's kind of expected."* So the second viewer's claim
+/// displaces the first's, the first's release lands on nothing when it eventually happens, and the
+/// geometry the *pane* was found at — not the first viewer's — is what the last one out puts back.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_newest_viewer_wins_the_pane_and_the_last_one_out_puts_the_pane_itself_back() {
+    let h = harness!("matchtwo");
+    let token = h.token(Role::Full).await;
+    let mut desk = h.connect(&token).await;
+    until(&mut desk, "hello", 10).await;
+    until(&mut desk, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut desk, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut desk, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut desk, &pane, &local).await;
+    paint_screen(&mut desk, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let desk_rows = (found_rows + 3).max(30);
+    ok(
+        &mut desk,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": found_cols + 24, "rows": desk_rows, "mode": "match" }),
+        30,
+    )
+    .await;
+    assert!(
+        rows_settle_at(&h._session, &local, desk_rows, 20).await,
+        "the first match never landed"
+    );
+
+    // A second window on the same pane, and it is the one being looked at now.
+    let mut second = h.connect(&token).await;
+    until(&mut second, "hello", 10).await;
+    let second_rows = desk_rows + 6;
+    let took = ok(
+        &mut second,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": found_cols + 40, "rows": second_rows, "mode": "match" }),
+        30,
+    )
+    .await;
+    // It carries the *pane's* own geometry forward rather than re-reading one the first viewer set.
+    assert_eq!(
+        (&took["found_cols"], &took["found_rows"]),
+        (&json!(found_cols), &json!(found_rows)),
+        "the handover took the first viewer's size for the pane's own: {took}",
+    );
+    assert!(
+        rows_settle_at(&h._session, &local, second_rows, 20).await,
+        "the handover never landed"
+    );
+
+    // The first window goes. Its hold was displaced, so it has nothing to let go of — and letting
+    // go of the hold that replaced it would take the pane out from under the window in front.
+    drop(desk);
+    assert!(
+        rows_stay_at(&h._session, &local, second_rows, 15).await,
+        "a displaced viewer closing took the newer viewer's hold with it; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    // And the last one out puts back what the pane was, not what either viewer made it.
+    drop(second);
+    assert!(
+        rows_settle_at(&h._session, &local, found_rows, 45).await,
+        "the pane was left at a viewer's size; it is {} rows and it was found at {found_rows}",
+        viewport_rows(&h._session, &local).await,
+    );
+}
+
+/// Waits for a pane to arrive at `want` rows. The release is a controller exiting and then a
+/// second claim-and-release putting the size back, so it is seconds rather than instant.
+async fn rows_settle_at(session: &Session, pane: &str, want: u16, seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if viewport_rows(session, pane).await == want {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    false
+}
+
+/// The opposite question, and it has to be asked over time rather than once: a restore that fires
+/// late would pass a single reading taken before it.
+async fn rows_stay_at(session: &Session, pane: &str, want: u16, seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if viewport_rows(session, pane).await != want {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    true
+}
+
+async fn a_pane_the_node_streams_at(h: &Harness, pane: &str, cols: u16) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    let mut seen = None;
+    while tokio::time::Instant::now() < deadline {
+        seen = h.node.herd().pane(pane).and_then(|entry| entry.cols);
+        if seen == Some(cols) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the node never settled on {cols} columns for this pane; it is streaming {seen:?}");
+}
+
+/// No `#` left anywhere on the screen, which is this pane's only wrapped line gone.
+async fn a_screen_with_no_wrap_on_it(session: &Session, pane: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut rows = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        rows = hash_rows(session, pane).await;
+        if rows.is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the probe line is still on the screen at {rows:?}, so the wrap was never taken away");
 }
 
 async fn typed(session: &Session, pane: &str, text: &str) {
@@ -2715,10 +3109,16 @@ async fn drain_resets(socket: &mut Socket, pane: &str, window: Duration) -> Vec<
     widths
 }
 
-/// Waits for a `grid.reset` on this pane whose grid is `pty` wide and whose probe line is
+/// Waits for a `grid.reset` on this pane whose grid is `pty` wide **and** whose probe line is
 /// uncropped. The first reading can miss — a probe that loses its socket call falls back to the
 /// rect and the next poll corrects it — so what is asserted is that the node *arrives* at the
 /// PTY's width, not that it never guesses.
+///
+/// **Both, in the wait.** Every caller used to assert the width on whatever frame came back
+/// uncropped, and a rect-width guess carrying a row the pane had already wrapped satisfies the
+/// second half without the first: a 93-column pane streamed at 94 for one poll took the test down
+/// with `left: 94, right: 93`. Waiting for the frame that has both is the claim the docstring
+/// already made.
 async fn await_grid_at(socket: &mut Socket, pane: &str, pty: u16) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let mut seen = Vec::new();
@@ -2730,47 +3130,69 @@ async fn await_grid_at(socket: &mut Socket, pane: &str, pty: u16) -> Value {
             continue;
         }
         seen.push(message["cols"].as_u64().unwrap_or(0));
-        if longest_hash_run(&message) == pty {
+        if longest_hash_run(&message) == pty && message["cols"].as_u64() == Some(pty as u64) {
             return message;
         }
     }
     panic!("the grid never came back at {pty} columns uncropped; saw widths {seen:?}");
 }
 
-/// Waits for the probe line to reach the screen and returns the width it wrapped at. A wrapped
-/// line is what makes the reading exact, and under load the shell can take seconds to produce it.
+/// The width the `#` probe line wrapped at — **proved by the wrap**, and not by a widest row that
+/// stopped growing.
+///
+/// A half-painted first row is also the widest row on the screen, and "the same width twice in a
+/// row" is exactly what a shell stalled mid-write produces. Under sixteen spinners two reads
+/// 500 ms apart caught the same half-drawn row and a 93-column pane was measured at **75**; every
+/// assertion after that was against a width nothing on the machine had, and the test failed
+/// saying the grid never came back at 75 columns — a number it had invented.
+///
+/// 400 `#` wrapped at `w` leave *at least two* rows of exactly `w`, the last row being the
+/// remainder, and no partial paint can produce a second full row at a width the PTY did not wrap
+/// at. So the condition is the evidence rather than a guess about how long a write takes.
 async fn filled_width(session: &Session, pane: &str) -> u16 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut widest = 0;
-    let mut settled = 0;
+    let mut rows = Vec::new();
     while tokio::time::Instant::now() < deadline {
-        let now = widest_rendered_row(session, pane).await;
-        settled = if now == widest { settled + 1 } else { 0 };
-        widest = widest.max(now);
-        // 400 `#` cannot fit on one row of any plausible pane, so anything this wide has wrapped.
-        // Two agreeing samples, because a read that lands mid-write catches a half-drawn row.
-        if widest > 60 && settled >= 2 {
+        rows = hash_rows(session, pane).await;
+        let widest = rows.iter().copied().max().unwrap_or(0);
+        if widest > 60 && rows.iter().filter(|&&run| run == widest).count() >= 2 {
             return widest;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    panic!("the probe line never settled; widest row was {widest}");
+    panic!("the probe line never wrapped; its rows of `#` were {rows:?}");
+}
+
+/// How many `#` are on each row of the visible screen, blank rows left out. The probe line is the
+/// only thing these panes draw one with, so a row's run is its share of the wrap.
+async fn hash_rows(session: &Session, pane: &str) -> Vec<u16> {
+    visible(session, pane)
+        .await
+        .lines()
+        .map(|row| row.chars().filter(|c| *c == '#').count() as u16)
+        .filter(|run| *run > 0)
+        .collect()
 }
 
 async fn widest_rendered_row(session: &Session, pane: &str) -> u16 {
-    let read = session
-        .call(
-            "pane.read",
-            json!({ "pane_id": pane, "source": "visible", "format": "text" }),
-        )
-        .await;
-    read["read"]["text"]
-        .as_str()
-        .unwrap_or_default()
+    visible(session, pane)
+        .await
         .lines()
         .map(|l| l.chars().count() as u16)
         .max()
         .unwrap_or(0)
+}
+
+async fn visible(session: &Session, pane: &str) -> String {
+    session
+        .call(
+            "pane.read",
+            json!({ "pane_id": pane, "source": "visible", "format": "text" }),
+        )
+        .await["read"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }
 
 async fn rect_width(session: &Session, pane: &str) -> u16 {
@@ -3411,6 +3833,21 @@ async fn every_client_op_lands_on_a_real_herd() {
     )
     .await;
     assert_eq!(sized["ok"], json!(true), "{sized}");
+    // **`ok` is not the answer.** The op ran; whether the pane is now 30 rows is a separate
+    // question, and `size_pane` measures it — so the ack carries the measurement or it is telling
+    // this client `true` about a resize that did not happen (#233's shape on the one op ADR 0012
+    // permits). This session is headless, so #219 says the size stays and `kept` is `true`; on an
+    // attached pane the same field is how a client learns the desk took it back inside a second.
+    assert_eq!(
+        sized["kept"],
+        json!(true),
+        "the ack does not say whether the resize stuck: {sized}"
+    );
+    assert_eq!(
+        sized["measured_rows"],
+        json!(30),
+        "the ack does not say what the pane actually measured: {sized}"
+    );
 
     // The floor, against a real node: a size no shell is usable at is refused rather than made
     // permanent. This is the guard the whole feature is shaped around.
@@ -3425,19 +3862,32 @@ async fn every_client_op_lands_on_a_real_herd() {
 
     // Holding and letting go. The hold is what makes a size survive on a pane a desk is attached
     // to; the release is the ordinary end of one, and the node's own deadline is the backstop.
-    ok(
+    let held = ok(
         &mut socket,
         json!({ "t": "manage", "op": "pane.size", "at": first_pane,
                 "cols": 100, "rows": 30, "mode": "hold" }),
         30,
     )
     .await;
-    ok(
+    assert_eq!(
+        held["held"],
+        json!(true),
+        "a hold that does not say it is holding: {held}"
+    );
+    let released = ok(
         &mut socket,
         json!({ "t": "manage", "op": "pane.size", "at": first_pane, "mode": "release" }),
         15,
     )
     .await;
+    // A release that let go of nothing and one that let go of a live controller are different
+    // answers, and only this field tells them apart.
+    assert_eq!(
+        released["was_held"],
+        json!(true),
+        "the release does not say there was a hold to let go of: {released}"
+    );
+    assert_eq!(released["held"], json!(false), "{released}");
 
     // Only a pane's label is nullable, and null is what clears it.
     ok(
@@ -3668,6 +4118,29 @@ async fn every_client_op_lands_on_a_real_herd() {
     }
     assert!(gone, "closing the workspace never arrived as a herd.patch");
 
+    // The two book ops, on a node that has a real herd attached. They reach herdr for nothing —
+    // the book is this node's own database — and driving them here is what proves that: they are
+    // answered on a socket whose every other op went to a herdr server, and they are the only two
+    // this test never routes.
+    let kept = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "fleet.save", "args": ["kampr", "update"],
+                "label": "update everything" }),
+        15,
+    )
+    .await;
+    let entry = kept["id"].as_str().expect("the entry it kept").to_string();
+    let book = until(&mut socket, "fleet.book", 15).await;
+    assert_eq!(book["saved"][0]["args"], json!(["kampr", "update"]));
+    assert_eq!(book["saved"][0]["label"], "update everything");
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "fleet.drop", "entry": entry }),
+        15,
+    )
+    .await;
+    assert_eq!(until(&mut socket, "fleet.book", 15).await["saved"], json!([]));
+
     // If the client learns a new op, this test has to have driven it against a real herd before
     // it counts as working.
     let fixture: Value = serde_json::from_str(include_str!("../fixtures/manage-ops.json")).unwrap();
@@ -3693,6 +4166,8 @@ async fn every_client_op_lands_on_a_real_herd() {
         "layout.apply",
         "session.create",
         "session.stop",
+        "fleet.save",
+        "fleet.drop",
     ]
     .into_iter()
     .collect();
@@ -4622,17 +5097,23 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
         if message["t"] != "convo.turn" || message["pane"] != pane.as_str() {
             continue;
         }
+        // **The whole frame first.** The claim is about what happens *once the record is on the
+        // wire*, and the two can share a frame — a client that applied a non-empty preview
+        // alongside the record would draw the message twice, so within a frame the rule still
+        // holds. What the rule does not forbid is the preview being published one more time in
+        // the window between the record reaching the disk and the node reading it: the pump polls
+        // the screen on its own clock, that frame is a truthful reading, and asserting on it made
+        // this test fail two runs in twenty saying the opposite of what its own message says.
+        authoritative |= message["turns"]
+            .as_array()
+            .is_some_and(|turns| turns.iter().any(|turn| turn["id"] == "a-1"));
         for turn in message["turns"].as_array().unwrap_or(&Vec::new()) {
-            match turn["id"].as_str() {
-                Some("a-1") => authoritative = true,
-                Some("live") => {
-                    withdrawn = turn["blocks"].as_array().is_none_or(Vec::is_empty);
-                    assert!(
-                        withdrawn,
-                        "once the record is on the wire the preview may only be withdrawn: {turn}"
-                    );
-                }
-                _ => {}
+            if turn["id"] == "live" {
+                withdrawn = turn["blocks"].as_array().is_none_or(Vec::is_empty);
+                assert!(
+                    withdrawn || !authoritative,
+                    "once the record is on the wire the preview may only be withdrawn: {turn}"
+                );
             }
         }
     }
@@ -5840,25 +6321,33 @@ async fn a_split_pane_is_observed_at_the_pty_height_not_the_rect() {
             json!({ "target_pane_id": local, "direction": "down" }),
         )
         .await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let rect = rect_height(&h._session, &local).await;
     let pty = viewport_rows(&h._session, &local).await;
+    let rect = a_halved_rect_height(&h._session, &local, pty).await;
     assert!(
         rect < pty,
         "the split must have halved the rect: rect {rect}, PTY {pty}"
     );
 
-    // Content past the rect, so the bottom of the pane is only reachable at the PTY's height.
+    // Content past the rect, so the bottom of the pane is only reachable at the PTY's height —
+    // and drawn by a painter rather than typed at the operator's prompt. ble.sh re-renders the
+    // command line it accepted *after* the command's own output and can wipe it outright
+    // ([#446](#)); a screenful of filler ending in a marker on the last row is exactly the shape
+    // that redraw scrolls away, and the marker never comes back.
     let marker = "kampr-bottom-marker";
-    h._session
-        .call(
-            "pane.send_text",
-            json!({ "pane_id": local, "text":
-                format!("clear; for i in $(seq 1 {}); do echo filler-$i; done; echo {marker}\n", pty - 5) }),
-        )
-        .await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
+    let filler: String = (1..=pty - 5).map(|i| format!("filler-{i}\\n")).collect();
+    paint_screen(&mut socket, &pane, &format!("{filler}{marker}")).await;
+    // Waited for rather than slept over: the claim below is that the *repaint* carries the bottom
+    // of the pane, and a repaint of a screen the filler has not finished reaching carries it
+    // honestly and says nothing. Two seconds covered that on an idle box and lost three of ten
+    // full-suite runs under sixteen spinners. Herdr's screen and not the node's, because nothing
+    // is watching this pane yet — the node has no emulator for it until the `watch` below, and it
+    // starts that one from whatever herdr is holding.
+    assert!(
+        drawn_on_herdr(&h._session, &local, marker, 60).await,
+        "the pane never printed {marker}"
+    );
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
 
@@ -5882,6 +6371,21 @@ async fn a_split_pane_is_observed_at_the_pty_height_not_the_rect() {
     );
 }
 
+/// The rect once the split has halved it, waited for on herdr's own clock. Its floor is the PTY's
+/// height, which the rect is only below once the layout has actually moved.
+async fn a_halved_rect_height(session: &Session, pane: &str, pty: u16) -> u16 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut rect = pty;
+    while tokio::time::Instant::now() < deadline {
+        rect = rect_height(session, pane).await;
+        if rect < pty {
+            return rect;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    rect
+}
+
 async fn rect_height(session: &Session, pane: &str) -> u16 {
     let layout = session.call("pane.layout", json!({ "pane_id": pane })).await;
     layout["layout"]["panes"]
@@ -5894,7 +6398,9 @@ async fn rect_height(session: &Session, pane: &str) -> u16 {
 }
 
 /// Herdr's own `scroll.viewport_rows` — the PTY's height, which is what the program in the pane
-/// is actually writing to.
+/// is actually writing to, and the half of a pane's geometry herdr answers honestly (#84). It is
+/// therefore the only evidence available that a `pane.size` landed at all, columns being reported
+/// by nothing anywhere (#221).
 async fn viewport_rows(session: &Session, pane: &str) -> u16 {
     let snapshot = session.call("session.snapshot", json!({})).await;
     snapshot["snapshot"]["panes"]
@@ -5932,7 +6438,13 @@ async fn reopening_a_pane_repaints_it_from_the_screen_as_it_is_now() {
     until_pane(&mut socket, "grid.reset", &pane, 20).await;
     send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
 
-    // Everything from here happens while this client is not looking.
+    // Everything from here happens while this client is not looking — and it has to have actually
+    // happened before the client comes back, or the repaint it gets is honest about a screen the
+    // marker had not reached yet and every frame that carries it afterwards is a `grid.patch`
+    // this test is not looking for. A fixed two seconds covered that on an idle box and not on a
+    // contended one, where it went red on a run with nothing else on the machine. Waited for on
+    // both the screens the node reads: a reopening client is repainted from the node's own
+    // emulator, so the marker has to have reached that one too.
     let marker = "kampr-while-away-marker";
     h._session
         .call(
@@ -5940,7 +6452,10 @@ async fn reopening_a_pane_repaints_it_from_the_screen_as_it_is_now() {
             json!({ "pane_id": local, "text": format!("echo {marker}\n") }),
         )
         .await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        drawn(&h, &local, marker, 60).await,
+        "the pane never printed {marker} while the client was away"
+    );
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -6475,7 +6990,17 @@ async fn keypress_to_glyph(socket: &mut Socket, pane: &str, rounds: u32) -> Vec<
         // to produce it, and it tracks how oversubscribed the box is rather than what the pane is
         // running: it is most likely this test's own wakeup latency and not the node's. That is a
         // guess and it is why nothing here asserts on a quantile it can reach.
-        send(socket, json!({ "t": "input", "pane": pane, "keys": ["BSpace"] })).await;
+        // **`Backspace`, because `BSpace` is not a key herdr has.** herdr 0.8.2 answers it
+        // `invalid_key: unsupported key BSpace` and delivers no byte, so for as long as this said
+        // `BSpace` the line was never taken back and every reading after the first landed on a
+        // prompt one character longer than the last. Probe #7's grammar has `Backspace` and `BS`;
+        // both send `0x7f` and both erase. It also cost a refused herdr call per round, and a
+        // refused call is still a call — worst case a whole 100 ms poll (#445).
+        send(
+            socket,
+            json!({ "t": "input", "pane": pane, "keys": ["Backspace"] }),
+        )
+        .await;
         let jitter = 50 + (round as u64 * 37) % 190;
         drain(socket, Duration::from_millis(jitter)).await;
     }
@@ -7451,13 +7976,26 @@ async fn an_agent_pane_with_a_transcript(
     (h, socket, pane, local, home)
 }
 
-/// Paints a harness-shaped screen through the pane's own tty, so the node's emulator sees exactly
-/// what herdr would put there. One `printf` on one shell line: a command with real newlines in it
-/// is read line by line and every line after the first becomes its own prompt.
 /// The defect this was written for: `pending` is published on a blocked *edge* and latches on its
 /// first successful read, so a dialog whose **checkboxes move under the operator** was drawn from
 /// its first reading for as long as it stood. Every press on a multiple-answer question is a tick
 /// (#421), and nothing else on the wire ever says which are ticked.
+///
+/// **Nothing interactive is left on the pane, and that is the whole of why this used to flake.**
+/// The dialog was painted with `clear; printf` through the operator's own login shell, which
+/// loads ble.sh. ble.sh re-renders the accepted command line on its own schedule, and under load
+/// that re-render lands *after* the `printf`: the screen was left carrying the echoed command and
+/// a fresh prompt, with the dialog gone and never coming back. Measured under sixteen spinners,
+/// four of six full-suite runs died here, and the failing screen read back as
+/// `clear; printf '%b' ' ☐ Test suites\n\n…'` over three wrapped rows and a prompt — no dialog
+/// at all. So `drawn` saw the dialog, the report went in, and by the time the node read the pane
+/// there was nothing on it to publish; it spent its twelve retries (`PENDING_ATTEMPTS`, six
+/// seconds) on a wiped screen and correctly stopped asking. The node was right and the fixture was
+/// fighting a line editor — [#442](#)'s lesson one layer up.
+///
+/// A painter with no echo, no prompt and no line editor is also the *truer* fixture: a real dialog
+/// has the harness's own chrome above it and never a shell echo ([#407](#)), which is the entire
+/// subject of [#406](#).
 #[tokio::test(flavor = "multi_thread")]
 async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pressed() {
     let h = harness!("multipending");
@@ -7468,46 +8006,33 @@ async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pre
     let local = pane.split_once('/').unwrap().1.to_string();
 
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    until(&mut socket, "grid.reset", 15).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
 
-    // The blank line above the question is what makes this independent of the machine it runs on
-    // (#406, #407) — without it the row above is this command's own echo, and whether it is joined
-    // on turns on the ambient prompt width.
-    // Painted through `paint_harness_screen`, which clears first: the shell echoes the command
-    // that draws the dialog, and this one is long enough to wrap into the rows the detector reads.
+    // The blank row above the question is what makes the reading independent of the machine
+    // (#406, #407); with the shell gone there is nothing above the header at all.
     let dialog = |unit: &str, browser: &str| {
         let box_glyph = '\u{2610}';
         format!(
-            " {box_glyph} Test suites\\n\\nWhich test suites should I run?\\n\\n             1. [{unit}] unit\\n  Run the unit test suite.\\n             2. [ ] integration\\n  Run the integration test suite.\\n             3. [{browser}] browser\\n  Run the browser test suite.\\n"
+            " {box_glyph} Test suites\\n\\nWhich test suites should I run?\\n\\n             1. [{unit}] unit\\n  Run the unit test suite.\\n             2. [ ] integration\\n  Run the integration test suite.\\n             3. [{browser}] browser\\n  Run the browser test suite."
         )
     };
 
-    // **Waited for on the screen, not on the clock.** This dialog is long enough that herdr is
-    // still reporting `processing input...` after the fixed sleep `paint_harness_screen` takes,
-    // and reporting the pane blocked before the command has run asks the node to read a screen
-    // that has nothing on it yet — which it then latches as "no dialog here" for good.
-    paint_harness_screen(&mut socket, &pane, &dialog(" ", " ")).await;
+    // **Waited for on the screen, not on the clock**, and on *both* the screens the node reads.
+    // This is the environment half: one write down a pty and back out of herdr, which is 5 ms
+    // here and ten seconds at forty-eight spinners.
+    paint_screen(&mut socket, &pane, &dialog(" ", " ")).await;
     assert!(
-        drawn(&h, &local, "Run the browser test suite.", 20).await,
+        drawn(&h, &local, "Run the browser test suite.", 60).await,
         "the dialog never reached the screen",
     );
-    h._session
-        .call(
-            "pane.report_agent",
-            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
-        )
-        .await;
+    report(&h._session, &local, "blocked").await;
+    // And the second environment half: herdr taking the report and the node's herd carrying it.
+    // The product only has an edge to publish on once this has happened, so a budget that spans
+    // it is a budget on herdr's detection and on the node's poll (#440).
+    until_herd(&h, &pane, "blocked").await;
 
-    let seen: Value = h
-        ._session
-        .call(
-            "pane.read",
-            json!({ "pane_id": local, "source": "visible", "format": "text", "strip_ansi": true }),
-        )
-        .await;
-    let _ = &seen;
-
-    let asked = until_pane(&mut socket, "pending", &pane, 25).await;
+    let asked = until_pane(&mut socket, "pending", &pane, 20).await;
     assert_eq!(
         asked["multi"], true,
         "the checkboxes say what kind of question this is: {asked}"
@@ -7530,19 +8055,24 @@ async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pre
 
     // The operator presses 1 and 3 — at the desk, or from a phone. Either way a press is a *tick*
     // (#421), the screen moves, and nothing but a re-read can say so.
-    paint_harness_screen(&mut socket, &pane, &dialog("\u{2714}", "\u{2714}")).await;
+    paint_screen(&mut socket, &pane, &dialog("\u{2714}", "\u{2714}")).await;
     assert!(
-        drawn(&h, &local, "[\u{2714}] browser", 20).await,
+        drawn(&h, &local, "[\u{2714}] browser", 60).await,
         "the ticks never reached the screen"
     );
 
-    // Not merely "the next `pending`": clearing the screen to repaint it takes the dialog away and
-    // puts it back, so the frames in between are honest readings of a screen mid-repaint. What has
-    // to arrive is the one carrying the ticks.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    // Not merely "the next `pending`": the erase and the redraw are one write, but the node polls
+    // herdr on its own clock and may still read the screen between them. What has to arrive is the
+    // frame carrying the ticks.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut moved = Value::Null;
     while tokio::time::Instant::now() < deadline {
-        let frame = until_pane(&mut socket, "pending", &pane, 25).await;
+        let Some(frame) = recv(&mut socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if frame["t"] != "pending" || frame["pane"] != pane {
+            continue;
+        }
         if frame["options"][0]["chosen"] == true {
             moved = frame;
             break;
@@ -7576,6 +8106,63 @@ async fn the_ticks_on_a_question_that_takes_several_answers_move_as_they_are_pre
             );
         }
     }
+}
+
+/// Takes the operator's shell off the pane and leaves a painter on it: one `read`, one `printf`,
+/// no echo, no prompt and no line editor. Everything the pane shows from here is what a test put
+/// there.
+///
+/// **Waited for on what the painter can do rather than on what it is called.** `/bin/sh` is a
+/// symlink to a different binary on half the machines this runs on, so a process name is not the
+/// condition; decoding `\145` into an `e` is, and only `printf %b` does it. A shell still holding
+/// the pane echoes the probe verbatim and tries to run it, which draws neither the erase nor the
+/// word.
+///
+/// The 60 s is a give-up threshold on the environment, not a budget on anything the node does.
+async fn a_painter_on_the_pane(h: &Harness, socket: &mut Socket, pane: &str, local: &str) {
+    send(
+        socket,
+        json!({ "t": "input", "pane": pane,
+                "text": "stty -echo; exec /bin/sh -c 'while IFS= read -r row; do printf \"%b\" \"$row\"; done'\n" }),
+    )
+    .await;
+    for _ in 0..30 {
+        paint_screen(socket, pane, "paint\\145r-ready").await;
+        // herdr's screen alone, because a pane nobody is watching has no other one: the node
+        // opens an emulator for a pane when a client watches it, and two of the three callers
+        // here are setting a pane up *before* anything does.
+        if drawn_on_herdr(&h._session, local, "painter-ready", 2).await {
+            return;
+        }
+    }
+    panic!("the pane never got a painter on it");
+}
+
+/// One line to the painter: erase, then the body, in **one** write.
+///
+/// The erase is part of the same `printf` on purpose. Two writes leave the screen genuinely blank
+/// between them, and a node that reads it there reads a pane with no dialog on it — which is a
+/// truthful reading of a screen no harness ever draws, and it costs the read that mattered.
+async fn paint_screen(socket: &mut Socket, pane: &str, body: &str) {
+    let erase = "\\033[H\\033[2J\\033[3J";
+    send(
+        socket,
+        json!({ "t": "input", "pane": pane, "text": format!("{erase}{body}\n") }),
+    )
+    .await;
+}
+
+/// Whether a screen a test painted has landed on **herdr's** screen, which is the only one there
+/// is until something watches the pane.
+async fn drawn_on_herdr(session: &Session, pane: &str, want: &str, seconds: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if visible(session, pane).await.contains(want) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
 }
 
 /// Whether a screen a test painted has landed — on **both** of the screens the node reads.
@@ -7614,15 +8201,6 @@ async fn drawn(h: &Harness, local: &str, want: &str, seconds: u64) -> bool {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     false
-}
-
-async fn paint_harness_screen(socket: &mut Socket, pane: &str, body: &str) {
-    send(
-        socket,
-        json!({ "t": "input", "pane": pane, "text": format!("clear; printf '%b' '{body}'\n") }),
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(900)).await;
 }
 
 /// The same screen for a test watching the *conversation*, painted two ways the one above is not.

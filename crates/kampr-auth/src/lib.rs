@@ -9,6 +9,7 @@
 
 pub mod android;
 pub mod audit;
+pub mod book;
 pub mod files;
 pub mod identity;
 pub mod mesh;
@@ -20,6 +21,7 @@ pub mod store;
 pub mod tier;
 
 pub use audit::{AuditLog, Entry, Refusals};
+pub use book::{FLEET_RECENT, FleetBook, FleetCommand};
 pub use files::private_dir;
 pub use identity::{IdentityError, NodeIdentity};
 pub use mesh::{Mesh, MeshNode, MeshRole};

@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
 use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{NodeEntry, PaneEntry};
-use kampr_herdr::Herdr;
 use kampr_journal::{FacetFold, Harness, Registry as Journals, SessionMarker, Titles};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
@@ -64,6 +63,9 @@ pub struct Node {
     journals: watch::Sender<Arc<Journals>>,
     caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
+    /// Bumped whenever the fleet book changes, so a save made on the phone reaches the desktop
+    /// that is looking at the same node right now rather than at its next connection.
+    book: watch::Sender<u64>,
     /// Loaded on first use rather than at startup: a node that never meshes never needs a key,
     /// and writing one it will not use is a file written for nothing.
     identity: OnceLock<NodeIdentity>,
@@ -91,6 +93,7 @@ impl Node {
         });
 
         let (herd, _) = watch::channel(Arc::new(HerdModel::default()));
+        let (book, _) = watch::channel(0u64);
         let home = config.journal_home();
         let (journals, _) = watch::channel(Arc::new(kampr_journal::registry_from_home(&home)));
         let (available, mut tasks) = crate::update::start(&config, state_dir);
@@ -133,6 +136,7 @@ impl Node {
             journals,
             caps: crate::caps::Caps::default(),
             herd,
+            book,
             identity: OnceLock::new(),
             tasks: Mutex::new(tasks),
         });
@@ -174,6 +178,16 @@ impl Node {
 
     pub fn subscribe_herd(&self) -> watch::Receiver<Arc<HerdModel>> {
         self.herd.subscribe()
+    }
+
+    pub fn subscribe_book(&self) -> watch::Receiver<u64> {
+        self.book.subscribe()
+    }
+
+    /// The book changed. Every live session re-reads it, so two devices looking at the same node
+    /// at the same time do not disagree about what is saved.
+    pub fn book_changed(&self) {
+        self.book.send_modify(|n| *n = n.wrapping_add(1));
     }
 
     /// Test-visible: the model is built by [`refresh_herd`] from what a herdr reports, and a test
@@ -607,8 +621,14 @@ async fn build_model(
             // This process is answering by definition — it is the one assembling the message. A
             // herdr that is down takes the panes and leaves the node able to run a fleet command.
             reachable: Some(true),
+            // **Not a call of its own.** The provider's sweep round-trips this herdr already, so
+            // the number is read rather than asked for — one `ping` per session per rebuild was
+            // 19/min with four panes busy, for a figure the node was in a position to know
+            // (#448). And it is the best of a handful of those readings rather than the latest,
+            // because a single one is bimodal at 100 ms (#445) and a number that reads 0.2 or
+            // 100 with nothing in between is not a latency an operator can act on.
             rtt_ms: match health.online {
-                true => ping(&session.herdr).await,
+                true => session.provider.rtt_ms(),
                 false => None,
             },
             herdr_version: session.provider.herdr_version(),
@@ -658,15 +678,6 @@ async fn build_model(
     conversations.keep(&live);
     names.keep(&titled);
     HerdModel { nodes, panes }
-}
-
-async fn ping(herdr: &Herdr) -> Option<f64> {
-    let at = Instant::now();
-    herdr
-        .call::<serde_json::Value>("ping", serde_json::json!({}))
-        .await
-        .ok()
-        .map(|_| at.elapsed().as_secs_f64() * 1000.0)
 }
 
 /// The pane's status once the harness has had its say.
