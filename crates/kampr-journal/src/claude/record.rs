@@ -18,6 +18,44 @@ pub struct Record {
     pub message: Option<Message>,
     #[serde(rename = "toolUseResult")]
     pub tool_use_result: Option<Value>,
+    pub attachment: Option<Attached>,
+}
+
+/// The harness files twelve kinds of `attachment` record and one of them is conversation: a prompt
+/// the operator typed while a turn was running, which the turn absorbs and which is written **here
+/// and in no `user` record anywhere** — 64 of 64 across this machine's 61 transcripts (#462).
+///
+/// `origin` is the whole discrimination. The other 230 `queued_command` records are the harness
+/// queueing its own background results to itself, and every one of those carries a null origin
+/// against a person's `{"kind":"human"}` (#463) — rendering them would bury the conversation under
+/// the plumbing on a view pinned to its end, which is what #363 already cost once.
+#[derive(Debug, Deserialize)]
+pub struct Attached {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub prompt: Option<Content>,
+    pub origin: Option<PromptOrigin>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PromptOrigin {
+    pub kind: Option<String>,
+}
+
+impl Attached {
+    fn spoken(&self) -> bool {
+        self.kind == "queued_command" && self.origin.as_ref().and_then(|o| o.kind.as_deref()) == Some("human")
+    }
+}
+
+pub fn queued_prompt(record: &Record) -> Option<&Content> {
+    let attached = record.attachment.as_ref()?;
+    attached.spoken().then_some(attached.prompt.as_ref()).flatten()
+}
+
+pub fn take_queued_prompt(record: &mut Record) -> Option<Content> {
+    let attached = record.attachment.take()?;
+    attached.spoken().then_some(attached.prompt).flatten()
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,7 +101,12 @@ pub enum ContentBlock {
 /// walks have to agree**: an id names an attachment by its ordinal within the record, so a block
 /// this yields and the parser skips would hand the next marker somebody else's bytes.
 pub fn attachments(record: &Record) -> Vec<Att<'_>> {
-    let Some(Content::Blocks(blocks)) = record.message.as_ref().and_then(|m| m.content.as_ref()) else {
+    let content = record
+        .message
+        .as_ref()
+        .and_then(|m| m.content.as_ref())
+        .or_else(|| queued_prompt(record));
+    let Some(Content::Blocks(blocks)) = content else {
         return Vec::new();
     };
     let mut found = Vec::new();

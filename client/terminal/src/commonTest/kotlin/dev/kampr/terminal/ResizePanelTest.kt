@@ -13,8 +13,8 @@ import kotlin.test.assertTrue
 // controller lets go (#219), so "fit this pane to my screen" from a phone would leave that pane at
 // phone width for every other client, with nothing but another resize to undo it.
 class ResizePanelTest {
-    private fun sizing(fitCols: Int, fitRows: Int) =
-        PaneSizing(cols = 94, rows = 40, fitCols = fitCols, fitRows = fitRows, held = false)
+    private fun sizing(viewCols: Int, viewRows: Int) =
+        PaneSizing(cols = 94, rows = 40, viewCols = viewCols, viewRows = viewRows, held = false)
 
     @Test
     fun aViewTooNarrowToGiveAPaneIsRefused() {
@@ -27,8 +27,9 @@ class ResizePanelTest {
     fun aDeskSizedViewIsOffered() {
         assertTrue(sizing(MIN_PANE_COLS, MIN_PANE_ROWS).fitIsUsable(), "the floor itself is allowed")
         assertTrue(sizing(292, 72).fitIsUsable(), "a real desk browser")
-        // Fit-width zoom on a phone shows the whole pane, which is a legitimate size to ask for
-        // even though the text is small — the pane is what is being sized, not the reading.
+        // Measured at the base cell, so this is a window that really is 94 columns wide at
+        // readable size — the pane is what is being sized, not the reading, and zooming out to
+        // see a wide pane no longer moves this number at all.
         assertTrue(sizing(94, 40).fitIsUsable())
     }
 

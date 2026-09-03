@@ -43,6 +43,7 @@ impl SessionNode {
                 send_argv: config.naming.send_argv,
                 report_names: config.naming.reporting(),
                 desk_agents: config.naming.desk_agents(),
+                primary,
                 ..HerdrConfig::default()
             },
         ));
@@ -205,7 +206,13 @@ impl Sessions {
         {
             let mut all = self.all.write().unwrap();
             let before = all.len();
-            all.retain(|s| Arc::ptr_eq(s, &self.primary) || live.contains(s.name.as_str()));
+            all.retain(|s| {
+                let keep = Arc::ptr_eq(s, &self.primary) || live.contains(s.name.as_str());
+                if !keep {
+                    info!(session = %s.name, node = %s.node_id, "a herdr session ended");
+                }
+                keep
+            });
             changed |= all.len() != before;
         }
         if changed {

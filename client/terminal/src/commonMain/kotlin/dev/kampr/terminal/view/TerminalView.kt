@@ -968,13 +968,9 @@ fun TerminalView(
                     PaneSizing(
                         cols = cols,
                         rows = rows.liveRows,
-                        // What this client can actually show at the zoom it is on, which is what
-                        // "match this view" means. Below the floor the panel refuses it and says so.
-                        fitCols = (paint.width / metrics.width).toInt().coerceAtLeast(1),
-                        fitRows = visibleRows,
+                        viewCols = viewCols,
+                        viewRows = viewRows,
                         held = view.sizeHeld,
-                        matchCols = viewCols,
-                        matchRows = viewRows,
                         matching = matching,
                         canMatch = roomToMatch && !ownPane,
                     )

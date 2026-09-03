@@ -747,6 +747,7 @@ impl Session {
                 warm: warm.clone(),
                 held,
                 followed: followed.clone(),
+                relayed: self.caller == Caller::Hub,
             })));
         }
         self.panes.insert(

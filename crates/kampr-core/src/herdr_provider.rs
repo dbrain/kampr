@@ -142,6 +142,14 @@ pub struct HerdrConfig {
     /// names the job for its whole life. So this is not the screen a readonly device could already
     /// read, and it is not on unless an operator says so.
     pub send_argv: bool,
+    /// Whether this socket going quiet is news about the machine, or one named session ending.
+    ///
+    /// **True for the node's own herdr, false for every session it discovered.** A named session is
+    /// a whole separate server (#49) and a whole separate node in the herd, and an operator closes
+    /// one the way they close a terminal — the discovery sweep drops it within its own interval and
+    /// the herd says so. Raising the machine's alarm for that is a false one on a healthy host, and
+    /// it is the line an operator reads first on the day something is actually wrong (#465).
+    pub primary: bool,
 }
 
 impl Default for HerdrConfig {
@@ -158,6 +166,7 @@ impl Default for HerdrConfig {
             report_names: None,
             desk_agents: None,
             send_argv: false,
+            primary: true,
         }
     }
 }
@@ -679,7 +688,12 @@ impl Inner {
             h.detail = Some(detail);
             changed
         });
-        if first {
+        if first && !self.config.primary {
+            info!(
+                socket = %self.herdr.socket().display(),
+                "a herdr session stopped answering; it leaves the herd at the next discovery sweep"
+            );
+        } else if first {
             warn!(
                 socket = %self.herdr.socket().display(),
                 error = %error,

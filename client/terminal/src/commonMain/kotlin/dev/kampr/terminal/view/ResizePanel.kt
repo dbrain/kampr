@@ -31,19 +31,21 @@ internal val SIZE_PRESETS = listOf(80 to 24, 120 to 40, 200 to 50)
 data class PaneSizing(
     val cols: Int,
     val rows: Int,
-    val fitCols: Int,
-    val fitRows: Int,
+    // The grid this window would show, measured at the base cell rather than at the zoom the
+    // operator happens to be reading at — see `viewGrid`. **Both controls below ask for this one
+    // number.** Taken at the current zoom instead it is a function of the pane rather than of the
+    // window, because the fit ladder picked that zoom to suit the pane's width: on a grid wider
+    // than the window the chip offered the pane roughly the width it already had, and where the
+    // standing hold was on it named a different size and undid the chip a moment later.
+    val viewCols: Int,
+    val viewRows: Int,
     val held: Boolean,
-    // What this view would ask for as a standing intent, which is measured at the base cell rather
-    // than at the zoom the operator happens to be on — see `viewGrid`.
-    val matchCols: Int = fitCols,
-    val matchRows: Int = fitRows,
     val matching: Boolean = false,
     // False on a view too small to ask, and on a pane Kampr forked for a job of its own.
     val canMatch: Boolean = false,
 )
 
-internal fun PaneSizing.fitIsUsable() = fitCols >= MIN_PANE_COLS && fitRows >= MIN_PANE_ROWS
+internal fun PaneSizing.fitIsUsable() = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
 
 // Kampr's one deliberate exception to never reshaping a pane, and it is behind a panel rather than
 // on the surface because of what it costs: claiming a PTY overrides whoever is at the desk for as
@@ -95,13 +97,13 @@ internal fun ResizePanel(
         val fits = sizing.fitIsUsable()
         SizeChip(
             label = if (fits) {
-                "Match this view · ${sizing.fitCols}×${sizing.fitRows}"
+                "Match this view · ${sizing.viewCols}×${sizing.viewRows}"
             } else {
-                "This view is only ${sizing.fitCols}×${sizing.fitRows}"
+                "This view is only ${sizing.viewCols}×${sizing.viewRows}"
             },
             active = false,
             enabled = fits,
-            onClick = { onResize(sizing.fitCols, sizing.fitRows) },
+            onClick = { onResize(sizing.viewCols, sizing.viewRows) },
             modifier = Modifier.fillMaxWidth(),
         )
         if (!fits) {
@@ -120,7 +122,7 @@ internal fun ResizePanel(
         if (sizing.canMatch) {
             Toggle(
                 on = sizing.matching,
-                title = "Match this view while it's open · ${sizing.matchCols}×${sizing.matchRows}",
+                title = "Match this view while it's open · ${sizing.viewCols}×${sizing.viewRows}",
                 detail = "Holds the pane at this window's size until you leave it. Their screen at " +
                     "the desk is wrong while it is held, and the pane goes back to the size it was " +
                     "when you let go.",

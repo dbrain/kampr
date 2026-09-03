@@ -378,3 +378,125 @@ fn parallel_tool_calls_each_settle_onto_their_own_card() {
         "the Grep never settled at all"
     );
 }
+
+fn absorbed(prompt: serde_json::Value, origin: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "type": "attachment",
+        "uuid": "q1",
+        "timestamp": "2026-09-03T07:08:36.850Z",
+        "isSidechain": false,
+        "attachment": {
+            "type": "queued_command",
+            "prompt": prompt,
+            "source_uuid": "c5da01d4-428e-450b-91b3-a352bcf626d0",
+            "commandMode": "prompt",
+            "origin": origin,
+            "timestamp": "2026-09-03T07:08:36.850Z"
+        }
+    })
+}
+
+fn working(uuid: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "assistant", "uuid": uuid, "timestamp": "2026-09-03T07:08:30.000Z",
+        "message": { "content": [ { "type": "text", "text": text } ] }
+    })
+}
+
+/// A prompt typed while the agent is working is `enqueue`d, then `remove`d with
+/// `reason: "absorbed_mid_turn"` about a second later, and written into the transcript as an
+/// `attachment`/`queued_command` record and **nowhere else** — there is no `user` record for it at
+/// all, on any of the 64 measured across this machine's 61 transcripts (#462). The queue fold
+/// correctly stops calling it waiting; nothing put it back, so the operator watched their own
+/// message vanish at the moment the agent took it up.
+#[test]
+fn a_prompt_absorbed_into_the_running_turn_is_still_the_operators_own_turn() {
+    let mut scratch = scratch_claude(
+        "absorbed",
+        &[
+            working("a1", "starting on it"),
+            absorbed(
+                serde_json::json!("also the conversation view drops these"),
+                serde_json::json!({ "kind": "human" }),
+            ),
+            working("a2", "noted, doing that too"),
+        ],
+    );
+    let turns = scratch.turns();
+
+    let roles: Vec<Role> = turns.iter().map(|t| t.role).collect();
+    assert_eq!(
+        roles,
+        [Role::Assistant, Role::User, Role::Assistant],
+        "the operator's words went missing between the two halves of the turn that answered them"
+    );
+    assert_eq!(turns[1].id, "q1");
+    assert_eq!(turns[1].at.as_deref(), Some("2026-09-03T07:08:36.850Z"));
+    assert_eq!(
+        turns[1].blocks,
+        vec![Block::md("also the conversation view drops these")]
+    );
+}
+
+/// 230 of the 294 `queued_command` records on this machine are the harness handing itself the
+/// result of its own background work, and every one of them carries a null `origin` where a
+/// person's carries `{"kind":"human"}` (#463). Rendering those would bury the conversation under
+/// the plumbing on a view pinned to its end, which is what #363 already cost once.
+///
+/// **The second case is the one that bites.** All 230 are `<task-notification>`, so the envelope
+/// stripper (#286) refuses them a second time whatever the origin says — prose with no origin on
+/// it is the only shape that can tell whether Kampr is reading the origin or the words.
+#[test]
+fn a_queued_command_that_is_not_a_person_speaking_is_not_a_turn() {
+    let plumbing = "<task-notification>\n<task-id>b1</task-id>\n</task-notification>";
+    for (at, (why, prompt)) in [
+        (
+            "the harness's own background result, as it is actually written",
+            plumbing,
+        ),
+        (
+            "prose with no origin, which only the origin itself can refuse",
+            "run the tests again",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut scratch = scratch_claude(
+            &format!("absorbed-plumbing-{at}"),
+            &[
+                working("a1", "off I go"),
+                absorbed(serde_json::json!(prompt), serde_json::Value::Null),
+            ],
+        );
+
+        assert_eq!(
+            scratch.turns().len(),
+            1,
+            "{why} was read as something a person said"
+        );
+    }
+}
+
+#[test]
+fn a_screenshot_queued_with_the_words_arrives_with_them() {
+    let mut scratch = scratch_claude(
+        "absorbed-image",
+        &[absorbed(
+            serde_json::json!([
+                { "type": "text", "text": "missing glyphs:" },
+                { "type": "image",
+                  "source": { "type": "base64", "media_type": "image/png", "data": PNG } }
+            ]),
+            serde_json::json!({ "kind": "human" }),
+        )],
+    );
+    let turns = scratch.turns();
+
+    assert_eq!(md_texts(&turns), vec!["missing glyphs:", "[image · png]"]);
+    assert_eq!(
+        attachments(&turns).len(),
+        1,
+        "the picture the message was about is not reachable from the turn"
+    );
+}

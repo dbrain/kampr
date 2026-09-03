@@ -10,7 +10,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.runDesktopComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
@@ -86,6 +89,7 @@ private fun ComposeUiTest.terminal(
     pane: PaneState,
     io: PaneIo,
     size: Pair<Dp, Dp>,
+    session: PaneSession? = null,
     shown: () -> Boolean = { true },
 ) {
     setContent {
@@ -97,7 +101,9 @@ private fun ComposeUiTest.terminal(
         ) {
             Box(Modifier.size(size.first, size.second).keyboardInset()) {
                 if (shown()) {
-                    Box(Modifier.fillMaxSize()) { TerminalView(pane, PaneSession(Phone.PANE), io) }
+                    Box(Modifier.fillMaxSize()) {
+                        TerminalView(pane, session ?: PaneSession(Phone.PANE), io)
+                    }
                 }
             }
         }
@@ -260,5 +266,41 @@ class MatchingTheViewTest {
             asks.all { it.cols == first.cols && it.rows == first.rows },
             "and it asked for something else: $asks",
         )
+    }
+
+    // **The two controls on the panel are one promise, so they are one number.** The chip measured
+    // the window in cells of whatever size the operator was reading at while the switch measured it
+    // at the base cell, and the pair therefore agreed only at 1x. On a grid wider than the window
+    // the fit ladder is at the zoom that pane's width chose, so the chip was offering the pane
+    // roughly the width it already had — and with the switch on, the standing hold undid it a
+    // moment later.
+    //
+    // A real window rather than an oversized `Box`, because this is the one test here that presses
+    // something: a control laid out past the edge of the test window cannot be clicked.
+    @Test
+    fun theChipAndTheSwitchAskForTheSameGridAtEveryZoom() {
+        for (zoom in listOf("0.6", "1.0", "1.6")) {
+            runDesktopComposeUiTest(DESK.first.value.toInt(), DESK.second.value.toInt()) {
+                val io = MatchIo(PanePrefs(mapOf("zoom" to zoom)))
+                val session = PaneSession(Phone.PANE)
+                terminal(grid(cols = 300), io, DESK, session)
+                val held = assertNotNull(settled(io, SizeMode.Match), "nothing was held at ${zoom}x")
+
+                session.view.sheetOpen = true
+                waitForIdle()
+                onNodeWithContentDescription("Match this view ·", substring = true).performClick()
+                waitForIdle()
+
+                val once = assertNotNull(
+                    io.sent.sizings().lastOrNull { it.mode == SizeMode.Once },
+                    "the chip asked for nothing at ${zoom}x",
+                )
+                assertEquals(
+                    held.cols to held.rows,
+                    once.cols to once.rows,
+                    "at ${zoom}x the chip and the switch named different grids",
+                )
+            }
+        }
     }
 }

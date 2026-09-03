@@ -7462,6 +7462,21 @@ async fn pane_title(socket: &mut Socket, pane: &str) -> Option<String> {
 /// every other test emits into it and never asks.
 static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// Every `WARN` the herdr provider raised about a socket, and which socket. Read by one test for
+/// the alarms it must *not* find.
+static ALARMS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn alarms_about(socket: &Path) -> Vec<String> {
+    let needle = socket.display().to_string();
+    ALARMS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains(&needle))
+        .cloned()
+        .collect()
+}
+
 fn opens(pane: &str) -> usize {
     OPENED.lock().unwrap().iter().filter(|p| *p == pane).count()
 }
@@ -7478,11 +7493,23 @@ struct Opened;
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Opened {
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
-        if event.metadata().target() != "kampr_node::convo" {
+        let target = event.metadata().target();
+        if target != "kampr_node::convo" && target != "kampr_core::herdr_provider" {
             return;
         }
         let mut fields = Fields::default();
         event.record(&mut fields);
+        if target == "kampr_core::herdr_provider" {
+            if *event.metadata().level() == tracing::Level::WARN
+                && let Some(socket) = fields.socket
+            {
+                ALARMS
+                    .lock()
+                    .unwrap()
+                    .push(format!("{socket} {}", fields.message.unwrap_or_default()));
+            }
+            return;
+        }
         if fields.message.as_deref() == Some("conversation opened")
             && let Some(pane) = fields.pane
         {
@@ -7495,6 +7522,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Opened {
 struct Fields {
     message: Option<String>,
     pane: Option<String>,
+    socket: Option<String>,
 }
 
 impl tracing::field::Visit for Fields {
@@ -7502,6 +7530,7 @@ impl tracing::field::Visit for Fields {
         let slot = match field.name() {
             "message" => &mut self.message,
             "pane" => &mut self.pane,
+            "socket" => &mut self.socket,
             _ => return,
         };
         *slot = Some(format!("{value:?}"));
@@ -8342,4 +8371,192 @@ async fn a_browser_that_already_has_the_bundle_is_not_sent_it_again() {
         stale.contains("200"),
         "a browser holding an old file was told it was still current: {stale}",
     );
+}
+
+/// A hub, as a peer's node sees one: the same client protocol over an in-process link, opened
+/// under [`kampr_node::session::Caller::Hub`] exactly as `mesh.rs` opens a real one.
+struct AsAHub {
+    out: kampr_mesh::transport::Sender,
+    incoming: kampr_mesh::transport::Receiver,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl AsAHub {
+    async fn attach(node: &Arc<Node>) -> Self {
+        let key = "b".repeat(64);
+        let device = node
+            .auth
+            .store()
+            .mesh()
+            .hub_device(&key, "front", kampr_auth::now())
+            .await
+            .expect("a hub device");
+        let (near, far) = kampr_mesh::transport::pair();
+        let task = tokio::spawn(kampr_node::session::run_on(
+            far.out,
+            far.incoming,
+            node.clone(),
+            device,
+            "mesh:test".to_string(),
+            kampr_node::session::Caller::Hub,
+        ));
+        Self {
+            out: near.out,
+            incoming: near.incoming,
+            _task: task,
+        }
+    }
+
+    async fn say(&mut self, value: Value) {
+        use kampr_mesh::transport::Outgoing;
+        assert!(self.out.send(value.to_string()).await, "the peer hung up");
+    }
+
+    /// The next message for this pane with one of these tags, and the tags that came first.
+    async fn until(&mut self, pane: &str, tags: &[&str], seconds: u64) -> Value {
+        use kampr_mesh::transport::Incoming;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+        let mut seen = Vec::new();
+        while tokio::time::Instant::now() < deadline {
+            let Ok(Some(text)) = tokio::time::timeout(Duration::from_secs(2), self.incoming.recv()).await
+            else {
+                continue;
+            };
+            let Ok(message) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let tag = message["t"].as_str().unwrap_or_default().to_string();
+            if message["pane"] == pane && tags.contains(&tag.as_str()) {
+                return message;
+            }
+            seen.push(tag);
+        }
+        panic!("none of {tags:?} for {pane} in {seconds}s; saw {seen:?}");
+    }
+}
+
+/// **A hub is a relay, not a viewer, and its peer was answering it as though it were one.**
+///
+/// A pane's pump downgrades its delivery from a page to a revision whenever the socket it is
+/// writing to already holds this transcript (#411). That is right for a phone, whose record is its
+/// own screen, and wrong for a hub, whose record is a fan-out cache nobody is looking at: a
+/// revision carries no `cursor` and no `more`, so every client behind that hub is handed the
+/// newest turns with no way to reach anything older, and the window covers less of the
+/// conversation the longer the transcript grows.
+///
+/// Measured on the operator's own herd before it was fixed. A fresh client of the node that owns
+/// the pane: `convo`, 129 turns, `more: true`, a cursor. A fresh client of the hub one hop away,
+/// on the same pane in the same second: `convo.turn`, 132 turns, no cursor, no `more` (#464).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_is_paged_every_time_because_the_turns_it_holds_are_on_nobodys_screen() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("hubpage", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let mut hub = AsAHub::attach(&h.node).await;
+    hub.say(json!({ "t": "watch", "pane": pane, "conversation": true }))
+        .await;
+    let opening = hub.until(&pane, &["convo", "convo.turn"], 25).await;
+    assert_eq!(
+        opening["t"], "convo",
+        "the first delivery was not a page: {opening}"
+    );
+
+    // A second phone opens the same pane on the hub. The hub already holds the transcript, so it
+    // re-asks the peer for it on that phone's behalf — which is a `watch` for a pane this link is
+    // already watching, exactly as `Peers::watch` sends one.
+    hub.say(json!({ "t": "unwatch", "pane": pane })).await;
+    hub.say(json!({ "t": "watch", "pane": pane, "conversation": true }))
+        .await;
+
+    let again = hub.until(&pane, &["convo", "convo.turn"], 25).await;
+    assert_eq!(
+        again["t"], "convo",
+        "the hub was handed a revision for a phone that holds nothing: {again}"
+    );
+    assert!(
+        again.get("cursor").is_some_and(|c| !c.is_null()) || again["more"] == json!(false),
+        "a page with no cursor and more turns behind it can never be paged back: {again}"
+    );
+    assert_eq!(again["turns"][0]["blocks"][0]["text"], "FIRST SESSION", "{again}");
+}
+
+/// **A named session closing is that session ending, not this machine's herdr going down.**
+///
+/// A named herdr session is a whole separate server (#49) and a whole separate node in the herd,
+/// and an operator closes one the way they close a terminal. The node noticed the socket go quiet
+/// and raised its one alarm about the *machine* — `herdr is not reachable … Is the Herdr server
+/// running?` — for something that had just been shut down on purpose, on a host whose own herdr was
+/// answering throughout. Forty-odd of them in twenty minutes on the operator's own node, all from
+/// sessions that had already left the herd (#465), which is exactly what makes the line worthless
+/// on the day it is true.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_session_closing_does_not_raise_the_alarm_for_the_machines_own_herdr() {
+    recording_opens();
+    let (Some(mine), Some(theirs)) = (Session::start("ownherdr").await, Session::start("closes").await)
+    else {
+        eprintln!("skipping: no herdr on PATH");
+        return;
+    };
+    theirs
+        .call("workspace.create", json!({ "label": "theirs", "cwd": "/tmp" }))
+        .await;
+
+    let state = tempfile::tempdir().unwrap();
+    let mut config = Config::bootstrap("closingnode");
+    config.update.check = false;
+    config.herdr.socket = mine.socket.display().to_string();
+    config.herdr.sessions = Some(vec![theirs.name.clone()]);
+    let (node, _origin, server) = serve_config(config, &state).await;
+
+    let extra = format!("{}.{}", node.config.node_id, theirs.name);
+    herd_has(&node, 60, |herd| herd.nodes.iter().any(|n| n.id == extra)).await;
+
+    // The operator closes it. `server.stop` is the ordinary shutdown — the socket is unlinked and
+    // herdr goes on listing the session, `running: false`, which is what the sweep reads.
+    theirs.stop().await;
+    herd_has(&node, 60, |herd| !herd.nodes.iter().any(|n| n.id == extra)).await;
+
+    assert_eq!(
+        alarms_about(&theirs.socket),
+        Vec::<String>::new(),
+        "a session the operator closed was reported as this machine's herdr being unreachable",
+    );
+    assert_eq!(
+        alarms_about(&mine.socket),
+        Vec::<String>::new(),
+        "the node's own herdr answered throughout and was still complained about",
+    );
+    server.abort();
+}
+
+async fn herd_has(node: &Arc<Node>, seconds: u64, ready: impl Fn(&kampr_node::herd::HerdModel) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if ready(&node.herd()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("the herd never reached the state this test is about");
 }

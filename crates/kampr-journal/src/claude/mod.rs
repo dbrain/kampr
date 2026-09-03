@@ -27,7 +27,10 @@ use crate::sub::SubRef;
 use crate::summary::{clip, count_lines, image_marker, marker_of, summarise};
 use crate::tail::{FileJournal, Journal, TranscriptParser};
 
-use record::{Content, ContentBlock, Record, image, image_subtype, result_atts, result_text, unified_patch};
+use record::{
+    Content, ContentBlock, Record, image, image_subtype, result_atts, result_text, take_queued_prompt,
+    unified_patch,
+};
 
 pub const AGENT: &str = "claude";
 
@@ -282,10 +285,13 @@ impl TranscriptParser for ClaudeParser {
 }
 
 impl ClaudeParser {
-    fn ingest(&mut self, record: Record, seq: u64, at: u64) {
+    fn ingest(&mut self, mut record: Record, seq: u64, at: u64) {
+        // An absorbed prompt is a turn the operator took, filed under a record kind of its own
+        // because the harness had already started answering when it arrived (#462).
+        let absorbed = record.kind == "attachment";
         let role = match record.kind.as_str() {
             "assistant" => Role::Assistant,
-            "user" => Role::User,
+            "user" | "attachment" => Role::User,
             _ => return,
         };
         if (record.is_sidechain == Some(true) && !self.launched) || record.is_meta == Some(true) {
@@ -295,11 +301,16 @@ impl ClaudeParser {
             Some(origin) => attach::headers(origin, at, &record::attachments(&record)),
             None => Vec::new(),
         };
-        let Some(content) = record.message.and_then(|m| m.content) else {
+        let content = if absorbed {
+            take_queued_prompt(&mut record)
+        } else {
+            record.message.take().and_then(|m| m.content)
+        };
+        let Some(content) = content else {
             return;
         };
 
-        let id = record.uuid.unwrap_or_else(|| format!("c{seq}"));
+        let id = record.uuid.take().unwrap_or_else(|| format!("c{seq}"));
         let mut turn = Turn::new(id.clone(), role, record.timestamp);
         // `/compact` files the harness's summary as a user record and leaves this flag as the only
         // thing separating it from a prompt (#259). Dropping it would take the operator's own

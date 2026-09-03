@@ -207,10 +207,25 @@ pub fn page(journal: &Open, pane: &str, before: Option<&str>, fresh: bool) -> Op
 ///
 /// Only while the two still overlap. A gap wide enough that nothing in the page is on the client's
 /// screen cannot be ordered from either end, and that is a replacing page saying so.
-fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>) -> Option<ServerMsg> {
+///
+/// **And only for a socket that is a screen.** A hub's record of this transcript is a fan-out cache
+/// no operator is looking at: its clients arrive one at a time, each holding nothing, and each is
+/// handed whatever this delivery is. A revision carries no `cursor` and no `more`, so a client
+/// given one can never reach anything older than the window it opened on — and that window covers
+/// less of the conversation the longer the transcript grows, which is how it was reported: *"every
+/// time I look at it there seems to be less history"* (#464). So a relay is paged, every time.
+///
+/// Not `fresh`, which would take a client's own paged-back history away on every joiner. Whether
+/// this page replaces what a client holds is the *hub's* to decide and it already decides it —
+/// `relay::first_page` marks the first page each client is handed and leaves every later one to
+/// merge by id.
+fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>, relayed: bool) -> Option<ServerMsg> {
     let Some(ids) = showing else {
         return page(journal, pane, None, true);
     };
+    if relayed {
+        return page(journal, pane, None, false);
+    }
     let turns = journal.lock().unwrap().as_ref()?.page_before(None, PAGE).turns;
     match turns.iter().any(|turn| ids.contains(&turn.id)) {
         true => Some(ServerMsg::ConvoTurn {
@@ -256,6 +271,9 @@ pub struct ConvoCtx {
     pub warm: Warmth,
     pub held: Held,
     pub followed: Followed,
+    /// Whether the far end of this socket is a hub relaying to clients of its own rather than a
+    /// screen. See [`reopened`].
+    pub relayed: bool,
 }
 
 /// One pane's transcript for one client: the initial page, then the tail.
@@ -277,6 +295,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         warm,
         held,
         followed,
+        relayed,
     } = ctx;
     let journal = warm.lock().unwrap().journal.clone();
 
@@ -423,7 +442,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     inherited = false;
                     *journal.lock().unwrap() = Some(fresh);
                     warm.lock().unwrap().opened = opened.clone();
-                    if !deliver(&journal, &wire, &global, &held, &path).await
+                    if !deliver(&journal, &wire, &global, &held, &path, relayed).await
                         || !publish_facets(
                             &warm,
                             &journals,
@@ -446,7 +465,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // fold that already exist, which is the whole of what warmth buys.
         if std::mem::take(&mut inherited)
             && let Some(path) = opened.clone()
-            && (!deliver(&journal, &wire, &global, &held, &path).await
+            && (!deliver(&journal, &wire, &global, &held, &path, relayed).await
                 || !publish_facets(
                     &warm,
                     &journals,
@@ -565,7 +584,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 /// One path, because a pump that had to find and parse the file and a pump that inherited one
 /// already parsed differ in what it *cost* and in nothing about what the reader is owed. A warm
 /// pump that skipped this would sit on a socket that had been sent no conversation at all.
-async fn deliver(journal: &Open, wire: &Wire, pane: &str, held: &Held, transcript: &Path) -> bool {
+async fn deliver(
+    journal: &Open,
+    wire: &Wire,
+    pane: &str,
+    held: &Held,
+    transcript: &Path,
+    relayed: bool,
+) -> bool {
     // What the client is holding *of this transcript*, when this node knows. A page for a
     // transcript it is already showing merges into it; every other page replaces it. Read before
     // [`withdraw`], which takes the record.
@@ -582,7 +608,7 @@ async fn deliver(journal: &Open, wire: &Wire, pane: &str, held: &Held, transcrip
     // it as a revision. On a warm pump it is the handful of records written while nobody was
     // watching; on a cold one it is the whole file.
     let _ = drain(journal).await;
-    match reopened(journal, pane, showing_already.as_deref()) {
+    match reopened(journal, pane, showing_already.as_deref(), relayed) {
         Some(first) if wire.send(&first) => {
             // The other half of the same blind spot: which shape went out, and how much of it. A
             // page and a revision are the difference between a client drawing the conversation and
