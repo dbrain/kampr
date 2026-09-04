@@ -174,21 +174,16 @@ private fun MatchTheView(
     on: Boolean,
     cols: Int,
     rows: Int,
-    paneCols: Int,
-    paneRows: Int,
 ) {
     // Whether the session actually took the pane. It may decline one already close enough to this
     // view to be worth a reflow, and everything below answers to *that* rather than to the switch:
     // a strip saying a pane is held, and a release for a hold nobody took, are both lies.
     //
-    // The pane's own geometry is read here and passed down rather than watched, so it is not in
-    // this effect's keys — a claim is edge-triggered by this view and never by what the pane
-    // reports back, which is the property ADR 0013 leans on to have no loop.
     var claimed by remember(paneId) { mutableStateOf(false) }
     LaunchedEffect(paneId, on, cols, rows) {
         if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
-        claimed = io.claimMatch(paneId, cols, rows, paneCols, paneRows)
+        claimed = io.claimMatch(paneId, cols, rows)
     }
     // The status strip is what stops this being a shape change nobody was told about: it says the
     // pane is being held while it is, whether the operator ticked the switch or their screen size
@@ -347,7 +342,7 @@ fun TerminalView(
         val ownPane = io.info(pane.id)?.fleet != null
         val matching = !io.readOnly && !ownPane && roomToMatch && !LocalMosaicCell.current &&
             (matchAsked ?: (breakpoint == Breakpoint.Desktop))
-        MatchTheView(pane.id, io, matching, viewCols, viewRows, cols, rows.liveRows)
+        MatchTheView(pane.id, io, matching, viewCols, viewRows)
 
         val zoom = if (view.zoom > 0f) view.zoom else 1f
         val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }

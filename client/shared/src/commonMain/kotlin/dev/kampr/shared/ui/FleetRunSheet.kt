@@ -48,14 +48,21 @@ import dev.kampr.shared.wire.ServerMsg
 internal fun RunSheet(
     hosts: Int,
     book: ServerMsg.FleetBook,
+    // What the box opens holding, when something outside the sheet chose it — the empty board's
+    // quick links. It is staged and not run: the button below is still the only thing that fires.
+    staged: FleetCommand? = null,
     breakpoint: Breakpoint,
     onCancel: () -> Unit,
     onRun: (String) -> Unit,
     onBook: (ManageOp) -> Unit,
 ) {
     val tokens = Kampr.tokens
-    var entry by remember { mutableStateOf(TextFieldValue("")) }
-    var naming by remember { mutableStateOf(TextFieldValue("")) }
+    var entry by remember {
+        mutableStateOf(
+            staged?.command.orEmpty().let { TextFieldValue(it, TextRange(it.length)) },
+        )
+    }
+    var naming by remember { mutableStateOf(TextFieldValue(staged?.label.orEmpty())) }
     val line = entry.text.trim()
     val closed = balanced(entry.text)
     val ready = closed && line.isNotEmpty()

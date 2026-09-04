@@ -30,6 +30,7 @@ import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.recipients
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.Palette
+import dev.kampr.shared.wire.FleetCommand
 import dev.kampr.shared.wire.FleetInfo
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.ServerMsg
@@ -62,6 +63,9 @@ fun FleetScreen(
     val targets = fleetTargets(herd.nodes)
     var confirming by remember { mutableStateOf<PendingBroadcast?>(null) }
     var composing by remember { mutableStateOf(false) }
+    // What the box opens holding, when a quick link on the empty board opened it. Cleared by the
+    // **Run** chip, which is the operator asking for an empty box.
+    var staged by remember { mutableStateOf<FleetCommand?>(null) }
 
     Column(modifier.fillMaxSize().background(tokens.color.bg)) {
         Row(
@@ -71,11 +75,17 @@ fun FleetScreen(
         ) {
             KText("Fleet", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
             if (canRun && targets.isNotEmpty()) {
-                FleetChip("Run", isDefault = true) { composing = true }
+                FleetChip("Run", isDefault = true) {
+                    staged = null
+                    composing = true
+                }
             }
         }
         if (cohorts.isEmpty()) {
-            EmptyBoard(targets.size, canRun)
+            EmptyBoard(targets.size, canRun, if (canRun) quickRuns(book) else emptyList()) {
+                staged = it
+                composing = true
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -93,6 +103,7 @@ fun FleetScreen(
         RunSheet(
             hosts = targets.size,
             book = book,
+            staged = staged,
             breakpoint = breakpoint,
             onCancel = { composing = false },
             onRun = {
@@ -126,8 +137,28 @@ private data class PendingBroadcast(
     val differingNames: List<String>,
 )
 
+// What the node remembers, ready to put in the box: everything kept, then whatever else has been
+// run recently, deduplicated on the line itself so a command that is both does not appear twice.
+//
+// Capped, because this is the *empty* board and a wall of history is not a calmer screen than the
+// sentence it replaced. Kept commands are the curated half and come first; recent ones fill what
+// is left.
+internal const val QUICK_RUNS = 6
+
+internal fun quickRuns(book: ServerMsg.FleetBook): List<FleetCommand> {
+    val seen = mutableSetOf<String>()
+    return (book.saved + book.recent)
+        .filter { it.command.isNotBlank() && seen.add(it.command) }
+        .take(QUICK_RUNS)
+}
+
 @Composable
-private fun EmptyBoard(hosts: Int, canRun: Boolean) {
+private fun EmptyBoard(
+    hosts: Int,
+    canRun: Boolean,
+    quick: List<FleetCommand>,
+    onStage: (FleetCommand) -> Unit,
+) {
     val tokens = Kampr.tokens
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -145,6 +176,40 @@ private fun EmptyBoard(hosts: Int, canRun: Boolean) {
             tokens.color.mute,
             maxLines = 2,
         )
+        // **The board with nothing on it is the only screen with room to spare**, and the operator
+        // arriving at it has come to start something. Reaching what the node already remembers
+        // used to be Run, then the entry, then Run; from here it is the entry, then Run.
+        //
+        // What it is *not* is a way to fan a command across the herd on one press. A quick link
+        // stages the line exactly as the sheet's own rows do, and the sheet's button is still the
+        // only thing that fires — see `RunSheet`, where that rule is written down.
+        if (quick.isNotEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                quick.forEach { QuickRun(it, onStage) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickRun(command: FleetCommand, onStage: (FleetCommand) -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(tokens.color.surface2, shape)
+            .action("Put ${command.command} in the run box", { onStage(command) }, shape)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        // The label never replaces the command, on this screen for the same reason it does not in
+        // the sheet: what is about to run on every machine in the herd has to be readable.
+        command.label?.let { KText(it, tokens.type.bodyStrong, tokens.color.text, maxLines = 1) }
+        KText(command.command, tokens.type.captionSmall, tokens.color.accent, maxLines = 2)
     }
 }
 

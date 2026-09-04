@@ -13,11 +13,6 @@ import kotlin.test.assertTrue
 private const val A = "01JKAMPRNODE0000000000000/w1:p1"
 private const val B = "01JKAMPRNODE0000000000000/w1:p2"
 
-// A pane far enough from the view that matching it is worth a reflow, so these tests are about the
-// lease and not about the slack.
-private const val PANE_COLS = 200
-private const val PANE_ROWS = 60
-
 private fun List<ClientMsg>.sizings(pane: String): List<ManageOp.PaneSize> =
     mapNotNull { (it as? ClientMsg.Manage)?.request as? ManageOp.PaneSize }.filter { it.at == pane }
 
@@ -38,12 +33,12 @@ class SwitchingPanesTest {
         val sent = mutableListOf<ClientMsg>()
         val holds = MatchHolds(backgroundScope, sent::add)
 
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         // To B, and back to A: each switch is one view leaving and one arriving.
         holds.release(A)
-        holds.claim(B, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(B, 120, 40)
         holds.release(B)
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         advanceTimeBy(MATCH_LINGER_MS / 2)
 
         assertEquals(
@@ -66,7 +61,7 @@ class SwitchingPanesTest {
         val sent = mutableListOf<ClientMsg>()
         val holds = MatchHolds(backgroundScope, sent::add)
 
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         holds.release(A)
         advanceTimeBy(MATCH_LINGER_MS / 2)
         assertEquals(listOf(SizeMode.Match), sent.sizings(A).modes(), "released early")
@@ -86,7 +81,7 @@ class SwitchingPanesTest {
         val sent = mutableListOf<ClientMsg>()
         val holds = MatchHolds(backgroundScope, sent::add)
 
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         holds.release(A, linger = false)
 
         assertEquals(listOf(SizeMode.Match, SizeMode.Release), sent.sizings(A).modes())
@@ -98,65 +93,13 @@ class SwitchingPanesTest {
         val sent = mutableListOf<ClientMsg>()
         val holds = MatchHolds(backgroundScope, sent::add)
 
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
-        holds.claim(A, 160, 50, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
+        holds.claim(A, 120, 40)
+        holds.claim(A, 160, 50)
 
         val asked = sent.sizings(A)
         assertEquals(listOf(SizeMode.Match, SizeMode.Match), asked.modes(), "$asked")
         assertEquals(160, asked.last().cols)
-    }
-
-    // And the decision is taken once, on the edge where the view first asks — never again while
-    // the hold stands. Re-asking would answer "close enough" (the pane is now exactly the view's
-    // size), release it, and the restore would put it back out of range: an oscillator.
-    @Test
-    fun a_pane_already_held_is_not_re_judged_against_the_slack() = runTest {
-        val sent = mutableListOf<ClientMsg>()
-        val holds = MatchHolds(backgroundScope, sent::add)
-
-        assertTrue(holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS), "the first claim was declined")
-        // The pane has arrived at the view's size, which is what a slack test would call
-        // "close enough".
-        assertTrue(holds.claim(A, 120, 40, 120, 40), "the hold was dropped once the pane fitted")
-        assertEquals(listOf(SizeMode.Match), sent.sizings(A).modes(), "${sent.sizings(A)}")
-    }
-
-    // A pane close enough to begin with is never claimed at all, so nothing is held and nothing is
-    // released — the strip must not say a pane is held either.
-    @Test
-    fun a_pane_close_enough_to_begin_with_is_never_taken() = runTest {
-        val sent = mutableListOf<ClientMsg>()
-        val holds = MatchHolds(backgroundScope, sent::add)
-
-        assertTrue(!holds.claim(A, 289, 69, 292, 72), "it claimed a pane it did not need to")
-        holds.release(A)
-        advanceTimeBy(MATCH_LINGER_MS * 2)
-
-        assertTrue(sent.sizings(A).isEmpty(), "it wrote to a pane it never held: ${sent.sizings(A)}")
-    }
-
-    // The operator's own numbers, off the audit log: every one of 31 claims asked for 289x69
-    // against a pane that was 292x72. Three columns and three rows, and the price is a PTY reflow
-    // plus an observe child torn down and restarted — twice, because the release does it again.
-    @Test
-    fun a_pane_already_this_close_to_the_view_is_not_worth_a_reflow() {
-        assertTrue(
-            !worthMatching(viewCols = 289, viewRows = 69, paneCols = 292, paneRows = 72),
-            "the operator's own case: 1% of the width, for four disturbances a round trip",
-        )
-    }
-
-    // And a pane that really is the wrong shape still gets matched, which is the whole feature.
-    @Test
-    fun a_pane_the_wrong_shape_for_the_view_is_still_claimed() {
-        assertTrue(worthMatching(120, 40, 200, 50), "a much wider pane went unmatched")
-        assertTrue(worthMatching(120, 40, 80, 24), "a much narrower pane went unmatched")
-        assertTrue(worthMatching(120, 40, 120, 60), "twenty rows out and still not worth it")
-        assertTrue(
-            worthMatching(120, 40, 0, 0),
-            "a pane whose grid is not known yet has to be claimed, not assumed to fit",
-        )
     }
 
     // The socket going takes every lease with it and restores every pane, at the node. A session
@@ -166,9 +109,9 @@ class SwitchingPanesTest {
         val sent = mutableListOf<ClientMsg>()
         val holds = MatchHolds(backgroundScope, sent::add)
 
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         holds.disconnected()
-        holds.claim(A, 120, 40, PANE_COLS, PANE_ROWS)
+        holds.claim(A, 120, 40)
         advanceTimeBy(MATCH_LINGER_MS * 2)
 
         assertEquals(listOf(SizeMode.Match, SizeMode.Match), sent.sizings(A).modes())

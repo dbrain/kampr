@@ -61,7 +61,7 @@ interface PaneIo {
     // Answers whether the pane is now held. A session may decline — a pane already close enough to
     // the view is not worth the reflow — and the surface has to know, because the status strip says
     // a pane is being held and that sentence has to be true.
-    fun claimMatch(paneId: String, cols: Int, rows: Int, paneCols: Int, paneRows: Int): Boolean {
+    fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
         send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
         return true
     }

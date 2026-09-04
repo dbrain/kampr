@@ -7,6 +7,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
+
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
@@ -157,6 +159,71 @@ class FleetBookTest {
         recent: List<FleetCommand> = emptyList(),
         saved: List<FleetCommand> = emptyList(),
     ) = ServerMsg.FleetBook(recent = recent, saved = saved)
+
+    /// The operator, on 0.1.59: *"can we make the fleet run empty screen have quick links to
+    /// launch these instead of having to Click Run -> Click item -> Click Run everywhere"*.
+    ///
+    /// The board with nothing on it is the one screen with room to spare and nothing else to read,
+    /// so what the node remembers goes on it. Three presses become two.
+    @Test
+    fun theEmptyBoardOffersTheRunsTheNodeRemembers() = runComposeUiTest {
+        board(book(recent = listOf(RECENT), saved = listOf(SAVED)))
+        onNodeWithContentDescription("Put kampr update in the run box").assertExists()
+        onNodeWithContentDescription("Put pacman -Syu in the run box").assertExists()
+    }
+
+    /// **And the third press stays.** A saved command is a one-press fan-out across every machine
+    /// in the herd; a shortcut to it must not also be a shortcut past the confirmation a typed
+    /// command gets. The quick link opens the box with the line in it — the same staging the
+    /// sheet's own rows do — and the sheet's button is still the only thing that fires.
+    @Test
+    fun aQuickLinkStagesItAndRunsNothing() = runComposeUiTest {
+        val board = board(book(saved = listOf(SAVED)))
+        onNodeWithContentDescription("Put kampr update in the run box").performClick()
+        waitForIdle()
+        assertNull(board.ran, "a quick link fanned out across the herd on one press")
+        onNodeWithContentDescription("Run everywhere").performClick()
+        waitForIdle()
+        assertEquals("kampr update", board.ran, "the sheet did not open with the line in the box")
+    }
+
+    /// A node that has never run anything says what it always said. The quick links are what the
+    /// memory *adds* to the empty board, not a replacement for it.
+    @Test
+    fun anEmptyBookLeavesTheEmptyBoardSayingWhatItSaid() = runComposeUiTest {
+        board(book())
+        onAllNodesWithText("No fleet runs").assertCountEquals(1)
+        onAllNodesWithText("One command, on all 2 machines you can reach.").assertCountEquals(1)
+    }
+
+    /// The board that is not empty is not a launcher: a run in flight is what the operator came to
+    /// read, and the memory is behind **Run** where it has always been.
+    private fun ComposeUiTest.board(book: ServerMsg.FleetBook): Pressed {
+        val board = Pressed()
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides tokens(),
+                LocalConnectionStatus provides ConnectionStatus.Live("full"),
+            ) {
+                Box(Modifier.size(411.dp, 891.dp)) {
+                    FleetScreen(
+                        herd = HERD,
+                        breakpoint = Breakpoint.Portrait,
+                        onOpenPane = {},
+                        onAnswer = { _, _ -> },
+                        onStop = {},
+                        onRun = { board.ran = it },
+                        canRun = true,
+                        book = book,
+                        onBook = { board.op = it },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        return board
+    }
 
     // The sheet is behind **Run**, which is where the operator goes to run something — so the
     // memory lives beside the box rather than on a screen of its own.
