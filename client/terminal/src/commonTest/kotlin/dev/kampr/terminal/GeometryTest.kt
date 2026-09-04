@@ -274,6 +274,37 @@ class GeometryTest {
         close(view.scrollY, view.band.floor)
     }
 
+    /// The operator, on 0.1.60, after a command printed: *"it never corrected without me manually
+    /// scrolling, the second jump took me further up"* — twice, once per batch of rows that
+    /// scrolled off the live grid.
+    ///
+    /// **The test above passes for the wrong reason and always has.** `following` starts true, so
+    /// it returns at the first line of `carryHistory` and never reaches the position its name is
+    /// about. This is the same claim asked of a reader whose hand is what put them there.
+    ///
+    /// A hand may travel *below* the live edge, down to the end of the record (#428), so the whole
+    /// span between the two is somewhere a wheel lands — three rows a notch, and nothing about
+    /// stopping there says "take me back to history". A reader inside it is watching the newest
+    /// output, and rows scrolling off must not walk them backwards away from it, for ever, with
+    /// nothing to bring them back.
+    @Test
+    fun aHandThatStoppedBelowTheLiveEdgeIsNotCarriedByHistoryArriving() {
+        val view = TerminalViewState()
+        view.maxScroll = 10_000f
+        view.contentFloor = 0f
+        view.band = CaretBand(17 * CELL_H, 30 * CELL_H)
+        // Down to the end of the record, then a notch and a bit back up: short of the live edge,
+        // which is where a wheel leaves you.
+        view.scrollBy(0f, -1_000f * CELL_H)
+        view.scrollBy(0f, 8f * CELL_H)
+        assertTrue(!view.following, "a hand below the live edge has not re-armed the follow")
+        close(view.scrollY, 8 * CELL_H)
+
+        view.carryHistory(400, CELL_H)
+
+        close(view.scrollY, 8 * CELL_H)
+    }
+
     // And the same reader anywhere else the caret is still on screen. The floor is a minimum, so a
     // surface that only ever rests on it hands the viewport to the caret; the surface rests inside
     // the band instead, which puts a reader riding the live edge at a scrollY that is not the floor

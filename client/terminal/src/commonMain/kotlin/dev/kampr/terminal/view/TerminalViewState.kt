@@ -158,20 +158,27 @@ class TerminalViewState {
     // anywhere in the caret band and a positive scrollY is no longer evidence of a hand. Reading
     // it as one carried a follower off the output it was following, which is #175 again by a
     // different route (#380).
-    // A reader sitting on the end of the pane is the exception, and it is the operator's report:
-    // *"launching docker commands has the terminal scroll up and I need to manually scroll down"*.
-    // The bottom of the grid is below the live edge on every pane whose caret sits above the end of
-    // its record — `docker compose pull` is one — so scrolling down to the end lands a hand there
-    // and leaves it parked, and from there every row that scrolls off carries it back up again.
-    // Nothing arrived under a reader at the bottom: the rows they are on are the last rows of the
-    // grid, and the grid's last row is the surface's last row whatever the ring does above it.
+    // A reader who is not in history is the exception, and it is the operator's report — twice.
+    // First *"launching docker commands has the terminal scroll up and I need to manually scroll
+    // down"*, and then, when a guard at the very bottom of the grid was not enough: *"it never
+    // corrected without me manually scrolling, the second jump took me further up"*, once per batch
+    // of rows that scrolled off.
+    //
+    // **The live edge is the line, not the bottom of the grid.** A hand may travel below the edge,
+    // down to the end of the record (#428), so the whole span between the two is somewhere a wheel
+    // lands — three rows a notch — and nothing about stopping there says "take me back to
+    // history". Everyone inside it is watching the newest output. Carrying them is carrying them
+    // away from the thing they are watching, permanently, because nothing but typing brings a
+    // parked reader back.
+    //
+    // Above the edge is history, and a reader there is anchored to their rows: that is what the
+    // carry is for and it still happens.
     fun carryHistory(rowsAdded: Int, cellHeight: Float) {
-        if (rowsAdded == 0 || following || atGridBottom) return
+        if (rowsAdded == 0 || following || atOrBelowTheLiveEdge) return
         scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
     }
 
-    // The far end of the hand's travel, which `clampScroll` is the other half of.
-    private val atGridBottom: Boolean get() = scrollY <= min(contentFloor, maxScroll) + FOLLOW_SLACK
+    private val atOrBelowTheLiveEdge: Boolean get() = scrollY <= band.floor + FOLLOW_SLACK
 
     // Both axes take the delta with the same sign: the surface goes where the finger goes. The
     // vertical one was subtracted, which made dragging down mean "newer" on a surface whose

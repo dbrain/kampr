@@ -392,6 +392,11 @@ fun TerminalView(
         // is not snapshot state: a resize changes how many rows sit below the caret without
         // moving the caret, and only a composition sees that. Re-keying is the cancellation —
         // a caret that has not stopped never reaches the assignment.
+        // **Symmetric, and it has to be**: a full-screen repaint sweeps the caret from the top of
+        // its block to the bottom, so a caret reading that has got smaller is as likely to be a
+        // sweep as it is to be output. #380 is that defect and `aRepaintThatSweepsTheCaretAcross`
+        // `ATallGridMovesNothing` is the guard. The *record's* end is the reading that can tell
+        // the two apart — see `settledContent` below.
         LaunchedEffect(pane.id, below) {
             delay(CARET_SETTLE_MS)
             settledBelow = below
@@ -417,6 +422,22 @@ fun TerminalView(
         }
         LaunchedEffect(pane, rows) {
             snapshotFlow { pane.revision }.collectLatest {
+                // **The wait is one-way here, and only here.** The record ending *further down*
+                // the grid is output — a repaint can blank rows and shorten it, and that is the
+                // reading worth waiting out, but nothing about a repaint makes the record longer
+                // than it was. So a shorter distance to the bottom is taken at once and a longer
+                // one settles.
+                //
+                // Waiting out both directions is what left the newest output below the fold for
+                // `CARET_SETTLE_MS` after every command that printed anything — the operator's
+                // *"it initially drew fine then started walking back up when CMD was done, two
+                // jumps up"*, the two being this reading and the caret's landing on their own
+                // clocks. The walk is bounded by the blank tail, so the common case is a row.
+                val now = rows.contentBelow(pane.cursor.row)
+                if (now < settledContent) {
+                    settledContent = now
+                    return@collectLatest
+                }
                 delay(CARET_SETTLE_MS)
                 settledContent = rows.contentBelow(pane.cursor.row)
             }
