@@ -127,6 +127,7 @@ android {
         versionCode = versionProps.getProperty("versionCode").trim().toInt()
         versionName = versionProps.getProperty("versionName").trim()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["appLabel"] = "Kampr"
     }
 
     signingConfigs {
@@ -145,6 +146,14 @@ android {
     }
 
     buildTypes {
+        // So a debug build installs beside the release one rather than over it. They are signed
+        // with different keys, so replacing is an uninstall, and an uninstall of Kampr is a node
+        // that has to be paired again — too much to pay to look at a layout defect on the phone
+        // the report came off.
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "Kampr (Dbg)"
+        }
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true

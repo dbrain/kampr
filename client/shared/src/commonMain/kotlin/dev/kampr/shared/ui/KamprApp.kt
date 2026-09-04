@@ -556,9 +556,18 @@ internal fun AppScaffold(
 // Never the bottom: whatever is below this box is the thing that owes the gesture handle.
 @Composable
 internal fun Modifier.screenInset(screen: Screen): Modifier {
-    if (screen is Screen.Pane) return this
+    // Padded with zero rather than returned untouched: `screenInset` is the one modifier on this
+    // node that changes with the screen, and a chain that changes *shape* leaves the node holding
+    // the position the last screen put it at. A pane then reported itself one status bar below the
+    // place it drew, and every popup anchored to it — selection handles, the text toolbar — landed
+    // there. 172 px on a Pixel 10 Pro. One shape, and the staleness has nowhere to live.
     val safe = LocalSafeArea.current
-    return absolutePadding(left = safe.left, top = safe.top, right = safe.right)
+    val pane = screen is Screen.Pane
+    return absolutePadding(
+        left = if (pane) 0.dp else safe.left,
+        top = if (pane) 0.dp else safe.top,
+        right = if (pane) 0.dp else safe.right,
+    )
 }
 
 @Composable
