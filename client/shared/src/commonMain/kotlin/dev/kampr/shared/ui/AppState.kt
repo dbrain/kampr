@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.Enrolment
 import dev.kampr.shared.net.AuthApi
@@ -145,6 +146,15 @@ class AppState(
     // stop claiming the desk is untouched.
     private val held = MutableStateFlow<String?>(null)
     val heldPane: StateFlow<String?> = held
+
+    // ADR 0013's leases, owned by this session rather than by the views that come and go asking for
+    // them — see `MatchHolds`. The node's own ceiling on one is this socket; this is the same
+    // ownership on this side of it.
+    private val matches = MatchHolds(scope) { connection.send(it) }
+
+    fun claimMatch(paneId: String, cols: Int, rows: Int) = matches.claim(paneId, cols, rows)
+
+    fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
 
     fun holdingPane(paneId: String, holding: Boolean) {
         held.value = when {
@@ -592,6 +602,12 @@ class AppState(
     // Last in the class on purpose: an Unconfined collector runs its first emission inside the
     // constructor, and `adoptRememberedView` reads `screen`.
     init {
+        // A socket that went took every lease on it with it, and the node put every held pane back
+        // as it did. Going on believing they are held would mean the next view of one claiming
+        // nothing at all.
+        scope.launch {
+            store.status.collect { if (it !is ConnectionStatus.Live) matches.disconnected() }
+        }
         scope.launch { store.prefs.collect { adoptRememberedView() } }
         scope.launch {
             store.herd.collect {

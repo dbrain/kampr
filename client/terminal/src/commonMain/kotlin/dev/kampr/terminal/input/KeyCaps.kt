@@ -11,15 +11,27 @@ data class KeyCap(
     val hold: Latch? = null,
     val csi: Boolean = false,
     val symbol: Boolean = false,
+    // Whether holding this cap repeats it, the way a physical keyboard's autorepeat does. Only the
+    // arrows: every other cap on the row spends its long press on something already — an
+    // alternate, a latch, a lock — and a repeat cannot share a gesture with any of them.
+    val repeats: Boolean = false,
 )
 
 private fun text(label: String, send: String = label, alternate: KeyCap? = null) =
     KeyCap(label, CapKind.Text, send, alternate = alternate)
 
-private fun csi(label: String, send: String, alternate: KeyCap? = null, symbol: Boolean = false) =
-    KeyCap(label, CapKind.Text, send, alternate = alternate, csi = true, symbol = symbol)
+private fun csi(
+    label: String,
+    send: String,
+    alternate: KeyCap? = null,
+    symbol: Boolean = false,
+    repeats: Boolean = false,
+) = KeyCap(
+    label, CapKind.Text, send,
+    alternate = alternate, csi = true, symbol = symbol, repeats = repeats,
+)
 
-private fun latch(label: String, which: Latch, hold: Latch) =
+private fun latch(label: String, which: Latch, hold: Latch? = null) =
     KeyCap(label, CapKind.Latch, latch = which, hold = hold)
 
 private val insert = csi("ins", Esc.INSERT)
@@ -28,10 +40,17 @@ private val keyboard = KeyCap("kbd", CapKind.Keyboard)
 
 private val escape = text("esc", Esc.ESCAPE, alternate = text("~"))
 
-// Shift and Fn latch on a long press of Ctrl and Alt. The row is eight columns wide and every one
-// of them is spoken for by the artboard, so the two rarer modifiers ride on the two common ones.
+// Shift latches on a long press of Ctrl: the row is eight columns wide, every one of them is
+// spoken for by the artboard, and shift is the modifier this row's own keys already carry — the
+// arrows and tab take it, and a letter needs the soft keyboard anyway.
+//
+// Fn used to ride on Alt the same way, and it is the one that could not. It does not modify the
+// next key, it *replaces the row*, and a layer whose only way in is an unlabelled long press is a
+// layer nobody finds — the operator asked for a way to see the function keys that were already
+// there. So it has a cap.
 private val ctrl = latch("ctrl", Latch.Ctrl, Latch.Shift)
-private val alt = latch("alt", Latch.Alt, Latch.Fn)
+private val alt = latch("alt", Latch.Alt)
+private val fnKey = latch("fn", Latch.Fn)
 private val tab = text("tab", Esc.TAB, alternate = csi("tab", Esc.BACKTAB))
 
 private val home = csi("home", Esc.HOME, alternate = insert)
@@ -41,16 +60,21 @@ private val pageDown = csi("pgdn", Esc.PAGE_DOWN)
 
 // The inverted T: up sits directly above down, with left and right flanking it, the way it is on
 // every physical keyboard. An L-shape is what makes a thumb look down.
-private val up = csi("↑", Esc.UP, symbol = true)
-private val down = csi("↓", Esc.DOWN, symbol = true)
-private val left = csi("←", Esc.LEFT, symbol = true)
-private val right = csi("→", Esc.RIGHT, symbol = true)
+private val up = csi("↑", Esc.UP, symbol = true, repeats = true)
+private val down = csi("↓", Esc.DOWN, symbol = true, repeats = true)
+private val left = csi("←", Esc.LEFT, symbol = true, repeats = true)
+private val right = csi("→", Esc.RIGHT, symbol = true, repeats = true)
 
 private val navTop = listOf(home, pageUp, up, pageDown)
 private val navBottom = listOf(end, left, down, right)
 
 private fun fn(n: Int, alternate: Int? = null) =
     csi("F$n", Esc.function(n), alternate = alternate?.let { csi("F$it", Esc.function(it)) })
+
+// F1-F12 across six slots, the upper six on a long press of the lower six. Regular rather than
+// clever: the sixth key along is F6 and holding it is F12, so the pairing is one rule and not a
+// table to memorise.
+private fun fnPair(n: Int) = fn(n, n + 6)
 
 // null is the fixed separator track between the modifier/symbol group and the navigation group.
 typealias KeyRowSpec = List<KeyCap?>
@@ -79,8 +103,6 @@ private val SPOKEN = mapOf(
     "/" to "Slash",
     "\\" to "Backslash",
     "|" to "Pipe",
-    "-" to "Hyphen",
-    "_" to "Underscore",
     "~" to "Tilde",
     "&" to "Ampersand",
     "*" to "Asterisk",
@@ -96,20 +118,24 @@ fun spokenKey(label: String): String =
     SPOKEN[label] ?: FUNCTION.matchEntire(label)?.let { "F " + it.groupValues[1] } ?: label
 
 object KeyLayouts {
+    // `fn` takes the slot `-` had, on the operator's own reading of the row: a hyphen and an
+    // underscore are both on the soft keyboard's first symbol page and the function keys are on
+    // nothing at all. It sits in the **same slot on the layer it turns on**, beside `kbd`, so
+    // pressing it twice is two presses in one place.
     val portrait: List<KeyRowSpec> = listOf(
         listOf(escape, ctrl, alt, tab, null) + navTop,
-        listOf(text("/", "/", text("\\")), text("|", "|", text("&")), text("-", "-", text("_")), keyboard, null) + navBottom,
+        listOf(text("/", "/", text("\\")), text("|", "|", text("&")), fnKey, keyboard, null) + navBottom,
     )
 
     val portraitFn: List<KeyRowSpec> = listOf(
-        listOf(fn(1, 9), fn(2, 10), fn(3, 11), fn(4, 12), null) + navTop,
-        listOf(fn(5), fn(6), fn(7), fn(8), null) + navBottom,
+        listOf(fnPair(1), fnPair(2), fnPair(3), fnPair(4), null) + navTop,
+        listOf(fnPair(5), fnPair(6), fnKey, keyboard, null) + navBottom,
     )
 
     val landscape: List<KeyRowSpec> = listOf(
         listOf(
             escape, ctrl, alt, tab,
-            text("/", "/", text("\\")), text("|", "|", text("&")), text("-", "-", text("_")), keyboard,
+            text("/", "/", text("\\")), text("|", "|", text("&")), fnKey, keyboard,
             null,
         ) + navTop,
         listOf(
@@ -119,10 +145,13 @@ object KeyLayouts {
         ) + navBottom,
     )
 
+    // Twelve across a row that has the width for them, so nothing here is a long press. `ins` and
+    // `del` go with the symbols and are not lost: they are what `home` and `end` hold, on every
+    // layout including this one.
     val landscapeFn: List<KeyRowSpec> = listOf(
-        listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fn(7), fn(8), null) + navTop,
+        listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fnKey, keyboard, null) + navTop,
         listOf(
-            fn(9), fn(10), fn(11), fn(12), insert, delete, csi("tab", Esc.BACKTAB), escape,
+            fn(7), fn(8), fn(9), fn(10), fn(11), fn(12), csi("tab", Esc.BACKTAB), escape,
             null,
         ) + navBottom,
     )

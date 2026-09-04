@@ -1,7 +1,10 @@
 package dev.kampr.terminal.input
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -160,16 +164,55 @@ private fun RowScope.Cap(
             )
             .pointerInput(cap, enabled) {
                 if (!enabled) return@pointerInput
-                detectTapGestures(
-                    onTap = { capPress(cap, session, sink) },
-                    onLongPress = { capHold(cap, session, sink) },
-                )
+                if (cap.repeats) {
+                    holdToRepeat(
+                        first = { capPress(cap, session, sink) },
+                        again = { sink.press(cap) },
+                    )
+                } else {
+                    detectTapGestures(
+                        onTap = { capPress(cap, session, sink) },
+                        onLongPress = { capHold(cap, session, sink) },
+                    )
+                }
             }
             .defaultMinSize(minHeight = 44.dp)
             .padding(vertical = if (compact) 7.dp else 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         KText(label, if (cap.symbol) tokens.type.badge else tokens.type.key, ink)
+    }
+}
+
+// A physical keyboard's autorepeat, and the two numbers are its: long enough that an ordinary tap
+// never repeats and a thumb resting on a key while it reads is not a run of keystrokes, short
+// enough that holding one walks a shell's history at a readable pace. Each repeat is one
+// `input.text` on the wire, so ~17 a second is the ceiling this is willing to spend.
+private const val REPEAT_AFTER_MS = 400L
+private const val REPEAT_EVERY_MS = 60L
+
+// **The first key goes on the way down, not on the way up**, which is the other half of what makes
+// a held key feel like a key: a repeat that begins at the release of a tap has already lost the
+// press it was repeating.
+//
+// `again` is not `first`: the ordinary press also reclaims the soft keyboard, and doing that
+// seventeen times a second is a focus request per repeat rather than a keystroke.
+private suspend fun PointerInputScope.holdToRepeat(first: () -> Unit, again: () -> Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        first()
+        var wait = REPEAT_AFTER_MS
+        while (true) {
+            // Null is the timeout and only the timeout: `waitForUpOrCancellation` returns for an
+            // up *and* for a cancellation, and both of those end the gesture.
+            val ended = withTimeoutOrNull(wait) {
+                waitForUpOrCancellation()
+                true
+            }
+            if (ended != null) return@awaitEachGesture
+            again()
+            wait = REPEAT_EVERY_MS
+        }
     }
 }
 

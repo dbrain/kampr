@@ -96,12 +96,21 @@ class InputTest {
         val (_, keys) = sink()
         val ctrl = allCaps().first { it.label == "ctrl" }
         val alt = allCaps().first { it.label == "alt" }
+        val fn = allCaps().first { it.label == "fn" }
 
-        for (cap in listOf(ctrl, alt)) {
+        // Holding ctrl rides shift; holding fn locks the layer. Neither is waiting for a letter.
+        for (cap in listOf(ctrl, fn)) {
             val session = PaneSession("n/w1:p1")
             capHold(cap, session, keys)
-            assertFalse(session.keyboardOpen, "holding ${cap.label} rides shift or fn, not letters")
+            assertFalse(session.keyboardOpen, "holding ${cap.label} takes no letter")
         }
+
+        // Alt has no rider now that fn has a cap of its own, so holding it locks alt — and a
+        // locked alt is the same unfinishable chord an armed one is, waiting on a letter this row
+        // does not carry.
+        val locked = PaneSession("n/w1:p1")
+        capHold(alt, locked, keys)
+        assertTrue(locked.keyboardOpen, "a locked alt is a chord with nothing on this row to finish it")
 
         for ((cap, latch) in listOf(ctrl to Latch.Ctrl, alt to Latch.Alt)) {
             val session = PaneSession("n/w1:p1")
@@ -223,14 +232,72 @@ class InputTest {
         }
     }
 
+    // Per layout rather than across both of them. The union passed while a phone in portrait could
+    // reach eight of the twelve, which is the only reading of "reaches every function key" that
+    // matters to a thumb.
     @Test
     fun theFnLayerReachesEveryFunctionKey() {
-        val caps = (KeyLayouts.portraitFn + KeyLayouts.landscapeFn).flatten().filterNotNull()
-            .flatMap { listOfNotNull(it, it.alternate) }
-        for (n in 1..12) {
-            assertTrue(caps.any { it.label == "F$n" }, "F$n is not on the Fn layer")
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
+            val caps = rows.flatten().filterNotNull().flatMap { listOfNotNull(it, it.alternate) }
+            for (n in 1..12) {
+                assertTrue(caps.any { it.label == "F$n" }, "F$n is not on the $name Fn layer")
+            }
         }
     }
+
+    // The operator, on 0.1.57: *"function keys (F1-F12) can we add a way to show these, maybe
+    // replace `-` with `fn` and it shows the options?"* — they were already there, behind a long
+    // press on `alt` that nothing on the row named, in nothing the row drew, and in no label a
+    // screen reader could read out. A layer with no key of its own is a layer nobody finds.
+    @Test
+    fun theFnLayerHasAKeyOfItsOwnOnEveryLayout() {
+        for ((name, rows) in namedLayouts()) {
+            assertTrue(
+                rows.flatten().filterNotNull().any { it.latch == Latch.Fn },
+                "$name reaches the function keys only by a gesture nothing names",
+            )
+        }
+    }
+
+    // And pressing it twice is two presses in one place. The cap that turns the layer on has to be
+    // in the slot the cap that turns it off is in, or the way back is somewhere the thumb has to
+    // go looking for.
+    @Test
+    fun theFnKeyDoesNotMoveWhenItIsPressed() {
+        for ((name, pair) in listOf(
+            "portrait" to (KeyLayouts.portrait to KeyLayouts.portraitFn),
+            "landscape" to (KeyLayouts.landscape to KeyLayouts.landscapeFn),
+        )) {
+            assertEquals(fnSlot(pair.first), fnSlot(pair.second), "$name moves its fn key")
+        }
+    }
+
+    // The keyboard toggle is the other cap a layer must not swallow: with fn on and no `kbd`,
+    // the soft keyboard cannot be brought back without leaving the layer first.
+    @Test
+    fun everyLayoutCanReachTheKeyboardToggle() {
+        for ((name, rows) in namedLayouts()) {
+            assertTrue(
+                rows.flatten().filterNotNull().any { it.kind == CapKind.Keyboard },
+                "$name has no keyboard key",
+            )
+        }
+    }
+}
+
+private fun namedLayouts() = listOf(
+    "portrait" to KeyLayouts.portrait,
+    "portrait fn" to KeyLayouts.portraitFn,
+    "landscape" to KeyLayouts.landscape,
+    "landscape fn" to KeyLayouts.landscapeFn,
+)
+
+private fun fnSlot(rows: List<List<dev.kampr.terminal.input.KeyCap?>>): Pair<Int, Int> {
+    for ((r, row) in rows.withIndex()) {
+        val at = row.indexOfFirst { it?.latch == Latch.Fn }
+        if (at >= 0) return r to at
+    }
+    return -1 to -1
 }
 
 // A pane whose program holds the alternate screen keeps no ring (#387), so the scroll it cannot

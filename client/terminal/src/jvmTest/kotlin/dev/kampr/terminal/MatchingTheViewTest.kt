@@ -63,6 +63,29 @@ private class MatchIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
     override fun prefs(paneId: String) = stored
 }
 
+// The same recorder, watching the two calls a session owns rather than the wire underneath them.
+// A view that goes on sending the ops itself cannot be given a linger, and the pane switch that
+// bounced (ADR 0013, `MatchHolds`) is exactly a view ending and another starting.
+private class SessionIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
+    val sent = mutableListOf<ClientMsg>()
+    val claims = mutableListOf<Triple<String, Int, Int>>()
+    val releases = mutableListOf<Pair<String, Boolean>>()
+
+    override fun send(msg: ClientMsg) {
+        sent += msg
+    }
+
+    override fun prefs(paneId: String) = stored
+
+    override fun claimMatch(paneId: String, cols: Int, rows: Int) {
+        claims += Triple(paneId, cols, rows)
+    }
+
+    override fun releaseMatch(paneId: String, linger: Boolean) {
+        releases += paneId to linger
+    }
+}
+
 private fun ClientMsg.sizing(): ManageOp.PaneSize? =
     ((this as? ClientMsg.Manage)?.request as? ManageOp.PaneSize)
 
@@ -181,6 +204,69 @@ class MatchingTheViewTest {
             io.sent.sizings().lastOrNull { it.mode == SizeMode.Release },
             "the view closed still holding the pane: ${io.sent}",
         )
+    }
+
+    // **The wiring, and it is the whole of the pane-switch fix.** The claim and the release go to
+    // the session rather than onto the wire, because only the session can tell a view ending from
+    // the operator answering — and a pane switch is a view ending. ADR 0013's release restores the
+    // pane, so a view that released on its own way out resized the pane being left and the pane
+    // being opened on every switch, and both again coming back.
+    @Test
+    fun the_hold_is_asked_for_and_let_go_of_through_the_session() = runComposeUiTest {
+        val io = SessionIo()
+        var showing by mutableStateOf(true)
+        terminal(grid(cols = 40), io, DESK) { showing }
+        try {
+            waitUntil(timeoutMillis = 3_000) { io.claims.isNotEmpty() }
+        } catch (_: Throwable) {
+            // Asserted below with the claim list in the message.
+        }
+        assertTrue(io.claims.isNotEmpty(), "a desk claimed nothing through the session: ${io.sent}")
+        assertEquals(Phone.PANE, io.claims.last().first)
+        assertTrue(
+            io.sent.sizings().none { it.mode == SizeMode.Match },
+            "the view put a claim on the wire behind the session's back: ${io.sent}",
+        )
+
+        showing = false
+        waitForIdle()
+        assertEquals(
+            listOf(Phone.PANE to true),
+            io.releases,
+            "a view ending has to linger — it is a pane switch as often as it is a pane left",
+        )
+        assertTrue(
+            io.sent.sizings().none { it.mode == SizeMode.Release },
+            "the view put a release on the wire behind the session's back: ${io.sent}",
+        )
+    }
+
+    // And the one release that must not linger: the operator ticking the switch off is an answer
+    // about this pane, so the pane goes back now.
+    @Test
+    fun turning_the_switch_off_gives_the_pane_back_without_the_linger() {
+        runDesktopComposeUiTest(DESK.first.value.toInt(), DESK.second.value.toInt()) {
+            val io = SessionIo()
+            val session = PaneSession(Phone.PANE)
+            terminal(grid(cols = 40), io, DESK, session)
+            try {
+                waitUntil(timeoutMillis = 3_000) { io.claims.isNotEmpty() }
+            } catch (_: Throwable) {
+                // Asserted below.
+            }
+            assertTrue(io.claims.isNotEmpty(), "nothing was held, so nothing is being let go of")
+
+            session.view.sheetOpen = true
+            waitForIdle()
+            onNodeWithContentDescription("Match this view while it's open ·", substring = true)
+                .performClick()
+            waitForIdle()
+
+            assertTrue(
+                io.releases.any { it == Phone.PANE to false },
+                "an untick was given a view switch's grace window: ${io.releases}",
+            )
+        }
     }
 
     // The switch is stored per pane per device, and it wins over the size of the screen. An

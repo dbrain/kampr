@@ -154,6 +154,17 @@ answer to *"a geometry change they did not ask for and cannot find the switch fo
   looking through it, so a hub client's lease sends a scoped release down the link when it drops.
   That covers a cancelled hub session; it does not cover the hub process being killed, where the
   peer's hold is bounded only by its own mesh link failing.
+- **A release is a resize, so it is not sent the instant a view ends.** The view that asks for a
+  hold is not the thing that owns it: a pane switch is one terminal view leaving the composition and
+  another arriving, so releasing on the way out put the found geometry back on the pane being left
+  and the viewer's geometry on the pane being opened — and switching back wrote both again the other
+  way round. The operator, on 0.1.57: *"switching panes now bounces around"*. The lease is therefore
+  held by the client **session** (`MatchHolds`), which lets go `MATCH_LINGER_MS` after the last view
+  of a pane ends and cancels that if another asks for the same pane meanwhile; a pane already held at
+  exactly the grid being asked for is not claimed again, because a re-claim supersedes the controller
+  and herdr shows the desk's own geometry in the gap. Point 3 is unchanged in substance — the pane is
+  still put back, and still only if it still reads back the rows the hold put on it. The operator
+  ticking the switch off is an *answer* rather than a view ending and is not given the window.
 - `ARCHITECTURE.md` §4.2's "there is exactly one width the node does not have to infer, and it is
   the one it commanded" now covers this mode too — a matched hold *is* the geometry
   ([#18](../03-probe-log.md)), so its width is recorded as a proof exactly as `hold` already does.

@@ -382,7 +382,15 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // as long as it takes to send a first message (#259, #311). Waiting for
             // one leaves the previous conversation on the screen taking no new turns,
             // which is the panel that will not update (#260).
-            if elsewhere && !retire(&wire, &global, &held) {
+            //
+            // Or the pane has no harness at all, which is the case `elsewhere` cannot see: it
+            // compares two announcements and a pane whose agent was quit announces nothing, so
+            // `something -> nothing` retired nothing and the conversation of a session that had
+            // ended stayed on the screen — until another one opened, or for good. `Absent` is
+            // this node having looked in procfs and found no harness, which is a fact and not
+            // the absence of one, and a pane with no harness has no conversation.
+            let gone = matches!(now.identity.harness, Harness::Absent);
+            if (elsewhere || gone) && !retire(&wire, &global, &held) {
                 return;
             }
             due = true;
@@ -830,12 +838,28 @@ fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
 
 /// The same withdrawal with no replacement to compare against: whatever the client is
 /// holding, it is holding it of a conversation this pane has left.
+///
+/// **The facets go with the turns, and nothing else on this socket ever takes them off.** A
+/// client's `facets` only changes when a `convo.facets` arrives, and the pump only publishes one
+/// while a transcript is open — so the last strip a session published before it was quit stands
+/// over whatever comes next, and over nothing at all if the operator never opens another. The
+/// operator saw the two background shells of a session they had closed listed as still running
+/// (probe #476); a launch is only ever ended by a record ([#418](#)) and a harness that has gone
+/// writes none, so this is the only thing that can say so.
+///
+/// Sent whether or not any turn was held, because the two are not held together: a client that
+/// paged away from the transcript still has the strip on its screen.
 fn retire(wire: &Wire, pane: &str, held: &Held) -> bool {
     let holding = held.lock().unwrap().take();
-    match holding {
-        Some((_, ids)) => send_retirement(wire, pane, ids),
-        None => true,
+    if let Some((_, ids)) = holding
+        && !send_retirement(wire, pane, ids)
+    {
+        return false;
     }
+    wire.send(&ServerMsg::ConvoFacets {
+        pane: pane.to_string(),
+        facets: Facets::default(),
+    })
 }
 
 fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {

@@ -9,6 +9,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
@@ -44,6 +46,23 @@ interface PaneIo {
     // A surface may need to hand the pane over to the other one — a harness with no journal
     // adapter has no conversation to show, and offers the terminal instead of an error.
     fun show(view: PaneView) = Unit
+
+    // ADR 0013's standing hold, asked for and let go of through the *session* rather than straight
+    // off the view that wanted it — because a release is a resize. It puts the pane back to the
+    // geometry it was found at, so one terminal view leaving the composition and another arriving
+    // (which is the whole of a pane switch) wrote a geometry onto the pane being left and another
+    // onto the pane being opened, and switching back wrote both again the other way round. See
+    // `MatchHolds`, which is where the linger and the already-held rule live.
+    //
+    // The defaults are the wire, so a surface with no session behind it behaves exactly as the
+    // view used to. `linger` is false where the *operator* said so — ticking the switch off is an
+    // answer about this pane and is owed the pane back at once — and true where a view merely
+    // ended, which is not an answer at all.
+    fun claimMatch(paneId: String, cols: Int, rows: Int) =
+        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
+
+    fun releaseMatch(paneId: String, linger: Boolean = true) =
+        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
 
     // Told when a pane is being held at a size, because the status strip stands there saying "no
     // lease held — desktop shape untouched" and that sentence is false exactly while one is. A

@@ -172,7 +172,7 @@ private fun MatchTheView(paneId: String, io: PaneIo, on: Boolean, cols: Int, row
     LaunchedEffect(paneId, on, cols, rows) {
         if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
-        io.send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
+        io.claimMatch(paneId, cols, rows)
     }
     // The status strip is what stops this being a shape change nobody was told about: it says the
     // pane is being held while it is, whether the operator ticked the switch or their screen size
@@ -182,7 +182,7 @@ private fun MatchTheView(paneId: String, io: PaneIo, on: Boolean, cols: Int, row
         onDispose {
             if (on) {
                 io.holding(paneId, false)
-                io.send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
+                io.releaseMatch(paneId)
             }
         }
     }
@@ -338,6 +338,18 @@ fun TerminalView(
         }
 
         var carriedTotal by remember(pane.id) { mutableIntStateOf(rows.total) }
+        // A ring that was thrown away and started again is re-delivery, not output: atuin's history
+        // search takes the alternate screen (`?1049h`, measured — probe #475) and the node stops
+        // vouching for the shell's ring for as long as it is up, so pressing up and pressing escape
+        // is the whole ring leaving and arriving inside a second. Carrying that moved a parked
+        // reader by three hundred rows and the discard's own clamp at zero meant the two moves
+        // could never cancel — the operator's *"the terminal scroll up and I need to manually
+        // scroll down"*. The surface is re-based on what came back instead.
+        var carriedRestarts by remember(pane.id) { mutableIntStateOf(rows.restarts) }
+        if (rows.restarts != carriedRestarts) {
+            carriedRestarts = rows.restarts
+            carriedTotal = rows.total
+        }
         if (rows.total != carriedTotal) {
             view.carryHistory(rows.total - carriedTotal, metrics.height)
             carriedTotal = rows.total
@@ -990,9 +1002,13 @@ fun TerminalView(
                 onMatchView = { on ->
                     view.matchView = on
                     io.send(ClientMsg.SetPrefs(pane.id, mapOf("match" to if (on) "on" else "off")))
-                    // The claim itself is `MatchTheView`'s, on both edges: it is the one place
-                    // that knows the size, and a release sent from here as well would let go of a
-                    // hold it had not yet taken.
+                    // Claiming stays `MatchTheView`'s: it is the one place that knows the size.
+                    // Letting go does not, because the two releases are different events — this
+                    // one is the operator answering about this pane and is owed it back now,
+                    // where a view ending is given the linger a pane switch needs. The session
+                    // lets go of nothing it is not holding, so an untick before any claim is
+                    // silent rather than a release of somebody else's hold.
+                    if (!on) io.releaseMatch(pane.id, linger = false)
                 },
                 onHoldSize = { on ->
                     view.sizeHeld = on

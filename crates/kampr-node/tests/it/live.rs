@@ -680,6 +680,25 @@ async fn until_pane(socket: &mut Socket, tag: &str, pane: &str, seconds: u64) ->
 /// A rebuild the caller did not cause reaches the client as a `herd.patch` too — a title
 /// settling, a cwd arriving — and that patch carries no `added`. Waiting for the tag alone takes
 /// whichever came first and reads `added.panes` off a patch that never had one.
+/// The next `convo.facets` for `pane` that satisfies `want`, or nothing inside the deadline.
+async fn until_facets(
+    socket: &mut Socket,
+    pane: &str,
+    seconds: u64,
+    want: impl Fn(&Value) -> bool,
+) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "convo.facets" && message["pane"] == pane && want(&message["facets"]) {
+            return Some(message);
+        }
+    }
+    None
+}
+
 async fn until_panes_added(socket: &mut Socket, seconds: u64) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let mut seen = Vec::new();
@@ -5363,6 +5382,39 @@ impl Harnessed {
         std::fs::write(self.session_file(pid), record.to_string()).unwrap();
     }
 
+    /// A transcript whose session launched a background shell and was never told it finished —
+    /// which is the ordinary shape, not a broken one: the `tool_result` arrives at launch carrying
+    /// only a `backgroundTaskId`, and the ending is a `queue-operation` that may never come
+    /// ([#418](#)).
+    fn launched(&self, id: &str, title: &str) {
+        let at = |offset: i64| {
+            (time::OffsetDateTime::now_utc() + time::Duration::seconds(offset))
+                .replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        };
+        let launch = json!({
+            "type": "assistant", "uuid": format!("{id}-1"), "cwd": self.cwd, "timestamp": at(0),
+            "message": { "content": [
+                { "type": "tool_use", "id": "bg1", "name": "Bash",
+                  "input": { "run_in_background": true, "description": title } }
+            ] },
+        });
+        let ack = json!({
+            "type": "user", "uuid": format!("{id}-2"), "cwd": self.cwd, "timestamp": at(0),
+            "toolUseResult": { "stdout": "", "backgroundTaskId": "b1" },
+            "message": { "content": [
+                { "type": "tool_result", "tool_use_id": "bg1" }
+            ] },
+        });
+        std::fs::write(
+            self.project.join(format!("{id}.jsonl")),
+            format!("{launch}\n{ack}\n"),
+        )
+        .unwrap();
+    }
+
     /// A further turn on a transcript that is already open, which is what the follow tick sends
     /// as a `convo.turn` rather than as a page.
     fn append(&self, id: &str, uuid: &str, text: &str) {
@@ -5484,6 +5536,80 @@ async fn a_pane_shows_the_session_its_own_process_is_on_and_moves_when_it_restar
     fixture.announce(second, "33333333-3333-4333-8333-333333333333");
     fixture.transcript("33333333-3333-4333-8333-333333333333", "AFTER CLEAR", 0);
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// The operator, on 0.1.57: *"closed Claude, opened again in the same terminal and the
+/// conversation pane is showing me 2 terminals still running"*.
+///
+/// **The node's own audit log is what caught this**, on the operator's machine: `conversation
+/// opened … handle="cwd"` naming the transcript of the session that had just been quit, four
+/// seconds before the replacement `claude` forked. The window is real and it was measured — Claude
+/// removes `~/.claude/sessions/<pid>.json` **50 ms** into `/exit` and the process outlives it by
+/// **1.05 s** (probe #476) — so for that second the pane has a live harness that names no session,
+/// the exact handle is gone, and the working directory answers with the conversation that is
+/// closing. Everything in it is republished, including its running launches.
+///
+/// The second half is the one that made it stand for 2 min 22 s rather than a second: **nothing
+/// takes facets off a client**. `moved()` needs a session on both sides, so `something → nothing`
+/// retires no turns; `refold` only runs while a transcript is open; and the client's `facets` only
+/// ever changes when a `convo.facets` arrives. So the last strip published before the agent was
+/// quit stands over whatever comes next — and if the operator never restarts, it stands for good.
+///
+/// A launch is only ever closed by a record ([#418](#)), and a harness that has gone writes none,
+/// which is why this cannot be answered inside the transcript.
+#[tokio::test(flavor = "multi_thread")]
+async fn quitting_the_agent_takes_what_it_had_running_off_the_client() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("quit-running", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.launched("11111111-1111-4111-8111-111111111111", "the client gate");
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+
+    let opening = until_pane(&mut socket, "convo.facets", &pane, 25).await;
+    assert_eq!(
+        opening["facets"]["running"][0]["title"], "the client gate",
+        "the launch has to be on the strip to begin with, or nothing is tested: {opening}"
+    );
+
+    // The operator quits. The marker goes first and the process follows, which is the order
+    // measured — and neither writes a completion for the shell it left running.
+    fixture.stop(&h._session, &local, pid).await;
+
+    let cleared = until_facets(&mut socket, &pane, 40, |facets| {
+        facets["running"].as_array().is_none_or(|r| r.is_empty())
+    })
+    .await;
+    assert!(
+        cleared.is_some(),
+        "the strip from the session that was quit stood on the client with nothing to end it"
+    );
 }
 
 /// The same defect one screen away: the transcript moves while nobody is watching the pane.

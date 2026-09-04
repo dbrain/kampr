@@ -18,6 +18,7 @@ class SurfaceRows(private val pane: PaneState) {
     // The ring's own coordinates, not the surface's. History rows keep their absolute index
     // when more history arrives, which is what a reader parked on one can be anchored to.
     val fromTop: Int get() = pane.scrollback.fromTop
+    val restarts: Int get() = pane.scrollback.restarts
     val capped: Boolean get() = pane.scrollback.capped
     val complete: Boolean get() = pane.scrollback.complete
 

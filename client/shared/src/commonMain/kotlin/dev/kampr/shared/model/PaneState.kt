@@ -49,6 +49,15 @@ class ScrollbackStore {
 
     private var highestIndex = -1
 
+    // How many times the ring has been thrown away and started again, which is not the same event
+    // as history arriving and must not be read as one. A discard is the node saying it no longer
+    // vouches for these rows — a harness taking the alternate screen, or two reads that shared no
+    // overlap (ADR 0004) — and what comes back afterwards is the same rows a second time rather
+    // than rows the pane produced. Counted rather than flagged so a reader of it can tell "since I
+    // last looked" from "right now" without anything having to clear it.
+    var restarts: Int = 0
+        private set
+
     // History arrives as one document then tails; a later message carries only new rows, so it
     // must never shrink what is already held. The node re-bases every delta's from_top onto the
     // client's known end (`send_history`), so an advanced from_top is the ordinary tail, not a
@@ -72,6 +81,7 @@ class ScrollbackStore {
         val discarded = msg.totalRows == 0 && msg.rows.isEmpty() && msg.fromTop >= fromTop + totalRows
         val restart = discarded || msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
         if (restart) {
+            restarts++
             fromTop = msg.fromTop
             rows.clear()
             bytes = 0
@@ -114,6 +124,7 @@ class ScrollbackStore {
         highestIndex = -1
         complete = false
         capped = false
+        restarts++
     }
 }
 
