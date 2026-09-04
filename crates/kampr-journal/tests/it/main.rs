@@ -11,6 +11,7 @@ mod follow;
 mod harness_facets;
 mod identity;
 mod live;
+mod omp;
 mod registry;
 mod scratch;
 mod subagents;

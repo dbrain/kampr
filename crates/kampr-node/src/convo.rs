@@ -333,6 +333,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut was_working = false;
     let mut desk = ComposerFeed::default();
     let mut composer: Option<ComposerReader> = None;
+    let mut queued: Option<kampr_journal::QueuedReader> = None;
 
     loop {
         let now = pane_of(&herd, &global, &identity, &local);
@@ -396,6 +397,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             due = true;
             misses = 0;
             composer = journals.composer(now.agent.as_deref());
+            queued = journals.queued(now.agent.as_deref());
         }
 
         // **An inherited transcript is only this pane's if the pane still resolves to it** — and
@@ -529,7 +531,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 // carries has moved — a `convo.facets` every 400 ms per pane would be a frame for
                 // nothing.
                 if let Some(path) = opened.clone()
-                    && let Some(moved) = refold(&warm, &path, describe(&local)).await
+                    && let Some(moved) =
+                        refold(&warm, &path, describe(&local), waiting(&panes, &local, queued)).await
                     && !wire.send(&ServerMsg::ConvoFacets { pane: global.clone(), facets: moved })
                 {
                     return;
@@ -668,7 +671,10 @@ async fn publish_facets(
             false => false,
         }
     };
-    let opening = match refold(warm, transcript, marker).await {
+    // No queue is read here: `publish_facets` runs where the pane's grid is not in hand, and the
+    // facets tick fills one in within its own period. An opening that guessed `[]` would tell a
+    // client the queue is empty a moment before saying it is not.
+    let opening = match refold(warm, transcript, marker, None).await {
         Some(moved) => moved,
         None if cold => Facets::default(),
         None => warm
@@ -726,6 +732,22 @@ fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(),
 /// client, because it is a per-harness *measurement* and the node is where measurements live — a
 /// phone already installed cannot be corrected when a harness changes its mind about what empties
 /// a box, and the three harnesses served here do not agree on it in the first place.
+/// The prompts waiting behind the running turn, for a harness that draws them and records nothing.
+///
+/// Read on the same tick as the composer and off the same grid, so it costs a walk of the rows and
+/// no I/O. `None` is a harness whose queue is in its own transcript — where the fold already has
+/// it, and with every word rather than the row the screen had space for.
+fn waiting(
+    panes: &PaneRegistry,
+    local: &str,
+    reader: Option<kampr_journal::QueuedReader>,
+) -> Option<Vec<kampr_journal::Queued>> {
+    let reader = reader?;
+    let screen = panes.screen(local)?;
+    let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+    Some(reader(&rows))
+}
+
 fn desk_line(panes: &PaneRegistry, local: &str, reader: Option<ComposerReader>) -> Option<Composed> {
     let reader = reader?;
     let screen = panes.screen(local)?;
@@ -927,11 +949,16 @@ async fn drain_sub(followed: &Followed) -> Option<(String, Vec<Turn>)> {
 /// A fold whose blocking task did not come back is dropped rather than replaced with a fresh one
 /// that would silently re-send everything: the next resolve builds one, and until then this pane
 /// publishes no facets rather than the wrong ones.
-async fn refold(warm: &Warmth, transcript: &Path, marker: Option<SessionMarker>) -> Option<Facets> {
+async fn refold(
+    warm: &Warmth,
+    transcript: &Path,
+    marker: Option<SessionMarker>,
+    queued: Option<Vec<kampr_journal::Queued>>,
+) -> Option<Facets> {
     let mut held = warm.lock().unwrap().facets.take()?;
     let transcript = transcript.to_path_buf();
     let (held, moved) = tokio::task::spawn_blocking(move || {
-        let moved = held.moved(&transcript, marker.as_ref());
+        let moved = held.moved_with(&transcript, marker.as_ref(), queued);
         (held, moved)
     })
     .await

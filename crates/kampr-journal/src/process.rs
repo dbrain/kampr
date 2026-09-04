@@ -79,6 +79,14 @@ impl PaneProcess {
     }
 }
 
+/// What `/proc/<pid>/comm` calls a process, which is the same name herdr labels a pane with
+/// (probe #75) and is read here rather than taken from herdr — a pane herdr can only describe as
+/// `bash` (#297) still has its own harness named honestly in procfs.
+pub fn comm(pid: u32) -> Option<String> {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(comm.trim_end().to_string())
+}
+
 /// Whether this host answers questions about a process at all.
 ///
 /// A pid with no start time means two different things, and only one of them is a harness that

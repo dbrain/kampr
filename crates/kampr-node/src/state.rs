@@ -671,7 +671,12 @@ async fn build_model(
             // whose title says working (#360). `idle` from a scrape is never evidence, only the
             // absence of a match. This costs nothing: the marker is already in hand for the
             // title.
-            entry.agent_status = settled_status(entry.agent_status, marker.as_ref());
+            // And where a harness writes no status file at all, what it wrote into its own
+            // terminal title. omp publishes its run state there and herdr carries no manifest for
+            // it, so an omp pane reports `idle` through a whole working turn and through an
+            // approval dialog — measured, with `agent explain` returning no rules ([#485](#)).
+            let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
+            entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
             panes.push(entry);
         }
     }
@@ -691,8 +696,12 @@ async fn build_model(
 ///
 /// Every other word still wins, `busy` over `done` included — a pane that has started again is
 /// not one waiting to be read.
-fn settled_status(seen: AgentStatus, marker: Option<&SessionMarker>) -> AgentStatus {
-    match marker.and_then(harness_status) {
+fn settled_status(seen: AgentStatus, marker: Option<&SessionMarker>, said: Option<&str>) -> AgentStatus {
+    let harness = marker
+        .and_then(|m| m.status.as_deref())
+        .or(said)
+        .and_then(harness_status);
+    match harness {
         Some(AgentStatus::Idle) if seen == AgentStatus::Done => AgentStatus::Done,
         Some(status) => status,
         None => seen,
@@ -707,8 +716,8 @@ fn settled_status(seen: AgentStatus, marker: Option<&SessionMarker>) -> AgentSta
 /// itself needs no prompt to be on screen and no rule to have been written for it. `shell` is
 /// idle with a background shell task, which is idle to anyone deciding where to look. A word
 /// this does not know leaves the pane's existing status alone rather than flattening it.
-fn harness_status(marker: &SessionMarker) -> Option<AgentStatus> {
-    match marker.status.as_deref()? {
+fn harness_status(word: &str) -> Option<AgentStatus> {
+    match word {
         "busy" => Some(AgentStatus::Working),
         "waiting" => Some(AgentStatus::Blocked),
         "idle" | "shell" => Some(AgentStatus::Idle),
@@ -796,13 +805,10 @@ mod tests {
     /// identical on screen, so a scrape calls both idle.
     #[test]
     fn a_harness_that_says_it_is_waiting_is_blocked_rather_than_idle() {
-        assert_eq!(
-            harness_status(&saying(Some("waiting"))),
-            Some(AgentStatus::Blocked)
-        );
-        assert_eq!(harness_status(&saying(Some("busy"))), Some(AgentStatus::Working));
-        assert_eq!(harness_status(&saying(Some("idle"))), Some(AgentStatus::Idle));
-        assert_eq!(harness_status(&saying(Some("shell"))), Some(AgentStatus::Idle));
+        assert_eq!(harness_status("waiting"), Some(AgentStatus::Blocked));
+        assert_eq!(harness_status("busy"), Some(AgentStatus::Working));
+        assert_eq!(harness_status("idle"), Some(AgentStatus::Idle));
+        assert_eq!(harness_status("shell"), Some(AgentStatus::Idle));
     }
 
     /// Herdr's `done` is `idle` with the half a marker cannot see: nobody has looked yet. The
@@ -812,37 +818,62 @@ mod tests {
     fn a_harness_saying_idle_does_not_take_the_unread_flag_off_a_pane_that_finished() {
         for word in ["idle", "shell"] {
             assert_eq!(
-                settled_status(AgentStatus::Done, Some(&saying(Some(word)))),
+                settled_status(AgentStatus::Done, Some(&saying(Some(word))), None),
                 AgentStatus::Done
             );
         }
         assert_eq!(
-            settled_status(AgentStatus::Working, Some(&saying(Some("idle")))),
+            settled_status(AgentStatus::Working, Some(&saying(Some("idle"))), None),
             AgentStatus::Idle,
             "the screen is still the thing a harness saying `idle` is there to correct"
         );
         assert_eq!(
-            settled_status(AgentStatus::Done, Some(&saying(Some("busy")))),
+            settled_status(AgentStatus::Done, Some(&saying(Some("busy"))), None),
             AgentStatus::Working,
             "a pane that has started again is not one waiting to be read"
         );
         assert_eq!(
-            settled_status(AgentStatus::Done, Some(&saying(Some("waiting")))),
+            settled_status(AgentStatus::Done, Some(&saying(Some("waiting"))), None),
             AgentStatus::Blocked
         );
         assert_eq!(
-            settled_status(AgentStatus::Done, Some(&saying(Some("compacting")))),
+            settled_status(AgentStatus::Done, Some(&saying(Some("compacting"))), None),
             AgentStatus::Done
         );
-        assert_eq!(settled_status(AgentStatus::Done, None), AgentStatus::Done);
+        assert_eq!(settled_status(AgentStatus::Done, None, None), AgentStatus::Done);
+    }
+
+    /// **The only signal an `omp` pane has.** herdr carries no detection manifest for it — `agent
+    /// explain` returns no rules at all — so the pane reports `idle` through a whole working turn
+    /// and through an approval dialog. What omp does publish is its terminal title, and the
+    /// adapter reads the run state off the separator in it.
+    #[test]
+    fn a_harness_herdr_has_no_rules_for_is_taken_at_its_own_terminal_titles_word() {
+        assert_eq!(
+            settled_status(AgentStatus::Idle, None, Some("busy")),
+            AgentStatus::Working
+        );
+        assert_eq!(
+            settled_status(AgentStatus::Idle, None, Some("waiting")),
+            AgentStatus::Blocked
+        );
+        // The marker is the stronger signal and keeps its precedence: a title is what a harness
+        // with no marker at all has to offer.
+        assert_eq!(
+            settled_status(AgentStatus::Idle, Some(&saying(Some("busy"))), Some("idle")),
+            AgentStatus::Working
+        );
     }
 
     /// A word from a newer harness than this one leaves the pane as it was. Flattening an
     /// unrecognised state to `Unknown` would throw away herdr's answer to keep our own silence.
     #[test]
     fn a_status_this_node_does_not_know_leaves_the_pane_alone() {
-        assert_eq!(harness_status(&saying(Some("compacting"))), None);
-        assert_eq!(harness_status(&saying(None)), None);
+        assert_eq!(harness_status("compacting"), None);
+        assert_eq!(
+            settled_status(AgentStatus::Working, Some(&saying(None)), None),
+            AgentStatus::Working
+        );
     }
 
     fn levels(manual: Option<&str>, generated: Option<&str>, named: Option<&str>) -> Titles {

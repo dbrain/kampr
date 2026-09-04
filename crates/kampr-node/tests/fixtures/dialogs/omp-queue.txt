@@ -1,0 +1,40 @@
+│                          │ / for commands                                                │
+│       ████████████       │ ! to run bash                                                 │
+│          ██  ██          │ $ to run python                                               │
+│          ██  ██          │ ───────────────────────────────────────────────────────────── │
+│          ▒▒  ██          │ LSP Servers                                                   │
+│              ██          │ No LSP servers                                                │
+│                          │                                                               │
+│    Claude Sonnet 4.5     │                                                               │
+│        anthropic         │                                                               │
+│                          │ ───────────────────────────────────────────────────────────── │
+│                          │ Recent sessions                                               │
+│                          │ No recent sessions                                            │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+╰──────────────────────────┴───────────────────────────────────────────────────────────────╯
+ Tip: `/shake` rips heavy tool results out of context to reclaim tokens without a full
+      /compact — `/shake images` drops just images
+
+
+
+ LONGANSWER please explain it
+
+
+ A terminal emulator sits between a program writing bytes and a person reading glyphs, and
+ almost everything hard about one lives in that gap. The program writes a stream with no idea
+ how wide the screen is; the screen has a fixed grid and a cursor that the stream moves by
+ escape sequence rather than by coordinate. Every wrap, every clear, every scroll is a
+ decision the emulator makes on the program's behalf, and a wrong one is not a visual glitch
+ — it is
+
+ Steering · 2
+   1. and then push it
+   2. and tag the release too
+   └ Alt+Up/Shift+Up to edit
+
+  ⎋ Working…
+ ⠏ 21s  > ◒ Sonnet 4.5 > 🗑 kampr-omp-RZz3Gb ▶─2%────────────────────────────────────┃──────1M─
+╰─

@@ -1,0 +1,40 @@
+│          ▒▒  ██          │ LSP Servers                                                   │
+│              ██          │ No LSP servers                                                │
+│                          │                                                               │
+│    Claude Sonnet 4.5     │                                                               │
+│        anthropic         │                                                               │
+│                          │ ───────────────────────────────────────────────────────────── │
+│                          │ Recent sessions                                               │
+│                          │ No recent sessions                                            │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+╰──────────────────────────┴───────────────────────────────────────────────────────────────╯
+ Tip: `/shake` rips heavy tool results out of context to reclaim tokens without a full
+      /compact — `/shake images` drops just images
+
+
+
+ LONGANSWER please explain it
+
+
+ A terminal emulator sits between a program writing bytes and a person reading glyphs, and
+ almost everything hard about one lives in that gap. The program writes a stream with no idea
+ how wide the screen is; the screen has a fixed grid and a cursor that the stream moves by
+ escape sequence rather than by coordinate. Every wrap, every clear, every scroll is a
+ decision the emulator makes on the program's behalf, and a wrong one is not a visual glitch
+ — it is the wrong character under the cursor for the rest of the session.
+
+
+ and then push it
+
+
+ Steering · 2
+   1. and tag the release too
+   2. and then write the release notes, mentioning every probe row this work added and which…
+   └ Alt+Up/Shift+Up to edit
+
+  ⎋ Working…
+ ⠏ 24s  > ◒ Sonnet 4.5 > 🗑 kampr-omp-RZz3Gb > $0.00 ▶─0.0%───────────────────────────┃─────1M─
+╰─

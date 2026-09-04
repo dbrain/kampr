@@ -5450,6 +5450,69 @@ impl Harnessed {
     }
 }
 
+/// **A harness herdr has no rules for, end to end.** herdr labels a pane with its foreground
+/// process's name and nothing else (#75) — a copy of `sleep` named `omp` is served as an `omp`
+/// pane — and it carries no `omp` detection manifest at all: `agent explain` returns
+/// `evaluated_rules: []` and `default_known_agent_idle_fallback`, so the pane reports **`idle`
+/// through a whole working turn and through an approval dialog**, measured against the real
+/// harness. What omp does publish is its own terminal title, whose separator is the run state:
+/// `>` the operator's turn, a braille spinner frame while it works, `!` blocked on a person.
+///
+/// So this drives the two states herdr cannot reach past its own answer, with herdr's `idle`
+/// asserted underneath each one — a test that passed with the title unread would be a test of
+/// nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_herdr_has_no_rules_for_is_read_off_the_title_its_harness_writes() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let binary = home.path().join("omp");
+    std::fs::copy(which("sleep").expect("sleep on PATH"), &binary).unwrap();
+    let cwd = work.path().canonicalize().unwrap().display().to_string();
+    let home_path = home.path().display().to_string();
+    let h = harness!("omp-title", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call("workspace.create", json!({ "label": "omp", "cwd": cwd }))
+        .await;
+    let pane = h.pane_with_cwd(&cwd).await.expect("the omp pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    for (separator, want) in [('⠹', "working"), ('!', "blocked"), ('>', "idle")] {
+        // The title is written before the harness takes the pane, which is the order omp itself
+        // writes it in: the shell is what runs `printf`, and the state stands for as long as the
+        // process the title belongs to does.
+        h._session
+            .call(
+                "pane.send_text",
+                json!({ "pane_id": local, "text": format!(
+                    "printf '\\033]0;\u{3c0} {separator} probe\\a'; {} 600\n",
+                    binary.display()
+                ) }),
+            )
+            .await;
+        herdr_pane(&h._session, &local, 30, "labelled an omp in", |p| {
+            p["agent"] == "omp"
+                && p["terminal_title"]
+                    .as_str()
+                    .is_some_and(|t| t.contains(separator))
+        })
+        .await;
+        // herdr holds `unknown` for 3.33 s after a label attaches with nothing matching, and then
+        // publishes its idle fallback (#360) — which is the answer it will now keep, whatever the
+        // pane is doing.
+        herdr_says(&h._session, &local, "idle").await;
+        until_herd(&h, &pane, want).await;
+        let seen = h._session.call("pane.get", json!({ "pane_id": local })).await;
+        assert_eq!(
+            seen["pane"]["agent_status"], "idle",
+            "and herdr never moved off it: {seen}"
+        );
+        h._session
+            .call("pane.send_keys", json!({ "pane_id": local, "keys": ["ctrl+c"] }))
+            .await;
+        a_pane_at_its_shell(&h._session, &local).await;
+    }
+}
+
 /// The operator's two reports, end to end: *"i opened claude on a terminal … that had never
 /// opened claude and its showing me the most recent session"*, and *"closed claude -> opened
 /// again fresh session -> conversation panel showing old and not updating to new at all"*.
@@ -5536,6 +5599,87 @@ async fn a_pane_shows_the_session_its_own_process_is_on_and_moves_when_it_restar
     fixture.announce(second, "33333333-3333-4333-8333-333333333333");
     fixture.transcript("33333333-3333-4333-8333-333333333333", "AFTER CLEAR", 0);
     moved_to(&mut socket, &pane, &stale, "AFTER CLEAR").await;
+}
+
+/// The operator: *"if there are multiple questions answering the first doesn't update to show the
+/// second question"*.
+///
+/// **One `AskUserQuestion` call can carry several questions, and answering one does not unblock
+/// the pane** — the harness draws the next one in its place and goes on waiting. Nothing about the
+/// pane changes: no status edge, no provider revision, no new transcript record ([#42](#) — the
+/// request is not written down until it has been answered). So the only thing that could notice
+/// was a re-read of the screen, and a single-answer dialog stopped being re-read the moment it was
+/// first published. The strip on the phone stayed on question one for as long as the operator
+/// cared to look at it, and the presses it offered answered whatever was actually on screen.
+///
+/// Measured as [#492](#). The second question is painted here rather than answered, because what
+/// is under test is the node noticing that the screen moved — not Claude's own dialog, which [#413](#) and [#421](#)
+/// measured and which is what the shape below is copied from.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_question_in_place_of_the_first_reaches_the_client() {
+    let h = harness!("nextquestion");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
+
+    let dialog = |question: &str, first: &str, second: &str| {
+        format!(
+            " \\u{{2610}} Indentation\\n\\n{question}\\n\\n             1. {first}\\n             2. {second}"
+        )
+    };
+    paint_screen(
+        &mut socket,
+        &pane,
+        &dialog("Which indentation do you prefer?", "Tabs", "Spaces"),
+    )
+    .await;
+    assert!(
+        drawn(&h, &local, "Which indentation do you prefer?", 60).await,
+        "the first dialog never reached the screen",
+    );
+    report(&h._session, &local, "blocked").await;
+    until_herd(&h, &pane, "blocked").await;
+
+    let first = until_pane(&mut socket, "pending", &pane, 20).await;
+    assert_eq!(first["question"], "Which indentation do you prefer?", "{first}");
+
+    // The operator answers, at the desk or from the phone. The harness replaces the dialog with
+    // its next question and stays blocked — which is the whole of what used to be invisible.
+    paint_screen(
+        &mut socket,
+        &pane,
+        &dialog("Which line width do you prefer?", "80 columns", "100 columns"),
+    )
+    .await;
+    assert!(
+        drawn(&h, &local, "Which line width do you prefer?", 60).await,
+        "the second dialog never reached the screen",
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut moved = Value::Null;
+    while tokio::time::Instant::now() < deadline {
+        let Some(frame) = recv(&mut socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if frame["t"] == "pending" && frame["pane"] == pane && frame["question"] != first["question"] {
+            moved = frame;
+            break;
+        }
+    }
+    assert_ne!(
+        moved,
+        Value::Null,
+        "the strip stayed on the question that had already been answered"
+    );
+    assert_eq!(moved["question"], "Which line width do you prefer?", "{moved}");
+    assert_eq!(moved["options"][0]["label"], "80 columns", "{moved}");
 }
 
 /// The operator, on 0.1.57: *"closed Claude, opened again in the same terminal and the

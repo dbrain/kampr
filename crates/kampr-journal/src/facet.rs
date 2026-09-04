@@ -149,6 +149,10 @@ pub struct Compaction {
     pub dropped_tokens: Option<u64>,
 }
 
+/// Reads the prompts an operator has queued off one harness's screen, for the harnesses that put
+/// them there and nowhere else. A bare fn for the same reason [`crate::ScreenReader`] is one.
+pub type QueuedReader = fn(&[&str]) -> Vec<Queued>;
+
 /// A harness's facet collector, kept between reads so a poll costs the records the transcript has
 /// grown by rather than the whole file.
 pub trait FacetFold: Send {
@@ -215,7 +219,26 @@ impl FacetFeed {
     /// call answers `None` for a harness with nothing to say, which is the same message as the
     /// `{}` it would otherwise have sent.
     pub fn moved(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Option<Facets> {
-        let next = self.fold.facets(transcript, marker);
+        self.moved_with(transcript, marker, None)
+    }
+
+    /// The same, with a queue read off the pane's screen rather than out of the transcript.
+    ///
+    /// **`Some(vec![])` is a queue that has emptied, and `None` is a harness whose queue is in its
+    /// file.** omp writes a steering prompt down only when it *delivers* it — a session with three
+    /// waiting looks identical on disk to one with none ([#489](#)) — so the only account of one
+    /// is the screen, and the screen has to be able to say "gone" as well as "three". A harness
+    /// that records its own queue passes `None` and keeps every word of it.
+    pub fn moved_with(
+        &mut self,
+        transcript: &Path,
+        marker: Option<&SessionMarker>,
+        queued: Option<Vec<Queued>>,
+    ) -> Option<Facets> {
+        let mut next = self.fold.facets(transcript, marker);
+        if let Some(queued) = queued {
+            next.queued = queued;
+        }
         if next == self.last {
             return None;
         }

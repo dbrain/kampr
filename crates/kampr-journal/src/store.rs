@@ -25,6 +25,23 @@ impl TurnStore {
         self.mark(at);
     }
 
+    /// Takes a turn back: the same id carrying no blocks, which is how the wire withdraws one.
+    ///
+    /// **Emptied rather than removed.** Every position this store hands out — a page's cursor, a
+    /// tool card's index inside its turn — is an index into `turns`, and removing an element
+    /// shifts every one of them. A client that is holding the turn is told to drop it because a
+    /// turn with no blocks is not drawn, and a page that still contains it draws nothing for it.
+    pub fn retire(&mut self, id: &str) {
+        let Some(&at) = self.index.get(id) else {
+            return;
+        };
+        if self.turns[at].blocks.is_empty() {
+            return;
+        }
+        self.turns[at].blocks.clear();
+        self.mark(at);
+    }
+
     pub fn revise(&mut self, id: &str) -> Option<&mut Turn> {
         let at = *self.index.get(id)?;
         self.mark(at);

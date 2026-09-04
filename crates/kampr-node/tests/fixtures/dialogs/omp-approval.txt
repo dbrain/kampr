@@ -1,0 +1,40 @@
+│          ██  ██          │ $ to run python                                               │
+│          ██  ██          │ ───────────────────────────────────────────────────────────── │
+│          ▒▒  ██          │ LSP Servers                                                   │
+│              ██          │ No LSP servers                                                │
+│                          │                                                               │
+│    Claude Sonnet 4.5     │                                                               │
+│        anthropic         │                                                               │
+│                          │ ───────────────────────────────────────────────────────────── │
+│                          │ Recent sessions                                               │
+│                          │ No recent sessions                                            │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+╰──────────────────────────┴───────────────────────────────────────────────────────────────╯
+ Tip: `/copy code` grabs the last code block to your clipboard — `/copy cmd` grabs the last
+      shell/python command
+
+
+
+ SLOWCMD approve me
+
+
+ Running a slow command now.
+
+╭────────────────────────────────────────────────────────────────────────────────────────────╮
+│ $ sleep 20; echo slow-done                                                                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ⎋ Working…                                                        Running a slow command now
+╭─ Allow tool: bash ─────────────────────────────────────────────────────────────────────────╮
+│                                                                                            │
+│ Command: sleep 20; echo slow-done                                                          │
+│                                                                                            │
+│  ❯ Approve                                                                                 │
+│    Deny                                                                                    │
+│                                                                                            │
+│ up/down navigate  enter select  esc cancel                                                 │
+│                                                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -722,9 +722,20 @@ async fn warm(
         "panes": herd.panes,
         "role": auth.device.role,
     });
+    // **Only a pane the herd calls blocked.** A dialog is read off the screen (probe #42) and a
+    // screen holds whatever the agent last printed, so a pane that is not waiting on anybody can
+    // still carry something shaped like a question — a numbered list in build output, a cursor
+    // beside two aligned lines. The socket path has always gated on `blocked`; this one did not,
+    // and it is the same read.
     if let Some(pane) = query.pane.as_deref()
+        && herd.pane(pane).map(|p| p.agent_status) == Some(kampr_core::provider::AgentStatus::Blocked)
         && let Some((session, local)) = node.resolve(pane)
-        && let Some(found) = crate::pending::read(&session.herdr, &local).await
+        && let Some(found) = crate::pending::read(
+            &session.herdr,
+            &local,
+            herd.pane(pane).and_then(|p| p.agent.as_deref()),
+        )
+        .await
     {
         body["pending"] = json!({
             "t": "pending",

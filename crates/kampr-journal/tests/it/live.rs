@@ -7,7 +7,9 @@
 
 use crate::common;
 
-use kampr_journal::{AgyAdapter, ClaudeAdapter, CodexAdapter, JournalAdapter, LIVE_ID, TranscriptRoot};
+use kampr_journal::{
+    AgyAdapter, ClaudeAdapter, CodexAdapter, JournalAdapter, LIVE_ID, OmpAdapter, TranscriptRoot,
+};
 use kampr_journal::{Block, Journal, Turn};
 use std::path::PathBuf;
 
@@ -51,6 +53,17 @@ fn codex() -> CodexAdapter {
 
 fn agy() -> AgyAdapter {
     AgyAdapter::new(TranscriptRoot::new(common::agy_root()).expect("root"))
+}
+
+fn omp() -> OmpAdapter {
+    OmpAdapter::new(TranscriptRoot::new(common::fixtures().join("live")).expect("root"))
+}
+
+/// The transcript the `omp-*` screens were captured off — the same run, so a preview and the
+/// record that retires it are two views of one moment rather than two fixtures that happen to
+/// agree.
+fn omp_upto(records: usize) -> Box<dyn Journal> {
+    upto_path(&omp(), &common::fixtures().join("live/omp-typing.jsonl"), records)
 }
 
 /// `agy` keeps its transcript under the conversation rather than in a directory of its own, so
@@ -611,4 +624,59 @@ fn every_agy_head_in_every_capture_is_a_thought_header() {
         }
     }
     assert!(seen >= 6, "the corpus has heads to check: {seen}");
+}
+
+/// **omp marks nothing on its screen.** Its answers and the operator's own prompts are both plain
+/// text one column in, wrapped to the same column, with no glyph on either — so the message being
+/// written is found by walking up from the composer to the blank row above the block, and the
+/// whole read is gated on `⎋ Working…` being on the screen.
+#[test]
+fn a_message_omp_is_still_writing_is_previewed() {
+    // Five records in: the prompt has landed and no assistant record has.
+    let journal = omp_upto(5);
+    let turn = journal
+        .preview(&lines(&screen("omp-streaming")))
+        .expect("a preview");
+    assert_eq!(turn.id, LIVE_ID);
+    assert_eq!(turn.role, kampr_journal::Role::Assistant);
+    assert_eq!(
+        md(&turn),
+        "A terminal emulator sits between a program writing bytes and a person"
+    );
+
+    // The same block a poll later, longer — which is the only thing that makes a block a message
+    // rather than a notice.
+    let more = journal
+        .preview(&lines(&screen("omp-streaming-more")))
+        .expect("a preview");
+    assert!(md(&more).starts_with("A terminal emulator sits between a program"));
+    assert!(md(&more).len() > md(&turn).len(), "{:?}", md(&more));
+}
+
+/// The rotating `Tip:` line omp paints over an idle pane is one column in like a message, and the
+/// operator's own prompt is indistinguishable from an answer. `⎋ Working…` is what separates a
+/// pane that is writing something from one that is not, and it is the whole gate.
+#[test]
+fn omp_previews_nothing_while_it_is_idle() {
+    let journal = omp_upto(5);
+    assert_eq!(journal.preview(&lines(&screen("omp-idle"))), None);
+}
+
+/// A tool card sits between the chrome and whatever was said above it, and a card's border is
+/// column zero — which is a boundary, not a continuation. The message above it was recorded when
+/// it finished, so there is nothing here a preview could add.
+#[test]
+fn omp_previews_nothing_under_a_tool_card() {
+    let journal = omp_upto(5);
+    assert_eq!(journal.preview(&lines(&screen("omp-after-tool"))), None);
+}
+
+/// The preview loses to the transcript: once the record carrying the same words has landed, the
+/// screen has nothing left to add and the preview is withdrawn.
+#[test]
+fn omp_withdraws_the_preview_once_the_record_lands() {
+    let text = screen("omp-streaming");
+    assert!(omp_upto(5).preview(&lines(&text)).is_some());
+    // Six records: the assistant message the screen was painting is now on disk.
+    assert_eq!(omp_upto(6).preview(&lines(&text)), None);
 }

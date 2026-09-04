@@ -243,6 +243,81 @@ Three of the four publish a live status transparently. The ladder is per-harness
 | **codex** 0.150.1 | **`thread-writer-locks/<id>.lock` held under `flock` for the process's life**, plus the rollout fd held open continuously. From **process start** | `thread_history_1.sqlite` `thread_turns.status` (`inProgress`→`completed`), or the rollout's `task_started`/`task_complete` | inferred only (unmatched tool call, #43) |
 | **agy** 1.1.22 | `presence/<conv-id>.lock` under `flock` — but **only from the first prompt**; `crashes/crash_<pid>_<uuid>.log` covers boot | `conversations/<id>.db` `steps.status`: 8 generating, 9 **awaiting approval**, 3 done, 6 cancelled | **direct, and the only one that is a value rather than an inference** |
 | **gemini** 0.56.0 | **nothing** — 0 regular-file fds and 0 lock entries across 643 samples, no env var | none found | no |
+| **omp** 18.1.10 | **the session JSONL held open for the life of the session** — `/proc/<pid>/fd`, kernel-held, nothing to validate ([#481](./03-probe-log.md)); before the first assistant message, `terminal-sessions/<tty>` ([#482](./03-probe-log.md)) | **the terminal title**, whose separator is the state ([#486](./03-probe-log.md)) — nothing it writes to disk says what it is doing | **direct**, and herdr cannot see it at all |
+| **pi** 0.73.1 | **nothing** — no descriptor held, no breadcrumb, no marker; the working directory alone ([#490](./03-probe-log.md)) | none of its own; herdr's `pi` manifest is one rule, `contains ["Working..."]` | no |
+
+### What is served for an omp pane, and what is not
+
+Everything Claude's adapter publishes, omp's now does — the conversation, the subagent handles, the
+live preview of a message being written, the desk composer and the keystroke that clears it, the
+session title, the turn durations, the compactions, the launches still running, and the question a
+blocked pane is asking with the presses that answer it. Two of them it publishes *better*: the
+identity handle is a held descriptor rather than a written marker, and a turn's duration comes off
+two of the harness's own stamps rather than out of a record Claude happens to write.
+
+Two of them arrive by a different road than Claude's, and one is genuinely absent:
+
+- **Queued prompts come off the screen.** omp writes a steering prompt down only when it
+  *delivers* it ([#489](./03-probe-log.md)), so the file cannot answer — and facets are folded
+  from the file. A `QueuedReader` beside the composer's own reader fills them from the pane's grid,
+  and `Some(vec![])` is how the screen says the queue has emptied.
+- **Attachments are inline after all.** omp normalises an image on the way in — a 7.8 KB PNG
+  stored as 904 characters of base64 — so it never reaches the 1 024-character threshold its own
+  documentation says a payload is content-addressed into `blobs/<sha256>` at
+  ([#493](./03-probe-log.md)). The inline shape is the one Kampr already serves. A record carrying
+  `blob:sha256:<hash>` instead is documented, unobserved, and answered with no attachment rather
+  than a header pointing at bytes the record does not hold.
+- **A `permission` mode is absent.** `mode_change` carries the plan/normal mode and nothing about
+  the approval mode, which omp's own source calls a runtime override that is *not persisted*.
+
+**And one that was wrong rather than thin, now fixed.** An omp session is a *tree*: a rewind moves
+a leaf pointer and leaves the abandoned branch in the file, so a reader taking the file in order
+published turns the operator had taken back ([#495](./03-probe-log.md), driven through `/tree` on a
+live session). The parser now keeps every entry's parent — the bookkeeping ones included, because
+the chain runs through a `title_change` as much as through a message — recomputes the path when a
+record arrives whose parent is not the leaf, and withdraws what falls off it with the wire's own
+retirement, a turn under its own id carrying no blocks. **Claude's transcripts carry `parentUuid`
+and its reader ignores it**; whether its own rewind branches in place or opens a fresh transcript
+has not been measured, so nothing has been changed there.
+
+### And it is not the harness it forked
+
+`pi` and `omp` share a record grammar, a session path and a `π` in the title, and **that is where it
+ends** ([#490](./03-probe-log.md)). Everything on omp's row above is oh-my-pi's own: the held
+descriptor, the tty breadcrumb, the `task` tool's subagents, the title slot, and the run state in
+the title. The adapter is registered for both because the *conversation* reads identically — one
+parser, two roots — and every handle above the working directory answers nothing on a `pi` pane
+rather than answering wrongly.
+
+### The one herdr has no rules for
+
+**omp is the case the ladder was built for, and it arrives from the other end.** Its identity
+handle is the strongest of the five — an open file descriptor needs no `procStart` check, moves
+with `/new`, and is gone when the process is — while its *status* is the weakest place any of
+them has put one: herdr carries **no detection manifest for `omp` at all**, so `agent explain`
+returns `evaluated_rules: []` and the pane publishes `default_known_agent_idle_fallback → idle`
+through a whole working turn and through an open approval dialog ([#485](./03-probe-log.md)).
+The 20 manifests it does ship include `pi`, whose single rule is `contains ["Working..."]` —
+which omp's own screen (`⎋ Working…`, a Unicode ellipsis) does not match either.
+
+What omp publishes instead is its **terminal title**, and it is not a scrape: `title-generator.ts`
+composes every title as `π`, a separator that *is* the run state, and the session label — `>` the
+operator's turn, one of ten braille spinner frames while working, `!` blocked on a person, and
+`π: label` when the operator has turned `tui.titleState` off. herdr carries both
+`terminal_title` and `terminal_title_stripped` on `session.snapshot`, so the node already has it.
+
+Two things fall out, and both are in the code:
+
+- **The vocabulary belongs to the harness, not to the install.** `kampr_journal::title_status` is
+  a free function keyed on the pane's agent name rather than a method on a registered adapter: a
+  pane running omp publishes its state whether or not this node can find `~/.omp/agent` to read
+  transcripts from, and a machine with a relocated agent dir must not lose the status as well as
+  the conversation.
+- **The spinner animates at 80 ms.** A pane's `revision` moved on 29 of ~30 samples over 6 s of a
+  working turn ([#486](./03-probe-log.md)), so the herdr snapshot's fingerprint hashes the *state*
+  the title carries and never the title: hashing the title would rebuild the herd — and push it to
+  every phone — twelve times a second, and hashing neither would leave a pane that starts working
+  waking nothing at all.
 
 **Two corrections to this codebase fell out of that.** `codex/mod.rs` claimed codex *"publishes no
 map from a process to the thread it is on"* — the lock files are empty, which is what made them

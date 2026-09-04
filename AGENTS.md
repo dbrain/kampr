@@ -119,10 +119,24 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
   still not enough: the profile that adds `~/.local/bin` is `.bashrc`, which `-l` does not read
   (#419). The directory `current_exe()` is in is appended for exactly this, and `kampr doctor`
   refuses to say `ok` about a fleet `PATH` it cannot resolve `kampr` and `herdr` on.
+- **herdr labels a pane it has no rules for, and then says `idle` for ever.** The label is the
+  foreground process's name with no verification (#75); the *state* comes from per-agent manifests,
+  and there is no `omp` manifest — so an omp pane reports `idle` through a whole working turn and
+  through an open approval dialog (#485). What omp publishes instead is its terminal title, whose
+  separator is the run state (#486), and `kampr_journal::title_status` is where that is read. A
+  harness nobody has measured a title for leaves herdr's answer alone.
 - **A digit does not answer every dialog.** On Claude's single-answer question it answers and the
   dialog closes (#413); on a multiple-answer one the same digit *ticks a box*, `\r` toggles the
   focused row, and only right-arrow then Enter commits (#421). `pending.multi` is what tells the
   two apart, and a client that ignores it offers a press that looks like an answer and is not.
+  **omp draws no digits at all** (#487): its dialogs are a `❯` on one row, moved with the arrows
+  and committed with Enter, so the node turns the key a client pressed into that many moves —
+  counted from a screen read taken at the moment of the press. `pending::cursor_dialogs` is the
+  per-harness list, and a harness not on it is read for numbers only.
+- **`pi` is not `omp`.** They share a record grammar and a session path; the held descriptor, the
+  tty breadcrumb, the subagents, the title slot and the run state in the title are all oh-my-pi's
+  own (#490). One adapter serves both, and every handle above the working directory answers
+  nothing on a `pi` pane rather than answering wrongly.
 - **A `FontFamily` of loaded fonts draws everything from its first font.** A second face in it
   supplies no glyph the first is missing, either way round (#416) — so a codepoint the terminal
   face lacks is tofu in the browser and nothing else can answer for it. `tools/terminalmono.py`

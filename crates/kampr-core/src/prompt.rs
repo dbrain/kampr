@@ -31,6 +31,76 @@ pub fn numbered_option(line: &str) -> Option<PendingOption> {
     })
 }
 
+/// One option of a dialog that marks its choice with a **cursor** rather than a number:
+/// `❯ Approve` beside `  Deny`, or `❯ ○ main` beside `  ○ a topic branch`.
+///
+/// **A line on its own is not evidence of anything here.** Without a number, an unfocused option
+/// is indistinguishable from any indented line of prose — which is why `at` is on this at all: a
+/// run is anchored on the row that carries the cursor and gathered from the rows whose *label*
+/// starts in the same column, so the description omp indents under an option is excluded by the
+/// two columns it is further in. The caller is per-harness for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marked {
+    pub focused: bool,
+    /// The column the label starts at, past the cursor and any radio glyph.
+    pub at: usize,
+    pub label: String,
+    /// `Some` when the glyph in front of the label is a **checkbox** rather than a radio, and
+    /// whether it is ticked. A checkbox is the only thing on the screen that says the question
+    /// takes several answers, and on such a question a press is a tick rather than an answer
+    /// (#421) — so losing it in the strip means offering a press that looks like one and is not.
+    pub ticked: Option<bool>,
+}
+
+/// The cursor a harness draws against the row it would commit.
+const CURSORS: [char; 3] = ['\u{276f}', '\u{27a4}', '\u{25b8}'];
+
+/// The radio glyph an option may carry between the cursor and its label.
+const RADIOS: [char; 4] = ['\u{25cb}', '\u{25cf}', '\u{25c9}', '\u{25ef}'];
+
+/// The checkbox glyphs, empty and ticked. A checkbox is the only thing on the screen that says a
+/// question takes several answers.
+const BOXES: [char; 2] = ['\u{2610}', '\u{2611}'];
+
+pub fn marked_option(line: &str) -> Option<Marked> {
+    let mut at = 0;
+    let mut rest = line;
+    let eat = |rest: &mut &str, at: &mut usize, wanted: &[char]| {
+        let mut taken = false;
+        while let Some(c) = rest.chars().next() {
+            if c == ' ' {
+                *at += 1;
+                *rest = &rest[1..];
+            } else if !taken && wanted.contains(&c) {
+                taken = true;
+                *at += 1;
+                *rest = &rest[c.len_utf8()..];
+            } else {
+                break;
+            }
+        }
+        taken
+    };
+    let focused = eat(&mut rest, &mut at, &CURSORS);
+    let boxed = rest.chars().next().filter(|c| BOXES.contains(c));
+    if boxed.is_none() {
+        eat(&mut rest, &mut at, &RADIOS);
+    } else {
+        eat(&mut rest, &mut at, &BOXES);
+    }
+    let label = rest.trim_end();
+    let ok = !label.is_empty()
+        && label.chars().count() > 1
+        && !label.chars().all(is_chrome)
+        && numbered_option(label).is_none();
+    ok.then(|| Marked {
+        focused,
+        at,
+        label: label.to_string(),
+        ticked: boxed.map(|c| c == BOXES[1]),
+    })
+}
+
 /// Every `1) a  2) b` on one line, in the order written.
 ///
 /// A CLI packs a provider list onto one row where a TUI puts each on its own, so the line parser

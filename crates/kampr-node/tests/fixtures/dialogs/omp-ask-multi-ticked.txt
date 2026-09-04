@@ -1,0 +1,40 @@
+ All done, the probe is complete.
+
+
+ ASKTWO decide both
+
+
+ Two things before I go on.
+
+╭─── Ask 2 questions ────────────────────────────────────────────────────────────────────────╮
+├─── [suites] · multi · options:3 ───────────────────────────────────────────────────────────┤
+│  Which test suites should I run?                                                           │
+│  ☐ unit                                                                                    │
+│    ↳ The unit suite.                                                                       │
+│  ☐ integration                                                                             │
+│    ↳ The integration suite.                                                                │
+│  ☐ browser                                                                                 │
+│    ↳ The browser suite.                                                                    │
+├─── [branch] · options:2 ───────────────────────────────────────────────────────────────────┤
+│  Which branch should this land on?                                                         │
+│  ○ main                                                                                    │
+│    ↳ Straight onto the default branch.                                                     │
+│  ○ a topic branch                                                                          │
+│    ↳ Open a PR instead.                                                                    │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  ⎋ Working…                                                        Running a slow command now
+╭─ Ask ──────────────────────────────────────────────────────────────────────────────────────╮
+│  suites    branch    Submit                                                                │
+│ Which test suites should I run?                                                            │
+├────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ❯ ☑ unit                                                                                   │
+│       The unit suite.                                                                      │
+│   ☐ integration                                                                            │
+│       The integration suite.                                                               │
+│   ☐ browser                                                                                │
+│       The browser suite.                                                                   │
+│   ☐ Other (type your own)                                                                  │
+├────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Space toggle · Enter next · ↑/↓ move · Tab/←/→ · Esc cancel                                │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯

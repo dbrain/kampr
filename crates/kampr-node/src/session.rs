@@ -1151,8 +1151,25 @@ impl Session {
         // key it was offered.
         let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
         self.audit("answer", Some(pane), Some(json!({ "key": key })));
-        let mut keystrokes = vec![key.to_string()];
-        keystrokes.extend(submit_key(agent.as_deref()).map(str::to_string));
+        let keystrokes = match pending::cursor_dialogs(agent.as_deref()) {
+            true => match self.moves_to(&session.herdr, &local, key).await {
+                Some(keys) => keys,
+                None => {
+                    self.wire.error(
+                        ErrorCode::BadRequest,
+                        "this harness answers by moving a cursor, and its dialog is no longer on \
+                         the screen to move it in",
+                        Some(pane),
+                    );
+                    return;
+                }
+            },
+            false => {
+                let mut keys = vec![key.to_string()];
+                keys.extend(submit_key(agent.as_deref()).map(str::to_string));
+                keys
+            }
+        };
         for stroke in keystrokes {
             if let Err(e) = session
                 .registry
@@ -1164,6 +1181,17 @@ impl Session {
                 return;
             }
         }
+    }
+
+    /// The keystrokes that get a cursor-driven dialog from wherever its cursor is **now** to the
+    /// option the operator pressed, and commit it.
+    ///
+    /// **Read fresh, not remembered.** The last frame this socket published may be seconds old and
+    /// somebody at the desk may have moved the cursor since; the arrows are counted from a read
+    /// taken at the moment of the press, and a dialog that has gone in the meantime answers
+    /// nothing rather than pressing Enter into whatever replaced it.
+    async fn moves_to(&self, herdr: &kampr_herdr::Herdr, local: &str, key: &str) -> Option<Vec<String>> {
+        cursor_moves(&pending::read(herdr, local, Some(OMP_LIKE)).await?, key)
     }
 
     /// Commits a question that takes several answers, after the operator has ticked what they want.
@@ -1916,6 +1944,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     // the same reason: the herd is state, and a client joining is arriving at it.
     let mut blocked = herd.borrow().pane(&global).map(|p| p.agent_status)
         == Some(kampr_core::provider::AgentStatus::Blocked);
+    // The harness the pane is running, read once: it decides how a question is spelled and how an
+    // answer is pressed, and a pane cannot change harness without the pane itself changing.
+    let harness = herd.borrow().pane(&global).and_then(|p| p.agent.clone());
     // A pane can be reported blocked before its dialog has finished painting, and the question is
     // read off the screen (probe #42). Latching on the first read would leave a blocked agent with
     // no prompt strip at all until its status happened to change again, so an unproductive read is
@@ -1931,9 +1962,19 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         // pane costs nothing here: `send_pending` finds nothing, matches what this socket has
         // been told, and sends no frame — so this does not add a read or a frame per watch, and
         // #448's `multi` re-arm is left exactly as it was.
-        match send_pending(&herdr, &wire, &global, &local, true, &mut asked).await {
+        match send_pending(
+            &herdr,
+            &wire,
+            &global,
+            &local,
+            harness.as_deref(),
+            true,
+            &mut asked,
+        )
+        .await
+        {
             None => return,
-            Some(published) => asking = keep_asking(published, &asked, asking),
+            Some(published) => asking = keep_asking(published, asking),
         }
     }
     // The ring's own signal, so this socket is told when there is history to send instead of
@@ -1982,9 +2023,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             }
             _ = ask.tick(), if asking > 0 => {
                 asking -= 1;
-                match send_pending(&herdr, &wire, &global, &local, true, &mut asked).await {
+                match send_pending(&herdr, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
                     None => return,
-                    Some(published) => asking = keep_asking(published, &asked, asking),
+                    Some(published) => asking = keep_asking(published, asking),
                 }
             }
             // Two arms rather than one, and the split is what keeps the wake cancel-safe: the
@@ -2029,9 +2070,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if now_blocked != blocked {
                     blocked = now_blocked;
                     asking = if blocked { PENDING_ATTEMPTS } else { 0 };
-                    match send_pending(&herdr, &wire, &global, &local, blocked, &mut asked).await {
+                    match send_pending(&herdr, &wire, &global, &local, harness.as_deref(), blocked, &mut asked).await {
                         None => return,
-                        Some(published) => asking = keep_asking(published, &asked, asking),
+                        Some(published) => asking = keep_asking(published, asking),
                     }
                 }
             }
@@ -2084,23 +2125,31 @@ async fn send_history(
 
 /// How many more times to re-read the screen, after one attempt at publishing a prompt.
 ///
-/// **A multiple-answer dialog is the one that has to be re-read for as long as it stands**, and it
-/// is the reason this is a function rather than an assignment at each of the two call sites — the
-/// blocked *edge* zeroed the counter on a successful publish and the retry branch re-armed it, so
-/// the shape that needed re-reading was the one shape that never got it. Every press on such a
-/// dialog is a tick (#421), the checkboxes move under the operator, and nothing else on the wire
-/// ever says which are ticked.
+/// **A dialog on the screen is re-read for as long as it stands, whatever kind it is.** The bound
+/// is for the other case entirely: a pane herdr calls blocked whose screen holds nothing this node
+/// can parse costs a handful of reads rather than one every half second for as long as it sits
+/// there.
 ///
-/// Every other dialog latches on its first successful read exactly as before: the bound exists so
-/// a harness whose dialog Kampr cannot parse costs a handful of reads rather than one every half
-/// second for as long as it sits there. And the re-read is free to the wire either way —
-/// [`send_pending`] compares against what this socket was last told and sends nothing when the
-/// screen has not moved.
-fn keep_asking(published: bool, asked: &Option<pending::Pending>, asking: u32) -> u32 {
-    match (published, asked.as_ref().is_some_and(|p| p.multi)) {
-        (true, true) => PENDING_ATTEMPTS,
-        (true, false) => 0,
-        (false, _) => asking,
+/// It used to hold only for a multiple-answer dialog, where every press is a tick (#421) and the
+/// checkboxes move under the operator. That was too narrow by exactly one shape, and it is the
+/// shape the operator hit: **one `AskUserQuestion` can carry several questions, and answering one
+/// does not unblock the pane** — the harness paints the next question in place of the first and
+/// goes on waiting. No status edge, no provider revision, and nothing written down until the
+/// request is answered (#42), so a strip that latched on the first reading stayed on a question
+/// that had already been answered, offering presses that answered whatever was really on screen
+/// ([#492](#)).
+///
+/// The re-read is free to the wire — [`send_pending`] compares against what this socket was last
+/// told and sends nothing when the screen has not moved — and it is **not** free to herdr: a
+/// blocked pane with a watcher costs one `pane.read` every [`PENDING_RETRY`] for as long as the
+/// dialog stands, where a single-answer one used to cost one read in total. That is the price of
+/// noticing the next question, it is what a multiple-answer dialog has always cost, and it ends
+/// when the pane stops being blocked. A slower cadence once a dialog has been published would buy
+/// most of it back and has not been needed.
+fn keep_asking(published: bool, asking: u32) -> u32 {
+    match published {
+        true => PENDING_ATTEMPTS,
+        false => asking,
     }
 }
 
@@ -2122,11 +2171,12 @@ async fn send_pending(
     wire: &Wire,
     global: &str,
     local: &str,
+    agent: Option<&str>,
     blocked: bool,
     last: &mut Option<pending::Pending>,
 ) -> Option<bool> {
     let found = match blocked {
-        true => pending::read(herdr, local).await,
+        true => pending::read(herdr, local, agent).await,
         false => None,
     };
     if blocked && found.is_none() {
@@ -2156,6 +2206,42 @@ async fn send_pending(
 /// nothing rather than a guess.
 const SUBMIT_KEYS: &[(&str, &str)] = &[("codex", "\r")];
 
+/// What moves and commits a cursor-driven dialog. Measured on omp 18.1.10 against both of the
+/// dialogs it blocks on — a tool approval and the `ask` tool ([#487](#)): a digit leaves either of
+/// them standing, `↓`/`↑` move the `❯`, and Enter commits the row it is on.
+const DOWN: &str = "\u{1b}[B";
+const UP: &str = "\u{1b}[A";
+const COMMIT: &str = "\r";
+
+/// What ticks a box on a question that takes several answers, where Enter would answer it.
+const TOGGLE: &str = " ";
+
+/// Any harness [`pending::cursor_dialogs`] answers for; the read only needs to know that the
+/// screen should be looked at for a cursor rather than for numbers.
+const OMP_LIKE: &str = kampr_journal::omp::AGENT;
+
+/// The arrows that reach `key` from where the cursor is, and the press that acts on it.
+///
+/// **A press means different things on the two shapes, and the screen says which.** On a question
+/// that takes one answer the cursor is moved onto the row and Enter commits it; on one that takes
+/// several, Enter is *next question* and `Space` is the tick — omp's own footer reads
+/// `Space toggle · Enter next` ([#494](#)). Pressing Enter on a checkbox row would answer the
+/// whole question with nothing ticked.
+fn cursor_moves(found: &pending::Pending, key: &str) -> Option<Vec<String>> {
+    let wanted = found.options.iter().position(|o| o.key == key)?;
+    let cursor = found.cursor?;
+    let step = if wanted >= cursor { DOWN } else { UP };
+    let mut keys = vec![step.to_string(); wanted.abs_diff(cursor)];
+    keys.push(
+        match found.multi {
+            true => TOGGLE,
+            false => COMMIT,
+        }
+        .to_string(),
+    );
+    Some(keys)
+}
+
 /// What commits a question that takes **several** answers, per harness.
 ///
 /// Measured on Claude 2.1.258 (#421) and on nothing else. Two digits ticked two boxes and the tool
@@ -2163,7 +2249,14 @@ const SUBMIT_KEYS: &[(&str, &str)] = &[("codex", "\r")];
 /// dialog draws `\u{2190}  \u{2610} Test suites  \u{2714} Submit  \u{2192}` above the question, and right-arrow then
 /// Enter completed it with the ticked answers. A harness with no row here has not been probed, and
 /// is refused rather than sent a guess into a live dialog.
-const COMMIT_KEYS: &[(&str, &[&str])] = &[("claude", &["\u{1b}[C", "\r"])];
+const COMMIT_KEYS: &[(&str, &[&str])] = &[
+    ("claude", &["\u{1b}[C", "\r"]),
+    // omp's footer says it outright — `Space toggle · Enter next` — and Enter measured as exactly
+    // that: it closed the ticked question and drew the *next* one in the same box, which on the
+    // last question is the whole ask completing ([#494](#)). So the same key both commits what is
+    // ticked and moves the operator on, which is what a person at the desk presses.
+    ("omp", &["\r"]),
+];
 
 fn commit_keys(agent: Option<&str>) -> Option<&'static [&'static str]> {
     let agent = agent?;
@@ -2179,6 +2272,61 @@ fn submit_key(agent: Option<&str>) -> Option<&'static str> {
         .iter()
         .find(|(harness, _)| *harness == agent)
         .map(|(_, key)| *key)
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+
+    fn dialog(name: &str) -> pending::Pending {
+        let text =
+            std::fs::read_to_string(format!("tests/fixtures/dialogs/{name}.txt")).expect("a captured dialog");
+        pending::detect_marked(&text).expect("a dialog")
+    }
+
+    /// **The client presses the key it was offered and the node does the walking.** On a harness
+    /// that answers by moving a cursor there is no key to press, so the wire carries the same
+    /// `1`/`2` an installed phone already draws and this turns it into the moves that reach it —
+    /// counted from where the cursor is at the moment of the press, not from where a frame said it
+    /// was.
+    #[test]
+    fn an_answer_on_a_cursor_dialog_is_the_moves_that_reach_it() {
+        let approval = dialog("omp-approval");
+        assert_eq!(cursor_moves(&approval, "1"), Some(vec![COMMIT.to_string()]));
+        assert_eq!(
+            cursor_moves(&approval, "2"),
+            Some(vec![DOWN.to_string(), COMMIT.to_string()])
+        );
+
+        // The same dialog with the cursor already moved down: the answer above it now walks back
+        // up, and the one under the cursor is a bare Enter.
+        let moved = dialog("omp-approval-moved");
+        assert_eq!(
+            cursor_moves(&moved, "1"),
+            Some(vec![UP.to_string(), COMMIT.to_string()])
+        );
+        assert_eq!(cursor_moves(&moved, "2"), Some(vec![COMMIT.to_string()]));
+
+        // Three options, and the last is two moves away.
+        assert_eq!(
+            cursor_moves(&dialog("omp-ask"), "3"),
+            Some(vec![DOWN.to_string(), DOWN.to_string(), COMMIT.to_string()])
+        );
+        assert_eq!(cursor_moves(&dialog("omp-ask"), "9"), None);
+
+        // **A press on a question that takes several answers is a tick.** Enter there is `next
+        // question` and would answer the whole thing with whatever happened to be ticked, so the
+        // walk ends on `Space` — and the harness's own footer is what says so ([#494](#)).
+        assert_eq!(
+            cursor_moves(&dialog("omp-ask-multi"), "2"),
+            Some(vec![DOWN.to_string(), TOGGLE.to_string()])
+        );
+        assert_eq!(
+            cursor_moves(&dialog("omp-ask-multi-ticked"), "1"),
+            Some(vec![TOGGLE.to_string()]),
+            "and a press on a row already ticked is the same key, which unticks it"
+        );
+    }
 }
 
 #[cfg(test)]

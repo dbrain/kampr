@@ -9,7 +9,8 @@
 use crate::common;
 
 use kampr_journal::{
-    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, JournalAdapter, TranscriptRoot,
+    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, JournalAdapter, OmpAdapter,
+    TranscriptRoot,
 };
 
 /// A fixture's caret header and its grid. The caret has to travel with the screen: it is the only
@@ -43,6 +44,12 @@ fn agy() -> AgyAdapter {
     AgyAdapter::new(TranscriptRoot::new(common::agy_root()).expect("root"))
 }
 
+/// The root is only a containment check here — a composer read touches no transcript — so the
+/// fixture directory stands in for one.
+fn omp() -> OmpAdapter {
+    OmpAdapter::new(TranscriptRoot::new(common::fixtures()).expect("root"))
+}
+
 const TYPED: &str = "push the branch when the tests go green";
 
 #[test]
@@ -50,6 +57,7 @@ fn what_the_operator_has_typed_at_the_desk_is_read_off_every_harness_probed() {
     assert_eq!(read(&claude(), "claude-typed").as_deref(), Some(TYPED));
     assert_eq!(read(&codex(), "codex-typed").as_deref(), Some(TYPED));
     assert_eq!(read(&agy(), "agy-typed").as_deref(), Some(TYPED));
+    assert_eq!(read(&omp(), "omp-typed").as_deref(), Some(TYPED));
 }
 
 /// Claude paints `Try "refactor <filepath>"` into an empty composer and Codex paints `Ask Codex to
@@ -61,6 +69,8 @@ fn a_harnesss_own_placeholder_is_not_the_operators_line() {
     assert_eq!(read(&claude(), "claude-empty"), None);
     assert_eq!(read(&codex(), "codex-empty"), None);
     assert_eq!(read(&agy(), "agy-empty"), None);
+    // omp paints no placeholder at all, and the caret says the same thing about it.
+    assert_eq!(read(&omp(), "omp-empty"), None);
 }
 
 /// A line longer than the box wraps onto rows indented by two, and the whole of it is the
@@ -72,6 +82,7 @@ fn a_line_too_long_for_the_box_is_read_whole_and_not_just_its_first_row() {
         ("claude-wrapped", read(&claude(), "claude-wrapped")),
         ("codex-wrapped", read(&codex(), "codex-wrapped")),
         ("agy-wrapped", read(&agy(), "agy-wrapped")),
+        ("omp-wrapped", read(&omp(), "omp-wrapped")),
     ] {
         let text = text.unwrap_or_else(|| panic!("{name}: nothing read"));
         assert!(text.starts_with(TYPED), "{name}: {text:?}");
@@ -95,6 +106,7 @@ fn a_caret_sent_home_reads_as_empty_rather_than_as_a_guess() {
     assert_eq!(read(&claude(), "claude-caret-at-home"), None);
     assert_eq!(read(&codex(), "codex-caret-at-home"), None);
     assert_eq!(read(&agy(), "agy-caret-at-home"), None);
+    assert_eq!(read(&omp(), "omp-caret-at-home"), None);
 }
 
 /// The clearing keystroke is a per-harness measurement, and the three disagree: one `ctrl+u` takes

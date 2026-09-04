@@ -136,6 +136,15 @@ pub trait JournalAdapter: Send + Sync {
         None
     }
 
+    /// Reads the prompts waiting behind the turn that is running, for the harnesses that draw
+    /// them on the screen and record nothing about them.
+    ///
+    /// The default is a harness whose queue is in its transcript, or that has none — both of which
+    /// leave [`Facets::queued`] exactly as the fold found it.
+    fn queued(&self) -> Option<crate::facet::QueuedReader> {
+        None
+    }
+
     /// The `index`th attachment of one already-read record, decoded. The default is a harness
     /// whose transcripts have never been measured to carry one.
     fn attachment(&self, _record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -224,6 +233,12 @@ impl Registry {
     /// has been measured. A harness nobody has probed publishes no desk line at all.
     pub fn composer(&self, pane_agent: Option<&str>) -> Option<ComposerReader> {
         pane_agent.and_then(|agent| self.adapters.get(agent))?.composer()
+    }
+
+    /// How to read the queue of a pane running `pane_agent`, for the harnesses that keep it on the
+    /// screen only.
+    pub fn queued(&self, pane_agent: Option<&str>) -> Option<crate::facet::QueuedReader> {
+        self.adapters.get(pane_agent?)?.queued()
     }
 
     /// The conversation a `sub` handle names, proved to be one the pane asking may see.

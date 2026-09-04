@@ -1,9 +1,9 @@
-use kampr_core::prompt::{is_chrome, numbered_option as numbered, unbox};
+use kampr_core::prompt::{is_chrome, marked_option as marked, numbered_option as numbered, unbox};
 use kampr_core::wire::PendingOption;
 use kampr_herdr::Herdr;
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct Pending {
     pub question: String,
     pub options: Vec<PendingOption>,
@@ -11,6 +11,26 @@ pub struct Pending {
     pub header: Option<String>,
     /// Whether the dialog takes several answers at once, read off the checkboxes it draws.
     pub multi: bool,
+    /// Which option the harness's own cursor is on, for a dialog that has one instead of numbers.
+    ///
+    /// **The client is never told this and never needs to be.** It presses the key it was offered;
+    /// the node turns that into the moves that get from wherever the cursor is *now* to the option
+    /// asked for, and "now" is a fresh read at the moment of the press rather than whatever the
+    /// last frame said.
+    pub cursor: Option<usize>,
+}
+
+/// **The cursor is deliberately not part of this.** `send_pending` sends a frame when the reading
+/// has moved, and the frame it sends carries no cursor — so comparing on one means an operator
+/// moving `❯` at the desk emits a frame byte-identical to the last, once per press, to every
+/// watching socket.
+impl PartialEq for Pending {
+    fn eq(&self, other: &Self) -> bool {
+        self.question == other.question
+            && self.options == other.options
+            && self.header == other.header
+            && self.multi == other.multi
+    }
 }
 
 /// Reads the question off the screen.
@@ -20,7 +40,7 @@ pub struct Pending {
 /// `tool_use` and its result (probe #42). So the wording has to come from the pane, and `source`
 /// on the wire says so. Codex does publish an unmatched call while it waits (probe #43), but the
 /// wire shape is identical either way, so the screen path is the one implementation.
-pub async fn read(herdr: &Herdr, pane_id: &str) -> Option<Pending> {
+pub async fn read(herdr: &Herdr, pane_id: &str, agent: Option<&str>) -> Option<Pending> {
     let reply: Value = herdr
         .call(
             "pane.read",
@@ -30,7 +50,161 @@ pub async fn read(herdr: &Herdr, pane_id: &str) -> Option<Pending> {
         )
         .await
         .ok()?;
-    detect(reply["read"]["text"].as_str()?)
+    detect_for(agent, reply["read"]["text"].as_str()?)
+}
+
+/// The detector this harness's screen is read with.
+///
+/// **One or the other, never one and then the other.** omp draws no numbered dialog at all, and it
+/// *does* draw a numbered list — the steering queue, `1.` and `2.` under a `Steering · 2` header
+/// ([#489](#)) — so a numbered read of an omp screen finds a question nobody asked, with the
+/// prompts the operator is waiting on offered as the answers to it.
+pub fn detect_for(agent: Option<&str>, screen: &str) -> Option<Pending> {
+    match cursor_dialogs(agent) {
+        true => detect_marked(screen),
+        false => detect(screen),
+    }
+}
+
+/// The harnesses measured to ask with a cursor rather than with numbers.
+///
+/// **Per-harness on purpose, and `omp` alone.** A numbered run proves itself — a dialog that draws
+/// `1.` `2.` `3.` is a menu and nothing else looks like one — but a cursor run is anchored on a
+/// single glyph and a column, and turning that loose on a harness nobody has looked at is inviting
+/// a false question onto a pane. omp draws no numbers at all: a digit sent into either of its
+/// dialogs leaves them standing, measured against both ([#487](#)).
+///
+/// **`pi` is not on this list**, though the same adapter reads its transcripts. What [#490](#)
+/// measured about it is the session *format*; its TUI is a different program — herdr's own `pi`
+/// manifest matches `Working...` where omp paints `⎋ Working…` — and nobody has put a keystroke
+/// into one of its dialogs. A `pi` pane keeps the numbered reading every unmeasured harness gets.
+pub fn cursor_dialogs(agent: Option<&str>) -> bool {
+    matches!(agent, Some(kampr_journal::omp::AGENT))
+}
+
+/// A dialog whose options are marked with a cursor.
+///
+/// **Bounded in both directions, and refused outright at column zero.** A blank row and a row
+/// indented past the label column are both walked over rather than stopping the run — that is what
+/// lets an option's description sit under it — so the only things that end one are a rule, a row
+/// at or left of the label column, and this bound. An anchor whose label starts in column zero
+/// would make "indented past the label" true of every line on the screen, and the walk would
+/// gather arbitrary prose as options; omp indents its own by four, inside a box.
+///
+/// The run is anchored on the row carrying the cursor — taken from the bottom, like the numbered
+/// one, because a pane that is waiting has the thing it is waiting on last — and gathered from the
+/// rows whose label starts in the **same column**. That alignment is the whole of what separates a
+/// sibling option from the description omp indents under one, and it is why nothing here needs to
+/// know which of the two dialogs it is reading.
+pub fn detect_marked(screen: &str) -> Option<Pending> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let inner: Vec<&str> = lines.iter().map(|l| inside(l)).collect();
+    let cleaned: Vec<String> = lines.iter().map(|l| unbox(l)).collect();
+    let focus = (0..inner.len())
+        .rev()
+        .find(|at| marked(inner[*at]).is_some_and(|m| m.focused))?;
+    let anchor = marked(inner[focus]).filter(|m| m.at > 0)?;
+    let aligned = |at: usize| marked(inner[at]).filter(|m| m.at == anchor.at).map(|m| (at, m));
+    let mut rows = vec![(focus, anchor.clone())];
+    for step in [true, false] {
+        let mut at = focus;
+        for _ in 0..MAX_LOOKBACK {
+            at = match step {
+                true => match at.checked_sub(1) {
+                    Some(next) => next,
+                    None => break,
+                },
+                false => at + 1,
+            };
+            if at >= inner.len() || is_rule(lines[at]) {
+                break;
+            }
+            match aligned(at) {
+                Some(found) => rows.push(found),
+                // A description sits further in and a blank row separates the run from the
+                // dialog's own footer; anything at or left of the label column ends it.
+                None if inner[at].trim().is_empty() || indented_past(inner[at], anchor.at) => continue,
+                None => break,
+            }
+        }
+    }
+    rows.sort_by_key(|(at, _)| *at);
+    if rows.len() < 2 {
+        return None;
+    }
+    // **The box the dialog is drawn in, not the rule inside it.** omp puts its question in the
+    // head of the box and a rule between that and the options, so a floor at the nearest rule
+    // finds nothing at all — and one that simply looks further up joins the harness's own chrome
+    // onto the front of the question, which is what the first attempt published.
+    let opened = box_top(&lines, rows[0].0);
+    let question = question_above(
+        &cleaned,
+        rows[0].0,
+        opened.map_or_else(|| rule_floor(&lines, rows[0].0), |at| at + 1),
+    )?;
+    let cursor = rows.iter().position(|(_, m)| m.focused);
+    let at: Vec<usize> = rows.iter().map(|(at, _)| *at).collect();
+    // **The checkbox is what says the question takes several answers**, and it says so while
+    // nothing is ticked — which is the state every one of them opens in (#421). omp draws `☐`/`☑`
+    // where a question that takes one answer gets `○` ([#494](#)).
+    let multi = rows.iter().any(|(_, found)| found.ticked.is_some());
+    let options = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (row, found))| PendingOption {
+            key: (index + 1).to_string(),
+            label: found.label.clone(),
+            // `inner` rather than `lines`: the indentation test that separates a description
+            // from the screen below the dialog is done on the row's own text, and omp's rows
+            // start with the box border rather than with the spaces that test looks for.
+            detail: detail_under(&inner, &cleaned, *row, at.get(index + 1).copied()),
+            chosen: found.ticked.unwrap_or(false),
+        })
+        .collect();
+    Some(Pending {
+        question,
+        header: box_title(&lines, rows[0].0),
+        multi,
+        options,
+        cursor,
+    })
+}
+
+/// A line with its box borders taken off and **its indentation kept**, which `unbox` does not do:
+/// alignment is the only thing that separates one of these options from the description under it.
+fn inside(line: &str) -> &str {
+    let line = line.trim_end();
+    let line = line.strip_suffix('│').unwrap_or(line);
+    line.strip_prefix('│').unwrap_or(line)
+}
+
+fn indented_past(line: &str, at: usize) -> bool {
+    line.chars().take_while(|c| *c == ' ').count() > at
+}
+
+/// Where the dialog's own box opens.
+fn box_top(lines: &[&str], options_at: usize) -> Option<usize> {
+    let floor = options_at.saturating_sub(MAX_LOOKBACK);
+    (floor..options_at)
+        .rev()
+        .find(|at| lines[*at].starts_with(['╭', '┌']))
+}
+
+/// How far above the options the question may be, for a dialog that is not drawn in a box: never
+/// past the rule that opens it (probe #36's link label sat four lines below the real question).
+fn rule_floor(lines: &[&str], options_at: usize) -> usize {
+    lines[..options_at]
+        .iter()
+        .rposition(|l| is_rule(l))
+        .map_or(options_at.saturating_sub(MAX_LOOKBACK), |at| at + 1)
+}
+
+/// The title omp draws into the top border of the box — `Allow tool: bash`, `Ask`.
+fn box_title(lines: &[&str], options_at: usize) -> Option<String> {
+    let at = box_top(lines, options_at)?;
+    let title = lines[at].trim_start_matches(['╭', '┌', '─', ' ']);
+    let title = title.trim_end_matches(['╮', '┐', '─', ' ']).trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 pub fn detect(screen: &str) -> Option<Pending> {
@@ -63,7 +237,7 @@ pub fn detect(screen: &str) -> Option<Pending> {
         if chosen.len() < 2 {
             continue;
         }
-        if let Some(question) = question_above(&lines, &cleaned, chosen[0].0) {
+        if let Some(question) = question_above(&cleaned, chosen[0].0, rule_floor(&lines, chosen[0].0)) {
             let rows: Vec<usize> = chosen.iter().map(|(at, _)| *at).collect();
             let mut options: Vec<PendingOption> = chosen.into_iter().map(|(_, o)| o).collect();
             // **Noticed while stripping, not afterwards.** A checkbox is what says the question
@@ -86,6 +260,7 @@ pub fn detect(screen: &str) -> Option<Pending> {
                 header: header_above(&cleaned, rows[0]),
                 multi,
                 options,
+                cursor: None,
             });
         }
     }
@@ -200,14 +375,14 @@ fn header_above(cleaned: &[String], options_at: usize) -> Option<String> {
 /// below the real question. So: never look above the rule or border that opens the dialog, prefer
 /// a line that actually asks something, and cut it at the question mark rather than at the width
 /// the harness happened to wrap at.
-fn question_above(lines: &[&str], cleaned: &[String], options_at: usize) -> Option<String> {
-    let floor = lines[..options_at]
-        .iter()
-        .rposition(|l| is_rule(l))
-        .map_or(options_at.saturating_sub(MAX_LOOKBACK), |at| at + 1);
+fn question_above(cleaned: &[String], options_at: usize, floor: usize) -> Option<String> {
     let prose = |at: usize| {
         let line = &cleaned[at];
-        !line.is_empty() && line.chars().count() > 2 && numbered(line).is_none() && !is_reference(line)
+        !line.is_empty()
+            && line.chars().count() > 2
+            && numbered(line).is_none()
+            && !is_reference(line)
+            && !is_control_row(line)
     };
     let Some(asked) = (floor..options_at)
         .rev()
@@ -256,6 +431,18 @@ fn unmark(line: &str) -> String {
 fn is_rule(line: &str) -> bool {
     let trimmed = line.trim();
     !trimmed.is_empty() && trimmed.chars().all(is_chrome)
+}
+
+/// The row of controls a dialog draws above a question that takes several answers — Claude's
+/// `←  ☐ Test suites  ✔ Submit  →` and omp's `suites    branch    Submit` ([#494](#)).
+///
+/// It is chrome, and it is prose to every test that looks for prose: without this the wrap-joining
+/// that reassembles a question split across rows walks straight into it and publishes
+/// `"suites    branch    Submit Which test suites should I run?"` as the question.
+fn is_control_row(line: &str) -> bool {
+    line.split("  ")
+        .map(str::trim)
+        .any(|chip| chip.trim_start_matches(['\u{2714}', '\u{2610}', ' ']).trim() == SUBMIT_LABEL)
 }
 
 /// A URL or a bare path is something the dialog is *about*, never what it is asking.
@@ -735,5 +922,159 @@ mod tests {
         let screen =
             "old output\n\n│ Run `rm -rf /tmp/x`? │\n│                     │\n│ 1. Yes │\n│ 2. No  │\n";
         assert_eq!(detect(screen).unwrap().question, "Run `rm -rf /tmp/x`?");
+    }
+
+    /// **omp draws no numbers**, and a digit sent into either of its dialogs leaves it standing —
+    /// measured against both, with the arrow keys moving the `❯` and Enter committing it
+    /// ([#487](#)). So the options are found by the cursor and the column their labels start in,
+    /// and the key on the wire is one this node synthesised: the client presses what it was
+    /// offered, and the node turns that into the moves that reach it.
+    #[test]
+    fn an_approval_omp_draws_no_numbers_on_is_still_a_question_with_answers() {
+        let p = detect_marked(&fixture("omp-approval")).expect("a dialog");
+        assert_eq!(p.header.as_deref(), Some("Allow tool: bash"));
+        assert_eq!(p.question, "Command: sleep 20; echo slow-done");
+        assert_eq!(
+            p.options.iter().map(|o| (&*o.key, &*o.label)).collect::<Vec<_>>(),
+            [("1", "Approve"), ("2", "Deny")]
+        );
+        assert_eq!(p.cursor, Some(0));
+        assert!(!p.multi);
+        // The numbered detector is what runs first for every harness, and it finds nothing here —
+        // which is why the marked one exists rather than replacing it.
+        assert_eq!(detect(&fixture("omp-approval")), None);
+    }
+
+    /// The same dialog after one press of `↓`. Nothing about the options changed; the cursor did,
+    /// and it is the cursor that decides how far an answer has to travel.
+    #[test]
+    fn the_cursor_is_read_wherever_the_operator_left_it() {
+        let p = detect_marked(&fixture("omp-approval-moved")).expect("a dialog");
+        assert_eq!(p.cursor, Some(1));
+        assert_eq!(p.options.len(), 2);
+    }
+
+    /// omp's `ask` puts the question in the head of its box with a rule under it, where Claude
+    /// puts it *below* the rule that opens the dialog — so the search has to be allowed past one,
+    /// and the descriptions indented under each option must not be read as options themselves.
+    #[test]
+    fn the_ask_tools_question_sits_above_the_rule_and_its_options_below_it() {
+        let p = detect_marked(&fixture("omp-ask")).expect("a dialog");
+        assert_eq!(p.question, "Which branch should this land on?");
+        assert_eq!(p.header.as_deref(), Some("Ask"));
+        assert_eq!(
+            p.options
+                .iter()
+                .map(|o| (&*o.label, o.detail.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("main", Some("Straight onto the default branch.")),
+                ("a topic branch", Some("Open a PR instead.")),
+                ("Other (type your own)", None),
+            ]
+        );
+        assert_eq!(p.cursor, Some(0));
+    }
+
+    /// The detector is offered only to the harnesses whose dialogs have been measured. A cursor
+    /// run is anchored on one glyph and a column, and turning it loose on a harness nobody has
+    /// looked at is how a phone gets offered a question that was never asked.
+    #[test]
+    fn a_cursor_dialog_is_read_only_for_the_harnesses_it_was_measured_on() {
+        assert!(cursor_dialogs(Some("omp")));
+        // **`pi` is not on the list**, though the same adapter reads its transcripts: [#490](#)
+        // measured the session format they share, and nobody has put a keystroke into one of its
+        // dialogs. It keeps the numbered reading every unmeasured harness gets.
+        assert!(!cursor_dialogs(Some("pi")));
+        assert!(!cursor_dialogs(Some("claude")));
+        assert!(!cursor_dialogs(None));
+    }
+
+    /// Claude's own dialogs must read exactly as they did: the marked detector is a fallback for
+    /// the harnesses that need it, never a second opinion about a screen the first one read.
+    #[test]
+    fn a_numbered_dialog_is_still_read_by_the_numbers() {
+        let p = detect(&fixture("claude-single")).expect("a dialog");
+        assert_eq!(p.cursor, None);
+        assert!(p.options.iter().all(|o| o.key.parse::<u8>().is_ok()));
+    }
+
+    /// **The steering queue is a numbered list on a pane that is often blocked**, and it is not a
+    /// question: `Steering · 2` over `1.` and `2.` is exactly the shape the numbered detector was
+    /// built to find. Reading an omp screen for numbers would offer the operator their own waiting
+    /// prompts as answers to a question nobody asked — which is why the two detectors are chosen
+    /// between rather than tried in turn.
+    #[test]
+    fn the_prompts_an_operator_has_queued_are_not_a_question_they_are_being_asked() {
+        let screen = fixture("omp-queue");
+        assert!(
+            detect(&screen).is_some(),
+            "the numbered detector does find it, which is the hazard"
+        );
+        // Through the routing rather than past it: this is the whole of what stops the hazard.
+        assert_eq!(detect_for(Some("omp"), &screen), None);
+        assert!(
+            detect_for(Some("claude"), &screen).is_some(),
+            "and every other harness is read for numbers exactly as before"
+        );
+    }
+
+    /// An option list is found by a cursor glyph and a column, which is a looser thing to find than
+    /// a numbered run — so the walk is bounded, and an anchor with nothing in front of it is
+    /// refused rather than allowed to gather the screen.
+    #[test]
+    fn a_cursor_in_column_zero_is_not_a_dialog() {
+        let screen = "\u{276f}Approve\nDeny\nSomething the agent printed earlier\n";
+        assert_eq!(detect_marked(screen), None);
+    }
+
+    /// **A checkbox means a press is a tick, not an answer** (#421), and omp says so the same way
+    /// Claude does — with the glyph in front of the label, while nothing is ticked yet
+    /// ([#494](#)). It also draws a control row above the question, `suites  branch  Submit`,
+    /// which is the harness talking about the dialog rather than about any option in it.
+    #[test]
+    fn a_question_omp_takes_several_answers_to_says_so_before_anything_is_ticked() {
+        // **The dialog as it opens**, which is the state that matters: nothing is ticked, so the
+        // *presence* of the checkbox is the only thing saying what kind of question this is.
+        let p = detect_marked(&fixture("omp-ask-multi")).expect("a dialog");
+        assert!(
+            p.multi,
+            "nothing is ticked and it is still a multiple-answer question: {p:?}"
+        );
+        assert_eq!(p.question, "Which test suites should I run?");
+        assert_eq!(
+            p.options
+                .iter()
+                .map(|o| (&*o.label, o.chosen))
+                .collect::<Vec<_>>(),
+            [
+                ("unit", false),
+                ("integration", false),
+                ("browser", false),
+                ("Other (type your own)", false),
+            ],
+            "{p:?}"
+        );
+        assert_eq!(p.cursor, Some(0));
+
+        // And the same dialog after one `Space`, which is what a press on it does.
+        let ticked = detect_marked(&fixture("omp-ask-multi-ticked")).expect("a dialog");
+        assert!(ticked.multi);
+        assert_eq!(
+            ticked.options.iter().map(|o| o.chosen).collect::<Vec<_>>(),
+            [true, false, false, false],
+            "{ticked:?}"
+        );
+    }
+
+    /// The second question of the same call, drawn in place of the first once it was answered —
+    /// the shape [#492](#) is about. It takes one answer where the first took several, and the
+    /// strip has to say so or the press it offers means the wrong thing.
+    #[test]
+    fn the_next_question_of_one_call_is_read_as_the_question_it_is() {
+        let p = detect_marked(&fixture("omp-ask-second")).expect("a dialog");
+        assert!(!p.multi, "a radio, not a checkbox: {p:?}");
+        assert_eq!(p.question, "Which branch should this land on?");
+        assert!(p.options.iter().all(|o| !o.chosen), "{p:?}");
     }
 }

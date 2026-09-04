@@ -1,0 +1,33 @@
+
+╭─── omp v18.1.10 ─────────────────────────────────────────────────────────────────────────╮
+│                          │ Tips                                                          │
+│      Welcome back!       │ # for prompt actions                                          │
+│                          │ / for commands                                                │
+│       ████████████       │ ! to run bash                                                 │
+│          ██  ██          │ $ to run python                                               │
+│          ██  ██          │ ───────────────────────────────────────────────────────────── │
+│          ▒▒  ██          │ LSP Servers                                                   │
+│              ██          │ No LSP servers                                                │
+│                          │                                                               │
+│    Claude Sonnet 4.5     │                                                               │
+│        anthropic         │                                                               │
+│                          │ ───────────────────────────────────────────────────────────── │
+│                          │ Recent sessions                                               │
+│                          │ No recent sessions                                            │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+│                          │                                                               │
+╰──────────────────────────┴───────────────────────────────────────────────────────────────╯
+ Tip: Press shift+tab to cycle through reasoning effort levels
+
+
+ LONGANSWER please explain it
+
+
+ A terminal emulator sits between a program writing bytes and a person reading glyphs, and
+ almost everything hard about one lives in that gap. The program writes a stream with no idea
+
+  ⎋ Working…
+ ⠇ 7s  > ◒ Sonnet 4.5 > 🗑 kampr-omp-lY3g2f ▶─2%─────────────────────────────────────┃──────1M─
+╰─

@@ -1381,6 +1381,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         cwd: pane.cwd.clone(),
         label: pane.label.clone(),
         agent: pane.agent.clone(),
+        terminal_title: pane.title_text().map(str::to_string),
         agent_harness: inner.agent_harness(&pane.pane_id),
         agent_status: AgentStatus::from(pane.agent_status),
         cols,
@@ -1410,6 +1411,11 @@ fn fingerprint(snapshot: &Snapshot) -> u64 {
         p.label.hash(&mut h);
         p.agent.hash(&mut h);
         (p.agent_status as u8).hash(&mut h);
+        // The state the harness wrote into its own title, for the harnesses that write one. It is
+        // hashed as the *state* rather than as the title, because omp repaints a spinner frame
+        // into its title every 80 ms and a herd rebuilt at 12 Hz is a herd pushed to every phone
+        // at 12 Hz ([#486](#)) — while a pane that starts working must still wake one.
+        kampr_journal::title_status(p.agent.as_deref(), p.title_text()).hash(&mut h);
         if let Some(s) = p.scroll {
             (s.max_offset_from_bottom, s.viewport_rows).hash(&mut h);
         }
@@ -1829,7 +1835,7 @@ mod tests {
     fn a_line_short_enough_to_render_is_left_exactly_as_it_is() {
         assert_eq!(as_a_name("cargo test -p kampr-core"), "cargo test -p kampr-core");
     }
-    use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, subscriptions};
+    use super::{STATUS_EVENT, TOPOLOGY_EVENTS, agent_panes, fingerprint, subscriptions};
     use kampr_herdr::Snapshot;
     use unicode_width::UnicodeWidthChar;
 
@@ -1873,6 +1879,48 @@ mod tests {
             .filter_map(|s| s.pane_id.as_deref())
             .collect();
         assert_eq!(named, ["w1:p1", "w3:p2"]);
+    }
+
+    fn titled(agent: &str, title: &str) -> Snapshot {
+        let json = serde_json::json!({
+            "version": "0.8.2",
+            "protocol": 20,
+            "focused_pane_id": null,
+            "panes": [{
+                "pane_id": "w1:p1",
+                "workspace_id": "w1",
+                "tab_id": "w1:t1",
+                "cwd": null,
+                "label": null,
+                "agent": agent,
+                "agent_status": "idle",
+                "agent_session": null,
+                "scroll": null,
+                "terminal_title": title,
+            }],
+        });
+        serde_json::from_value(json).expect("snapshot fixture")
+    }
+
+    /// A harness herdr has no rules for publishes its state in its own terminal title, and the
+    /// herd is only rebuilt when this changes — so the state has to be in it. **The frame must
+    /// not be**: omp repaints its title every 80 ms while it works, and 29 revisions in 6 s of
+    /// polling is what that measured as through herdr.
+    #[test]
+    fn a_spinner_frame_is_not_a_change_and_starting_to_work_is() {
+        let idle = fingerprint(&titled("omp", "π > project"));
+        assert_eq!(
+            fingerprint(&titled("omp", "π ⠹ project")),
+            fingerprint(&titled("omp", "π ⠼ project")),
+            "two frames of the same spinner are the same pane"
+        );
+        assert_ne!(idle, fingerprint(&titled("omp", "π ⠹ project")));
+        assert_ne!(idle, fingerprint(&titled("omp", "π ! project")));
+        // A harness nobody has measured a title for is untouched by any of it.
+        assert_eq!(
+            fingerprint(&titled("claude", "π > project")),
+            fingerprint(&titled("claude", "π ⠹ project"))
+        );
     }
 
     #[test]

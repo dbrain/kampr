@@ -301,7 +301,7 @@ fn status_for(kind: Kind) -> AgentStatus {
 /// guess about what the agent did.
 async fn detail_for(kind: Kind, pane: &PaneEntry, sessions: &Sessions) -> Option<String> {
     match kind {
-        Kind::Blocked => question_for(sessions, &pane.id).await,
+        Kind::Blocked => question_for(sessions, &pane.id, pane.agent.as_deref()).await,
         Kind::Done => pane.cwd.as_deref().map(|cwd| home_relative(cwd, home())),
     }
 }
@@ -325,10 +325,12 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 
 /// The question, read the same way the `pending` message reads it — off the screen, because
 /// Claude publishes nothing about a pending request until after it is answered (probe #42).
-async fn question_for(sessions: &Sessions, global: &str) -> Option<String> {
+async fn question_for(sessions: &Sessions, global: &str, agent: Option<&str>) -> Option<String> {
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
-    pending::read(&session.herdr, &local).await.map(|p| p.question)
+    pending::read(&session.herdr, &local, agent)
+        .await
+        .map(|p| p.question)
 }
 
 #[cfg(test)]

@@ -95,6 +95,9 @@ pub struct PaneInfo {
     /// `None` on a shell pane. This is the agent-vs-shell discriminator, and it also decides
     /// whether scrollback may be read at all.
     pub agent: Option<String>,
+    /// What the harness wrote into the terminal title, for the adapters that have measured what
+    /// one means. A harness nobody has measured leaves this unread.
+    pub terminal_title: Option<String>,
     /// The harness process this pane is running. **This, not `cwd`, is what identifies a
     /// conversation**: every run in a directory writes a new transcript, so the newest of them
     /// belongs to whoever ran last rather than to this pane.

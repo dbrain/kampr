@@ -54,6 +54,34 @@ in W0 before it belongs in code.
 | `messagingSocketPath` speaks newline-delimited JSON one way, needs no auth on Linux, and `notify_idle` is a real one-shot subscription — but it **cannot report `waiting`**, so it is an accelerator and not the signal | connected to a throwaway session's socket and subscribed, then drove it to a dialog and back ([#346](./03-probe-log.md)) | **measured** |
 | Whether Codex and agy have equivalents of any of this | — | **guess, W0** |
 
+### omp (oh-my-pi) 18.1.10
+
+Driven end to end in a herdr pane against a local endpoint answering the Anthropic Messages API,
+so the harness took its real code paths without a provider. Rows
+[#481](./03-probe-log.md)–[#496](./03-probe-log.md).
+
+| Fact | How | Confidence |
+|---|---|---|
+| A session is `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<id>.jsonl`, and the process **holds it open for the session's life** | `/proc/<pid>/fd` while a pane ran one | **measured** |
+| Subagents are `<session>/<agent-name>.jsonl` in a directory beside the session file, with `<agent-name>.md` for the yield and a `session_init` entry carrying the assignment | ran a named spawn and an unnamed one | **measured** |
+| An unnamed spawn's generated name is published **only in the tool result** — `` Spawned agent `BizarreWhale` `` — never on the call | `jq` over the call and its result | **measured** |
+| A spawn is **detached by default**: the call is acknowledged at once and the yield returns later as a `custom_message` / `async-result` naming the *job* | read the parent transcript in order | **measured** |
+| The session file does not exist until the first assistant message; `terminal-sessions/<tty>` carries cwd, path and `fresh` from the moment the session opens | watched the directory across a pane opening | **measured** |
+| Nothing omp writes to disk says what it is doing — `tool_execution_start` is written **before** the approval dialog, not after it | held a pane at an `Allow tool: bash` prompt and read the tail | **measured** |
+| Its **terminal title** is the state (`>` idle, spinner working, `!` blocked), and herdr carries no `omp` manifest at all | `agent explain --json` and `pane.list` sampled across a working turn and a dialog | **measured** |
+| An `edit` result carries `details` — `op`, `path`, `oldText`, `newText` and a **line-numbered** `diff` — and a gap in those numbers is where one hunk ends and the next begins | one edit changing two lines four apart in a ten-line file ([#491](./03-probe-log.md)) | **measured** |
+| A turn's duration is a span between two of omp's own stamps — the prompt's `timestamp` to the ending message's `completedAt`; its per-message `duration`/`ttft` are the model call alone and a *different* quantity | `jq` over the probe transcripts ([#488](./03-probe-log.md)) | **measured** |
+| A queued prompt is on the screen (`Steering · 1`) and **nowhere in the file** until it is delivered, when it lands as an ordinary user message | typed one into a working pane and read the transcript before and after ([#489](./03-probe-log.md)) | **measured** |
+| Neither of omp's blocking dialogs carries a number and no digit answers one: `↓`/`↑` move the `❯` and Enter commits it | each keystroke sent alone into a live dialog ([#487](./03-probe-log.md)) | **measured** |
+| Its assistant messages and the operator's prompts are both plain text one column in, with no glyph on either — `⎋ Working…` is the only thing that says a turn is in flight | eight frames captured while a long answer streamed ([#496](./03-probe-log.md)) | **measured** |
+| The composer opens with two characters, `╰─`, wraps at three, and one `ctrl+u` clears it wrapped or not | the caret read off a real `observe` stream at four states ([#496](./03-probe-log.md)) | **measured** |
+| `pi`, the harness omp forked, shares the grammar and the path and **none** of the handles above | `@mariozechner/pi-coding-agent` 0.73.1 read against oh-my-pi's tree ([#490](./03-probe-log.md)) | **measured** |
+| Its `ask` takes several answers to one question and several questions to one call: `☐`/`☑` instead of `○`, `Space` toggles, `Enter` is *next question*, and a control row (`suites  branch  Submit`) sits above the question | each keystroke sent alone into a live dialog ([#494](./03-probe-log.md)) | **measured** |
+| A pasted image is **inline base64** in the record: omp re-encodes it small enough that its own 1 024-character blob threshold is never reached | a 7.8 KB PNG passed as `@shot.png` and the record read back ([#493](./03-probe-log.md)) | **measured** |
+| What `op` reads on a create, a delete or a move, and whether those carry a `diff` at all | — | **guess** |
+| What a blobbed image record looks like — `session.md` documents `blob:sha256:<hash>` and two attempts with incompressible PNGs never reached a request | — | **guess**, and why a blobbed record is answered with no attachment |
+| **A session is a tree**: a rewind keeps the abandoned branch in the file and gives the next prompt the *pre-rewind* entry as its parent, so file order and the harness's own replay disagree. The chain runs through bookkeeping entries as well as messages | two prompts, `/tree` searched and selected, a third prompt, and the file walked both ways ([#495](./03-probe-log.md)) | **measured**, and fixed: the parser keeps every parent, recomputes the path on a record whose parent is not the leaf, and retires what falls off it |
+
 ---
 
 ## The mechanism three of these share

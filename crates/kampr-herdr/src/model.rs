@@ -52,12 +52,33 @@ pub struct Pane {
     pub tab_id: String,
     pub cwd: Option<String>,
     pub label: Option<String>,
+    /// The title the program in the pane last wrote with OSC 0/2, verbatim, and herdr's own
+    /// copy of it with the escapes taken out.
+    ///
+    /// **Not the region herdr matches its detection rules against.** That one records only titles
+    /// written after the agent label attached and is never backfilled (#360); this is live state,
+    /// and for a harness herdr carries no manifest for it is the only thing a pane publishes about
+    /// what its agent is doing. Both are on `session.snapshot`, unlike [`Self::title`] (#294).
+    #[serde(default)]
+    pub terminal_title: Option<String>,
+    #[serde(default)]
+    pub terminal_title_stripped: Option<String>,
     /// Absent on panes with no detected harness — this is the agent-vs-shell discriminator.
     pub agent: Option<String>,
     #[serde(default)]
     pub agent_status: AgentStatus,
     pub agent_session: Option<AgentSession>,
     pub scroll: Option<Scroll>,
+}
+
+impl Pane {
+    /// The title as text: herdr's stripped copy where it sent one, because a harness that styles
+    /// its own title would otherwise be read through the escape rather than through the word.
+    pub fn title_text(&self) -> Option<&str> {
+        self.terminal_title_stripped
+            .as_deref()
+            .or(self.terminal_title.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
