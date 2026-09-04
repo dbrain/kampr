@@ -82,10 +82,21 @@ things are new.
 
    **The absence of a loop is structural rather than lucky.** A claim is edge-triggered by the
    client's own view — it opens, it closes, its window changes size — and never by anything the node
-   reports about the pane. And the size asked for is computed at a **fixed reference cell**, not at
-   the current zoom, so it is a pure function of the window's pixel size. A pane getting wider
-   changes the earlier viewer's *zoom* and cannot change the number it would ask for. There is
-   nothing for two viewers to alternate over.
+   reports about the pane. And the size asked for is computed at a **fixed reference cell**, so it
+   is a pure function of the window's pixel size. A pane getting wider changes the earlier viewer's
+   *zoom* and cannot change the number it would ask for. There is nothing for two viewers to
+   alternate over.
+
+   **Which cell is fixed, though, is the operator's answer and not always the base one.** The loop
+   this guards against is the fit ladder's: while the zoom is *derived* it is a function of the
+   pane's width, so a grid measured in those cells would move the pane, move the zoom, and ask
+   again — there the reference has to be the base cell. A zoom the operator picked is not a function
+   of anything; it is a constant, and measuring the window in its cells is exactly as pure. Using
+   the base cell for both is what made the promise false: a pane held at 131x32 and drawn at 1.2x
+   is a pane the window shows 26 rows of, and the operator's report was *"it fits the pane but it
+   leaves a few blank lines at the bottom and i need to scroll up to see the claude logo top"*. So
+   the reference cell is the base cell until a zoom is chosen and the chosen cell afterwards, which
+   is the only reading under which "match this view" is true.
 
    A displaced lease is also *scoped*: it names its own hold by token, so the displaced viewer's
    release lands on nothing rather than taking the newer viewer's hold down with it.
@@ -111,7 +122,10 @@ things are new.
    cannot do that, and refusing would strand it at the viewer's size instead.
 
 4. **The default is decided by the measured viewport.** `Breakpoint.Desktop` — at least 900 dp wide
-   and 600 dp tall — **and** a grid of at least 80x24 at the base cell size. Both, because the first
+   and 600 dp tall — **and** a grid of at least 80x24 in the reference cell above, which is to say
+   in the cells the operator is actually reading in. A desk zoomed to 1.6x shows 81x20 and therefore
+   asks for nothing: the alternative is holding a pane at a grid nobody can see, which is the defect
+   the paragraph above describes wearing a floor. Both conditions, because the first
    is the "this is a desk" signal and the second is what makes it honest: below the floor the node
    would refuse the claim anyway, so a view that small must never ask. The terminal surface measures
    its own box rather than the window's, so a split half, a mosaic cell and a phone in landscape all

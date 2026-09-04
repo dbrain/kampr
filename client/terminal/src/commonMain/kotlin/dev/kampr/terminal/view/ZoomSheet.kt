@@ -51,6 +51,10 @@ import kotlin.math.abs
 // A key step is a wheel click, so the two agree; an arrow is the fine one, which is the whole
 // reason a keyboard is worth binding here — a preset is a jump and a click is a click, and neither
 // lands on a particular size.
+// The cell as the type scale sizes it — `BASE_CELL_SP` unscaled — which is what every zoom here is
+// a multiple of.
+private const val BASE_ZOOM = 1f
+
 private const val ZOOM_PER_KEY = 1.1f
 private const val ZOOM_PER_ARROW = 1.02f
 
@@ -128,8 +132,9 @@ fun ZoomSheet(
                         Key.DirectionUp, Key.DirectionRight -> zoom * ZOOM_PER_ARROW
                         Key.DirectionDown, Key.DirectionLeft -> zoom / ZOOM_PER_ARROW
                         Key.One -> presets.fitWidth
-                        Key.Two -> presets.readable
-                        Key.Three -> presets.closeUp
+                        Key.Two -> BASE_ZOOM
+                        Key.Three -> presets.readable
+                        Key.Four -> presets.closeUp
                         else -> return@onPreviewKeyEvent false
                     }
                     onZoom(next)
@@ -208,8 +213,15 @@ fun ZoomSheet(
                         // are the sizes worth landing on exactly, and this is everything between them.
                         ZoomSlider(presets, zoom, onZoom)
 
+                        // Four rungs, and `Actual` is the one the ladder was missing. It is where
+                        // a pane now opens wherever the window has room for it (`defaultZoom`'s
+                        // floor), so it is the size an operator is reading at before they touch
+                        // anything — and every other control here multiplies, which left no way
+                        // back to it. The operator's words: *"the config / zoom options really hate
+                        // 1.0x … maybe we push towards 1.0x being at least default"*.
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                             Preset("Fit width", presets.fitWidth, zoom, onZoom, Modifier.weight(1f))
+                            Preset("Actual", BASE_ZOOM, zoom, onZoom, Modifier.weight(1f))
                             Preset("Readable", presets.readable, zoom, onZoom, Modifier.weight(1f))
                             Preset("Close up", presets.closeUp, zoom, onZoom, Modifier.weight(1f))
                         }

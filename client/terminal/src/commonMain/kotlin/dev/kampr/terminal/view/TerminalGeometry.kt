@@ -6,13 +6,15 @@ import kotlin.math.min
 
 const val BASE_CELL_SP = 13f
 
-// The grid this view would show a pane at, in cells, measured at the **base** cell rather than at
-// the zoom it happens to be on.
+// The grid this view would show a pane at, in cells of whatever size the caller hands over.
 //
-// That is what stops a standing hold from chasing itself (ADR 0013). The fit ladder changes the
-// zoom to suit the pane's width, so a number taken at the current cell size is a function of the
-// pane — ask for it, the pane moves, the zoom moves, ask again. Taken at the base cell it is a
-// pure function of the window, and a pane getting wider cannot change it.
+// **The cell has to be a constant, and which constant is the caller's to know** (ADR 0013). The fit
+// ladder changes the zoom to suit the pane's width, so while the zoom is derived a number taken at
+// the current cell size is a function of the pane — ask for it, the pane moves, the zoom moves, ask
+// again; there the base cell is the only safe reference. A zoom the *operator* chose is a constant
+// like any other, and measuring in its cells is what makes the answer true of the screen as well as
+// pure: a grid counted in base cells and drawn at 1.2x is a fifth taller than the rectangle
+// drawing it.
 fun viewGrid(paint: PaintRect, cellWidth: Float, cellHeight: Float): Pair<Int, Int> = Pair(
     (paint.width / cellWidth).toInt().coerceAtLeast(1),
     (paint.contentHeight / cellHeight).toInt().coerceAtLeast(1),
@@ -103,9 +105,17 @@ fun zoomPresets(paintWidth: Float, cols: Int, baseCellWidth: Float): ZoomPresets
 //
 // `ceiling` is for the caller whose viewport is much bigger than the grid, which on a desktop is
 // the ordinary case: a fresh 40x12 pane in a 1624x1000 window fills to 3.6x, legible long before
-// it got there. It caps the magnification only — a grid too big for the viewport still shrinks —
-// and it belongs to the caller because it is a fact about the surface and not about the grid. A
-// phone has no room to spare: capping there letterboxes, which is what the max above prevents.
+// it got there. It caps the magnification only, and it belongs to the caller because it is a fact
+// about the surface and not about the grid. A phone has no room to spare: capping there
+// letterboxes, which is what the max above prevents.
+//
+// `floor` is the same argument the other way up, and it is the operator's: *"default is often 0.4x
+// and is tiny tiny … maybe we push towards 1.0x being at least default"*. Fitting a wide pane into
+// a window is only worth doing while the result can be read — a 300-column pane on a desk fits at
+// 0.7x, which is 13sp of text at nine — and the whole pane at a size nobody can read is not a view
+// of it. The caller decides where that stops mattering, because it is the *window* that decides:
+// below the width where 1.0x still leaves a usable pane on the screen, a floor would pin a phone
+// to a fifth of a pane instead, and Fit width is what it is for.
 fun defaultZoom(
     paint: PaintRect,
     cols: Int,
@@ -114,6 +124,7 @@ fun defaultZoom(
     baseCellWidth: Float,
     baseCellHeight: Float,
     ceiling: Float = Float.MAX_VALUE,
+    floor: Float = 0f,
 ): Float = min(
     ceiling,
     surfaceGeometry(
@@ -125,7 +136,7 @@ fun defaultZoom(
         cellWidth = baseCellWidth,
         cellHeight = baseCellHeight,
     ).zoom,
-)
+).coerceAtLeast(min(floor, ceiling))
 
 // Where the surface may rest while it is following: the band of scroll values that leave the
 // caret inside the content rectangle *and* the end of the record no higher than the bottom of it,

@@ -108,6 +108,26 @@ private fun grid(cols: Int): PaneState {
     return pane
 }
 
+// Claude Code's shape, measured against herdr 0.8.2 at 40 and at 60 rows: a logo on rows 2-4, a
+// blank middle, and a composer anchored to the **last** row of the grid with the caret three rows
+// above it. Nothing is blank tail — every row of a grid this program is given is one it has drawn
+// on — which is what makes a grid too tall for its rectangle visible as rows off the top rather
+// than as nothing at all.
+private fun anchoredToTheLastRow(cols: Int, rows: Int) = ServerMsg.GridReset(
+    pane = Phone.PANE,
+    cols = cols,
+    rows = rows,
+    rowsData = listOf(
+        RowDiff(1, listOf(Run(0, " ▐▛███▛█   Claude Code v2.1.260"))),
+        RowDiff(rows - 5, listOf(Run(0, "─".repeat(cols - 1)))),
+        RowDiff(rows - 4, listOf(Run(0, "❯ Try \"fix lint errors\""))),
+        RowDiff(rows - 3, listOf(Run(0, "─".repeat(cols - 1)))),
+        RowDiff(rows - 1, listOf(Run(0, "  ⏵⏵ auto mode on (shift+tab to cycle)"))),
+    ),
+    cursor = Cursor(2, rows - 4, true),
+    links = emptyList(),
+)
+
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.terminal(
     pane: PaneState,
@@ -352,6 +372,57 @@ class MatchingTheViewTest {
         assertTrue(
             asks.all { it.cols == first.cols && it.rows == first.rows },
             "and it asked for something else: $asks",
+        )
+    }
+
+    // **What the hold promises is a pane the view can show, and the operator reads it as one.**
+    // The report: "i open claude and it fits the pane but it leaves a few blank lines at the bottom
+    // and i need to scroll up to see the claude logo top — once scrolled up it doesn't let me
+    // scroll down (implying it knows the size)".
+    //
+    // A grid measured at the base cell and drawn at the operator's own is exactly that much too
+    // tall for the rectangle drawing it: at 1.2x this desk was held at 131x32 and could show 26 of
+    // those rows, so six of them sat above the header with the surface carrying travel it should
+    // never have had. The pane the arithmetic is checked against is Claude Code's own shape,
+    // measured on herdr 0.8.2: it anchors its composer to the last row of whatever grid it is
+    // given, so there is no blank tail to lose the overflow in and every row of it is a row of the
+    // record.
+    @Test
+    fun aPaneHeldAtTheViewsSizeIsAPaneTheViewCanShow() {
+        for (zoom in listOf("0.6", "1.0", "1.2")) {
+            runComposeUiTest {
+                val io = MatchIo(PanePrefs(mapOf("zoom" to zoom)))
+                val session = PaneSession(Phone.PANE)
+                val pane = grid(cols = 94)
+                terminal(pane, io, DESK, session)
+                val held = assertNotNull(settled(io, SizeMode.Match), "nothing was held at ${zoom}x")
+                pane.applyReset(anchoredToTheLastRow(held.cols!!, held.rows!!))
+                waitForIdle()
+                quiet(1_000)
+
+                assertEquals(
+                    0f,
+                    session.view.maxScroll,
+                    session.grid.cellHeight,
+                    "at ${zoom}x the pane was held at ${held.cols}x${held.rows} and overflows the " +
+                        "view it was matched to by ${session.view.maxScroll}px — " +
+                        "${session.view.maxScroll / session.grid.cellHeight} rows of it are off the screen",
+                )
+            }
+        }
+    }
+
+    // The other end of the same number, and the rule it has to keep: a view that cannot show a
+    // pane at ADR 0012's 80x24 floor does not ask for one. Zoomed to 1.6x this desk is 81x20 cells,
+    // so the honest answer is to hold nothing and let the surface scroll — never to hold the pane
+    // at a grid measured in cells nobody is reading in.
+    @Test
+    fun aViewZoomedPastTheFloorHoldsNothingRatherThanHoldingWhatItCannotShow() = runComposeUiTest {
+        val io = MatchIo(PanePrefs(mapOf("zoom" to "1.6")))
+        terminal(grid(cols = 94), io, DESK)
+        assertNull(
+            settled(io, SizeMode.Match),
+            "a view showing 81x20 cells claimed a pane anyway: ${io.sent.sizings()}",
         )
     }
 

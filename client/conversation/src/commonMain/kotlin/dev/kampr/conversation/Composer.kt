@@ -168,6 +168,26 @@ fun Composer(
         return true
     }
 
+    // The shell's line editing, in the box that writes to a shell's neighbour — `ReplyKeys` is
+    // where the keys and the ranges are. Written through `state.edit` like the other two edits
+    // here, which the input transformation does not see, so the draft is reported by hand.
+    //
+    // Not gated on `LocalHardKeyboard`: a soft keyboard has no ctrl to press, so there is no
+    // posture to take the chord away from — and an Android phone with a keyboard attached gets
+    // the same box a desk does.
+    fun lineEditing(event: KeyEvent): Boolean {
+        val key = lineKeyFor(event) ?: return false
+        if (event.type == KeyEventType.KeyDown) {
+            val edit = lineEdit(key, value.text, value.selection.min, value.selection.max)
+            value.edit {
+                if (edit.to > edit.from) replace(edit.from, edit.to, "")
+                placeCursorBeforeCharAt(edit.from)
+            }
+            onDraft(value.text.toString())
+        }
+        return true
+    }
+
     // **The takeover is a press and nothing else.** Switching to this view, opening the pane or
     // reconnecting must never move a character on the far machine: looking at a pane has no side
     // effects, and a write that empties somebody's half-written sentence is the last thing to make
@@ -246,7 +266,7 @@ fun Composer(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 96.dp)
-                        .onPreviewKeyEvent(::onReturn)
+                        .onPreviewKeyEvent { onReturn(it) || lineEditing(it) }
                         .named(if (enabled) "Reply to ${agent ?: "the agent"}" else "Read-only device — replies are refused"),
                     textStyle = tokens.type.body.copy(color = tokens.color.text),
                     cursorBrush = SolidColor(tokens.color.accent),

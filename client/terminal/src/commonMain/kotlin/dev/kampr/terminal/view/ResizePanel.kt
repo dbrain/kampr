@@ -31,12 +31,11 @@ internal val SIZE_PRESETS = listOf(80 to 24, 120 to 40, 200 to 50)
 data class PaneSizing(
     val cols: Int,
     val rows: Int,
-    // The grid this window would show, measured at the base cell rather than at the zoom the
-    // operator happens to be reading at — see `viewGrid`. **Both controls below ask for this one
-    // number.** Taken at the current zoom instead it is a function of the pane rather than of the
-    // window, because the fit ladder picked that zoom to suit the pane's width: on a grid wider
-    // than the window the chip offered the pane roughly the width it already had, and where the
-    // standing hold was on it named a different size and undid the chip a moment later.
+    // The grid this window would show, measured in the reference cell `viewGrid` explains: the base
+    // cell while the zoom is still the fit ladder's, and the operator's own cell once they have
+    // picked one. **Both controls below ask for this one number**, whichever it is — a chip and a
+    // switch that disagreed named different sizes, and the standing hold undid the chip a moment
+    // after it was pressed.
     val viewCols: Int,
     val viewRows: Int,
     val held: Boolean,

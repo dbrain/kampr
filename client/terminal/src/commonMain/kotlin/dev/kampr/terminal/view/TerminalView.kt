@@ -95,6 +95,8 @@ import dev.kampr.terminal.review.ReviewSurface
 import dev.kampr.terminal.review.historyEdgeLabel
 import dev.kampr.terminal.review.historyEdgeSpoken
 import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.clickReports
+import dev.kampr.terminal.input.paneTakesClicks
 import dev.kampr.terminal.input.paneScrollKeys
 import dev.kampr.terminal.review.historyWarning
 import androidx.compose.runtime.snapshotFlow
@@ -318,22 +320,49 @@ fun TerminalView(
         // zoom taken against it sticks for the life of the pane.
         // insetTop arrives a frame late — the chrome above this surface has to be laid out before
         // it can be measured — and a scroll clamped against the guess stays clamped there.
+        //
+        // **And `base` is a key like any other.** The cell is measured twice: the first composition
+        // lays out in whatever font is resolved at that moment and `cache.reprobe` corrects it a few
+        // frames later — on the web that is the terminal face arriving over the network, and #380
+        // measured the correction at 18 pixels a row against 10. A default derived from the first
+        // reading and never revised is the same defect as one derived before the insets landed.
         LaunchedEffect(
-            pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored, breakpoint,
+            pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored,
+            breakpoint, base,
         ) {
             if (!pane.painted || view.chosen || view.scrolled) return@LaunchedEffect
             val fill = defaultZoom(
                 paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
                 ceiling = if (breakpoint == Breakpoint.Desktop) 1f else Float.MAX_VALUE,
+                // Wherever 1.0x still leaves a usable pane's worth of columns on the screen. That
+                // is the desk, a split half and a rotated phone; a portrait phone shows 52 columns
+                // of 13sp text and is left to the fit ladder.
+                floor = if (paint.width >= MIN_PANE_COLS * base.width) 1f else 0f,
             )
             if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(fill)
         }
+        val zoom = if (view.zoom > 0f) view.zoom else 1f
+        val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }
+
         // **The standing intent, and the only automatic claim in the product.** It is 0012's op
         // under a setting the operator can see and turn off, not a second way to resize —
         // ADR 0013. The gate is the viewport *this surface* measured for itself rather than the
         // window's, so a split half and a phone in landscape fall out on the same test a phone
         // does; a mosaic cell can be desk-sized and is named separately.
-        val (viewCols, viewRows) = viewGrid(paint, base.width, base.height)
+        //
+        // **In the cell it is drawing, once the operator has picked one.** The base cell is what
+        // keeps the number a pure function of the *window* rather than of the pane, and that is
+        // only in question while the zoom is derived: the fit ladder picks a zoom to suit the
+        // pane's width, so asking in those cells would move the pane, which moves the zoom, which
+        // asks again. A zoom the operator chose is a constant — it is not a function of the pane at
+        // all — so measuring in its cells is as pure as the base cell was and is the only number
+        // that is *true*. Measured in base cells and drawn at 1.6x, a 1624x1000 desk held the pane
+        // at 32 rows and showed 21 of them: the operator's report was "it fits the pane but it
+        // leaves a few blank lines at the bottom and i need to scroll up to see the claude logo
+        // top". Claude Code anchors its composer to the last row of whatever grid it is given, so
+        // every one of those rows is a row of the record and none of it is blank tail.
+        val viewCell = if (view.chosen) metrics else base
+        val (viewCols, viewRows) = viewGrid(paint, viewCell.width, viewCell.height)
         val roomToMatch = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
         val matchAsked = view.matchView ?: io.prefs(pane.id).matchView
         // A fleet pane is a pty this node forked for a job of its own, with its geometry fixed
@@ -344,8 +373,6 @@ fun TerminalView(
             (matchAsked ?: (breakpoint == Breakpoint.Desktop))
         MatchTheView(pane.id, io, matching, viewCols, viewRows)
 
-        val zoom = if (view.zoom > 0f) view.zoom else 1f
-        val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }
         LaunchedEffect(cache, zoom) {
             repeat(FONT_SETTLE_FRAMES) {
                 withFrameNanos { }
@@ -594,6 +621,30 @@ fun TerminalView(
             }
         }
 
+        val info = io.info(pane.id)
+
+        // A tap on a control the *program* drew. Kampr's own targets come first and this is what
+        // happens when there are none: the same hand-off the wheel makes, in the one direction a
+        // grid could not otherwise be reached. Claude Code's `/diff` panel has a ✕ that a report on
+        // its cell presses; nothing here could press it, which is the whole of the report (#480).
+        //
+        // Gated exactly as `scrollToPane` is, and for the same reasons: a read-only device sends no
+        // pty bytes at all, a pane Kampr holds a ring for is showing rows the program's screen does
+        // not have, and `paneTakesClicks` fails closed on everything but a harness that was probed.
+        //
+        // The cell is the *surface's* and the report has to name a row of the program's own screen,
+        // which is why history is refused outright rather than subtracted off: a pane Kampr holds a
+        // ring for is a pane Kampr scrolls itself, and with no ring the two indices are the same
+        // row. The bounds check is what says so out loud.
+        fun clickedInto(cell: GridPoint) {
+            if (io.readOnly) return
+            if (!paneTakesClicks(info?.agent, info?.cmd)) return
+            if (rows.historyRows > 0 || cell.row < 0 || cell.row >= rows.liveRows) return
+            for (report in clickReports(cell.col, cell.row)) {
+                io.send(ClientMsg.InputText(pane.id, report))
+            }
+        }
+
         fun tapped(position: Offset) {
             view.menuAt = null
             if (view.selection != null) {
@@ -618,11 +669,13 @@ fun TerminalView(
                 found
             }
             view.aim(offered, offered?.let { logical.spanOf(cell.row, it.range) }, position)
-            if (found == null) session.openKeyboard()
+            if (found == null) {
+                clickedInto(cell)
+                session.openKeyboard()
+            }
         }
 
         val visibleRows = (paint.contentHeight / metrics.height).toInt().coerceAtLeast(1)
-        val info = io.info(pane.id)
         val transcript = info.talks
         val gridSummary = buildString {
             append("Terminal grid, $cols columns by ${rows.liveRows} rows")

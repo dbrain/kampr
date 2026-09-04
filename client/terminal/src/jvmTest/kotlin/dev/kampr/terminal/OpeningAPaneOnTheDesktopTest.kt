@@ -91,13 +91,45 @@ class OpeningAPaneOnTheDesktopTest {
         )
     }
 
-    // A ceiling, not a pin: a grid the window cannot hold still shrinks until it does.
+    // **And a floor under it, for the same reason the ceiling is over it.** Fitting a wide pane to
+    // the window is the right answer only while the result can still be read: a 300-column pane in
+    // a desk window fitted to **0.7x**, and the operator's own words for what that is worth were
+    // "default is often 0.4x and is tiny tiny … maybe we push towards 1.0x being at least default".
+    // The whole pane at a size nobody can read is not a view of it, and Fit width is one tap and
+    // one keystroke away for the times it is what you want.
     @Test
-    fun aGridTooBigForTheDesktopWindowStillShrinksToFit() = runComposeUiTest {
-        val session = opened(grid(cols = 300, rows = 60), 1000.dp, 700.dp)
+    fun aWidePaneOnADesktopOpensAtASizeThatCanBeRead() = runComposeUiTest {
+        val session = opened(grid(cols = 300, rows = 60), DESKTOP_WIDTH, DESKTOP_HEIGHT)
+        assertEquals(
+            1f,
+            session.view.zoom,
+            0.001f,
+            "a 300-column pane opened at ${session.view.zoom}x, which is 13sp of text scaled by that",
+        )
+    }
+
+    // The floor is not the breakpoint's, it is the window's own arithmetic: it holds wherever 1.0x
+    // still leaves a usable pane's worth of columns on the screen, so a split half and a rotated
+    // phone get it as well as a desk. This is that window — narrower than a desk, wider than 80
+    // columns of 13sp text.
+    @Test
+    fun aSplitSizedViewGetsTheSameFloor() = runComposeUiTest {
+        val session = opened(grid(cols = 300, rows = 60), 800.dp, 900.dp)
         assertTrue(
-            session.view.zoom < 0.9f,
-            "a 300x60 grid held its size at ${session.view.zoom}x in a 1000x700 window",
+            session.view.zoom >= 1f,
+            "a half-window view opened a 300-column pane at ${session.view.zoom}x",
+        )
+    }
+
+    // And where the floor cannot hold, the fit still shrinks. A portrait phone shows 52 columns of
+    // 13sp text: pinning it at 1.0x would be pinning it at a fifth of the pane with no way to see
+    // that there is more, which is what the fit ladder exists to avoid.
+    @Test
+    fun aPhoneTooNarrowForAUsablePaneAtOneStillShrinksToFit() = runComposeUiTest {
+        val session = opened(grid(cols = 300, rows = 200), 411.dp, 914.dp)
+        assertTrue(
+            session.view.zoom < 1f,
+            "a 300x200 pane held ${session.view.zoom}x on a phone that cannot show 80 columns of it",
         )
     }
 

@@ -73,6 +73,16 @@ client-side and unconditional. Clicks *into* a pane are sent only for a pane the
 explicitly armed, remembered per pane in `prefs`, and stated in the status line whenever it is on.
 A pane running a recognised program may be **offered** the toggle; it is never flipped for them.
 
+**The graphical client answers this differently, and the difference is a measurement.** It has no
+status line to state a mode in and no chord to arm one with, and it forwards the *wheel* to a
+harness measured to take one already ([#388](../03-probe-log.md)) — so a tap that found none of
+Kampr's own targets is forwarded as a click on the same terms: a per-harness table, never a
+heuristic on `cmd`, and `cmd == null` refusing outright so nothing is ever typed at a prompt. What
+makes that safe is the second half of [#480](../03-probe-log.md): a report sent to a Claude Code
+that is not listening leaves the screen byte-identical, so the table is safe to be wrong about in
+the only direction it can be wrong. The TUI's arming stands where it is — there the operator has a
+keystroke and a status line, and this client has neither.
+
 **3. Colour: the emulator keeps its own 16 slots.** `Default` and `Indexed(0..=15)` pass through as
 ordinary SGR so the operator's terminal skins them; `Rgb` and `Indexed(16..=255)` pass verbatim.
 ADR 0009's concern — absolute values staying absolute — is preserved, while the thing the operator
