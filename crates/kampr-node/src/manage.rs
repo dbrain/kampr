@@ -648,11 +648,16 @@ impl Manager<'_> {
 
         match mode {
             "hold" => {
-                self.holds
-                    .park(&pane, controller, crate::holds::PANEL_LIMIT, None);
+                self.holds.park(
+                    &pane,
+                    controller,
+                    crate::holds::PANEL_LIMIT,
+                    None,
+                    self.provider.clone(),
+                );
                 // A held controller *is* the pane's geometry until it lets go (#18), so there is
                 // nothing left to check: this is the width.
-                self.provider.resized(&pane, cols as u16);
+                self.provider.resized(&pane, cols as u16, true);
                 Ok(json!({ "pane_id": pane, "cols": cols, "rows": rows, "held": true }))
             }
             "match" => {
@@ -666,8 +671,10 @@ impl Manager<'_> {
                 // No deadline. A matched hold's ceiling is the websocket session that owns it,
                 // and that session releases it on every path out including a cancellation — so a
                 // clock would only ever fire on an operator who was still looking at the pane.
-                let token = self.holds.park(&pane, controller, None, restore);
-                self.provider.resized(&pane, cols as u16);
+                let token = self
+                    .holds
+                    .park(&pane, controller, None, restore, self.provider.clone());
+                self.provider.resized(&pane, cols as u16, true);
                 Ok(json!({
                     "pane_id": pane, "cols": cols, "rows": rows,
                     "held": true, "matched": true, "lease": token,
@@ -689,7 +696,7 @@ impl Manager<'_> {
                 // takes the geometry back inside a second (#19), and adopting a width the PTY
                 // does not have would crop every client instead of the one that asked.
                 if kept {
-                    self.provider.resized(&pane, cols as u16);
+                    self.provider.resized(&pane, cols as u16, false);
                 }
                 Ok(json!({
                     "pane_id": pane, "cols": cols, "rows": rows,

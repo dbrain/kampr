@@ -23,6 +23,26 @@ import kotlinx.coroutines.launch
 // holding one.
 const val MATCH_LINGER_MS = 20_000L
 
+// How far the pane may already be from the view before matching is worth doing.
+//
+// **A claim is not free and it is not one write.** It resizes the PTY, which reflows every wrapped
+// line the shell has on screen; it tears down the node's observe child and starts another; and the
+// release at the end does both again in reverse. Measured on the operator's own herd: a desk-sized
+// browser asked for `289x69` against a pane herdr had made `292x72`, on every single one of the 31
+// claims in the audit log — three columns and three rows, four disturbances a round trip, for a 1%
+// correction the fit ladder renders away without being asked.
+//
+// So the gate is not "is this the same size" but "is this difference worth a reflow". Below it the
+// client does what it does for every other mismatch — zoom, pan, fit — which is ADR 0013's own
+// rule that a view too small to ask never asks, read from the other end.
+const val MATCH_SLACK_COLS = 8
+const val MATCH_SLACK_ROWS = 4
+
+fun worthMatching(viewCols: Int, viewRows: Int, paneCols: Int, paneRows: Int): Boolean =
+    paneCols <= 0 || paneRows <= 0 ||
+        kotlin.math.abs(viewCols - paneCols) > MATCH_SLACK_COLS ||
+        kotlin.math.abs(viewRows - paneRows) > MATCH_SLACK_ROWS
+
 // The `match` holds this client session is carrying, across the views that come and go asking for
 // them. ADR 0013's lease is owned by the websocket session at the node; this is the same ownership
 // on this side of the wire, and it exists because a Compose view is not a session.
@@ -38,11 +58,21 @@ class MatchHolds(
     private val held = mutableMapOf<String, Pair<Int, Int>>()
     private val letting = mutableMapOf<String, Job>()
 
-    fun claim(paneId: String, cols: Int, rows: Int) {
+    // Answers whether this pane is now held, which is not the same as whether it was asked for: a
+    // pane already close enough to the view is left alone.
+    fun claim(paneId: String, cols: Int, rows: Int, paneCols: Int, paneRows: Int): Boolean {
         letting.remove(paneId)?.cancel()
-        if (held[paneId] == cols to rows) return
+        if (held[paneId] == cols to rows) return true
+        // **Asked only of a pane this session is not already holding, and that is what stops it
+        // oscillating.** Once a hold stands the pane *is* the view's size, so a slack test would
+        // answer "close enough" every time, release it, watch the restore put it back out of
+        // range, and claim it again — for ever. ADR 0013's absence of a loop is that a claim is
+        // edge-triggered by this client's own view and never by anything the pane reports back;
+        // this reads the pane exactly once, on the edge where the view first asks.
+        if (paneId !in held && !worthMatching(cols, rows, paneCols, paneRows)) return false
         held[paneId] = cols to rows
         send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
+        return true
     }
 
     // `linger` is false where the operator said so rather than where a view ended: ticking the

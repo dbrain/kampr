@@ -16,13 +16,23 @@ RestartSec=5
 # which is the only mode under which those sessions survive a restart. The node detaches them into
 # their own process group as the other half of the same guarantee.
 KillMode=process
-# The node can type into every terminal in the herd, so deny escalation.
+# **`NoNewPrivileges` is deliberately unset, and must stay unset.** It was here, and it broke
+# `sudo` in the operator's own terminals: the bit is inherited by every descendant and can never be
+# dropped again, and a herdr session created through `manage{session.create}` is a child of this
+# process — the same fact `KillMode=process` above exists for. So it reached the session server,
+# every pane in it and every agent in those panes; after a reboot, where the node is what brings
+# herdr up, that is every session on the machine. `sudo` is setuid and fails outright.
+#
+# The argument that put it here — "the node can type into every terminal in the herd" — is the
+# argument against it. Something that can already type into every terminal does not need to
+# escalate; the operator, whose shells these are, does. A pane Kampr serves has to behave like a
+# terminal.
+#
 # ProtectSystem is deliberately unset: the state directory may be anywhere the operator chose.
 # PrivateTmp is deliberately unset too: sessions the node creates inherit its mount namespace, so
 # a private /tmp would hand every agent in a node-created pane a /tmp the operator's own shell
 # cannot see, and that vanishes under them on restart. It bought nothing against a process that
 # already drives every pane on the machine.
-NoNewPrivileges=yes
 # sqlite recreates `-wal` and `-shm` for itself, and the audit found them world-readable with
 # pairing and token digests in them. The store chmods what it opens; this is the floor under it.
 UMask=0077

@@ -76,6 +76,7 @@ impl PaneHolds {
         controller: Controller,
         limit: Option<Duration>,
         restore: Option<Restore>,
+        provider: Arc<kampr_core::HerdrProvider>,
     ) -> HoldToken {
         let (tx, rx) = oneshot::channel();
         let token = self.next.fetch_add(1, Ordering::Relaxed) + 1;
@@ -136,8 +137,16 @@ impl PaneHolds {
             // gone" rather than "somebody asked it to go". Only if it is still ours: a hold that
             // superseded this one owns the entry now.
             let mut held = inner.lock().expect("holds");
-            if held.get(&key).is_some_and(|e| e.token == token) {
+            let ours = held.get(&key).is_some_and(|e| e.token == token);
+            if ours {
                 held.remove(&key);
+            }
+            drop(held);
+            // Only when the entry was still this hold's: a claim that superseded this one has
+            // already commanded its own width, and clearing it here would hand the stream back to
+            // an inference of rows the *new* hold has since resized away.
+            if ours {
+                provider.released(&key);
             }
         });
         token

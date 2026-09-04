@@ -199,7 +199,8 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
     override fun show(view: PaneView) = state.setPaneView(view)
-    override fun claimMatch(paneId: String, cols: Int, rows: Int) = state.claimMatch(paneId, cols, rows)
+    override fun claimMatch(paneId: String, cols: Int, rows: Int, paneCols: Int, paneRows: Int) =
+        state.claimMatch(paneId, cols, rows, paneCols, paneRows)
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
     override fun holding(paneId: String, held: Boolean) = state.holdingPane(paneId, held)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)

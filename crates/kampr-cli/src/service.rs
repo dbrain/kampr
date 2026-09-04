@@ -492,7 +492,36 @@ mod tests {
             .replace("@SOCKET@", "/home/x/.config/herdr/herdr.sock");
         assert!(!unit.contains('@'), "{unit}");
         assert!(unit.contains("ExecStart=/usr/local/bin/kampr serve"));
-        assert!(unit.contains("NoNewPrivileges=yes"));
+    }
+
+    /// The operator, after a reboot: *"agents tell me they can't run sudo … i dont want this - it
+    /// should act like any other terminal."*
+    ///
+    /// **`NoNewPrivileges` is inherited by every descendant and cannot be dropped again.** A herdr
+    /// session created through `manage{session.create}` is a child of this process — the same fact
+    /// `KillMode=process` exists for — so the bit reaches the session server, every pane in it, and
+    /// every agent in those panes. After a reboot, where the node is what brings herdr up, that is
+    /// every session on the machine, and `sudo` is a setuid binary: it fails outright.
+    ///
+    /// It was never worth what it cost. The comment defending it said the node "already drives
+    /// every pane on the machine", which is the argument *against* it: an attacker who can type
+    /// into every terminal does not need to escalate, and the operator who owns those terminals
+    /// does. A pane Kampr serves is the operator's own shell and has to behave like one.
+    #[test]
+    fn the_unit_does_not_deny_escalation_to_the_operators_own_shells() {
+        // Directives, not the word: the unit carries a comment naming this setting so nobody
+        // reinstates it, and a test that matched the prose would forbid the explanation as well.
+        let set: Vec<&str> = SYSTEMD_UNIT
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .filter(|line| line.starts_with("NoNewPrivileges"))
+            .collect();
+        assert!(
+            set.is_empty(),
+            "the node's panes are the operator's terminals; this bit reaches every one of them \
+             and cannot be dropped once set: {set:?}",
+        );
     }
 
     /// Sessions created through `manage{session.create}` are the operator's agents, and they are

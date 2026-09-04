@@ -67,7 +67,9 @@ impl Restore {
         // the desk takes the geometry straight back (#19), and adopting a width the PTY does not
         // have crops every client rather than only the one that asked (#233).
         if viewport_rows(&self.herdr, pane).await == Some(u64::from(rows)) {
-            self.provider.resized(pane, cols);
+            // The restore claims, resizes and lets go, so nothing is holding this width: it is the
+            // pane's own again and the inference is free to move it.
+            self.provider.resized(pane, cols, false);
             debug!(pane = %pane, cols, rows, "a matched hold put the pane's own size back");
         }
     }

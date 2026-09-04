@@ -372,6 +372,24 @@ struct Measured {
     rect: u16,
     floor: u16,
     proof: Option<Proof>,
+    /// The width Kampr is holding this pane at right now, or `None` when it is holding none.
+    ///
+    /// **This is the one width that is not inferred, and it has to outrank the inference.** A held
+    /// controller *is* the pane's geometry (#18) and herdr refuses a second one (#21), so while a
+    /// hold stands the PTY's width is known rather than measured. The reads behind [`Reading`]
+    /// measure the rows *in the pane*, and the moment Kampr resizes one, every row already there
+    /// was laid out at the width before — so the first definite reading after a claim proves the
+    /// old width and `record` overwrites the commanded one with it, unconditionally.
+    ///
+    /// Measured on the operator's own hub: a matched hold put the pane at 289 columns and the
+    /// observe stream came back up at **292**, the pre-claim width, read out of rows the resize
+    /// had not yet scrolled away. The client's emulator then wrapped at 292 over a 289-column PTY
+    /// for as long as those rows stayed in the read window — every wrapped line in the wrong
+    /// place, and the caret chasing a row it was never on.
+    ///
+    /// Readings go on being recorded underneath it, so the proof is current the instant the hold
+    /// ends and nothing has to be re-measured to get the stream back.
+    commanded: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,6 +452,10 @@ impl Measured {
     }
 
     fn cols(&self) -> u16 {
+        // The commanded width first, because it is the only one here that was not inferred.
+        if let Some(commanded) = self.commanded {
+            return commanded;
+        }
         self.proof
             .map_or_else(|| self.rect.max(self.floor), |proof| proof.cols)
     }
@@ -592,7 +614,11 @@ impl HerdrProvider {
     /// Callers must have established that the size actually took. On an attached pane the desk
     /// takes its geometry straight back (#19), and recording a width the PTY does not have is the
     /// plausible-looking success this project has paid for before (#233).
-    pub fn resized(&self, pane_id: &str, cols: u16) {
+    /// `held` is whether a controller of Kampr's is standing on this pane at `cols` right now. It
+    /// is the difference between a width that is *known* and one that merely *was* — a `once`
+    /// resize is handed straight back by an attached desk (#19), where a hold is the geometry
+    /// until it lets go (#18). Only the second may outrank a reading; see [`Measured::commanded`].
+    pub fn resized(&self, pane_id: &str, cols: u16, held: bool) {
         let Some((rect, _)) = self.inner.snapshot.borrow().geometry(pane_id) else {
             return;
         };
@@ -600,12 +626,33 @@ impl HerdrProvider {
         let mut widths = self.inner.widths.lock().unwrap();
         let entry = widths.entry(pane_id.to_string()).or_default();
         if entry.rect != rect {
+            // A rect change ages the *inference*; it says nothing about a controller Kampr is
+            // still holding, so the commanded width crosses it.
             *entry = Measured {
                 rect,
+                commanded: entry.commanded,
                 ..Measured::default()
             };
         }
         entry.proof = Some(Proof { cols, unconfirmed: 0 });
+        entry.commanded = held.then_some(cols);
+        drop(widths);
+        self.inner.resized.send_modify(|n| *n += 1);
+    }
+
+    /// The hold on `pane_id` has let go, so its width stops being commanded and the inference
+    /// underneath it — kept warm the whole time — is the answer again.
+    ///
+    /// Called from the one place every hold ends, whichever way it ended: let go, superseded,
+    /// or run out of deadline.
+    pub fn released(&self, pane_id: &str) {
+        let mut widths = self.inner.widths.lock().unwrap();
+        let Some(entry) = widths.get_mut(pane_id) else {
+            return;
+        };
+        if entry.commanded.take().is_none() {
+            return;
+        }
         drop(widths);
         self.inner.resized.send_modify(|n| *n += 1);
     }
@@ -929,8 +976,11 @@ impl Inner {
         let mut widths = self.widths.lock().unwrap();
         let entry = widths.entry(pane_id.to_string()).or_default();
         if entry.rect != rect {
+            // A rect change ages the *inference*; it says nothing about a controller Kampr is
+            // still holding, so the commanded width crosses it.
             *entry = Measured {
                 rect,
+                commanded: entry.commanded,
                 ..Measured::default()
             };
         }
@@ -1907,6 +1957,7 @@ mod tests {
         let m = Measured {
             rect: 47,
             floor: 93,
+            commanded: None,
             proof: Some(Proof {
                 cols: 93,
                 unconfirmed: 0,
@@ -1929,6 +1980,7 @@ mod tests {
         let m = Measured {
             rect: 94,
             floor: 11,
+            commanded: None,
             proof: None,
         };
         assert_eq!(m.cols(), 94, "and a floor never narrows the stream");
@@ -1957,6 +2009,7 @@ mod tests {
         let m = Measured {
             rect: 47,
             floor: 80,
+            commanded: None,
             proof: None,
         };
         assert_eq!(m.cols(), 80);
@@ -2291,6 +2344,88 @@ mod tests {
             });
         }
         assert_eq!(m.cols(), 93, "the rect is still fiction; the floor is not");
+    }
+
+    /// The operator, on 0.1.58: *"trying to type commands and it's bouncing up and down and all
+    /// around"*, on a pane a desk-sized browser was matching.
+    ///
+    /// **Measured on the operator's own hub**, straight off the process table: `control` holding
+    /// the pane at `289x69` while the observe child had come back up at `292x69`. The width
+    /// inference reads the rows *in the pane*, and every one of them had been laid out at 292
+    /// before the claim resized the PTY to 289 — so the first definite reading after the claim
+    /// proved 292 and overwrote the width Kampr had just commanded. The client's emulator then
+    /// wrapped three columns wider than the shell did, which puts every wrapped line on the wrong
+    /// row and the caret on a row it was never on.
+    ///
+    /// A held controller *is* the geometry (#18) and herdr refuses a second (#21), so while the
+    /// hold stands there is nothing to infer.
+    #[test]
+    fn a_reading_of_rows_written_before_a_claim_does_not_beat_the_width_it_commanded() {
+        let mut m = Measured {
+            rect: 292,
+            commanded: Some(289),
+            ..Measured::default()
+        };
+        // The rows still in the pane, laid out at the width it had a moment ago.
+        m.record(Reading {
+            floor: 292,
+            wrapped: Some(Wrapped::At(292)),
+        });
+        assert_eq!(
+            m.cols(),
+            289,
+            "the stream went back to the width the rows were written at, not the width the PTY has",
+        );
+    }
+
+    /// **The decay, which is what actually bit.** A quiet pane offers no wrap to measure, so every
+    /// reading is a floor and nothing else; after `PROOF_LIFETIME` of them a proof is dropped and
+    /// `cols` falls back to the layout rect — which is the intended rule for a pane nobody is
+    /// holding (`a_proof_that_is_never_re_proved_gives_the_rect_back_the_stream`) and exactly
+    /// wrong for one Kampr has a controller on. The operator's pane sat quiet for minutes after
+    /// the claim and the stream went back to the rect's 292 over a 289-column PTY.
+    ///
+    /// The rect is fiction (#68); a held controller is not (#18).
+    #[test]
+    fn a_commanded_width_does_not_decay_back_to_the_rect_while_the_hold_stands() {
+        let mut m = Measured {
+            rect: 292,
+            commanded: Some(289),
+            ..Measured::default()
+        };
+        for _ in 0..=PROOF_LIFETIME + 1 {
+            m.record(Reading {
+                floor: 20,
+                wrapped: None,
+            });
+        }
+        assert_eq!(
+            m.cols(),
+            289,
+            "the stream decayed back to the layout rect while Kampr was still holding the pane",
+        );
+    }
+
+    /// And the inference is kept warm underneath, so letting go needs no re-measurement: the
+    /// moment the hold ends the pane's own width is already proved.
+    #[test]
+    fn the_reading_underneath_a_hold_takes_over_the_instant_it_is_released() {
+        let mut m = Measured {
+            rect: 292,
+            commanded: Some(289),
+            ..Measured::default()
+        };
+        m.record(Reading {
+            floor: 292,
+            wrapped: Some(Wrapped::At(292)),
+        });
+        assert_eq!(m.cols(), 289);
+        m.commanded = None;
+        assert_eq!(
+            m.cols(),
+            292,
+            "the pane's own width had to be re-measured from scratch"
+        );
     }
 
     /// Measured live: a controller that claimed the pane at 60 columns and then went away left

@@ -77,8 +77,9 @@ private class SessionIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
 
     override fun prefs(paneId: String) = stored
 
-    override fun claimMatch(paneId: String, cols: Int, rows: Int) {
+    override fun claimMatch(paneId: String, cols: Int, rows: Int, paneCols: Int, paneRows: Int): Boolean {
         claims += Triple(paneId, cols, rows)
+        return true
     }
 
     override fun releaseMatch(paneId: String, linger: Boolean) {

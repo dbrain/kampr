@@ -168,19 +168,40 @@ private const val MATCH_SETTLE_MS = 250L
 // **The release the operator cannot send is the node's**, not this: a closed laptop never reaches
 // here. What this covers is the ordinary end of a view; `session.rs` covers the rest.
 @Composable
-private fun MatchTheView(paneId: String, io: PaneIo, on: Boolean, cols: Int, rows: Int) {
+private fun MatchTheView(
+    paneId: String,
+    io: PaneIo,
+    on: Boolean,
+    cols: Int,
+    rows: Int,
+    paneCols: Int,
+    paneRows: Int,
+) {
+    // Whether the session actually took the pane. It may decline one already close enough to this
+    // view to be worth a reflow, and everything below answers to *that* rather than to the switch:
+    // a strip saying a pane is held, and a release for a hold nobody took, are both lies.
+    //
+    // The pane's own geometry is read here and passed down rather than watched, so it is not in
+    // this effect's keys — a claim is edge-triggered by this view and never by what the pane
+    // reports back, which is the property ADR 0013 leans on to have no loop.
+    var claimed by remember(paneId) { mutableStateOf(false) }
     LaunchedEffect(paneId, on, cols, rows) {
         if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
-        io.claimMatch(paneId, cols, rows)
+        claimed = io.claimMatch(paneId, cols, rows, paneCols, paneRows)
     }
     // The status strip is what stops this being a shape change nobody was told about: it says the
     // pane is being held while it is, whether the operator ticked the switch or their screen size
     // did.
-    DisposableEffect(paneId, on) {
-        io.holding(paneId, on)
+    // Snapshotted, because `onDispose` closes over the *state* and not over its value: read
+    // straight, it sees `claimed` as it is when the effect is torn down, so the false-to-true flip
+    // that follows a successful claim disposed the old effect and released a hold that had just
+    // been taken. What this effect is holding is what it was set up with.
+    DisposableEffect(paneId, claimed) {
+        val holding = claimed
+        io.holding(paneId, holding)
         onDispose {
-            if (on) {
+            if (holding) {
                 io.holding(paneId, false)
                 io.releaseMatch(paneId)
             }
@@ -326,7 +347,7 @@ fun TerminalView(
         val ownPane = io.info(pane.id)?.fleet != null
         val matching = !io.readOnly && !ownPane && roomToMatch && !LocalMosaicCell.current &&
             (matchAsked ?: (breakpoint == Breakpoint.Desktop))
-        MatchTheView(pane.id, io, matching, viewCols, viewRows)
+        MatchTheView(pane.id, io, matching, viewCols, viewRows, cols, rows.liveRows)
 
         val zoom = if (view.zoom > 0f) view.zoom else 1f
         val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }
