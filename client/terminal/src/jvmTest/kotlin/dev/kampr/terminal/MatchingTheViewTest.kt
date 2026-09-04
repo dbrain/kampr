@@ -155,6 +155,23 @@ private fun ComposeUiTest.terminal(
     waitForIdle()
 }
 
+// How many columns this machine's monospace font leaves on the desk at the base cell. Every zoom
+// either test below reaches for is a ratio of it: the cell is whatever font the runner resolves,
+// and a zoom named as a number is a different number of columns on every machine that runs it.
+private const val COMFORTABLY_ABOVE_THE_FLOOR = 100f
+
+@OptIn(ExperimentalTestApi::class)
+private fun colsThisDeskShowsAtOne(): Int {
+    var cols = 0
+    runComposeUiTest {
+        val io = MatchIo(PanePrefs(mapOf("zoom" to "1.0")))
+        terminal(grid(cols = 94), io, DESK)
+        cols = assertNotNull(settled(io, SizeMode.Match), "a desk held nothing at 1.0x").cols!!
+    }
+    assertTrue(cols > MIN_PANE_COLS, "a desk shows $cols columns at 1.0x, which is under the floor")
+    return cols
+}
+
 // Lets the clock run without waiting for anything, so a claim that would fire late has fired.
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.quiet(millis: Long) {
@@ -381,17 +398,23 @@ class MatchingTheViewTest {
     // scroll down (implying it knows the size)".
     //
     // A grid measured at the base cell and drawn at the operator's own is exactly that much too
-    // tall for the rectangle drawing it: at 1.2x this desk was held at 131x32 and could show 26 of
-    // those rows, so six of them sat above the header with the surface carrying travel it should
-    // never have had. The pane the arithmetic is checked against is Claude Code's own shape,
-    // measured on herdr 0.8.2: it anchors its composer to the last row of whatever grid it is
-    // given, so there is no blank tail to lose the overflow in and every row of it is a row of the
-    // record.
+    // tall for the rectangle drawing it: on this machine's font the desk was held at 131x32 and
+    // could show 26 of those rows at 1.2x, so six sat above the header with the surface carrying
+    // travel it should never have had. The pane the arithmetic is checked against is Claude Code's
+    // own shape, measured on herdr 0.8.2: it anchors its composer to the last row of whatever grid
+    // it is given, so there is no blank tail to lose the overflow in and every row of it is a row
+    // of the record.
+    //
+    // **The magnified rung is derived rather than named**, because the cell is whatever font the
+    // machine resolves for monospace and a zoom that is comfortably above the floor here is past it
+    // on a runner. That is what `aViewZoomedPastTheFloor` failed on in CI, and the same hazard
+    // `FileHarness` names about where a tapped cell lands.
     @Test
     fun aPaneHeldAtTheViewsSizeIsAPaneTheViewCanShow() {
-        for (zoom in listOf("0.6", "1.0", "1.2")) {
+        val atOne = colsThisDeskShowsAtOne()
+        for (zoom in listOf(0.6f, 1f, atOne / COMFORTABLY_ABOVE_THE_FLOOR)) {
             runComposeUiTest {
-                val io = MatchIo(PanePrefs(mapOf("zoom" to zoom)))
+                val io = MatchIo(PanePrefs(mapOf("zoom" to zoom.toString())))
                 val session = PaneSession(Phone.PANE)
                 val pane = grid(cols = 94)
                 terminal(pane, io, DESK, session)
@@ -412,18 +435,31 @@ class MatchingTheViewTest {
         }
     }
 
-    // The other end of the same number, and the rule it has to keep: a view that cannot show a
-    // pane at ADR 0012's 80x24 floor does not ask for one. Zoomed to 1.6x this desk is 81x20 cells,
-    // so the honest answer is to hold nothing and let the surface scroll — never to hold the pane
-    // at a grid measured in cells nobody is reading in.
+    // The other end of the same number, and the rule it has to keep: a view that cannot show a pane
+    // at ADR 0012's 80x24 floor does not ask for one. The honest answer there is to hold nothing and
+    // let the surface scroll — never to hold the pane at a grid measured in cells nobody is reading
+    // in. The zoom is the one that leaves this machine one column short of the floor, whatever its
+    // font makes a cell.
     @Test
-    fun aViewZoomedPastTheFloorHoldsNothingRatherThanHoldingWhatItCannotShow() = runComposeUiTest {
-        val io = MatchIo(PanePrefs(mapOf("zoom" to "1.6")))
-        terminal(grid(cols = 94), io, DESK)
-        assertNull(
-            settled(io, SizeMode.Match),
-            "a view showing 81x20 cells claimed a pane anyway: ${io.sent.sizings()}",
-        )
+    fun aViewZoomedPastTheFloorHoldsNothingRatherThanHoldingWhatItCannotShow() {
+        val past = colsThisDeskShowsAtOne() / (MIN_PANE_COLS - 1f)
+        runComposeUiTest {
+            val io = MatchIo(PanePrefs(mapOf("zoom" to past.toString())))
+            val session = PaneSession(Phone.PANE)
+            terminal(grid(cols = 94), io, DESK, session)
+            // The presets clamp a stored zoom, and a clamp would put the view back above the floor
+            // and pass this test for the wrong reason.
+            assertEquals(
+                past,
+                session.view.zoom,
+                0.01f,
+                "the zoom this test needs was clamped to ${session.view.zoom}x",
+            )
+            assertNull(
+                settled(io, SizeMode.Match),
+                "a view showing ${MIN_PANE_COLS - 1} columns claimed a pane anyway: ${io.sent.sizings()}",
+            )
+        }
     }
 
     // **The two controls on the panel are one promise, so they are one number.** The chip measured
