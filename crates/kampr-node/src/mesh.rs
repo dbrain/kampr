@@ -56,18 +56,10 @@ pub struct WsIn(SplitStream<WebSocket>, Arc<Heard>);
 /// A pong is the only frame a frozen peer still produces — its websocket library answers one
 /// without waking the application — so this counts *every* frame rather than only the text ones
 /// `recv` passes up. Read and cleared by the writer's keepalive; see [`Outgoing::ping`].
-#[derive(Default)]
-pub struct Heard(std::sync::atomic::AtomicBool);
-
-impl Heard {
-    fn note(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn take(&self) -> bool {
-        self.0.swap(false, std::sync::atomic::Ordering::Relaxed)
-    }
-}
+///
+/// **One flag for both transports**, the accepted link and the dialled one, because it answers
+/// the same question about both and only one of them had it (#500).
+pub use kampr_mesh::Heard;
 
 impl Outgoing for WsOut {
     async fn send(&mut self, text: String) -> bool {
@@ -286,13 +278,21 @@ async fn serve_hub(
         return;
     }
     info!(hub = %hub.node_name, fingerprint = %hub.fingerprint(), "serving a hub");
-    session::run_on(
+    // **A hub that stops delivering is asked about, exactly as a phone is.** Every other leg of
+    // this product notices a link that froze rather than closed: the hub pings each peer and drops
+    // it after three unanswered, and the node does the same to every client socket (#284). This
+    // one was handed a transport with nowhere to record an answer, so the ping arm never ran — and
+    // an operator's laptop, whose network went away and came back, went on believing it was
+    // serving a hub that had dropped it fifteen seconds in. Three hours, ended by hand (#500).
+    let heard = incoming.heard();
+    session::run_on_watched(
         out,
         incoming,
         node,
         device,
         format!("mesh:{}", hub.fingerprint()),
         session::Caller::Hub,
+        Some(heard),
     )
     .await;
 }

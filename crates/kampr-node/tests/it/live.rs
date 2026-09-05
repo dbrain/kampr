@@ -6239,7 +6239,13 @@ fn merge_as_an_older_client_would(screen: &mut Vec<String>, message: &Value) {
 /// which resets the probe counter on every probe, so nothing below ever errors, the writer never
 /// breaks, and `outbox.close()` never happens. Measured: the watch was still held after 25
 /// minutes, costing herdr exactly what a watched pane costs and holding one of 64 socket permits
-/// for ever. The mesh link has had this guard all along; the link a phone uses had none.
+/// for ever.
+///
+/// The mesh had **half** of this guard: a hub asks each peer that dialled in, and a peer that
+/// dialled *out* asked nobody, because `serve_hub` handed this function a transport with nowhere
+/// to record an answer. That half cost an operator's laptop three hours offline (#500), and
+/// `a_hub_link_the_network_dropped_without_closing_is_noticed_and_dialled_again` is the same
+/// property from the other end of the link.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_client_that_stops_answering_is_dropped_and_a_quiet_one_is_not() {
     let h = harness!("keepalive", |c: &mut Config| c.limits.client_keepalive_secs = 1);

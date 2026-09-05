@@ -34,6 +34,15 @@ use crate::process::Started;
 pub struct Watch {
     open: HashMap<String, Running>,
     order: Vec<String>,
+    /// The id each open launch was handed at its acknowledgement, and the call it belongs to.
+    ///
+    /// **A completion names one of two things and both shapes are in one transcript** (#501): some
+    /// carry `<tool-use-id>`, and some carry only `<task-id>` — which is the `agentId` an
+    /// asynchronous agent's acknowledgement returned, or the `backgroundTaskId` a background
+    /// shell's did. Nothing else in the file joins the two, so it is written down here at launch
+    /// or the ending cannot be read at all: an agent the operator watched finish was still being
+    /// counted four and a half hours later.
+    tasks: HashMap<String, String>,
 }
 
 impl Watch {
@@ -70,6 +79,11 @@ impl Watch {
         };
         if let Some(call) = tagged(text, "tool-use-id") {
             self.close(&call);
+            return;
+        }
+        // The other shape, and the only handle it gives is the one the launch was answered with.
+        if let Some(call) = tagged(text, "task-id").and_then(|task| self.tasks.get(&task).cloned()) {
+            self.close(&call);
         }
     }
 
@@ -82,11 +96,16 @@ impl Watch {
             match block.get("type").and_then(Value::as_str) {
                 Some("tool_use") => self.launched(block, at),
                 Some("tool_result") => {
-                    if acknowledgement(result) {
+                    let Some(call) = block.get("tool_use_id").and_then(Value::as_str) else {
                         continue;
-                    }
-                    if let Some(call) = block.get("tool_use_id").and_then(Value::as_str) {
-                        self.close(call);
+                    };
+                    match acknowledgement(result) {
+                        true => {
+                            if let Some(task) = handed_out(result) {
+                                self.tasks.insert(task, call.to_string());
+                            }
+                        }
+                        false => self.close(call),
                     }
                 }
                 _ => {}
@@ -130,8 +149,21 @@ impl Watch {
     fn close(&mut self, call: &str) {
         if self.open.remove(call).is_some() {
             self.order.retain(|held| held != call);
+            // The map is the open launches' ids and nothing else, so a session that launches all
+            // day carries no more of it than it is waiting on.
+            self.tasks.retain(|_, held| held != call);
         }
     }
+}
+
+/// The id a launch's acknowledgement handed back, which is what its completion will name when it
+/// names no call: `agentId` for an asynchronous agent, `backgroundTaskId` for a background shell.
+fn handed_out(result: Option<&Value>) -> Option<String> {
+    let result = result?;
+    ["backgroundTaskId", "agentId"]
+        .iter()
+        .find_map(|key| result.get(key).and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 /// A result that is the harness saying "started", not "finished".
@@ -169,6 +201,78 @@ mod tests {
             "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>{call}</tool-use-id>\n\
              <status>{status}</status>\n</task-notification>"
         ))
+    }
+
+    /// The other shape, verbatim from the transcript in probe #501: the same event, naming the
+    /// task it was given at launch and **no call at all**.
+    fn notification_by_task(task: &str, status: &str) -> Value {
+        json!(format!(
+            "<task-notification>\n<task-id>{task}</task-id>\n<output-file>/tmp/out</output-file>\n\
+             <status>{status}</status>\n<summary>done</summary>\n</task-notification>"
+        ))
+    }
+
+    /// The operator, on 0.1.65, looking at a conversation on their phone: *"a 4 hour long agent
+    /// that's apparently still running but Claude terminal itself doesn't have an agent running
+    /// and that agent finished ages ago"*.
+    ///
+    /// **A completion names one of two things, and only one of them was read.** Measured across a
+    /// live 9 MB transcript (#501): of its 373 notifications, some carry `<tool-use-id>` and some
+    /// carry only `<task-id>` — the id the *acknowledgement* handed out, `agentId` for an
+    /// asynchronous agent and `backgroundTaskId` for a background shell. The launch the operator
+    /// was looking at was ended by the second shape 18 minutes in, and the strip counted it for
+    /// four and a half hours because nothing had written down which call that task belonged to.
+    #[test]
+    fn a_completion_that_names_only_the_task_it_was_given_at_launch_still_ends_it() {
+        let mut watch = Watch::default();
+        watch.record(
+            Some(&call(
+                "toolu_01XJ",
+                "Agent",
+                json!({ "subagent_type": "general-purpose", "description": "Survey coding models" }),
+            )),
+            None,
+            Some("2026-09-05T07:47:49.634Z"),
+        );
+        watch.record(
+            Some(&result("toolu_01XJ")),
+            Some(&json!({ "isAsync": true, "status": "async_launched", "agentId": "ac2f8ed8659ad1ee7" })),
+            None,
+        );
+        assert_eq!(
+            watch.running(Started::Unknown).len(),
+            1,
+            "the launch was never open"
+        );
+
+        watch.notified(Some(&notification_by_task("ac2f8ed8659ad1ee7", "completed")));
+        assert!(
+            watch.running(Started::Unknown).is_empty(),
+            "the agent finished and the strip went on counting it",
+        );
+    }
+
+    /// And a task id nobody launched settles nothing — the map is what was handed out at launch,
+    /// not a wildcard.
+    #[test]
+    fn a_completion_for_a_task_this_session_never_launched_ends_nothing() {
+        let mut watch = Watch::default();
+        watch.record(
+            Some(&call(
+                "t1",
+                "Agent",
+                json!({ "subagent_type": "Explore", "description": "look" }),
+            )),
+            None,
+            Some("t"),
+        );
+        watch.record(
+            Some(&result("t1")),
+            Some(&json!({ "status": "async_launched", "agentId": "mine" })),
+            None,
+        );
+        watch.notified(Some(&notification_by_task("somebody-elses", "completed")));
+        assert_eq!(watch.running(Started::Unknown).len(), 1);
     }
 
     #[test]

@@ -103,6 +103,11 @@ pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: Strin
 /// with this code rather than a second implementation is what makes the relay free — the
 /// read-only refusal, the device re-read before every write, the audit line, the bounded queue and
 /// its purge rule all apply at the mesh hop because they are the same code.
+///
+/// **Only for a transport that cannot be lied to**, which today is an in-process pair in a test.
+/// Anything with a socket under it takes [`run_on_watched`] and a `Heard` to record answers in:
+/// without one the keepalive arm never runs at all, and a far end that freezes rather than closing
+/// is served for ever (#500).
 pub async fn run_on<O: Outgoing, I: Incoming>(
     out: O,
     incoming: I,
@@ -136,7 +141,7 @@ pub async fn run_on<O: Outgoing, I: Incoming>(
 /// #284's `ss` capture of a real one in that state and on the `select!` below being unable to
 /// reach the ticker from inside a pending `send`. It is the only guard covering that state.
 #[allow(clippy::too_many_arguments)]
-async fn run_on_watched<O: Outgoing, I: Incoming>(
+pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     mut out: O,
     mut incoming: I,
     node: Arc<Node>,

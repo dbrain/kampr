@@ -23,4 +23,4 @@ pub use peers::{
     ATT_CHUNK_BYTES, ATT_WINDOW, AttHeader, FetchError, PeerHerd, PeerState, Peers, PeersConfig, RelayError,
     RemoteEvent, RemoteWatcher, Transfer,
 };
-pub use transport::{Incoming, Link, Outgoing};
+pub use transport::{Heard, Incoming, Link, Outgoing};

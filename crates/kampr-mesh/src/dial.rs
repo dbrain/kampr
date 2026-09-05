@@ -1,10 +1,11 @@
 use crate::handshake::{HandshakeError, HubIdentity, Presence, greet};
-use crate::transport::{Incoming, Link, Outgoing};
+use crate::transport::{Heard, Incoming, Link, Outgoing};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use kampr_auth::NodeIdentity;
 use kampr_core::Backoff;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -15,7 +16,20 @@ type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub struct WsOut(SplitSink<Ws, Message>);
 
-pub struct WsIn(SplitStream<Ws>);
+pub struct WsIn(SplitStream<Ws>, Arc<Heard>);
+
+impl WsIn {
+    /// **The half of #284 the dialling side was missing.** A hub is served by the same code that
+    /// serves a browser, and that code asks a socket whether it is still there — but only when it
+    /// is given somewhere to record the answer. Without this the ping arm never ran on an outbound
+    /// link at all: a hub that stopped delivering was indistinguishable from a hub with nothing to
+    /// say, and the node went on serving a socket the hub had already dropped it from, until a
+    /// write happened to fail. Measured on a real herd at **three hours**, ended by the operator
+    /// typing into a pane.
+    pub fn heard(&self) -> Arc<Heard> {
+        self.1.clone()
+    }
+}
 
 impl Outgoing for WsOut {
     async fn send(&mut self, text: String) -> bool {
@@ -25,15 +39,22 @@ impl Outgoing for WsOut {
     async fn close(&mut self) {
         let _ = self.0.close().await;
     }
+
+    async fn ping(&mut self) -> bool {
+        self.0.send(Message::Ping(Default::default())).await.is_ok()
+    }
 }
 
 impl Incoming for WsIn {
     async fn recv(&mut self) -> Option<String> {
         loop {
             match self.0.next().await? {
-                Ok(Message::Text(text)) => return Some(text.to_string()),
+                Ok(Message::Text(text)) => {
+                    self.1.note();
+                    return Some(text.to_string());
+                }
                 Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => {}
+                Ok(_) => self.1.note(),
             }
         }
     }
@@ -113,7 +134,7 @@ pub async fn dial(
         .map_err(|_| DialError::Connect(url.clone(), "timed out".into()))?
         .map_err(|e| DialError::Connect(url.clone(), e.to_string()))?;
     let (sink, stream) = socket.split();
-    let mut link = Link::new(WsOut(sink), WsIn(stream));
+    let mut link = Link::new(WsOut(sink), WsIn(stream, Arc::default()));
     let hub_identity = greet(&mut link, identity, me, hub.join.as_deref(), hub.key.as_deref()).await?;
     let (out, incoming) = link.split();
     Ok((hub_identity, out, incoming))

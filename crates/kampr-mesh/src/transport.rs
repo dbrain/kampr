@@ -1,7 +1,28 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
+
+/// Whether anything at all has arrived on a link since the last time somebody asked.
+///
+/// **Any frame counts, including the ones the far end's websocket library answers by itself.**
+/// That is the whole of what it is for: a peer whose kernel is alive and whose application has
+/// stopped reading answers a ping without running a line of its own code (#284), and a link that
+/// has silently stopped delivering answers nothing at all. Held beside the reading half because
+/// that is the only place a frame is seen, and read by whatever is doing the pinging.
+#[derive(Debug, Default)]
+pub struct Heard(AtomicBool);
+
+impl Heard {
+    pub fn note(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn take(&self) -> bool {
+        self.0.swap(false, Ordering::Relaxed)
+    }
+}
 
 /// The half a mesh link writes to.
 ///

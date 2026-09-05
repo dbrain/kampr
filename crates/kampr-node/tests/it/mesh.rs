@@ -15,6 +15,7 @@ use kampr_node::{BUILD, Config, Node, http};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
@@ -2090,5 +2091,178 @@ async fn a_hub_carries_a_file_id_to_its_peer_only_for_a_device_that_may_type() {
         "{}",
         got.headers,
     );
+    hub.stop();
+}
+
+/// The network, as a thing that can be taken away without telling anybody.
+///
+/// A cut here is not a close: both kernels keep an open socket, nothing is delivered in either
+/// direction, and no `FIN` or `RST` ever arrives — which is the state a laptop's link is in after
+/// its network is disabled and re-enabled, and the one nothing above the transport can see.
+/// Connections made after the cut are forwarded normally, so what the peer does about it shows up
+/// as a second dial.
+struct Gate {
+    origin: String,
+    dials: Arc<AtomicUsize>,
+    cut_before: Arc<AtomicUsize>,
+}
+
+impl Gate {
+    async fn in_front_of(origin: &str) -> Self {
+        let target = origin
+            .strip_prefix("http://")
+            .expect("an http origin")
+            .to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let port = listener.local_addr().expect("an address").port();
+        let dials = Arc::new(AtomicUsize::new(0));
+        let cut_before = Arc::new(AtomicUsize::new(0));
+        tokio::spawn({
+            let (dials, cut_before) = (dials.clone(), cut_before.clone());
+            async move {
+                loop {
+                    let Ok((client, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let n = dials.fetch_add(1, Ordering::SeqCst);
+                    let Ok(server) = tokio::net::TcpStream::connect(&target).await else {
+                        continue;
+                    };
+                    let (client_read, client_write) = client.into_split();
+                    let (server_read, server_write) = server.into_split();
+                    tokio::spawn(relay(client_read, server_write, n, cut_before.clone()));
+                    tokio::spawn(relay(server_read, client_write, n, cut_before.clone()));
+                }
+            }
+        });
+        Self {
+            origin: format!("http://127.0.0.1:{port}"),
+            dials,
+            cut_before,
+        }
+    }
+
+    /// Every connection made so far stops delivering, in both directions, for ever.
+    fn cut(&self) {
+        self.cut_before
+            .store(self.dials.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+
+    fn dials(&self) -> usize {
+        self.dials.load(Ordering::SeqCst)
+    }
+}
+
+async fn relay(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    n: usize,
+    cut_before: Arc<AtomicUsize>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        if n < cut_before.load(Ordering::SeqCst) {
+            // Parking rather than returning is the whole point: both halves stay owned here, so
+            // the socket stays open and neither end is ever told anything.
+            std::future::pending::<()>().await;
+        }
+        let read = tokio::select! {
+            read = from.read(&mut buf) => read,
+            () = cut(n, &cut_before) => continue,
+        };
+        match read {
+            Ok(0) | Err(_) => return,
+            Ok(k) => {
+                if to.write_all(&buf[..k]).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn cut(n: usize, cut_before: &Arc<AtomicUsize>) {
+    while n >= cut_before.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The operator, on 0.1.65: *"this laptop is currently reporting as offline in kampr because it
+/// was temporarily network disabled and never recovered"*, and, on what finally ended it: *"it
+/// came back after I pinged the Claude conversation via remote control"*.
+///
+/// **A node that dials out had no liveness of its own.** Every other leg of this product has one:
+/// the hub pings each peer and drops it after three unanswered (`keepalive`), the node pings every
+/// client socket and drops it the same way (#284), and the phone pings the node and re-dials on
+/// silence. The link a node *dials* was the one that did not — `serve_hub` handed the session
+/// layer a transport with nowhere to record an answer, so the ping arm never ran at all and a hub
+/// that had stopped delivering was indistinguishable from a hub with nothing to say. The hub
+/// dropped the laptop fifteen seconds in and told every phone it was offline; the laptop went on
+/// believing it was serving a hub for three hours, until a write finally failed on traffic the
+/// operator caused by hand.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_link_the_network_dropped_without_closing_is_noticed_and_dialled_again() {
+    let hub_home = Home::new();
+    let peer_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let gate = Gate::in_front_of(&hub.origin).await;
+
+    let now = kampr_auth::now();
+    let code = hub
+        .node
+        .auth
+        .store()
+        .mesh()
+        .invite(now, now + 600)
+        .await
+        .expect("a join code");
+    let peer_node_id = peer_home.settle("laptop");
+    // Enrolled *through the gate*, so the URL the peer stores and re-dials is the one that can be
+    // taken away.
+    join(&peer_home, "laptop", &peer_node_id, &gate.origin, &code).await;
+    let mut config = peer_home.config_for("laptop");
+    // The interval this test's patience is a multiple of. A node ships with fifteen seconds and
+    // three misses, which is the same property at a scale no test should wait for.
+    config.limits.client_keepalive_secs = 1;
+    config.save(&peer_home.config()).expect("the peer's config");
+
+    let peer = Running::hub(&peer_home, "laptop").await;
+    mesh_settles(&hub, 30, |peers| peers.links().len() == 1).await;
+    let joined = gate.dials();
+
+    gate.cut();
+
+    // **The property, and nobody typed anything.** The link the peer is holding will never deliver
+    // another byte and will never close either, so the only thing that can end it is the peer
+    // asking whether it is still there.
+    let noticed = tokio::time::timeout(Duration::from_secs(45), async {
+        while gate.dials() <= joined {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    assert!(
+        noticed.is_ok(),
+        "the peer dialled {} times, the same as while the network was still delivering: it is \
+         still serving a socket the hub cannot reach, and nothing but a write will ever tell it",
+        gate.dials(),
+    );
+
+    // And it is one herd again on the other side, over the link it dialled rather than the dead
+    // one: the hub is holding a link for this node and measuring a round trip over it, which it
+    // can only do by asking and being answered. (`online` says nothing here — these two nodes
+    // have no herdr behind them, and that is what it is about.)
+    mesh_settles(&hub, 45, |peers| {
+        peers
+            .links()
+            .first()
+            .is_some_and(|link| link.node_id == peer_node_id && link.rtt_ms().is_some())
+    })
+    .await;
+
+    peer.stop();
     hub.stop();
 }
