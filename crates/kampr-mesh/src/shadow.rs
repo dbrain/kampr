@@ -272,6 +272,10 @@ pub struct History {
     rows: Vec<RowDiff>,
     complete: bool,
     capped: bool,
+    /// The peer's own era, carried through unchanged — the hub renumbers nothing. See
+    /// [`ScrollbackDoc::era`]: it is the only thing that tells a refill from a tail, because the
+    /// two land on the same index.
+    era: u32,
 }
 
 impl History {
@@ -279,10 +283,16 @@ impl History {
         self.rows.is_empty()
     }
 
-    pub fn absorb(&mut self, doc: &ScrollbackDoc) {
+    /// Answers whether what is now held replaces what was, rather than continuing it — which the
+    /// caller has to relay as a document of its own, since a delta "since the old end" cannot say
+    /// it.
+    pub fn absorb(&mut self, doc: &ScrollbackDoc) -> bool {
         self.complete = doc.complete;
         self.capped |= doc.capped;
-        let restart = doc.from_top < self.from_top || doc.from_top > self.from_top + self.rows.len() as u32;
+        let restart = doc.era != self.era
+            || doc.from_top < self.from_top
+            || doc.from_top > self.from_top + self.rows.len() as u32;
+        self.era = doc.era;
         if restart {
             self.from_top = doc.from_top;
             self.rows.clear();
@@ -302,6 +312,7 @@ impl History {
                 std::cmp::Ordering::Greater => {}
             }
         }
+        restart
     }
 
     pub fn doc(&self) -> ScrollbackDoc {
@@ -311,6 +322,7 @@ impl History {
             total_rows: self.rows.len() as u32,
             complete: self.complete,
             capped: self.capped,
+            era: self.era,
         }
     }
 
@@ -331,6 +343,7 @@ impl History {
             rows,
             complete: self.complete,
             capped: self.capped,
+            era: self.era,
         })
     }
 
@@ -537,6 +550,7 @@ mod tests {
             total_rows: rows.len() as u32,
             complete: true,
             capped,
+            era: 0,
         }
     }
 
@@ -553,6 +567,36 @@ mod tests {
         assert_eq!(since.from_top, 2);
         assert_eq!(since.rows.len(), 1);
         assert!(history.since(3).is_none(), "nothing new to send");
+    }
+
+    /// The refill a harness's exit produces lands **exactly** on what the hub already holds
+    /// (probe #498) — the peer advanced its base past every row it dropped — so the indices say
+    /// "tail" and the rows are the ones the hub is already holding. Only the era says otherwise,
+    /// and the hub has to relay the whole document rather than a delta past its old end, since a
+    /// delta cannot say "and throw the rest away".
+    #[test]
+    fn a_new_era_replaces_what_the_hub_held_even_where_the_indices_look_adjacent() {
+        let mut history = History::default();
+        history.absorb(&history_doc(0, &[(0, "shell-1"), (1, "shell-2")], false));
+        let mut refill = history_doc(2, &[(2, "shell-1"), (3, "shell-2")], true);
+        refill.era = 2;
+
+        assert!(history.absorb(&refill), "a new era replaces what was held");
+        let doc = history.doc();
+        assert_eq!(doc.from_top, 2, "the era before it is gone, not underneath it");
+        assert_eq!(doc.total_rows, 2, "the hub holds one ring, not two");
+        assert_eq!(
+            doc.era, 2,
+            "and it carries the peer's own era on to its own watchers"
+        );
+    }
+
+    #[test]
+    fn a_tail_in_the_same_era_is_still_stitched_on() {
+        let mut history = History::default();
+        assert!(!history.absorb(&history_doc(0, &[(0, "one")], false)));
+        assert!(!history.absorb(&history_doc(1, &[(1, "two")], false)));
+        assert_eq!(history.doc().total_rows, 2);
     }
 
     #[test]

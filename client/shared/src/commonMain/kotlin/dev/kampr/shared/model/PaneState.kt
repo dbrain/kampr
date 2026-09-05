@@ -49,6 +49,9 @@ class ScrollbackStore {
 
     private var highestIndex = -1
 
+    // The era of the rows held, as the node numbers them. See `ServerMsg.Scrollback.era`.
+    private var era = 0
+
     // How many times the ring has been thrown away and started again, which is not the same event
     // as history arriving and must not be read as one. A discard is the node saying it no longer
     // vouches for these rows — a harness taking the alternate screen, or two reads that shared no
@@ -79,7 +82,15 @@ class ScrollbackStore {
         // wheel to the pane only while `historyRows == 0`, so a client still holding them scrolls
         // them instead of letting Claude scroll its own transcript.
         val discarded = msg.totalRows == 0 && msg.rows.isEmpty() && msg.fromTop >= fromTop + totalRows
-        val restart = discarded || msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
+        // **The era is the only thing that can say it, and the indices actively lie.** A ring the
+        // node discarded advances past everything it dropped, so its refill lands exactly on this
+        // client's end — the shape of an ordinary tail, and the shape of a harness giving the
+        // alternate screen back with the same shell era in it a second time (probe #498). Read as
+        // growth, every row of it moved a parked reader up the pane: the operator quit Claude on a
+        // phone and the surface jumped back into a `top` they had run before it.
+        val reborn = msg.era != era
+        era = msg.era
+        val restart = reborn || discarded || msg.fromTop < fromTop || msg.fromTop > fromTop + totalRows
         if (restart) {
             restarts++
             fromTop = msg.fromTop
@@ -124,6 +135,7 @@ class ScrollbackStore {
         highestIndex = -1
         complete = false
         capped = false
+        era = 0
         restarts++
     }
 }

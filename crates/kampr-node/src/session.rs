@@ -1987,6 +1987,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     let mut history_due = scrollback;
     let mut history_at = tokio::time::Instant::now();
     let mut sent_rows = 0u32;
+    let mut sent_era = 0u32;
 
     loop {
         tokio::select! {
@@ -2036,7 +2037,9 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             }
             _ = tokio::time::sleep_until(history_at), if scrollback && history_due => {
                 history_due = false;
-                match send_history(&registry, &wire, &global, &local, &mut sent_rows).await {
+                match send_history(&registry, &wire, &global, &local, &mut sent_rows, &mut sent_era)
+                    .await
+                {
                     None => return,
                     // The floor is spent only on a frame that actually went. A render that
                     // found nothing new — the arm this loop starts with, before the ring has
@@ -2102,24 +2105,34 @@ async fn send_history(
     global: &str,
     local: &str,
     sent_rows: &mut u32,
+    sent_era: &mut u32,
 ) -> Option<bool> {
     let Ok(Some(mut doc)) = registry.scrollback(local).await else {
         return Some(false);
     };
+    // **A new era is news even when the indices say nothing happened.** The ring a harness
+    // superseded ends exactly where the rows it dropped ended, so `end` does not move and this
+    // socket would be told nothing at all — and the refill that follows lands on the same index
+    // again, which is what made the client count the shell era as output the pane had just
+    // produced (probe #498).
+    let era = doc.era;
+    let restarted = era != *sent_era;
     // `total_rows` is a depth, so the ring ends here; `sent_rows` is the same index, one message
     // ago.
     let end = doc.from_top + doc.total_rows;
-    if end == *sent_rows && doc.from_top <= *sent_rows {
+    if !restarted && end == *sent_rows && doc.from_top <= *sent_rows {
         return Some(false);
     }
-    // The ring restarted — a gap it could not stitch, or a width change — so the client's copy is
-    // no longer adjacent to what the node holds and the whole thing goes again.
-    if doc.from_top <= *sent_rows {
+    // The tail this socket has not had yet. Not on a restart: what it holds is not this era's, so
+    // trimming to what it is missing would leave it holding the era before it under the rows it
+    // was sent.
+    if !restarted && doc.from_top <= *sent_rows {
         doc.rows.retain(|r| r.row >= *sent_rows);
         doc.from_top = (*sent_rows).min(end);
         doc.total_rows = end - doc.from_top;
     }
     *sent_rows = end;
+    *sent_era = era;
     wire.send_scrollback(global, &doc).then_some(true)
 }
 

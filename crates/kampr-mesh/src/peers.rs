@@ -946,12 +946,18 @@ impl PeerLink {
             total_rows: message["total_rows"].as_u64().unwrap_or_default() as u32,
             complete: message["complete"].as_bool().unwrap_or(true),
             capped: message["capped"].as_bool().unwrap_or(false),
+            era: message["era"].as_u64().unwrap_or_default() as u32,
         };
         drop(styles);
         let mut history = pane.history.lock().unwrap();
         let before = history.end();
-        history.absorb(&doc);
-        let delta = history.since(before);
+        // A ring that replaced what the hub held goes on whole. `since` answers with rows past an
+        // index, and an era that replaced the rows below it has nothing past that index to say —
+        // so relaying the delta would leave every watcher on this hub holding the era before it.
+        let delta = match history.absorb(&doc) {
+            true => Some(history.doc()),
+            false => history.since(before),
+        };
         drop(history);
         if let Some(delta) = delta {
             pane.emit(RemoteEvent::Scrollback(delta));

@@ -467,4 +467,37 @@ fn a_pane_whose_harness_exited_takes_its_history_up_from_where_it_was_cut() {
     assert_eq!(doc.from_top, 2, "the base moved once, when the rows went");
     assert_eq!(doc.total_rows, 4);
     assert!(doc.capped, "the harness's own era is still unreachable");
+    assert_eq!(
+        doc.era, 2,
+        "the supersede and the refill are two eras, and the second of them is the whole point: \
+         the refill lands exactly where a tail would land, so nothing but the era can tell a \
+         client that the rows it is being handed are the ones it was already holding (#498)",
+    );
+}
+
+/// The other direction, and the one that costs something if it is wrong: a ring that is *growing*
+/// stays in its era. Every new era makes every consumer downstream throw away what it holds and
+/// take the whole document again — so an era that moved on ordinary output would re-send the ring
+/// on every poll, and a client that carries a parked reader by what arrives would stop carrying
+/// them at all.
+///
+/// Trimming is growth's other half here. A row dropped off the top keeps every remaining row's
+/// index, so what is held is still a run of the same era.
+#[test]
+fn a_ring_that_is_only_growing_stays_in_the_era_it_started_in() {
+    let mut ring = ScrollbackRing::new(4);
+    ring.ingest(&raw(&refs(&numbered(1, 2)), 20, 1, false));
+    let era = ring.render().era;
+    assert_eq!(era, 0, "a pane's first ring is the era it was born in");
+
+    ring.ingest(&raw(&refs(&numbered(1, 4)), 20, 1, false));
+    assert_eq!(ring.render().era, era, "stitching a tail on is not a new era");
+
+    ring.ingest(&raw(&refs(&numbered(3, 9)), 20, 1, false));
+    let doc = ring.render();
+    assert!(
+        doc.from_top > 0 && doc.capped,
+        "the ring has to have trimmed, or nothing is tested"
+    );
+    assert_eq!(doc.era, era, "trimming keeps every row it kept, index and all");
 }

@@ -385,8 +385,9 @@ absolute size scales with how much colour is on screen.
 ```jsonc
 { "t": "scrollback", "pane": "01J.../w3:p2", "from_top": 0,
   "rows": [ /* RowDiff, row = absolute index from the top of the node's ring */ ],
-  "total_rows": 171, "complete": true, "capped": false }
+  "total_rows": 171, "complete": true, "capped": false, "era": 0 }
 // total_rows is a DEPTH, not a highest index: the ring spans from_top .. from_top + total_rows.
+// era names the run of rows this document belongs to. Additive; omitted while it is zero.
 ```
 Only sent for panes with `scrollback_rows > 0`. Sourced from `pane.read recent format=ansi` and run
 through the same emulator, so styling matches the live grid. Agent panes never have this — their
@@ -396,6 +397,22 @@ history is the conversation.
 what the node holds; as the ring grows under a live watcher, further `scrollback` messages carry only
 rows above what was already sent, keyed on absolute row index. A client appends by index and never
 assumes a message is the whole ring.
+
+**`era` is the only thing that tells a refill from a tail, and the indices actively lie.** A ring
+the node discards advances its base past every row it dropped, so what comes back lands *exactly*
+on the client's own end — the shape of an ordinary tail. That is not a corner case: a harness on the
+alternate screen takes herdr's ring away and gives the same rows back (#244, #438), and the node
+drops them while it holds the screen, so one Claude session re-delivers the whole pre-harness shell
+era twice — measured at 162 rows in and 164 out of one cycle, on one socket, in probe #498. Read as
+growth it is one whole ring of rows that the pane never produced: the phone client carried a parked
+reader up by every one of them, into the era it had just been handed, which the operator saw as
+quitting Claude and landing in a `top` they had run before it.
+
+So **a document whose `era` is not the era of the rows a client holds replaces them**: throw them
+away, take this document as the whole ring, and do not count its rows as output that has just
+scrolled off. Growth never moves it and neither does trimming — a trimmed row keeps its index —
+so a client that sees the same era goes on appending by index exactly as before. Absent is era `0`,
+which is what a node that predates the field and a pane whose ring has never restarted both mean.
 
 **A backpressure purge must never drop a `scrollback` or `styles` message.** History is append-only
 and nothing repairs a hole in it, and a purged style entry orphans runs that survive. Only
@@ -1276,7 +1293,15 @@ A client must never letterbox a pane. Blank space below the last row is a bug, n
   rather than `min(...)`, which is what produces letterboxing. A user may zoom further out, but the
   default never leaves a margin.
 - **When a pane has no ring** (alt-screen, so `scrollback_rows == 0`) there is nothing above the grid
-  to fill with, so fill-height wins and the surface pans horizontally. `scrollback_rows == 0` says
+  to fill with, so fill-height wins and the surface pans horizontally — **but the fill counts the
+  deepest ring the pane has shown, not the one it is holding now.** The two answers are two sizes
+  for one pane, and a harness picks between them by starting: it takes herdr's ring away for as long
+  as it holds the screen and hands the same rows back on exit (#498), so a `claude` that came and
+  went halved the pane and put it back under an operator who had touched nothing. A ring that goes
+  away has not made the pane shorter — and the surface keeps its **height** too, holding the space
+  the missing rows will come back into, so the end of the record stays on the bottom of the screen
+  where a follower rests instead of being hauled a screen up it and dropped back. `scrollback_rows
+  == 0` says
   only that there is no history *above* the grid — the live grid comes off the observe stream and is
   unaffected — so it is not a reason to show a pane on any surface other than the one this device
   last chose for it. A pane opens on its remembered `view`, and on the terminal when it has none.

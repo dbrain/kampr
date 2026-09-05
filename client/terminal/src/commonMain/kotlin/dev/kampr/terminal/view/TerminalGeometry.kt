@@ -186,8 +186,17 @@ data class CaretBand(val floor: Float, val ceiling: Float)
 // a ninety-row window — where the end of the content is above the top of the surface's travel and
 // the honest answer is that there is nowhere to go at all. A grid that fits its rectangle has no
 // travel to clamp and answers zero, as it did before there was a floor of any kind.
-fun contentFloor(paint: PaintRect, totalRows: Int, contentIndex: Int, cellHeight: Float): Float {
-    val maxScroll = max(0f, totalRows * cellHeight - paint.contentHeight)
+// `reserved` is history the node is holding for this pane that has not been delivered — see
+// `TerminalView`'s `deepestRing`. It is travel like any other row above the grid: the surface may
+// go there, and what is drawn there is blank until the rows arrive.
+fun contentFloor(
+    paint: PaintRect,
+    totalRows: Int,
+    contentIndex: Int,
+    cellHeight: Float,
+    reserved: Float = 0f,
+): Float {
+    val maxScroll = max(0f, totalRows * cellHeight - paint.contentHeight + reserved)
     return ((totalRows - 1 - contentIndex) * cellHeight).coerceIn(0f, maxScroll)
 }
 
@@ -197,9 +206,10 @@ fun caretBand(
     cursorIndex: Int,
     contentIndex: Int,
     cellHeight: Float,
+    reserved: Float = 0f,
 ): CaretBand {
     val surfaceHeight = totalRows * cellHeight
-    val maxScroll = max(0f, surfaceHeight - paint.contentHeight)
+    val maxScroll = max(0f, surfaceHeight - paint.contentHeight + reserved)
     if (maxScroll <= 0f) return CaretBand(0f, 0f)
     val pinnedTop = paint.contentBottom - surfaceHeight + cursorIndex * cellHeight
     // Whichever of the two floors is the higher, because a follower may rest below neither: below
@@ -208,7 +218,7 @@ fun caretBand(
     // is why one of them served for as long as it did.
     val floor = max(
         paint.insetTop - pinnedTop,
-        contentFloor(paint, totalRows, contentIndex, cellHeight),
+        contentFloor(paint, totalRows, contentIndex, cellHeight, reserved),
     ).coerceIn(0f, maxScroll)
     return CaretBand(floor, (paint.contentBottom - cellHeight - pinnedTop).coerceIn(floor, maxScroll))
 }

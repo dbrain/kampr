@@ -4788,6 +4788,7 @@ async fn a_settled_pane_stops_restarting_its_ring() {
 
     // Let the pane drain and the width prober settle before measuring.
     let mut settled = first["from_top"].as_u64().expect("from_top");
+    let mut era = first["era"].as_u64().unwrap_or_default();
     let settle = tokio::time::Instant::now() + Duration::from_secs(8);
     while tokio::time::Instant::now() < settle {
         if let Some(m) = recv(&mut socket, Duration::from_secs(1)).await
@@ -4796,6 +4797,7 @@ async fn a_settled_pane_stops_restarting_its_ring() {
             && let Some(from_top) = m["from_top"].as_u64()
         {
             settled = from_top;
+            era = m["era"].as_u64().unwrap_or_default();
         }
     }
 
@@ -4812,6 +4814,14 @@ async fn a_settled_pane_stops_restarting_its_ring() {
             Some(settled),
             "the pane is idle, so its ring must not have restarted; it holds {} rows",
             m["total_rows"]
+        );
+        // The same claim in the field a client actually restarts on. A new era makes every
+        // consumer downstream throw away what it holds and take the whole ring again, so an era
+        // that moved on a pane doing nothing would re-send the history for ever.
+        assert_eq!(
+            m["era"].as_u64().unwrap_or_default(),
+            era,
+            "the pane is idle, so nothing may put its ring into a new era"
         );
     }
 }
@@ -8829,4 +8839,132 @@ async fn herd_has(node: &Arc<Node>, seconds: u64, ready: impl Fn(&kampr_node::he
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     panic!("the herd never reached the state this test is about");
+}
+
+/// The operator, on a phone, on 0.1.64: *"I quit Claude, see the terminal, it moves to the text
+/// entry line, then terminal jumps back up to a previous `top` commands output and I need to
+/// manually scroll up a little then down again to get to the terminal entry line"*.
+///
+/// **A harness takes herdr's ring away and gives the same rows back** (#244, #438), and the node
+/// drops them while it holds the screen because the era before a harness is not the harness's
+/// history. What that leaves is a ring whose `base` has advanced past everything it dropped — so
+/// the refill lands *exactly* on the client's own end, which is where a tail lands, and every
+/// consumer downstream counted the whole shell era as rows the pane had just produced. On the
+/// phone that is `carryHistory`: one ring of rows per delivery, up the pane, into the era itself.
+/// Probe #498 measured 162 rows on the way in and 164 on the way out of one alt-screen cycle.
+///
+/// The indices cannot say it and no heuristic over them can: growth and a refill are the same
+/// shape. `ScrollbackDoc::era` is what says it, and this is the level it has to be proved at —
+/// the ring, the poll, the supersede and one socket's `sent_rows`, all four of which have to agree
+/// before a client sees anything at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_harness_giving_the_screen_back_is_not_the_pane_producing_its_shell_era_again() {
+    let home = tempfile::tempdir().unwrap();
+    let h = harness!("ringback");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut socket, "grid.reset", 15).await;
+    // A marker on the first row of the ring, so a delivery of the shell era can be recognised
+    // however the node has renumbered it. Everything under it is there to make the ring deep
+    // enough that a carry of it would be unmistakable.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "echo SHELL-ERA-MARKER; seq 1 200\n" }),
+    )
+    .await;
+    let settling = deliveries(&mut socket, &pane, 12).await;
+    assert!(
+        settling.iter().any(|d| d.marked),
+        "the shell era never reached this socket: {settling:?}"
+    );
+
+    // The harness. A copy of bash under the agent's name is what makes herdr label the pane, and
+    // the alternate screen is what makes it a harness owning the screen — `?1049h` with no `3J`
+    // is exactly what Claude Code sends (#438), and herdr keeps no ring behind it (#30, #293).
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    herdr_has_scraped(&h._session, &local).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "printf '\\033[?1049h'; printf 'THE HARNESS SCREEN\\n'\n" }),
+    )
+    .await;
+    let taken = deliveries(&mut socket, &pane, 14).await;
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "printf '\\033[?1049l'\n" }),
+    )
+    .await;
+    let given_back = deliveries(&mut socket, &pane, 16).await;
+
+    // Read the way a client reads it, which is the only way that matters: a frame carrying the era
+    // of the frame before it is one this socket appends to what that frame left it holding.
+    let stream: Vec<&Delivery> = settling
+        .iter()
+        .chain(taken.iter())
+        .chain(given_back.iter())
+        .collect();
+    let again = stream.iter().skip(1).enumerate().filter(|(_, d)| d.marked);
+    let mut served_again = 0;
+    for (before, delivery) in again {
+        served_again += 1;
+        assert_ne!(
+            delivery.era, stream[before].era,
+            "the shell era was served again in the era this socket was already holding: {} rows \
+             at from_top {} in era {}. A client appends that, and counts one whole ring as rows \
+             the pane had just produced. The stream was {stream:?}",
+            delivery.total_rows, delivery.from_top, delivery.era,
+        );
+    }
+    assert!(
+        served_again > 0,
+        "the shell era was never served a second time, so this test never reached what it is \
+         about; the stream was {stream:?}"
+    );
+}
+
+/// One `scrollback` frame as this socket received it, with `marked` saying whether the shell era
+/// is in it.
+#[derive(Debug)]
+struct Delivery {
+    from_top: u64,
+    total_rows: u64,
+    era: u64,
+    marked: bool,
+}
+
+async fn deliveries(socket: &mut Socket, pane: &str, seconds: u64) -> Vec<Delivery> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut out = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(m) = recv(socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        if m["t"] != "scrollback" || m["pane"] != pane {
+            continue;
+        }
+        let rows = m["rows"].as_array().cloned().unwrap_or_default();
+        out.push(Delivery {
+            from_top: m["from_top"].as_u64().unwrap_or_default(),
+            total_rows: m["total_rows"].as_u64().unwrap_or_default(),
+            era: m["era"].as_u64().unwrap_or_default(),
+            marked: rows.iter().any(|r| row_text(r).contains("SHELL-ERA-MARKER")),
+        });
+    }
+    out
+}
+
+fn row_text(row: &Value) -> String {
+    row["runs"]
+        .as_array()
+        .map(|runs| runs.iter().filter_map(|r| r["x"].as_str()).collect())
+        .unwrap_or_default()
 }

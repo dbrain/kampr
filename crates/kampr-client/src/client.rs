@@ -585,11 +585,17 @@ impl Inner {
                 total_rows: message["total_rows"].as_u64().unwrap_or_default() as u32,
                 complete: message["complete"].as_bool().unwrap_or(true),
                 capped: message["capped"].as_bool().unwrap_or(false),
+                era: message["era"].as_u64().unwrap_or_default() as u32,
             };
             let history = entry.history_mut();
             let before = history.end();
-            history.absorb(&doc);
-            history.since(before)
+            // The ring the node holds was replaced rather than added to, so what this client holds
+            // is not its ancestor however adjacent the indices look (probe #498). The whole
+            // document goes on; a delta past the old end would leave the era before it underneath.
+            match history.absorb(&doc) {
+                true => Some(history.doc()),
+                false => history.since(before),
+            }
         };
         if let Some(doc) = delta {
             self.emit(Event::Scrollback {

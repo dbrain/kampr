@@ -72,6 +72,10 @@ fn is_narrow(w: &u8) -> bool {
     *w == 1
 }
 
+fn is_first_era(era: &u32) -> bool {
+    *era == 0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowRuns {
     pub row: u32,
@@ -485,6 +489,15 @@ pub enum ServerMsg {
         total_rows: u32,
         complete: bool,
         capped: bool,
+        /// Which run of rows this document belongs to — [`ScrollbackDoc::era`]. A client holding
+        /// rows of an older era must throw them away rather than append these to them, whatever
+        /// the indices look like: a ring that was discarded and filled again serves its refill
+        /// exactly where a tail would land (probe #498).
+        ///
+        /// Additive, and omitted while it is zero: a node that never sends it, and a client that
+        /// has never heard of it, both behave as every build before this one did.
+        #[serde(default, skip_serializing_if = "is_first_era")]
+        era: u32,
     },
     #[serde(rename = "convo")]
     Convo {
@@ -904,6 +917,7 @@ impl Encoder {
             total_rows: doc.total_rows,
             complete: doc.complete,
             capped: doc.capped,
+            era: doc.era,
         });
         out
     }

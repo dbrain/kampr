@@ -217,6 +217,7 @@ fn an_absolute_ring_index_beyond_sixteen_bits_survives_the_wire() {
         total_rows: 200_001,
         complete: false,
         capped: true,
+        era: 0,
     })
     .unwrap();
     assert_eq!(v["rows"][0]["row"], 200_000);

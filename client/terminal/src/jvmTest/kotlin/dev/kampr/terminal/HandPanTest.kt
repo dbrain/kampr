@@ -33,8 +33,13 @@ private fun wideShell(): PaneState {
     return pane
 }
 
-private fun PaneState.caretTo(col: Int) = applyPatch(
-    ServerMsg.GridPatch(pane = PANE, rows = emptyList(), cursor = Cursor(col, 38, true), links = emptyList()),
+private fun PaneState.caretTo(col: Int, visible: Boolean = true) = applyPatch(
+    ServerMsg.GridPatch(
+        pane = PANE,
+        rows = emptyList(),
+        cursor = Cursor(col, 38, visible),
+        links = emptyList(),
+    ),
 )
 
 @OptIn(ExperimentalTestApi::class)
@@ -93,6 +98,33 @@ class HandPanTest {
         assertTrue(
             session.view.panX < reached,
             "the caret ran off the edge and the surface did not follow: ${session.view.panX}",
+        )
+    }
+
+    // The operator, on a phone: *"it scrolled right a bunch opening top when I wasn't scrolled on
+    // previous screen so I couldn't see anything without scrolling left again"*.
+    //
+    // **A caret the program has hidden is not where anybody is typing.** Probe #499: `top` sets
+    // `?25l` and parks the cursor at **column 92 of a 94-column pane** for its whole run — nothing
+    // is drawn there and nothing can be, because the cursor is not on the screen. The surface
+    // chased it anyway and took the pane two screen-widths to the right, on a pane nobody had
+    // panned; every full-screen program does the same thing, since hiding the cursor is what you
+    // do before painting a frame you own.
+    @Test
+    fun a_caret_the_program_has_hidden_does_not_drag_the_surface_across_the_pane() = runComposeUiTest {
+        val pane = wideShell()
+        val session = PaneSession(PANE)
+        phoneTerminal(pane, session)
+        assertTrue(session.view.minPanX < -1f, "the grid has to overflow, or nothing is tested")
+        assertTrue(session.view.panX == 0f, "the surface opens at the start of the line")
+
+        pane.caretTo(150, visible = false)
+        waitForIdle()
+
+        assertTrue(
+            session.view.panX == 0f,
+            "a full-screen program parked a caret nobody can see at column 150 and the surface " +
+                "followed it to ${session.view.panX}",
         )
     }
 }

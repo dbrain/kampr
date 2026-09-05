@@ -64,6 +64,20 @@ pub struct ScrollbackDoc {
     /// True when history above `from_top` existed and is unreachable — herdr's read cap, a gap
     /// between reads, or the ring's own bound.
     pub capped: bool,
+    /// Which run of rows this document belongs to. **A reader holding a document of an older era
+    /// holds rows that are not this one's ancestors**, however adjacent the indices look, and must
+    /// throw them away rather than append.
+    ///
+    /// It exists because the indices cannot say it. A ring that is discarded and filled again
+    /// advances `base` past everything it dropped, so the refill lands exactly where a tail would
+    /// land — and a harness taking the alternate screen and giving it back is that discard and
+    /// that refill, twice per session, with the *same rows* arriving each time (probe #498). Every
+    /// consumer downstream read it as the pane having produced its whole shell era over again: the
+    /// phone client carried a parked reader up by one ring per delivery, into the era it had just
+    /// been handed.
+    ///
+    /// Growth never moves it, and neither does trimming — a trimmed row keeps the index it had.
+    pub era: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +111,8 @@ pub struct ScrollbackRing {
     cols: Option<u16>,
     /// Absolute index of `rows[0]`. Only ever increases.
     base: u32,
+    /// See [`ScrollbackDoc::era`]. Bumped by every path that stops holding what it held.
+    era: u32,
     capped: bool,
     max_rows: usize,
     rendered: Option<Vec<RowDiff>>,
@@ -114,6 +130,7 @@ impl ScrollbackRing {
             rows: Vec::new(),
             cols: None,
             base: 0,
+            era: 0,
             capped: false,
             max_rows: max_rows.max(1),
             rendered: None,
@@ -171,6 +188,15 @@ impl ScrollbackRing {
             return Ingest::Rewrapped { dropped };
         }
         if self.rows.is_empty() {
+            // **A ring that has already dropped rows is not being filled for the first time.**
+            // `rows` is empty here for one of two reasons and they are opposites: a pane that has
+            // never scrolled, where the rows now arriving really did just leave the live grid; or
+            // a ring a harness superseded, where they did not — they are the era from before it,
+            // handed back untouched when it gave the screen up (#244, #438). `base` is what tells
+            // the two apart, because nothing but a discard puts it above zero with nothing held.
+            if self.base > 0 {
+                self.era += 1;
+            }
             self.rows = incoming;
             self.capped |= raw.truncated;
             self.trim();
@@ -211,6 +237,7 @@ impl ScrollbackRing {
             total_rows,
             complete: self.base == 0,
             capped: self.capped,
+            era: self.era,
         }
     }
 
@@ -242,6 +269,7 @@ impl ScrollbackRing {
         let dropped = self.rows.len();
         self.rendered = None;
         self.base += dropped as u32;
+        self.era += 1;
         self.rows.clear();
         // Not "there is no history": there is, and this node cannot reach it (#233).
         self.capped = true;
@@ -254,6 +282,7 @@ impl ScrollbackRing {
     fn restart(&mut self, incoming: Vec<Row>) -> usize {
         let dropped = self.rows.len();
         self.base += dropped as u32;
+        self.era += 1;
         self.rows = incoming;
         self.capped = true;
         self.trim();

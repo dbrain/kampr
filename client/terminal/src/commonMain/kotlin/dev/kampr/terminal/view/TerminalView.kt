@@ -326,13 +326,22 @@ fun TerminalView(
         // frames later — on the web that is the terminal face arriving over the network, and #380
         // measured the correction at 18 pixels a row against 10. A default derived from the first
         // reading and never revised is the same defect as one derived before the insets landed.
+        // **The deepest ring this pane has shown, and not the one it is holding now.** The rows
+        // above a short grid are what the fill has to spare, so a pane that has a ring is drawn at
+        // fit-width with history above it and a pane with none is magnified to fill the height —
+        // two different sizes for the same pane, and a harness picks between them by starting.
+        // It takes herdr's ring away for as long as it holds the screen and gives it back on exit
+        // (#498), so a `claude` that came and went halved the pane and put it back, on a phone
+        // whose operator had touched nothing. A ring that goes away has not made the pane shorter.
+        var deepestRing by remember(pane.id) { mutableIntStateOf(0) }
+        if (rows.historyRows > deepestRing) deepestRing = rows.historyRows
         LaunchedEffect(
-            pane.id, pane.painted, cols, rows.historyRows > 0, paint.width, paint.insetTop, stored,
+            pane.id, pane.painted, cols, deepestRing > 0, paint.width, paint.insetTop, stored,
             breakpoint, base,
         ) {
             if (!pane.painted || view.chosen || view.scrolled) return@LaunchedEffect
             val fill = defaultZoom(
-                paint, cols, rows.liveRows, rows.historyRows, base.width, base.height,
+                paint, cols, rows.liveRows, deepestRing, base.width, base.height,
                 ceiling = if (breakpoint == Breakpoint.Desktop) 1f else Float.MAX_VALUE,
                 // Wherever 1.0x still leaves a usable pane's worth of columns on the screen. That
                 // is the desk, a split half and a rotated phone; a portrait phone shows 52 columns
@@ -479,11 +488,25 @@ fun TerminalView(
         // readings settle on their own clocks and only the smaller of the two is a distance the
         // surface may be held off the bottom by.
         val contentBelow = min(settledContent, settledBelow)
+        // **Room for the ring the node is holding and has not handed over.** A harness takes
+        // herdr's ring away for as long as it holds the screen and gives the same rows back on
+        // exit (#498), and the surface it is on shrinks and grows by the whole of it — so the end
+        // of the record, which is where a follower rests, was hauled off the bottom of the screen
+        // when `claude` started and dropped back onto it seconds after it exited, twice per
+        // session, on a phone whose operator had touched nothing. The operator: *"if I didn't
+        // manually scroll up I want it to follow the bottom"*.
+        //
+        // Reserving it keeps the travel and the floor exactly where they were: the rows are not
+        // held so nothing is drawn there, and when they come back they land in the space that was
+        // already theirs rather than pushing the pane down a screen.
+        val reserved = (deepestRing - rows.historyRows).coerceAtLeast(0) * metrics.height
         val band = caretBand(
             paint, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
+            reserved,
         )
         view.band = band
-        view.contentFloor = contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height)
+        view.contentFloor =
+            contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height, reserved)
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
         if (placedCell != metrics.height) {
             placedCell = metrics.height
@@ -520,7 +543,8 @@ fun TerminalView(
         val edgeLabel = historyEdgeLabel(reviewSurface())
         val edgePad = if (edgeLabel == null) 0f else with(density) { HISTORY_EDGE_DP.toPx() }
         val geometry = terminalGeometry(
-            paint, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY, edgePad,
+            paint, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY,
+            edgePad + reserved,
         )
         view.minPanX = geometry.minPanX
         view.maxScroll = geometry.maxScroll
@@ -545,7 +569,15 @@ fun TerminalView(
         // stopped being where a follower rests at #175; the caret band moved it again. A pane at a
         // zoom the operator picked overflows both axes, and gating this on the bottom left the
         // caret two screen widths off the right edge with no frame able to bring it back (#380).
+        // **And a caret the program has hidden is not chased at all.** Hiding the cursor is what
+        // every full-screen program does before painting a frame it owns, and where it leaves the
+        // thing while it is hidden means nothing: `top` sets `?25l` and parks it at column 92 of a
+        // 94-column pane for its whole run (#499). Chasing that took a phone two screen-widths to
+        // the right on a pane nobody had panned — the operator's *"it scrolled right a bunch
+        // opening top … I couldn't see anything without scrolling left again"*. The axis is left
+        // exactly where it is rather than handed back, because a hand that panned still owns it.
         LaunchedEffect(pane.cursor, view.followCursor, view.following) {
+            if (!pane.cursor.visible) return@LaunchedEffect
             if (view.followCursor && view.following && !view.pinching) {
                 view.chaseCursor(
                     followCursorPan(

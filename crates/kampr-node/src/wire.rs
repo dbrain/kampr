@@ -282,6 +282,7 @@ mod tests {
                 total_rows: 1,
                 complete: true,
                 capped: false,
+                era: 0,
             },
         );
         wire.send_update("n/w1:p1", &reset());

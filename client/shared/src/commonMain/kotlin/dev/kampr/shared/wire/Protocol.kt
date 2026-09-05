@@ -408,6 +408,12 @@ sealed interface ServerMsg {
         val totalRows: Int,
         val complete: Boolean,
         val capped: Boolean,
+        // Which run of rows this document belongs to. Rows held from an older era are not this
+        // one's ancestors however adjacent the indices look — a ring the node discarded and filled
+        // again serves its refill exactly where a tail would land (probe #498) — so they are
+        // thrown away rather than appended to. Additive: absent is era zero, which is what a node
+        // that never sends it and every build before this one both mean.
+        val era: Int = 0,
     ) : ServerMsg
 
     data class Convo(

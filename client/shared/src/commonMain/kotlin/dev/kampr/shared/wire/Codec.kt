@@ -72,6 +72,7 @@ object Wire {
                 totalRows = obj.int("total_rows") ?: 0,
                 complete = obj.bool("complete") ?: false,
                 capped = obj.bool("capped") ?: false,
+                era = obj.int("era") ?: 0,
             )
             "convo" -> ServerMsg.Convo(
                 pane = obj.str("pane") ?: return null,
