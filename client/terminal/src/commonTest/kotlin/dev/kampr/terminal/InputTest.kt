@@ -233,15 +233,60 @@ class InputTest {
     }
 
     // Per layout rather than across both of them. The union passed while a phone in portrait could
-    // reach eight of the twelve, which is the only reading of "reaches every function key" that
-    // matters to a thumb.
+    // The operator, on 0.1.66: *"we have a `fn` button but it only gives me F1-F6"*.
+    //
+    // **A key behind a long press is a key nobody has.** F7 to F12 were on the layer, as the
+    // alternate of the cap six along from them, and nothing on the row said so — which is the
+    // same defect the fn layer itself was built to fix one release earlier, one level down. The
+    // reading that matters to a thumb is what it can see: every function key has a cap.
     @Test
-    fun theFnLayerReachesEveryFunctionKey() {
+    fun everyFunctionKeyHasACapOfItsOwnOnTheFnLayer() {
         for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
-            val caps = rows.flatten().filterNotNull().flatMap { listOfNotNull(it, it.alternate) }
+            val caps = rows.flatten().filterNotNull()
             for (n in 1..12) {
-                assertTrue(caps.any { it.label == "F$n" }, "F$n is not on the $name Fn layer")
+                assertTrue(
+                    caps.any { it.label == "F$n" },
+                    "F$n is reachable on the $name Fn layer only by a gesture nothing names",
+                )
             }
+        }
+    }
+
+    // The other half of the same report: *"probably also needs to not replace existing buttons so
+    // I could alt+f4 for example"*.
+    //
+    // A layer that swallows the modifiers cannot build a chord on itself. The latches do survive
+    // the switch — arming alt and then turning the layer on has always worked — but that is a
+    // sequence nobody can see from a row with no `alt` on it, and every other layer here is judged
+    // by what it draws rather than by what it will accept.
+    @Test
+    fun theFnLayerKeepsTheModifiersAChordIsBuiltFrom() {
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
+            val latches = rows.flatten().filterNotNull().mapNotNull { it.latch }
+            for (modifier in listOf(Latch.Ctrl, Latch.Alt)) {
+                assertTrue(modifier in latches, "the $name Fn layer has no $modifier to chord with")
+            }
+        }
+    }
+
+    // And the chord itself, built where the operator would build it: both presses on the layer,
+    // one modified key out.
+    @Test
+    fun altAndAFunctionKeyPressedOnTheFnLayerAreOneChord() {
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
+            // One set of latches, the way the pane builds them: the row arms them and the sink
+            // reads them, and a test that gave each its own would prove nothing about a chord.
+            val recorder = Recorder()
+            val session = PaneSession("n/w1:p1")
+            val keys = InputSink("n/w1:p1", recorder, session.latches)
+            val caps = rows.flatten().filterNotNull()
+            capPress(caps.first { it.latch == Latch.Alt }, session, keys)
+            capPress(caps.first { it.label == "F4" }, session, keys)
+            assertEquals(
+                listOf(Esc.modified(Esc.function(4), ctrl = false, alt = true, shift = false)),
+                recorder.text,
+                "$name: alt and F4 did not leave the row as one chord",
+            )
         }
     }
 

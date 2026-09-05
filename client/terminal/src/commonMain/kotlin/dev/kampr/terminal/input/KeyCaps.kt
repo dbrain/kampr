@@ -68,13 +68,7 @@ private val right = csi("→", Esc.RIGHT, symbol = true, repeats = true)
 private val navTop = listOf(home, pageUp, up, pageDown)
 private val navBottom = listOf(end, left, down, right)
 
-private fun fn(n: Int, alternate: Int? = null) =
-    csi("F$n", Esc.function(n), alternate = alternate?.let { csi("F$it", Esc.function(it)) })
-
-// F1-F12 across six slots, the upper six on a long press of the lower six. Regular rather than
-// clever: the sixth key along is F6 and holding it is F12, so the pairing is one rule and not a
-// table to memorise.
-private fun fnPair(n: Int) = fn(n, n + 6)
+private fun fn(n: Int) = csi("F$n", Esc.function(n))
 
 // null is the fixed separator track between the modifier/symbol group and the navigation group.
 typealias KeyRowSpec = List<KeyCap?>
@@ -127,9 +121,24 @@ object KeyLayouts {
         listOf(text("/", "/", text("\\")), text("|", "|", text("&")), fnKey, keyboard, null) + navBottom,
     )
 
+    // **Twelve caps, and the modifiers they are pressed with.** The operator: *"we have a `fn`
+    // button but it only gives me F1-F6"* and *"probably also needs to not replace existing
+    // buttons so I could alt+f4 for example"*. F7 to F12 were here, as the alternate of the cap
+    // six along, behind a long press nothing on the row named — which is the defect this layer was
+    // built to fix one release earlier, one level down. A key nobody can see is a key nobody has.
+    //
+    // **A third row, and it is the only thing that fits.** Eight slots hold four function keys,
+    // `fn`, `kbd` and the inverted T the arrows make on every layout here — leaving nothing for
+    // the other eight function keys or for a modifier to press one with. The row this layer adds
+    // is paid for only while the layer is up, and one tap puts it away; a long press is not paid
+    // for at all, and it is what nobody found.
+    //
+    // F1 to F6 stay in the slots they were in, so a thumb that learned them keeps them, and `fn`
+    // and `kbd` keep theirs.
     val portraitFn: List<KeyRowSpec> = listOf(
-        listOf(fnPair(1), fnPair(2), fnPair(3), fnPair(4), null) + navTop,
-        listOf(fnPair(5), fnPair(6), fnKey, keyboard, null) + navBottom,
+        listOf(fn(1), fn(2), fn(3), fn(4), null) + navTop,
+        listOf(fn(5), fn(6), fnKey, keyboard, null) + navBottom,
+        listOf(fn(7), fn(8), fn(9), fn(10), null, fn(11), fn(12), ctrl, alt),
     )
 
     val landscape: List<KeyRowSpec> = listOf(
@@ -145,13 +154,14 @@ object KeyLayouts {
         ) + navBottom,
     )
 
-    // Twelve across a row that has the width for them, so nothing here is a long press. `ins` and
-    // `del` go with the symbols and are not lost: they are what `home` and `end` hold, on every
-    // layout including this one.
+    // Twelve across a row that has the width for them, and the two modifiers a chord takes. `ins`
+    // and `del` go with the symbols and are not lost: they are what `home` and `end` hold, on
+    // every layout including this one — and `esc` and the back-tab that used to sit in these two
+    // slots are on the layer below, which is where the keys this layer is not about belong.
     val landscapeFn: List<KeyRowSpec> = listOf(
         listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fnKey, keyboard, null) + navTop,
         listOf(
-            fn(7), fn(8), fn(9), fn(10), fn(11), fn(12), csi("tab", Esc.BACKTAB), escape,
+            fn(7), fn(8), fn(9), fn(10), fn(11), fn(12), ctrl, alt,
             null,
         ) + navBottom,
     )
