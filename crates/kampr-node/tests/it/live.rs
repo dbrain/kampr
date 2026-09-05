@@ -8887,7 +8887,7 @@ async fn a_harness_giving_the_screen_back_is_not_the_pane_producing_its_shell_er
         json!({ "t": "input", "pane": pane, "text": "echo SHELL-ERA-MARKER; seq 1 200\n" }),
     )
     .await;
-    let settling = deliveries(&mut socket, &pane, 12).await;
+    let settling = until_the_era_lands(&mut socket, &pane, 60, 4).await;
     assert!(
         settling.iter().any(|d| d.marked),
         "the shell era never reached this socket: {settling:?}"
@@ -8903,13 +8903,15 @@ async fn a_harness_giving_the_screen_back_is_not_the_pane_producing_its_shell_er
         json!({ "t": "input", "pane": pane, "text": "printf '\\033[?1049h'; printf 'THE HARNESS SCREEN\\n'\n" }),
     )
     .await;
-    let taken = deliveries(&mut socket, &pane, 14).await;
+    let taken = deliveries(&mut socket, &pane, 12).await;
     send(
         &mut socket,
         json!({ "t": "input", "pane": pane, "text": "printf '\\033[?1049l'\n" }),
     )
     .await;
-    let given_back = deliveries(&mut socket, &pane, 16).await;
+    // The one the test turns on, so it is waited for on the same terms as the first: the node's
+    // history poll decides when it lands, and its cadence is a function of the machine.
+    let given_back = until_the_era_lands(&mut socket, &pane, 60, 4).await;
 
     // Read the way a client reads it, which is the only way that matters: a frame carrying the era
     // of the frame before it is one this socket appends to what that frame left it holding.
@@ -8945,6 +8947,27 @@ struct Delivery {
     total_rows: u64,
     era: u64,
     marked: bool,
+}
+
+/// Every `scrollback` frame that reaches this socket, until the shell era has been delivered or
+/// the budget runs out.
+///
+/// **Waited for rather than timed.** A window measured in seconds is a bet on how long a node
+/// takes to run a command, notice its ring and poll it, and the bet is different on a loaded CI
+/// runner than on the machine it was written on — which is a flake, not a property. The frames
+/// after the one being waited for still matter, so the collection carries on to the end of the
+/// budget once it has what it came for, up to `settle` more.
+async fn until_the_era_lands(socket: &mut Socket, pane: &str, seconds: u64, settle: u64) -> Vec<Delivery> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut out = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        out.extend(deliveries(socket, pane, 1).await);
+        if out.iter().any(|d| d.marked) {
+            out.extend(deliveries(socket, pane, settle).await);
+            return out;
+        }
+    }
+    out
 }
 
 async fn deliveries(socket: &mut Socket, pane: &str, seconds: u64) -> Vec<Delivery> {
