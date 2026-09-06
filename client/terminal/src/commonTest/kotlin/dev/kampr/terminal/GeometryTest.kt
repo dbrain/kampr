@@ -105,10 +105,10 @@ class GeometryTest {
     fun aPaneOpensOnTheCaretWhenItWouldOtherwiseOpenOnBlankTail() {
         val paint = phone()
         val pinnedOnly =
-            caretBand(paint, totalRows = 34, cursorIndex = 33, contentIndex = 33, cellHeight = 21f).floor
+            caretBand(paint, totalRows = 34, cursorIndex = 33, contentIndex = 33, cellHeight = 21f, gridRows = 34).floor
         close(pinnedOnly, 0f)
         val caretHigh =
-            caretBand(paint, totalRows = 34, cursorIndex = 4, contentIndex = 33, cellHeight = 21f).floor
+            caretBand(paint, totalRows = 34, cursorIndex = 4, contentIndex = 33, cellHeight = 21f, gridRows = 34).floor
         assertTrue(caretHigh > 0f, "a caret above the fold has to pull the surface down")
         val geometry = terminalGeometry(paint, 94, 34, CELL_W, 21f, 0f, caretHigh)
         val caretTop = geometry.originY + 4 * 21f
@@ -126,12 +126,12 @@ class GeometryTest {
         val keyboard = PaintRect(width = 390f, height = 560f, insetTop = 108f, insetBottom = 130f)
         for (caret in listOf(0, 3, 20, 39)) {
             val band =
-                caretBand(roomy, totalRows = 40, cursorIndex = caret, contentIndex = 39, cellHeight = cell)
+                caretBand(roomy, totalRows = 40, cursorIndex = caret, contentIndex = 39, cellHeight = cell, gridRows = 40)
             close(band.floor, 0f)
         }
         for (caret in listOf(0, 3, 20)) {
             val floor =
-                caretBand(keyboard, totalRows = 40, cursorIndex = caret, contentIndex = 39, cellHeight = cell)
+                caretBand(keyboard, totalRows = 40, cursorIndex = caret, contentIndex = 39, cellHeight = cell, gridRows = 40)
                     .floor
             assertTrue(floor > 0f, "caret $caret has to be pulled into a rectangle that cannot hold the grid")
             val geometry = terminalGeometry(keyboard, 94, 40, CELL_W, cell, 0f, floor)
@@ -144,7 +144,7 @@ class GeometryTest {
         // The caret already near the bottom of the grid is the case the old rule got right, and it
         // has to stay right: nothing is pulled that does not need pulling.
         close(
-            caretBand(keyboard, totalRows = 40, cursorIndex = 39, contentIndex = 39, cellHeight = cell).floor,
+            caretBand(keyboard, totalRows = 40, cursorIndex = 39, contentIndex = 39, cellHeight = cell, gridRows = 40).floor,
             0f,
         )
     }
@@ -160,12 +160,12 @@ class GeometryTest {
         val cell = 21f
         val roomy = PaintRect(width = 390f, height = 1600f, insetTop = 108f, insetBottom = 130f)
         val keyboard = PaintRect(width = 390f, height = 560f, insetTop = 108f, insetBottom = 130f)
-        close(contentFloor(roomy, totalRows = 40, contentIndex = 3, cellHeight = cell), 0f)
-        close(contentFloor(keyboard, totalRows = 40, contentIndex = 39, cellHeight = cell), 0f)
-        close(contentFloor(keyboard, totalRows = 40, contentIndex = 30, cellHeight = cell), 9 * cell)
+        close(contentFloor(roomy, totalRows = 40, contentIndex = 3, cellHeight = cell, gridRows = 40), 0f)
+        close(contentFloor(keyboard, totalRows = 40, contentIndex = 39, cellHeight = cell, gridRows = 40), 0f)
+        close(contentFloor(keyboard, totalRows = 40, contentIndex = 30, cellHeight = cell, gridRows = 40), 9 * cell)
 
         val maxScroll = 40 * cell - keyboard.contentHeight
-        close(contentFloor(keyboard, totalRows = 40, contentIndex = 1, cellHeight = cell), maxScroll)
+        close(contentFloor(keyboard, totalRows = 40, contentIndex = 1, cellHeight = cell, gridRows = 40), maxScroll)
     }
 
     // And which of the two the surface rests on while it follows: whichever is the higher, because
@@ -179,12 +179,12 @@ class GeometryTest {
 
         // A shell pane: the record stops at the caret, so the caret's floor is a screenful below
         // the end of it and the record's is what holds the surface up.
-        val shell = caretBand(keyboard, totalRows = 40, cursorIndex = 30, contentIndex = 30, cellHeight = cell)
+        val shell = caretBand(keyboard, totalRows = 40, cursorIndex = 30, contentIndex = 30, cellHeight = cell, gridRows = 40)
         close(shell.floor, 9 * cell)
 
         // A full-screen redraw: rows written under a caret that stayed put, so the caret's floor is
         // above the end of the record and the record's is zero.
-        val redrawn = caretBand(keyboard, totalRows = 40, cursorIndex = 5, contentIndex = 39, cellHeight = cell)
+        val redrawn = caretBand(keyboard, totalRows = 40, cursorIndex = 5, contentIndex = 39, cellHeight = cell, gridRows = 40)
         close(redrawn.floor, maxScroll - 5 * cell)
         assertTrue(redrawn.floor <= redrawn.ceiling, "a band cannot be inverted")
     }

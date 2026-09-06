@@ -502,11 +502,11 @@ fun TerminalView(
         val reserved = (deepestRing - rows.historyRows).coerceAtLeast(0) * metrics.height
         val band = caretBand(
             paint, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
-            reserved,
+            rows.liveRows, reserved,
         )
         view.band = band
         view.contentFloor =
-            contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height, reserved)
+            contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height, rows.liveRows)
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
         if (placedCell != metrics.height) {
             placedCell = metrics.height

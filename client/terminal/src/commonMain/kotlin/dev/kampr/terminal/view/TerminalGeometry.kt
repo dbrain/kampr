@@ -182,22 +182,33 @@ data class CaretBand(val floor: Float, val ceiling: Float)
 // caret that stayed put, so the caret floor sits *above* the end of it and would put the last
 // rows of the pane out of reach, which is exactly the defect #428 fixed.
 //
-// Clamped to `maxScroll` for the pane with less in it than the rectangle can show — four lines in
-// a ninety-row window — where the end of the content is above the top of the surface's travel and
-// the honest answer is that there is nowhere to go at all. A grid that fits its rectangle has no
-// travel to clamp and answers zero, as it did before there was a floor of any kind.
-// `reserved` is history the node is holding for this pane that has not been delivered — see
-// `TerminalView`'s `deepestRing`. It is travel like any other row above the grid: the surface may
-// go there, and what is drawn there is blank until the rows arrive.
+// **Clamped to the top of the pane's own grid, which is the room it is allowed to make.** The
+// floor's job is to keep the end of the record on the screen; past the first row of the grid it is
+// spending the operator's history to hide the pane's blank tail, and history is not blank — it is
+// where the surface was scrolled *away from*. A full-screen program is what makes the difference
+// visible, because leaving one moves the end of the record by most of a pane in a single frame
+// (probe #502): every row written and the caret at the top while it holds the screen, five rows of
+// forty when it gives it back. On the desk, where the pane is the size of the view and the whole
+// grid is on the screen at the bottom of the surface, that swing hauled the viewport 19 rows into
+// a `top` the operator had run before it and pinned them there — a hand's floor is this same
+// number, so there was no scrolling back out. Where the grid genuinely overflows the rectangle the
+// clamp does not bind and the floor is what it was: `aPaneWithNothingOnItButItsCaretCannotBeDragged`
+// `IntoTheTail` is the case that was already this rule, arrived at by having no history to climb —
+// there `maxScroll` *was* the top of the grid, which is why it read as a clamp on the travel.
+//
+// A grid that fits its rectangle answers zero, as it did before there was a floor of any kind, and
+// the surface's own travel needs no clamp of its own: the grid is the tail of the surface, so the
+// top of it is never above the top of what there is to scroll. The `reserved` rows the node is
+// holding back are more of that surface, above the grid, and no part of this room.
 fun contentFloor(
     paint: PaintRect,
     totalRows: Int,
     contentIndex: Int,
     cellHeight: Float,
-    reserved: Float = 0f,
+    gridRows: Int,
 ): Float {
-    val maxScroll = max(0f, totalRows * cellHeight - paint.contentHeight + reserved)
-    return ((totalRows - 1 - contentIndex) * cellHeight).coerceIn(0f, maxScroll)
+    val topOfTheGrid = max(0f, gridRows * cellHeight - paint.contentHeight)
+    return ((totalRows - 1 - contentIndex) * cellHeight).coerceIn(0f, topOfTheGrid)
 }
 
 fun caretBand(
@@ -206,6 +217,7 @@ fun caretBand(
     cursorIndex: Int,
     contentIndex: Int,
     cellHeight: Float,
+    gridRows: Int,
     reserved: Float = 0f,
 ): CaretBand {
     val surfaceHeight = totalRows * cellHeight
@@ -218,7 +230,7 @@ fun caretBand(
     // is why one of them served for as long as it did.
     val floor = max(
         paint.insetTop - pinnedTop,
-        contentFloor(paint, totalRows, contentIndex, cellHeight, reserved),
+        contentFloor(paint, totalRows, contentIndex, cellHeight, gridRows),
     ).coerceIn(0f, maxScroll)
     return CaretBand(floor, (paint.contentBottom - cellHeight - pinnedTop).coerceIn(floor, maxScroll))
 }

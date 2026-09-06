@@ -26,11 +26,17 @@ import kotlin.test.assertTrue
 // The shape here is the operator's, and it is the shape the earlier attempt at this missed: a
 // **long ring** under a **phone-sized viewport**, so the surface is enormously taller than the
 // window and neither floor is clamped by `maxScroll`.
+//
+// **And the prompt is where a command that scrolls leaves it**: near the bottom of the grid, with
+// the record running down to it. The record's floor stops at the top of the pane's own grid (#502),
+// so a record that fits inside the viewport has no floor left to move — which is the right answer
+// for that pane and no test of a floor that is one reading stale. `paru -Syu` fills a screen long
+// before it finishes, and the two settles this is about are the ones at the end of it.
 private val PHONE = 411.dp to 914.dp
 private val DESK = 1600.dp to 900.dp
 
 private const val GRID_ROWS = 69
-private const val PROMPT_AT = 8
+private const val PROMPT_AT = 61
 private const val RING = 2000
 
 private fun history(count: Int) = ServerMsg.Scrollback(
