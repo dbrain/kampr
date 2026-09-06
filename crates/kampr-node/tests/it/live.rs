@@ -4778,13 +4778,18 @@ async fn a_settled_pane_stops_restarting_its_ring() {
         json!({ "t": "input", "pane": pane, "text": "seq 1 200\n" }),
     )
     .await;
-    until_pane(&mut socket, "scrollback", &pane, 25).await;
+    // **How long a node takes to notice its own ring is a fact about the machine.** Twenty-five
+    // seconds is the whole of this wait on the laptop this was written on and less than it on a
+    // loaded runner, where it failed with `saw ["grid.patch", "herd.patch"]` — a flake about the
+    // poll's cadence, on a test about the ring restarting. The budget is a bound on going wrong,
+    // not a measurement of going right, so it is generous.
+    until_pane(&mut socket, "scrollback", &pane, 60).await;
     send(
         &mut socket,
         json!({ "t": "input", "pane": pane, "text": "printf '#%.0s' $(seq 1 400); echo\n" }),
     )
     .await;
-    let first = until_pane(&mut socket, "scrollback", &pane, 25).await;
+    let first = until_pane(&mut socket, "scrollback", &pane, 60).await;
 
     // Let the pane drain and the width prober settle before measuring.
     let mut settled = first["from_top"].as_u64().expect("from_top");
