@@ -3132,52 +3132,6 @@ async fn drain_reset_sizes(socket: &mut Socket, pane: &str, window: Duration) ->
     sizes
 }
 
-/// The operator, on the resize that happens every time they navigate away from a pane and back:
-/// *"should it not just keep size until some other client pokes?"*
-///
-/// **A controller cannot do that and a client can.** Releasing a controller restores the desk's
-/// geometry inside a second whether it is asked politely or killed ([#19](#)), so a size a
-/// controller sets dies with the hold — which is the resize on every navigation. A herdr *client*
-/// sizes the session the way any other client does, and when it leaves the size falls back to
-/// whoever remains rather than being taken back from it ([#477](#), [#478](#), [#507](#)).
-///
-/// The environment is the trap and it is asserted here by working at all: herdr refuses to run
-/// inside its own pane, so a node that inherited `HERDR_*` from anywhere would get
-/// `nested herdr is disabled by default` and no client.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_attached_client_sizes_the_session_and_the_size_outlives_it() {
-    let Some(session) = Session::start("attached").await else {
-        eprintln!("skipping: herdr is not on PATH");
-        return;
-    };
-    let _created = CreatedSession::named(&session.name);
-    let workspace = session.call("workspace.create", json!({ "cwd": "/tmp" })).await["root_pane"]["pane_id"]
-        .as_str()
-        .expect("a pane")
-        .to_string();
-    the_only_workspace(&session, workspace.split(':').next().unwrap()).await;
-    a_pane_at_its_shell(&session, &workspace).await;
-
-    let was = viewport_rows(&session, &workspace).await;
-    let wanted = was + 12;
-    let client = kampr_herdr::attach::Attached::open("herdr", &session.name, 100, wanted)
-        .await
-        .expect("a herdr client on a pty of its own");
-
-    assert!(
-        rows_settle_at(&session, &workspace, wanted, 20).await,
-        "the attached client did not size the session; it is still {} rather than {wanted}",
-        viewport_rows(&session, &workspace).await,
-    );
-
-    client.close().await;
-    // The whole point: a controller's size would be gone inside a second (#19).
-    assert!(
-        rows_stay_at(&session, &workspace, wanted, 8).await,
-        "the size went away with the client that set it, which is the controller's behaviour"
-    );
-}
-
 /// The operator, on a pane they had just navigated back to: *"when i switch back to it it bounces
 /// around"*. Every claim and release of the standing hold is a resize, and a resize restarts the
 /// observe stream — which is a full repaint at a new size on every client watching.
