@@ -256,6 +256,17 @@ fn located(home: &Path, process: &PaneProcess) -> Option<String> {
         .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
 }
 
+/// Puts a lock file a second into the past, so "the newest" is a fact rather than an enumeration.
+fn older(home: &Path, id: &str) {
+    let lock = File::options()
+        .write(true)
+        .open(home.join(format!("thread-writer-locks/{id}.lock")))
+        .unwrap();
+    let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+    lock.set_times(std::fs::FileTimes::new().set_modified(earlier))
+        .unwrap();
+}
+
 fn hold(home: &Path, id: &str) -> File {
     let lock = File::options()
         .write(true)
@@ -312,6 +323,14 @@ fn a_codex_process_that_has_opened_a_second_thread_is_on_the_newer_one() {
     .unwrap();
     File::create(home.join(format!("thread-writer-locks/{SECOND_THREAD}.lock"))).unwrap();
     let _second = hold(&home, SECOND_THREAD);
+    // **The two locks have to be datable apart, and creating them back to back does not do it.**
+    // `held` sorts by mtime and `sort_by_key` is stable, so locks sharing one come back in
+    // `read_dir`'s order — the filesystem's business, not this test's. It passed here every time
+    // and failed a release on CI. Forcing the tie locally still passes, because this filesystem
+    // happens to enumerate them the favourable way, which is the whole objection to depending on
+    // it. Dating the held lock a second earlier is also the ordering codex really produces: it
+    // takes the second lock later and never lets the first go.
+    older(&home, HELD_THREAD);
 
     assert_eq!(
         located(&home, &me()).as_deref(),
