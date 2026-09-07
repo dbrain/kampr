@@ -1,3 +1,4 @@
+pub mod attach;
 pub mod control;
 pub mod locate;
 pub mod model;

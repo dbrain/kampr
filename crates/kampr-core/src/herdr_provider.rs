@@ -991,6 +991,25 @@ impl Inner {
         entry.cols()
     }
 
+    /// The pane's geometry as herdr has it *now*, rather than as the last sweep left it.
+    ///
+    /// **The width beside it is measured live and the rows were not, and that asymmetry is what
+    /// made one resize cost two restarts** (probe #506). `observe_cols` reads the pane over the
+    /// socket, so a respawn always carried a current width; the rows came from the cached
+    /// snapshot, which a sweep updates on its own cadence. So a resize that moved both was noticed
+    /// by the width probe first, the stream came back at the new width with the *old* row count,
+    /// and the sweep then changed the rows under a stream that had only just started — a second
+    /// full repaint at a second size, seconds after the first. Both halves come from the same
+    /// moment now, and the snapshot arriving later agrees with what is already running.
+    ///
+    /// One extra round trip per respawn, which is the same cost `observe_cols` beside it already
+    /// pays, and a respawn is rare. A read that does not answer leaves the caller with the
+    /// snapshot's own answer, which is what it had before.
+    async fn fresh_geometry(&self, pane_id: &str) -> Option<(u16, u16)> {
+        let snapshot = self.herdr.snapshot().await.ok()?;
+        observe_geometry(&snapshot, pane_id)
+    }
+
     async fn read_width(&self, pane_id: &str) -> Option<Reading> {
         let rows = self
             .snapshot
@@ -1613,6 +1632,7 @@ async fn supervise(inner: Arc<Inner>, pane_id: String, tx: mpsc::Sender<PaneEven
         let Some((rect, rows)) = resolve_geometry(&pane_id, &mut snapshots).await else {
             return;
         };
+        let (rect, rows) = inner.fresh_geometry(&pane_id).await.unwrap_or((rect, rows));
         let cols = inner.observe_cols(&pane_id, rect).await;
         let observer = Observer::spawn(
             &inner.config.binary,

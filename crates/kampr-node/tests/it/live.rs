@@ -3114,6 +3114,130 @@ async fn control_cols(session: &Session, pane: &str, cols: u16) {
 }
 
 /// Every width a `grid.reset` carried for this pane over `window`.
+/// Every `grid.reset` this pane sent over `window`, as the size it carried.
+async fn drain_reset_sizes(socket: &mut Socket, pane: &str, window: Duration) -> Vec<(u16, u16)> {
+    let deadline = tokio::time::Instant::now() + window;
+    let mut sizes = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "grid.reset" && message["pane"] == pane {
+            sizes.push((
+                message["cols"].as_u64().unwrap_or(0) as u16,
+                message["rows"].as_u64().unwrap_or(0) as u16,
+            ));
+        }
+    }
+    sizes
+}
+
+/// The operator, on the resize that happens every time they navigate away from a pane and back:
+/// *"should it not just keep size until some other client pokes?"*
+///
+/// **A controller cannot do that and a client can.** Releasing a controller restores the desk's
+/// geometry inside a second whether it is asked politely or killed ([#19](#)), so a size a
+/// controller sets dies with the hold — which is the resize on every navigation. A herdr *client*
+/// sizes the session the way any other client does, and when it leaves the size falls back to
+/// whoever remains rather than being taken back from it ([#477](#), [#478](#), [#507](#)).
+///
+/// The environment is the trap and it is asserted here by working at all: herdr refuses to run
+/// inside its own pane, so a node that inherited `HERDR_*` from anywhere would get
+/// `nested herdr is disabled by default` and no client.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_attached_client_sizes_the_session_and_the_size_outlives_it() {
+    let Some(session) = Session::start("attached").await else {
+        eprintln!("skipping: herdr is not on PATH");
+        return;
+    };
+    let _created = CreatedSession::named(&session.name);
+    let workspace = session.call("workspace.create", json!({ "cwd": "/tmp" })).await["root_pane"]["pane_id"]
+        .as_str()
+        .expect("a pane")
+        .to_string();
+    the_only_workspace(&session, workspace.split(':').next().unwrap()).await;
+    a_pane_at_its_shell(&session, &workspace).await;
+
+    let was = viewport_rows(&session, &workspace).await;
+    let wanted = was + 12;
+    let client = kampr_herdr::attach::Attached::open("herdr", &session.name, 100, wanted)
+        .await
+        .expect("a herdr client on a pty of its own");
+
+    assert!(
+        rows_settle_at(&session, &workspace, wanted, 20).await,
+        "the attached client did not size the session; it is still {} rather than {wanted}",
+        viewport_rows(&session, &workspace).await,
+    );
+
+    client.close().await;
+    // The whole point: a controller's size would be gone inside a second (#19).
+    assert!(
+        rows_stay_at(&session, &workspace, wanted, 8).await,
+        "the size went away with the client that set it, which is the controller's behaviour"
+    );
+}
+
+/// The operator, on a pane they had just navigated back to: *"when i switch back to it it bounces
+/// around"*. Every claim and release of the standing hold is a resize, and a resize restarts the
+/// observe stream — which is a full repaint at a new size on every client watching.
+///
+/// **One resize used to cost two of them.** The width a respawn runs at is measured over the
+/// socket, so it is always current; the rows came from the cached snapshot, which a sweep updates
+/// on its own cadence. The width probe notices a resize first, so the stream came back at the new
+/// width paired with the row count the resize had already replaced — and the sweep then moved the
+/// rows under a stream that had only just started. Measured on a real pane with a real client
+/// watching: `94x30`, then `99x30`, then `99x50`, three seconds apart (probe #506).
+#[tokio::test(flavor = "multi_thread")]
+async fn one_resize_never_brings_the_stream_back_at_a_row_count_it_has_already_left() {
+    let h = harness!("onereset");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    a_pane_at_its_shell(&h._session, &local).await;
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false }),
+    )
+    .await;
+    let first = until(&mut socket, "grid.reset", 20).await;
+    let was = first["rows"].as_u64().expect("the reset's rows") as u16;
+    // Let the width inference settle, so what follows is the resize's restart and not the probe
+    // arriving at the pane's real width for the first time.
+    drain_reset_sizes(&mut socket, &pane, Duration::from_secs(8)).await;
+
+    // **Through `pane.size`, because that is what the operator's resizes are** and it is the
+    // ordering that produces the defect: the op bumps the width prober awake at once (nothing in
+    // herdr announces a PTY move, probe #68), so the width is re-measured long before the sweep
+    // refreshes the snapshot the rows used to come from. A raw controller does not bump it, the
+    // sweep gets there first, and the stale pairing never happens — which is a harness that is not
+    // the app.
+    let wanted = was + 12;
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 100, "rows": wanted }),
+    )
+    .await;
+    let sizes = drain_reset_sizes(&mut socket, &pane, Duration::from_secs(20)).await;
+
+    assert!(
+        !sizes.is_empty(),
+        "the resize never reached this client at all, so nothing here is tested"
+    );
+    assert!(
+        sizes.iter().all(|(_, rows)| *rows != was),
+        "the stream came back at {was} rows, which the resize to {wanted} had already replaced — \
+         every client repaints twice for one resize. The resets were {sizes:?}"
+    );
+    assert!(
+        sizes.iter().any(|(_, rows)| *rows == wanted),
+        "the stream never reached {wanted} rows; the resets were {sizes:?}"
+    );
+}
+
 async fn drain_resets(socket: &mut Socket, pane: &str, window: Duration) -> Vec<u16> {
     let deadline = tokio::time::Instant::now() + window;
     let mut widths = Vec::new();
