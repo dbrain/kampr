@@ -109,6 +109,7 @@ import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private const val CURSOR_BLINK_MS = 530L
 
@@ -145,6 +146,20 @@ private const val TARGET_RULE = 2f
 // The card is placed at the click, not under it: a pointer sitting on its top-left corner hides
 // the first characters of the thing it is naming.
 private const val CARD_NUDGE = 10f
+
+// How far the viewport sits above the live edge, in rows, which is what "rows back" says.
+//
+// It was handed `historyRows` — the *depth of the ring* — so a pane with any scrollback at all told
+// the operator they were hundreds of rows back while they sat exactly on the live edge, and said it
+// in the accessibility text too. The operator read **448 rows back** off a pane they had never
+// scrolled and reported, reasonably, that it *"never stayed with the live edge"*; the number was the
+// ring, and it had been the ring since the strip was written.
+private fun rowsBack(view: TerminalViewState, cellHeight: Float): Int =
+    if (cellHeight <= 0f) {
+        0
+    } else {
+        ((view.scrollY - view.band.floor) / cellHeight).roundToInt().coerceAtLeast(0)
+    }
 
 private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
     Breakpoint.Desktop -> 56f
@@ -923,7 +938,7 @@ fun TerminalView(
 
         val firstCol = floor(-geometry.panX / metrics.width).toInt().coerceIn(0, cols)
         val lastCol = min(cols, firstCol + (paint.width / metrics.width).toInt() + 1)
-        val window = ColumnWindow(firstCol, lastCol, cols, rows.historyRows)
+        val window = ColumnWindow(firstCol, lastCol, cols, rowsBack(view, metrics.height))
 
         Column(
             Modifier
