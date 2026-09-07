@@ -32,11 +32,19 @@ import kotlin.test.assertTrue
 // so a record that fits inside the viewport has no floor left to move — which is the right answer
 // for that pane and no test of a floor that is one reading stale. `paru -Syu` fills a screen long
 // before it finishes, and the two settles this is about are the ones at the end of it.
+//
+// **The grid is deep for the same reason, and it is a fact about the runner rather than about the
+// pane.** With a 69-row grid the cap is `69 - <rows the viewport holds>`, and how many rows a
+// viewport holds is a function of the font the host resolved — which is not the same font on CI as
+// on the machine this was written on. There the cap came out under the four rows this asserts and
+// the floor stopped being the record's end at all, so it passed here and failed there for six runs.
+// Two hundred rows puts the cap a hundred and fifty rows clear of the number under test on any
+// geometry, which is what makes the assertion about the settle rather than about the runner.
 private val PHONE = 411.dp to 914.dp
 private val DESK = 1600.dp to 900.dp
 
-private const val GRID_ROWS = 69
-private const val PROMPT_AT = 61
+private const val GRID_ROWS = 200
+private const val PROMPT_AT = 192
 private const val RING = 2000
 
 private fun history(count: Int) = ServerMsg.Scrollback(
@@ -58,6 +66,18 @@ private fun ComposeUiTest.aShellWithHistory(size: Pair<Dp, Dp>): Pair<PaneState,
     wrote(pane, PROMPT_AT, "[dbrain@giftofthemagi2 kobbler]$ paru -Syu")
     assertTrue(session.view.following, "a pane nobody has touched follows its own output")
     assertTrue(session.view.maxScroll > 0f, "the surface has to overflow, or nothing is tested")
+    // The record's end has to be what the floor is made of. If the viewport of whatever host is
+    // running this holds nearly the whole grid, the cap at the top of the pane (#502) is the lower
+    // of the two and the floor stops tracking the record at all — which is correct behaviour and
+    // no test of a settle. Named here so that failure says so, rather than looking like the
+    // regression the assertion below is about.
+    val uncapped = (GRID_ROWS - PROMPT_AT - 1) * session.grid.cellHeight
+    assertTrue(
+        kotlin.math.abs(session.view.contentFloor - uncapped) < 0.51f,
+        "$size: this viewport holds so much of a $GRID_ROWS-row grid that the floor is the top of " +
+            "the pane (${session.view.contentFloor}px) rather than the end of the record " +
+            "(${uncapped}px) — the pane under test needs to be deeper than the window",
+    )
     return pane to session
 }
 
