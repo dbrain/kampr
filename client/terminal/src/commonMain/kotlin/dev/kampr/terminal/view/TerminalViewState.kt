@@ -85,6 +85,11 @@ class TerminalViewState {
     // read is the end of the travel.
     var contentFloor = 0f
 
+    // How tall the rectangle this surface is shown in is, which is the distance that tells a
+    // reader of history from a watcher of the pane. It is a property of the screen rather than of
+    // the pane, so it is written from the composition beside the band.
+    var viewportHeight = 0f
+
     // Where the surface rests while it follows, and nothing else. It was also the *floor of the
     // drag*, and that is the half that had to go: on a grid taller than the viewport with the
     // caret above the bottom of it, clamping a hand at the floor put the last rows of the pane
@@ -174,11 +179,25 @@ class TerminalViewState {
     // Above the edge is history, and a reader there is anchored to their rows: that is what the
     // carry is for and it still happens.
     fun carryHistory(rowsAdded: Int, cellHeight: Float) {
-        if (rowsAdded == 0 || following || atOrBelowTheLiveEdge) return
+        if (rowsAdded == 0 || following || watchingTheLiveEdge) return
         scrollY = (scrollY + rowsAdded * cellHeight).coerceAtLeast(0f)
     }
 
-    private val atOrBelowTheLiveEdge: Boolean get() = scrollY <= band.floor + FOLLOW_SLACK
+    // **A screenful, and it used to be half a pixel.** `following` is cleared by one notch of the
+    // wheel and nothing but typing sets it again, so it outlives leaving the pane, the conversation
+    // view, and the hour in between — which is why the operator could say, accurately, that they had
+    // not scrolled. What made the stale flag cost anything is this line: on a pane matched to the
+    // view the live edge *is* scroll zero, so `floor + FOLLOW_SLACK` gave a reader half a pixel of
+    // forgiveness and called everyone else a reader of history. Measured on the hub's own pane
+    // while the operator worked (probe #504): one notch off the edge, 87 rows of `adb` output into
+    // the ring, and the carry took three rows to **ninety** — *"things are just jumping around
+    // constantly"*.
+    //
+    // The carry is for somebody who went back to read, and holding their rows still is exactly
+    // right for them. Somebody sitting at the bottom watching a command run is not reading
+    // anything, and holding them still is what walks the pane out from under them. Inside a
+    // screenful of the live edge is the bottom of the pane; past it is its history.
+    private val watchingTheLiveEdge: Boolean get() = scrollY <= band.floor + viewportHeight
 
     // Both axes take the delta with the same sign: the surface goes where the finger goes. The
     // vertical one was subtracted, which made dragging down mean "newer" on a surface whose

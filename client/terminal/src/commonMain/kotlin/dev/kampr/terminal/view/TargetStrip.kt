@@ -46,6 +46,7 @@ fun TargetStrip(
     onAct: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier,
+    onCopy: (() -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -56,6 +57,7 @@ fun TargetStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Words(target, onDismiss, Modifier.weight(1f))
+        onCopy?.let { QuietButton("Copy", "Copy ${target.text}", it) }
         ActButton(target, onAct)
     }
 }
@@ -70,6 +72,7 @@ internal fun TargetCard(
     at: Offset,
     onAct: () -> Unit,
     onDismiss: () -> Unit,
+    onCopy: (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
@@ -86,17 +89,8 @@ internal fun TargetCard(
         Words(target, null, Modifier)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActButton(target, onAct)
-            Box(
-                Modifier
-                    .touchable()
-                    .background(tokens.color.surface, shape)
-                    .edge(tokens.card, shape)
-                    .action("Dismiss ${kind(target)} ${target.text}", onDismiss, shape)
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                KText("Dismiss", tokens.type.buttonSmall, tokens.color.dim)
-            }
+            onCopy?.let { QuietButton("Copy", "Copy ${target.text}", it) }
+            QuietButton("Dismiss", "Dismiss ${kind(target)} ${target.text}", onDismiss)
         }
     }
 }
@@ -127,6 +121,25 @@ private fun Words(target: Target, onDismiss: (() -> Unit)?, modifier: Modifier) 
         Box(Modifier.weight(1f, fill = false).heightIn(max = WORDS_MAX_HEIGHT).verticalScroll(rememberScrollState())) {
             KText(target.text, tokens.type.caption, tokens.color.text, maxLines = WRAPPED_LINES)
         }
+    }
+}
+
+// Everything beside the act: it never opens anything, so it is the surface colour rather than the
+// accent and a mis-tap costs nothing.
+@Composable
+private fun QuietButton(word: String, spoken: String, onClick: () -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.md)
+    Box(
+        Modifier
+            .touchable()
+            .background(tokens.color.surface, shape)
+            .edge(tokens.card, shape)
+            .action(spoken, onClick, shape)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        KText(word, tokens.type.buttonSmall, tokens.color.dim)
     }
 }
 

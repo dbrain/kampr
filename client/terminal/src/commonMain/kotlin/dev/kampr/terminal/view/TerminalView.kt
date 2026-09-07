@@ -505,6 +505,7 @@ fun TerminalView(
             rows.liveRows, reserved,
         )
         view.band = band
+        view.viewportHeight = paint.contentHeight
         view.contentFloor =
             contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height, rows.liveRows)
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
@@ -1012,6 +1013,18 @@ fun TerminalView(
                 }
                 view.aimOff()
             }
+            // Every target the act does something *else* with can also just be copied — the
+            // operator asked for the path rather than the file behind it. A `Path` is not offered
+            // one because copying is already what its act does, and two controls with the same
+            // label is one nobody can name.
+            val copy = if (target.kind == TargetKind.Path) {
+                null
+            } else {
+                {
+                    clipboard.setText(AnnotatedString(target.text))
+                    view.aimOff()
+                }
+            }
             val anchor = view.targetAt
             // By form factor, not by platform. A desk clicks a path at the top of a nine-hundred
             // pixel pane and the bottom of the screen is nowhere near it; a phone has no room to
@@ -1027,12 +1040,14 @@ fun TerminalView(
                     ),
                     onAct = act,
                     onDismiss = { view.aimOff() },
+                    onCopy = copy,
                 )
             } else {
                 TargetStrip(
                     target = target,
                     onAct = act,
                     onDismiss = { view.aimOff() },
+                    onCopy = copy,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),

@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::{Stream, StreamExt, TryStreamExt};
 use kampr_journal::attach::MAX_BYTES;
 use kampr_journal::{Fetched, FileRef, JournalError, Registry as Journals};
 use kampr_mesh::{FetchError, Peers};
@@ -293,19 +293,34 @@ pub async fn relay(peers: &Peers, pane: &str, id: &str) -> Response {
     let pane = pane.to_string();
     let rest = futures_util::stream::unfold(transfer, |mut transfer| async move {
         transfer.next_chunk().await.map(|chunk| (chunk, transfer))
+    })
+    .map(move |chunk| {
+        chunk.map_err(|e| {
+            tracing::debug!(pane, error = %e, "a peer's attachment stopped mid-body");
+            std::io::Error::other(e.to_string())
+        })
     });
-    // A truncation is visible to the client as a body shorter than the `Content-Length` it was
-    // promised, which is the honest end for a transfer that cannot be completed once the status
-    // line has gone out.
-    let body = futures_util::stream::once(async move { Ok(first) })
-        .chain(rest.map(move |chunk| {
-            chunk.map_err(|e| {
-                tracing::debug!(pane, error = %e, "a peer's attachment stopped mid-body");
-                std::io::Error::other(e.to_string())
-            })
-        }))
-        .map_ok(axum::body::Bytes::from);
-    (StatusCode::OK, headers, Body::from_stream(body)).into_response()
+    (StatusCode::OK, headers, Body::from_stream(chunked(first, rest))).into_response()
+}
+
+/// The first chunk, held back to decide the headers, and then the rest of them.
+///
+/// **The chunk source is fused, and a peer's attachment is why.** `Chain` does not remember that
+/// its second stream has finished — it polls it again on the next poll — and the source here is a
+/// `stream::unfold`, which *panics* rather than answering `None` twice. Hyper polls a body once
+/// more after its last chunk, so every relayed attachment ended in a panicked tokio worker and a
+/// connection dropped with no response header on it: the operator's browser showed `502` from the
+/// proxy in front of the node, twice to the second in its error log, while the node's own log
+/// carried the panic and nothing else (probe #505). A truncation is still visible to the client as
+/// a body shorter than the `Content-Length` it was promised, which is the honest end for a
+/// transfer that cannot be completed once the status line has gone out.
+fn chunked<S>(first: Vec<u8>, rest: S) -> impl Stream<Item = std::io::Result<axum::body::Bytes>> + Send
+where
+    S: Stream<Item = std::io::Result<Vec<u8>>> + Send,
+{
+    futures_util::stream::once(async move { Ok(first) })
+        .chain(rest.fuse())
+        .map_ok(axum::body::Bytes::from)
 }
 
 /// A name out of a transcript reaches a header and then a filesystem, so it is reduced to
@@ -335,6 +350,37 @@ fn filename(claim: &Claim<'_>) -> String {
 mod tests {
     use super::*;
     use kampr_journal::attach::{FILE, IMAGE};
+
+    /// The chunk source the relay actually has: `stream::unfold`, which panics rather than
+    /// answering `None` a second time. Nothing here is a stand-in for the panic — this *is* the
+    /// contract the real source keeps, and the body has to hold to it.
+    fn refuses_a_second_ending(chunks: Vec<Vec<u8>>) -> impl Stream<Item = std::io::Result<Vec<u8>>> + Send {
+        futures_util::stream::unfold(chunks.into_iter(), |mut left| async move {
+            left.next().map(|chunk| (Ok(chunk), left))
+        })
+    }
+
+    /// Hyper polls a body once more after its last chunk. Before the fuse that poll reached a
+    /// spent `unfold` through `Chain`, which panics — the worker died, the connection was dropped
+    /// with no header on it, and every relayed attachment came back to the operator as the
+    /// proxy's `502` (probe #505).
+    #[tokio::test]
+    async fn a_relayed_body_polled_after_its_last_chunk_ends_rather_than_panicking() {
+        let body = chunked(
+            b"first".to_vec(),
+            refuses_a_second_ending(vec![b"second".to_vec()]),
+        );
+        let mut body = Box::pin(body);
+        let mut seen = Vec::new();
+        while let Some(chunk) = body.next().await {
+            seen.extend_from_slice(&chunk.expect("a chunk"));
+        }
+        assert_eq!(seen, b"firstsecond");
+        assert!(
+            body.next().await.is_none(),
+            "a body polled after its last chunk must end again, not panic"
+        );
+    }
 
     fn wav() -> Vec<u8> {
         let mut bytes = b"RIFF\x24\x00\x00\x00WAVEfmt ".to_vec();

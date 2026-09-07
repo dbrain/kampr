@@ -68,6 +68,27 @@ class ShowingWhatWasClickedTest {
         )
     }
 
+    // The operator, on a card that offered Open and Dismiss and nothing else: *"clicking a filename
+    // pops up a open/cancel - can we also add a copy"*. The path is worth having on its own — into
+    // a message, a commit, another shell — without fetching the file behind it.
+    @Test
+    fun aFileCanBeCopiedAsWellAsOpened() = runComposeUiTest {
+        val session = PaneSession(Phone.PANE)
+        deskTerminal(paneShowing(SHOWN), session, Route(words("hello")))
+        tapCell(session, 0, SHOWN.indexOf(NOTES) + 2)
+        onNodeWithContentDescription("Open $NOTES").getUnclippedBoundsInRoot()
+        onNodeWithContentDescription("Copy $NOTES").getUnclippedBoundsInRoot()
+    }
+
+    // And on the phone's strip, where the same offer is made in a different place.
+    @Test
+    fun theStripOffersTheCopyToo() = runComposeUiTest {
+        val session = PaneSession(Phone.PANE)
+        gridTerminal(paneShowing(SHOWN), session, Route(words("hello")))
+        tapCell(session, 0, SHOWN.indexOf(NOTES) + 2)
+        onNodeWithContentDescription("Copy $NOTES").getUnclippedBoundsInRoot()
+    }
+
     @Test
     fun theCellsThatWereHitAreTheOnesTheGridWashes() = runComposeUiTest {
         val session = PaneSession(Phone.PANE)
