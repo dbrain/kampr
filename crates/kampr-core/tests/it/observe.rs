@@ -57,6 +57,16 @@ async fn serve(stream: UnixStream) {
     let result = match request["method"].as_str().unwrap_or_default() {
         "session.snapshot" => json!({ "snapshot": snapshot() }),
         "pane.read" => json!({ "read": { "text": "", "truncated": false } }),
+        // A herdr with no `pane.selection.read`, which is every build below 0.9.0 — and the only
+        // thing on the socket that reports a pane's width (#509).
+        "pane.selection.read" => {
+            let refusal = json!({
+                "id": "kampr",
+                "error": { "code": "unknown_method", "message": "unknown method" }
+            });
+            let _ = write_line(&mut stream, &refusal).await;
+            return;
+        }
         // Acknowledged and then held open, the way a real subscription is.
         "events.subscribe" => {
             let ack = json!({ "id": "kampr-events", "result": { "type": "subscription_started" } });
@@ -78,8 +88,8 @@ async fn write_line(stream: &mut UnixStream, value: &Value) -> std::io::Result<(
 
 fn snapshot() -> Value {
     json!({
-        "version": "0.8.2",
-        "protocol": 20,
+        "version": "0.9.0",
+        "protocol": 22,
         "focused_pane_id": "w1:p1",
         "workspaces": [{ "workspace_id": "w1", "number": 1, "label": "kampr" }],
         "tabs": [{ "tab_id": "w1:t1", "workspace_id": "w1", "label": "1" }],
@@ -225,4 +235,44 @@ async fn a_missing_frame_restarts_the_stream_rather_than_patching_over_the_hole(
         "one",
         "the restarted stream repaints from the top"
     );
+}
+
+/// **A herdr too old to measure a pane says so, rather than painting the layout rect.**
+///
+/// The only column count on the socket is `pane.selection.read`'s bound (#509), and every build
+/// below 0.9.0 lacks it. What is left is the layout rect, which #68 established is fiction — 47
+/// columns against a 93-column PTY. A node that quietly painted at it would answer every question
+/// correctly and show every pane at the wrong width, which is #233 with better scenery.
+///
+/// So it still paints — a wrong grid beats a blank one — and it says so through the **herd**, which
+/// is the channel a client renders. A `warn!` in a journal is what #233 was made of.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_herdr_that_cannot_measure_a_pane_says_so_instead_of_painting_the_rect() {
+    let fake = fake("#!/bin/sh\nsleep 30\n");
+    let provider = Arc::new(HerdrProvider::spawn(Herdr::new(&fake.socket), config(&fake.bin)));
+    online(&provider).await;
+    let registry = PaneRegistry::with_config(provider.clone(), RegistryConfig::default());
+    let _watcher = registry.watch("w1:p1").await.expect("watch");
+
+    for _ in 0..200 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let panes = provider.list_panes().await.expect("list");
+        let Some(detail) = panes[0].detail.as_deref() else {
+            continue;
+        };
+        if !detail.contains("wrong width") {
+            continue;
+        }
+        assert!(
+            detail.contains("0.9.0"),
+            "the message has to name the version that fixes it: {detail}"
+        );
+        assert!(
+            detail.contains("restart"),
+            "and the restart, because the streaming half is version-locked to the binary (#516): \
+             {detail}"
+        );
+        return;
+    }
+    panic!("a herdr that cannot answer a width reported no fault at all");
 }

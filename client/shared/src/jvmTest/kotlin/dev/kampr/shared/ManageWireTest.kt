@@ -129,6 +129,36 @@ class ManageWireTest {
         )
     }
 
+    // `group` is the operator's second press and the node defaults it false, so an ordinary close
+    // must not carry it at all: a client that sent `"group": false` on every close would be
+    // indistinguishable on the wire from one that had asked, and the field would stop meaning
+    // "they read the count and said yes".
+    @Test
+    fun anOrdinaryCloseCarriesNoGroupFlagAndTheSecondAskCarriesOnlyThat() {
+        assertEquals(
+            """{"t":"manage","op":"close","at":"01JNODE/w3"}""",
+            Wire.encode(ClientMsg.Manage(ManageOp.Close("01JNODE/w3"))),
+        )
+        assertEquals(
+            """{"t":"manage","op":"close","at":"01JNODE/w3","group":true}""",
+            Wire.encode(ClientMsg.Manage(ManageOp.Close("01JNODE/w3", group = true))),
+        )
+    }
+
+    // A search of the *whole* scrollback, which is why it goes to the node at all: this client
+    // holds a window on the history and `pane.read recent` caps at 1000 rows with no offset.
+    @Test
+    fun aFindCarriesItsDirectionAndOmitsAnAbsentStartingPoint() {
+        assertEquals(
+            """{"t":"find","pane":"01JNODE/w3:p2","query":"needle","backward":true}""",
+            Wire.encode(ClientMsg.Find("01JNODE/w3:p2", "needle")),
+        )
+        assertEquals(
+            """{"t":"find","pane":"01JNODE/w3:p2","query":"needle","backward":false,"from":40}""",
+            Wire.encode(ClientMsg.Find("01JNODE/w3:p2", "needle", backward = false, from = 40)),
+        )
+    }
+
     @Test
     fun anEmptyEnvIsOmittedRatherThanSentAsAnEmptyObject() {
         assertEquals(

@@ -38,11 +38,18 @@ of the second:
    So agent panes do have history to lose. The conversation view is still the better history for
    them ([ADR 0005](./0005-structure-comes-from-the-transcript.md)), but it is no longer the only
    one they have.
-2. ~~**A read on an idle *recognised agent* pane can move the operator's screen.**~~ **Measured and
-   withdrawn (#231).** Collie's hazard was respected rather than tested; a live `codex` and a live
-   `claude`, both herdr-detected and both holding a ring, answer `lines: 5000` in 1 ms with the
-   whole ring and the viewport unmoved. The interlock is now only `max_offset_from_bottom > 0` —
-   which is also what excludes the one read that *is* slow, a live harness whose ring is empty.
+2. **A read on an idle *recognised agent* pane can move the operator's screen — and it is gated on
+   the read's own parameters, not on the pane (#513, superseding #231).** herdr harvests through the
+   agent's mouse-scroll interface for `format: "text"` with `source: "recent"`/`"recent_unwrapped"`
+   and `lines` above the screen's row count, on a pane whose detected agent is **idle** and which
+   holds the **alternate screen** with mouse reporting on — 5.3 seconds of injected wheel events,
+   measured on 0.9.0 and identically on 0.8.2. #231 tested a live `codex` and a live `claude` that
+   were **blocked** and holding an ordinary ring, so not one of those conditions held; on that state
+   `lines: 5000` really does answer in 1 ms with the viewport unmoved. What was wrong was the
+   generalisation. **So the interlock is not what makes this safe — the format is.**
+   `read_scrollback` asks for `format: "ansi"`, which is outside the gate, and a test named for the
+   defect fails if that changes. The interlock itself stays as `max_offset_from_bottom > 0`, which
+   is what excludes the one read that *is* slow: a live harness whose ring is empty.
 3. **Reads cap at 1000 lines and there is no offset parameter.** Probe #29 originally recorded that
    over-asking clamps harmlessly with `truncated: false`; that only held because the ring under test
    was 400 deep. Against a 1371-row ring, `lines=5000` returns **1000** with `truncated: true`, and
@@ -62,12 +69,19 @@ The stitch is the longest suffix of what is held that is also a prefix of what j
 the remainder is appended. Proven live at 1553 rows — every one of them above what a single read can
 return — with all 1600 markers accounted for and colour intact.
 
-**On a gap, the old rows go.** If output outran the poll, the new read shares no overlap with the
-ring, so the two stretches of history are *not adjacent* and nothing can prove what sits between
-them. Splicing them would make `from_top` and `total_rows` fiction — a client would render two
-unrelated stretches as one continuous document and have no way to know. So the node drops what it
-held, **advances `from_top` by the number of rows dropped so absolute indices stay true**, and sets
-`capped: true`.
+**On a gap, the old rows go — and since herdr 0.9 that is the *fallback* rather than the answer.**
+See the amendment below. The reasoning stands wherever the rows cannot be refetched: two stretches
+of history that nothing can prove adjacent must not be spliced, because `from_top` and `total_rows`
+would become fiction and a client would render them as one continuous document with no way to know.
+So the node drops what it held, **advances `from_top` by the number of rows dropped so absolute
+indices stay true**, and sets `capped: true`.
+
+**The stitch itself was also unsound, and that is not about gaps at all.** A suffix match on output
+that repeats itself finds a run that is not the true one: measured, a ring holding herdr's rows
+0..361 met a window starting at 3403 and answered `Stitched { added: 599 }`, rendering
+`complete: true, capped: false` across a 3041-row hole (#522). That is the shape #233 taught this
+project to fear — not a read that failed, but one that failed and then looked like one that worked.
+Where a position is available the join is now arithmetic and the suffix match is the fallback.
 
 **A width change restarts the ring for a different reason**, and the log says which happened: every
 stored row was wrapped at the old PTY width, so nothing older can be trusted to line up.
@@ -84,7 +98,35 @@ three orders of magnitude.
 
 **Preserving history across a gap needs a wire change and is deliberately not in v1.** It would take
 either a per-segment `from_top` or a gap sentinel row, and both should be specified before anyone
-implements them.
+implements them. *(Overtaken: the rows are refetched instead, so there is no gap left to describe —
+see the amendment.)*
+
+## Amendment — 2026-09-08: the gap is refilled, and the join is arithmetic
+
+herdr 0.9's `pane.selection.read` addresses history by **absolute row** (#510), which is the offset
+`pane.read` never had. Two things follow, and the first matters more than the second.
+
+**The join stopped being a guess.** A read now carries where it starts — `L - K + 1`, where `L` is
+the pane's last content row, which is *not* `bottom` whenever the tail is blank (#518, #519). The
+ring remembers where its last row sits, so continuing and gapping are told apart by arithmetic. That
+closes #522's false stitch, which no amount of tuning could have.
+
+**A gap is refilled rather than discarded.** The missing span is fetched in one call — 4303 rows in
+2 ms — re-split at the grid width in **display cells**, because `selection.read` unwraps soft wraps
+and, after a reflow, joins rows that never wrapped; splitting by character count instead mismatched
+61 rows out of 63 on CJK (#521). Measured end to end: 262 held rows and 3041 unseen ones recovered,
+`complete: true`, against a baseline of `Gap { dropped: 262 }` (#523).
+
+**The discard is still there, and it is still right.** herdr's absolute row numbers are positions in
+its *current* ring, not identities — a retention trim renumbers them wholesale and reports nothing
+about how far (#520) — so the fetched rows are only spliced when eight of them demonstrably continue
+the ring's own tail. Measured refusing on exactly that case, with herdr trimmed underneath the node
+(#523). A refusal falls through to the behaviour this ADR describes.
+
+**What it costs.** One `pane.read visible` per poll to locate `L`; one `selection.read` per gap.
+Refilled rows are **plain text** — no SGR, no OSC 8 (#510) — so a repaired span renders unstyled.
+That is a real fidelity loss, and it is a loss of styling on rows that would otherwise not exist at
+all.
 
 ## Consequences
 

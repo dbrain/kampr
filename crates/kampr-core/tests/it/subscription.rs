@@ -236,8 +236,8 @@ async fn write_line(stream: &mut UnixStream, value: &Value) -> std::io::Result<(
 
 fn snapshot(panes: &[String]) -> Value {
     json!({
-        "version": "0.8.2",
-        "protocol": 20,
+        "version": "0.9.0",
+        "protocol": 22,
         "focused_pane_id": "w1:p1",
         "workspaces": [{ "workspace_id": "w1", "number": 1, "label": "kampr" }],
         "tabs": [{ "tab_id": "w1:t1", "workspace_id": "w1", "label": "1" }],

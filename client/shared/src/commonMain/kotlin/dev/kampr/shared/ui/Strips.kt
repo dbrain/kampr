@@ -82,6 +82,23 @@ internal fun BoxScope.ErrorStrip(message: String, code: String, onDismiss: () ->
     }
 }
 
+// The one refusal that is a question. herdr will not close a workspace while linked worktree
+// workspaces are open — the group goes together or nothing does — so the node counts what would go
+// and hands the count back. Dismissing is still the tap, the way every strip works; taking the
+// group is a control the operator has to reach for, because it destroys more than they named.
+@Composable
+internal fun BoxScope.GroupCloseNotice(message: String, onCloseGroup: () -> Unit, onDismiss: () -> Unit) {
+    val tokens = Kampr.tokens
+    val spoken = "$message Activate to leave it alone."
+    Strip(tokens.color.blockedBg, tokens.color.blocked, spoken, urgent = true, onActivate = onDismiss) {
+        IconGlyph(KamprIcons.warning, 14.dp, tokens.color.blocked, Modifier.padding(top = 2.dp))
+        SelectionContainer(Modifier.weight(1f)) {
+            KText(message, tokens.type.caption, tokens.color.text, maxLines = STRIP_MAX_LINES)
+        }
+        Chip("close the group", true, onCloseGroup, label = "Confirm — close this workspace and its worktrees")
+    }
+}
+
 // The same shape as the error strip in a tone that is not a refusal: enrolling a passkey succeeds
 // silently otherwise, which on the one screen about credentials is indistinguishable from nothing
 // having happened.

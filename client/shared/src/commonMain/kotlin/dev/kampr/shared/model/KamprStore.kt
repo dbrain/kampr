@@ -37,6 +37,16 @@ class KamprStore {
     private val _failure = MutableStateFlow<ServerMsg.Failure?>(null)
     val failure: StateFlow<ServerMsg.Failure?> = _failure.asStateFlow()
 
+    // The last search and what it matched, for the pane it was about. A result set belongs to one
+    // pane: stepping it after switching would scroll a pane to a row out of somebody else's
+    // history.
+    private val _found = MutableStateFlow<ServerMsg.Found?>(null)
+    val found: StateFlow<ServerMsg.Found?> = _found.asStateFlow()
+
+    fun clearFound() {
+        _found.value = null
+    }
+
     private val _localRttMs = MutableStateFlow<Double?>(null)
     val localRttMs: StateFlow<Double?> = _localRttMs.asStateFlow()
 
@@ -249,6 +259,7 @@ class KamprStore {
                     msg.pane?.let { paneStates[it]?.noteStreamStopped() }
                 }
             }
+            is ServerMsg.Found -> _found.value = msg
             is ServerMsg.Managed -> _managed.value = msg
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
             is ServerMsg.Pong -> Unit

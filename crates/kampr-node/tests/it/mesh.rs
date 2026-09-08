@@ -28,9 +28,15 @@ struct Session {
     socket: PathBuf,
 }
 
+/// How long a spawned herdr is given to open its socket before the wait is called a defect.
+const LISTENS_WITHIN: Duration = Duration::from_secs(10);
+
 impl Session {
-    async fn start(tag: &str) -> Option<Self> {
-        which("herdr")?;
+    // `herdr server` *is* the server: it runs until the socket is told to stop, which is what
+    // `Drop` does. Waiting on it here would block for the life of the session.
+    #[allow(clippy::zombie_processes)]
+    async fn start(tag: &str) -> Self {
+        let herdr = kampr_testkit::herdr_on_path();
         // The tag does not make this unique: `sessions!` serves more than one test, and two tests
         // in this binary run at once. Sharing a name is sharing one herdr server — the second
         // `herdr server` finds the socket already there and returns it — and then the first test
@@ -45,7 +51,7 @@ impl Session {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .ok()?;
+            .unwrap_or_else(|e| panic!("spawning `{} server --session {name}`: {e}", herdr.display()));
         for _ in 0..100 {
             if socket.exists() {
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -55,11 +61,11 @@ impl Session {
                 session
                     .call("workspace.create", json!({ "label": tag, "cwd": "/tmp" }))
                     .await;
-                return Some(session);
+                return session;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        None
+        kampr_testkit::herdr_never_listened(&name, &socket, LISTENS_WITHIN)
     }
 
     async fn call(&self, method: &str, params: Value) -> Value {
@@ -81,14 +87,6 @@ impl Drop for Session {
             crate::live::forget_session(dir);
         }
     }
-}
-
-fn which(binary: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(binary))
-            .find(|candidate| candidate.is_file())
-    })
 }
 
 fn herdr_home() -> PathBuf {
@@ -173,6 +171,11 @@ impl Running {
         config.config_dir = home.config().display().to_string();
         config.state_dir = home.state().display().to_string();
         config.herdr.socket = socket.display().to_string();
+        // The same binary `Session::start` spawned the server with. `kampr_herdr::locate` reads
+        // `HERDR_BIN_PATH` before `PATH`, herdr injects it into every pane it runs, and
+        // `terminal session observe` is version-locked (#516) — so a suite run from inside a herd
+        // otherwise streams nothing while every socket answer stays correct.
+        config.herdr.binary = kampr_testkit::herdr_on_path().display().to_string();
         // One machine is hosting both nodes, so left to itself each would discover the other's
         // herdr session and serve it locally — correct behaviour, and useless here. An empty list
         // is "only the configured session", which is what two real hosts look like.
@@ -380,10 +383,7 @@ async fn join(peer_home: &Home, peer_name: &str, node_id: &str, hub_origin: &str
 
 macro_rules! sessions {
     ($hub:ident, $peer:ident) => {
-        let (Some($hub), Some($peer)) = (Session::start("hub").await, Session::start("peer").await) else {
-            eprintln!("skipping: herdr is not on PATH");
-            return;
-        };
+        let ($hub, $peer) = (Session::start("hub").await, Session::start("peer").await);
     };
 }
 
@@ -589,10 +589,7 @@ async fn a_peers_panes_are_driven_through_the_hub_and_survive_it_dying() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_the_hub_never_enrolled_is_refused() {
-    let Some(hub_session) = Session::start("closed").await else {
-        eprintln!("skipping: herdr is not on PATH");
-        return;
-    };
+    let hub_session = Session::start("closed").await;
     let hub_home = Home::new();
     let hub = Running::start(&hub_home, &hub_session, "front").await;
 
@@ -701,10 +698,7 @@ async fn saw(socket: &mut Socket, marker: &str, seconds: u64) -> bool {
 /// `warn!` nobody reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_peer_cannot_take_over_another_peers_node_id() {
-    let Some(hub_session) = Session::start("claims").await else {
-        eprintln!("skipping: herdr is not on PATH");
-        return;
-    };
+    let hub_session = Session::start("claims").await;
     let hub_home = Home::new();
     let hub = Running::start(&hub_home, &hub_session, "front").await;
     let mesh = hub.node.auth.store().mesh();

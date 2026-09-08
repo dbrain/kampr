@@ -445,6 +445,29 @@ class AppState(
         connection.manage(op)
     }
 
+    // Whether the find bar is up, and for which pane. Held here rather than in the bar so that
+    // leaving the pane closes it: a query bar over a pane it was not opened on would send the next
+    // search to the wrong history.
+    var findingOn: String? by mutableStateOf(null)
+        private set
+
+    fun openFind(paneId: String) {
+        findingOn = paneId
+    }
+
+    fun closeFind() {
+        findingOn = null
+        store.clearFound()
+    }
+
+    // The node searches, not this client: the ring here is a window on the pane's history and
+    // `pane.read recent` caps at 1000 rows with no offset, so a search made locally would be a
+    // search of whatever happened to be in hand.
+    fun find(paneId: String, query: String, backward: Boolean = true, from: Int? = null) {
+        if (query.isBlank()) return
+        connection.send(ClientMsg.Find(paneId, query, backward, from))
+    }
+
     // An answer to a fleet host, typed as the ordinary pane input every other reply uses. There is
     // no `fleet.answer` and there should not be: a second way to type into a terminal is a second
     // thing to get wrong.

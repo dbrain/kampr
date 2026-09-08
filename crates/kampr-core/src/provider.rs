@@ -156,6 +156,42 @@ pub struct RawScrollback {
     pub viewport_rows: u16,
     /// Set by herdr when more history existed than it returned — the read cap, in practice.
     pub truncated: bool,
+    /// Where this read's first row sits in the provider's own history, and `None` from a provider
+    /// that cannot say.
+    ///
+    /// **This is what turns joining two reads from a guess into arithmetic.** Without it the ring
+    /// matches the longest suffix of what it holds against the prefix of what arrived — which on
+    /// output that repeats itself finds a run that is not the true one, splices at an offset
+    /// nothing chose, and reports the result `complete` (probe #522). A read window that has moved
+    /// clean past everything held is a *gap*, and only a position can say so.
+    ///
+    /// It is `Option` rather than required because a provider without a herdr behind it — a fleet
+    /// run's pty — has no such number, and for those the older suffix match is still the best
+    /// available answer.
+    pub first_row: Option<u32>,
+}
+
+/// What a search over a pane's whole history found.
+///
+/// Positions are rows from the live row, which is the only coordinate that survives the trip: a
+/// provider's own history indexing and a client's ring indexing are different spaces, and both are
+/// contiguous and both end on the same row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub hits: Vec<Hit>,
+    /// Every match in the history, which is not `hits.len()`: the listed ones are capped so that
+    /// one search cannot become hundreds of round trips.
+    pub total: u32,
+    pub current: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub from_bottom: u32,
+    pub col: u16,
+    pub end_from_bottom: u32,
+    pub end_col: u16,
+    pub text: String,
 }
 
 /// A pane's event stream. Dropping it stops the provider's supervision — for the herdr provider
@@ -204,6 +240,31 @@ pub trait Provider: Send + Sync + 'static {
 
     /// `None` when the pane has no readable history — the implementation owns that judgement.
     async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>>;
+
+    /// The provider's own history rows `from ..= to`, as plain text, one entry per **physical**
+    /// row. `None` from a provider that cannot address history by position.
+    ///
+    /// This is how a gap is filled rather than discarded. It is deliberately not the ring's own
+    /// format: the rows come back without SGR or OSC 8 (probe #510), so a repaired span renders
+    /// unstyled. Losing the styling of rows nobody could otherwise see is the trade.
+    async fn read_rows(&self, _pane_id: &str, _from: u32, _to: u32) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
+
+    /// Search the pane's whole history. `None` from a provider that cannot search one, which is
+    /// not the same as a search that matched nothing.
+    ///
+    /// Default `None` rather than a required method: the fleet provider's panes are ptys this
+    /// process forked and have no herdr behind them to ask.
+    async fn find(
+        &self,
+        _pane_id: &str,
+        _query: &str,
+        _backward: bool,
+        _from: Option<u32>,
+    ) -> Result<Option<Found>> {
+        Ok(None)
+    }
 
     /// Bumps whenever the pane list or its geometry may have changed.
     fn topology(&self) -> watch::Receiver<u64>;
@@ -301,6 +362,20 @@ impl Provider for Composite {
 
     async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>> {
         self.route(pane_id)?.read_scrollback(pane_id).await
+    }
+
+    async fn find(
+        &self,
+        pane_id: &str,
+        query: &str,
+        backward: bool,
+        from: Option<u32>,
+    ) -> Result<Option<Found>> {
+        self.route(pane_id)?.find(pane_id, query, backward, from).await
+    }
+
+    async fn read_rows(&self, pane_id: &str, from: u32, to: u32) -> Result<Option<Vec<String>>> {
+        self.route(pane_id)?.read_rows(pane_id, from, to).await
     }
 
     fn harness_owns_the_screen(&self, pane_id: &str) -> bool {

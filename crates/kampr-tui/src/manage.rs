@@ -135,7 +135,9 @@ pub struct Manage {
     /// What the node said it can be *asked to make*, as opposed to what it can do. The kinds and
     /// the sessions both come from here rather than from a list compiled into this client.
     caps: NodeCaps,
-    inflight: Option<(String, Instant)>,
+    /// The op as it was sent, not just its name: a refusal that offers a second, wider op needs
+    /// the target the first one named — see [`Manage::observe`] and the worktree group close.
+    inflight: Option<(Value, Instant)>,
     outcome: Option<(String, Instant)>,
     /// herdr's own split tree, held opaque between a `layout.export` ack and a `layout.apply`.
     exported: Option<Value>,
@@ -293,11 +295,27 @@ impl Manage {
                 let Some((op, _)) = self.inflight.take() else {
                     return;
                 };
+                let name = op["op"].as_str().unwrap_or_default().to_string();
                 let why = match failure.message.is_empty() {
                     true => failure.code.clone(),
                     false => failure.message.clone(),
                 };
-                self.note(format!("{op} was refused · {why}"));
+                // The one refusal that is a question rather than an outcome: herdr will not break
+                // a worktree group up (#514), so the node counts what a group close would take and
+                // hands it back. Re-asking is the operator's second press, and the count is the
+                // node's sentence rather than one composed here — it is the node that can see the
+                // herd.
+                if failure.code == "workspace_group_close_required" {
+                    self.open = Some(Modal {
+                        title: "close workspace".into(),
+                        stage: Stage::Confirm {
+                            lines: vec![why, "Close the whole group?".into()],
+                            op: group_close(&op),
+                        },
+                    });
+                    return;
+                }
+                self.note(format!("{name} was refused · {why}"));
             }
             _ => {}
         }
@@ -691,9 +709,8 @@ impl Manage {
     /// client's own copy of it does not learn a thing until the `herd.patch` arrives.
     fn fire(&mut self, op: Value) -> Progress {
         self.open = None;
-        let name = op["op"].as_str().unwrap_or_default().to_string();
         self.outcome = None;
-        self.inflight = Some((name, Instant::now()));
+        self.inflight = Some((op.clone(), Instant::now()));
         Progress::Send(op)
     }
 
@@ -705,7 +722,11 @@ impl Manage {
     }
 
     fn ack(&mut self, ack: &Managed) {
-        if self.inflight.as_ref().is_some_and(|(op, _)| *op == ack.op) {
+        if self
+            .inflight
+            .as_ref()
+            .is_some_and(|(op, _)| op["op"] == ack.op.as_str())
+        {
             self.inflight = None;
         }
         if !ack.ok {
@@ -774,8 +795,9 @@ impl Manage {
         if let Some((op, at)) = &self.inflight
             && at.elapsed() < NOTICE
         {
+            let name = op["op"].as_str().unwrap_or_default();
             parts.push(format!(
-                "{op} sent · waiting for the node — nothing moves here until the herd patch does"
+                "{name} sent · waiting for the node — nothing moves here until the herd patch does"
             ));
         }
         match parts.is_empty() {
@@ -1016,6 +1038,10 @@ fn zoom(at: &str) -> Next {
              this client's own zoom: #265 measured the PTY going 84 to 171 columns under an \
              attached client, so a program in it is redrawn at a size it did not ask for."
                 .into(),
+            "It also clears the operator's unread marks for every pane in that tab. herdr routes \
+             a zoom through focus before it decides whether the zoom changes anything, so even a \
+             toggle that does nothing destroys `done` for the whole tab (#515)."
+                .into(),
         ],
         op: json!({ "op": "pane.zoom", "at": at, "mode": "toggle" }),
     }
@@ -1186,6 +1212,13 @@ fn rename(at: &str, kind: &str, current: Option<String>, empty: Empty) -> Next {
         field: "label",
         empty,
     })
+}
+
+/// The same close, widened to the group the node just counted.
+fn group_close(refused: &Value) -> Value {
+    let mut op = refused.clone();
+    op["group"] = Value::Bool(true);
+    op
 }
 
 fn close(at: &str, kind: &str) -> Next {

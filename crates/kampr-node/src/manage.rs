@@ -70,6 +70,14 @@ pub struct ManageOp {
     /// every release an operator makes by hand, which lets go of whatever is standing.
     #[serde(default)]
     pub lease: Option<u64>,
+    /// A `close` that means the workspace **and** every worktree workspace linked to it.
+    ///
+    /// It is the operator's second press, never a default: the first close is refused with
+    /// [`ErrorCode::WorkspaceGroupCloseRequired`] and a count, and this is what they send having
+    /// read it. Absent from every client that has never heard of it, which is why the refusal has
+    /// to carry a sentence as well as a code.
+    #[serde(default)]
+    pub group: Option<bool>,
 }
 
 /// The smallest pane `pane.size` will produce.
@@ -171,6 +179,8 @@ pub enum ManageError {
     UnknownTarget(String),
     #[error("herdr: {0}")]
     Herdr(String),
+    #[error("{0}")]
+    GroupCloseRequired(String),
 }
 
 impl ManageError {
@@ -180,6 +190,7 @@ impl ManageError {
             Self::BadRequest(_) => ErrorCode::BadRequest,
             Self::UnknownTarget(_) => ErrorCode::UnknownPane,
             Self::Herdr(_) => ErrorCode::HerdrUnavailable,
+            Self::GroupCloseRequired(_) => ErrorCode::WorkspaceGroupCloseRequired,
         }
     }
 }
@@ -469,7 +480,7 @@ impl Manager<'_> {
             "close" => match self.target(op)? {
                 Target::Pane(id) => self.call("pane.close", json!({ "pane_id": id })).await,
                 Target::Tab(id) => self.call("tab.close", json!({ "tab_id": id })).await,
-                Target::Workspace(id) => self.call("workspace.close", json!({ "workspace_id": id })).await,
+                Target::Workspace(id) => self.close_workspace(&id, op.group.unwrap_or(false)).await,
             },
             "focus" => match self.target(op)? {
                 Target::Pane(id) => self.call("pane.focus", json!({ "pane_id": id })).await,
@@ -710,11 +721,16 @@ impl Manager<'_> {
     /// are honest.
     ///
     /// Rows come from `viewport_rows`, which is the PTY's and not the rect's (#84, #207). Columns
-    /// come from a wrap the node has actually measured — the rect is fiction (#68) and nothing on
-    /// the socket API reports a column count anywhere (#221) — so a pane that has never wrapped
-    /// has no width worth putting back, and putting the rect back would be a resize to a number no
-    /// row was ever laid out at. Nothing is better than a guess here: the pane keeps the viewer's
-    /// size until something deliberate moves it, which is what `pane.size` is for.
+    /// come from the width the node has read off the pane — the rect is fiction (#68) and nothing
+    /// on the socket API *reports* a column count even in 0.9 (#221), but `pane.selection.read`
+    /// bounds on the real one (#509), so a pane has a width to put back from its first sweep
+    /// rather than from its first wrap. That is what this used to wait for, and a full-screen
+    /// agent never wrapped: the hold released and there was nothing to restore to.
+    ///
+    /// Still `None` until that read has happened. Putting the rect back would be a resize to a
+    /// number no row was ever laid out at, and nothing is better than a guess here — the pane
+    /// keeps the viewer's size until something deliberate moves it, which is what `pane.size` is
+    /// for.
     async fn found_geometry(&self, pane: &str) -> Option<(u16, u16)> {
         let cols = self.provider.measured_cols(pane)?;
         let rows = u16::try_from(self.viewport_rows(pane).await?).ok()?;
@@ -770,6 +786,74 @@ impl Manager<'_> {
             .call::<Value>(method, params)
             .await
             .map_err(|e| ManageError::Herdr(e.to_string()))
+    }
+
+    /// Closes a workspace, and turns herdr's refusal to break up a worktree group into a question.
+    ///
+    /// herdr answers `workspace_group_close_required` for a workspace that still has linked
+    /// worktree workspaces open (#514): the group closes together or not at all. Passing
+    /// `close_group` unasked would make one press destroy several workspaces the operator never
+    /// named, so the refusal comes back instead, counted — the same shape as every other
+    /// destructive confirmation here, which names the thing and says how much of it there is
+    /// (#426).
+    async fn close_workspace(&self, id: &str, group: bool) -> Result<Value, ManageError> {
+        let asked = self
+            .herdr
+            .call::<Value>(
+                "workspace.close",
+                json!({ "workspace_id": id, "close_group": group }),
+            )
+            .await;
+        match asked {
+            Ok(reply) => Ok(reply),
+            Err(e) => {
+                let refused = e
+                    .downcast_ref::<kampr_herdr::RpcError>()
+                    .is_some_and(|r| r.code == "workspace_group_close_required");
+                if !refused {
+                    return Err(ManageError::Herdr(e.to_string()));
+                }
+                Err(ManageError::GroupCloseRequired(self.group_close_asks(id).await))
+            }
+        }
+    }
+
+    /// The sentence a client shows when it has no code for the refusal, and the count behind the
+    /// button when it has.
+    async fn group_close_asks(&self, id: &str) -> String {
+        let group = self.worktree_group(id).await;
+        match group {
+            Some(n) => format!(
+                "closing this workspace closes {n} workspaces — it and the {} worktree {} \
+                 herdr linked to it, which cannot be closed separately",
+                n - 1,
+                if n == 2 { "workspace" } else { "workspaces" }
+            ),
+            // The snapshot moved, or herdr is not answering any more. The refusal is still the
+            // truth and still worth passing on; only the number is missing.
+            None => "closing this workspace closes the worktree workspaces linked to it as well, \
+                     which cannot be closed separately"
+                .into(),
+        }
+    }
+
+    /// How many workspaces a group close would take, this one included.
+    async fn worktree_group(&self, id: &str) -> Option<usize> {
+        let snapshot = self.herdr.snapshot().await.ok()?;
+        let key = snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.workspace_id == id)?
+            .worktree
+            .as_ref()?
+            .repo_key
+            .clone();
+        let n = snapshot
+            .workspaces
+            .iter()
+            .filter(|w| w.worktree.as_ref().is_some_and(|t| t.repo_key == key))
+            .count();
+        (n > 1).then_some(n)
     }
 }
 

@@ -603,9 +603,9 @@ cd client && env -u GRADLE_HOME ./gradlew check     # W9 only; it touches shared
 ```
 
 `env -u GRADLE_HOME` is not optional — a `GRADLE_HOME` on this machine silently overrides the
-wrapper (#67). The Rust suite includes live tests that need a real `herdr` on PATH; they skip loudly
-rather than pass quietly, and a failure should be re-run alone before it is reported as a
-regression.
+wrapper (#67). The Rust suite includes live tests that need a real `herdr` on PATH; they
+fail rather than skip when one is missing, and a failure should be re-run alone before it is
+reported as a regression.
 
 ---
 

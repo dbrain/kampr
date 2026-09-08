@@ -237,8 +237,8 @@ subscription as well.
 
 ### 4.2 Geometry is the number nobody reports
 
-Before a stream can be opened, the node has to know how wide the pane is, and this turns out to be
-the hardest small problem in the system.
+Before a stream can be opened, the node has to know how wide the pane is, and this was for a long
+time the hardest small problem in the system.
 
 `observe --cols` **crops; it does not reflow** (#15). A 120-character line on a 93-column grid
 observed at 60 columns loses columns 61–93 entirely — they are not wrapped to the next row, they are
@@ -257,96 +257,55 @@ Worse, in a headless session — the configuration both the plugin and the servi
 does not follow the layout rect at all** (#68). A pane whose rect said 47 columns had a 93-column
 PTY, so observing at the rect cropped every row in half; and observing *above* the PTY width merely
 pads, while the `width` a frame reports just echoes what was requested and so carries no information
-at all (#87). Nothing in the socket API reports a pane's real column count: `pane.get` carries
-`viewport_rows` and no columns.
+at all (#87).
 
-So the node **infers** it, from the one thing that does render at the true width: `pane.read` (#84).
-`recent` returns physical rows already wrapped at the PTY's own width, and `recent_unwrapped`
-returns the logical lines they came from, with every row but the last of a join padded back out to
-the grid width (#217). So a logical line that spans more than one of the rows in
-hand gives the width away exactly: it is the stride those rows were laid out at.
+**Nothing in the socket API *reports* a pane's column count, and that is still true of herdr 0.9.**
+Re-checked across every method and every event in the 0.9 schema: the four `width` fields are the
+same four decoys #221 catalogued, and `pane.get` still carries `viewport_rows` and no columns.
 
-**The proof has to be about the rows in hand, and that is the part that was wrong** (#211). Both
-reads ask for `viewport_rows`, but a logical line is as many rows tall as it wrapped, so the logical
-read reaches further back into history than the physical one — and the older lines it reaches back
-to have no rows here to measure against. The old rule was "some logical line is longer than the
-widest physical row", which a line from off the top of the physical read satisfies, and it then
-called the widest row on the *current* screen the PTY's width: 80 against a PTY of 93. It also
-counted characters, so a screen of double-width glyphs — every row the full width in columns and
-half of it in characters — read as 46 columns on that same 93-column pane, and the stream was
-restarted at 46.
+What 0.9 added is a method that **bounds** on it. `pane.selection.read` answers a cursor column
+below the grid width and refuses one at or past it with `selection_unavailable`, on any valid row
+and whatever that row holds — a blank row and a row of double-width glyphs bound identically. So
+the width is the one `W` with `fits(W - 1)` and `!fits(W)`, and a binary search finds it in about
+twelve pure reads, or **two** when the caller already has a candidate to confirm. Validated against
+ground truth at 80, 150 and 43 columns, and it tracked a `control`-driven resize within 3–5 ms
+(#509). It mutates nothing: the scroll offset does not move and the `done` marker survives it.
 
-What replaces it walks both reads **from the bottom**, where they are anchored on the same row, and
-pairs each logical line with the rows that rebuild it: laid out on one grid and concatenated, they
-must reproduce the line character for character. That grid is the width. The walk stops at the first
-line the remaining rows cannot rebuild, because everything above that is another screen — and
-stopping is the whole of the safety. A line that cannot be rebuilt is a line whose height is
-unknown, so there is no count of rows to step over with it, and every join above it would be paired
-with rows belonging to some other line. Stepping over one is the defect this walk exists to prevent.
+`Herdr::pane_width` is that search, and `HerdrProvider::observe_cols` is its only caller. The hint
+it passes is the width this pane last read, or on the first pass the layout rect — which is the
+width or one more than it, the column herdr keeps back for the scrollbar (#230), and so is right
+half the time for nothing. A read that does not answer leaves the last width standing rather than
+falling back to the rect: herdr being briefly unreachable is not evidence that a pane got narrower,
+and sizing a stream from the rect on that basis is how a pane ends up cropped by an outage.
 
-The rows of a join do **not** all occupy the same number of columns, and assuming they did was the
-one place the walk went silent (#229). A
-real prompt line of 1891 columns came back over rows of 92, eighteen of 93 and a remainder: the
-double-width glyph starting the second row would not straddle the last column, so herdr laid the
-first row out at 92 and the join carries it as 92. No single stride reconstructs that, the walk
-stopped on the bottom-most line it looked at, and the poll measured nothing at all — on a third of
-live screens. So the grid is not divided out of the total any more. What the total pins down is the
-*pair* the grid must be one of — `p / n` and `p / n + 1`, since every row occupies the grid width or
-one less — and both are tried. A grid only one of them rebuilds is proved outright, by the rows that
-filled it; a grid both rebuild is the ambiguity below.
+**What this replaced was four hundred lines of inference, and it is worth knowing what they were
+for.** Until 0.9 the only thing that rendered at the true width was `pane.read` (#84): `recent`
+returns physical rows already wrapped at the PTY's own width, `recent_unwrapped` the logical lines
+they came from with every row but the last of a join padded back out to the grid (#217). So the
+node walked both reads from the bottom, paired each logical line with the rows that rebuild it, and
+took the stride they were laid out at. It had to walk rather than divide because the rows of a join
+do not all occupy the same number of columns (#229); it had to stop at the first line it could not
+rebuild, because everything above that is another screen; it carried a running floor and a proof
+that decayed after twenty unconfirmed readings, because nothing announces a PTY resize (#211); and
+it still could not separate `n` from `n + 1` on a screen of nothing but wide glyphs, which read back
+byte for byte the same on both grids (#220). That last one is simply gone: the bound is on the grid,
+not on the content.
 
-A break is only the width itself when a *narrow* character made it, because one more column would
-have held that character. A break a double-width glyph made is a column ambiguous — the glyph will
-not straddle the last column, so a row breaking at 92 sits on a grid of 92 *or* 93, and a screen of
-nothing but wide glyphs comes back from herdr byte for byte the same on both (#220 — an even PTY of
-wide glyphs is indistinguishable from the odd one above it). So that break is carried as the pair of
-widths it is rather than resolved on the spot, and it is settled by the reading before it: a pane
-that has already proved 92 outright is not contradicted by a break that says 92-or-93, so the break
-**confirms** that width instead of widening it, and the same break confirms a standing 93 just as
-well. It resolves upwards only when nothing it agrees with is standing — no proof, one that says
-some other width, or one the rows in hand have already outgrown — because observing above the PTY
-pads and observing below it crops (#87). A line that is longer than the read is deep is never proof
-of anything.
+Gone with it is the `commanded` override. It existed because the inference measured the rows *in*
+the pane, and the rows already there were laid out at the width before a resize — so on the
+operator's own hub a matched hold put a pane at 289 columns and the stream came back at **292**, the
+pre-claim width, and stayed there while those rows sat in the read window. A read that bounds on the
+live grid cannot say that. `HerdrProvider::resized` still records what an op applied, but as a head
+start on the next read rather than a claim that outranks it, and it still wakes every running width
+probe at once instead of leaving it to the 3 s interval — which was the report behind it: *"match
+this view works, but it doesn't horizontally update until a message goes through, so typing a prompt
+ends up typing off the visible cols"*.
 
-That ambiguity is narrower than #220 made it look, and rebuilding row by row is what shows why: it
-holds only while the wrap is the *last* thing on the screen. The last row of a join carries what it
-wrote and nothing more, so a screen ending on a run of wide glyphs says nothing — but let one more
-row follow it, a shell prompt for instance, and the wrap's own final row is no longer last and is
-padded out to the full grid. Measured on one pane held at 92 and then at 93: identical physical rows
-both times, and logical lines of **860** and **861** (#229). So a live pane, which always has
-something under its output, usually settles its own column.
-
-What is left is the pane that has *never* shown a narrow break since the rect last moved: nothing
-in the two reads separates its two candidate widths, and nothing else on the socket does either —
-the whole 91-method schema reports a column count in exactly one place, the layout rect that #68
-established is fiction (#221). Such a pane is observed at the wider of the two,
-where the extra column is the one no wide glyph could reach anyway.
-
-Without a join there is no proof, only a lower bound, which is why it combines with the rect by
-`max` and is re-measured on a poll of its own. And a proof is evidence about the screen it was read
-from: nothing announces a PTY resize, and a controller that resized a pane and detached leaves the
-rect exactly where it was (#219), so a proof that goes twenty readings
-without being re-proved stops overriding the rect. What it leaves behind is a floor, which is the
-point — letting go of a measurement can only ever widen the stream, never crop a pane on its way
-out. This is the one place in the system that reasons from evidence rather than from a reported
-number, and it is worth understanding before touching it.
-
-**There is exactly one width the node does not have to infer, and it is the one it commanded.**
-`pane.size` claims the PTY and puts a geometry on it, so afterwards the column count is known
-rather than deduced — and until the node adopted it, a resize was invisible to every client for as
-long as the pane happened to draw no wrap. Herdr *reflows* the screen when the PTY moves, so a
-shell with a wrapped line still on it re-proves its own width on the next poll and looks fine; a
-full-screen agent draws a grid of rows that each end where they end, the walk measures nothing at
-all, and the proof taken before the resize stands for its whole twenty readings. That was the
-report — *"match this view works, but it doesn't horizontally update until a message goes
-through, so typing a prompt ends up typing off the visible cols"*. So `pane.size` hands the width
-it applied to `HerdrProvider::resized`, which records it as a proof and wakes every running width
-probe at once instead of leaving it to the 3 s interval. It is recorded only where the size is
-known to have taken — a held controller *is* the geometry (#18), and the `once` mode's
-`viewport_rows` check is the only evidence there is that an attached desk did not take it straight
-back (#19, #306). Nothing about this claims a pane or reshapes one; it is what the node *believes*
-after an op the operator confirmed, and the ordinary machinery above goes on correcting it from
-the next wrap onwards.
+One thing quietly got better rather than merely simpler. `measured_cols` — the width a hold puts
+back when it lets go — used to be `None` until a wrap had proved one, and a full-screen agent never
+wraps, so the pane a hold most wanted to restore was the pane there was nothing to restore *to*. It
+now has a width from its first sweep. It is still `None` before that: putting the rect back would be
+a resize to a number no row was ever laid out at, and nothing is better than a guess here.
 
 The **rows** are the same trap with an easier answer, and it was got wrong for longer. A `down`
 split halves the rect's height and leaves the PTY at the height it already had (#205), and
@@ -356,6 +315,7 @@ the emulator itself is that tall, so reopening the pane repaints the same trunca
 a phone report — *"a few lines at the start but nothing else, not the end of the terminal"* — and
 the fix is one line of the rule that was already written down for the herd model: `viewport_rows`
 is the PTY's own, herdr reports it honestly, and the rect is only the fallback (#207).
+
 
 ### 4.3 Frames in, cell grid out
 
@@ -427,11 +387,19 @@ matches, behind an interlock: **read only when the ring is non-empty.** That is 
 
 It used to have a second half — and no detected agent — on Collie's documented hazard that a deep
 read on a recognised-agent pane harvests through the agent's own mouse-scroll interface and visibly
-moves the operator's screen. Measured, it does not (#231 — reading a detected agent's ring above the
-viewport). A live `codex` and a live `claude`, both herdr-detected and both holding a ring, answer
-`lines: 5000` in **1 ms** with every row of the ring, `truncated: false`, and the viewport exactly
-where it was; a pane deliberately marked an agent while running a mouse-mode program received no
-wheel bytes at all. What *is* slow is a live harness whose ring is **empty** — Claude Code clears
+moves the operator's screen. **That hazard is real, and it is gated on the read's own parameters
+rather than on the pane** (#513, superseding #231). herdr harvests only for `format: "text"` with
+`source: "recent"`/`"recent_unwrapped"` and `lines` above the screen's row count, on a pane whose
+detected agent is **idle** and which is showing the **alternate screen** with mouse reporting on —
+and then it injects wheel events for **5.3 seconds** while the operator watches. #231 measured a
+live `codex` and a live `claude` that were **blocked** and holding an ordinary ring, so not one of
+those conditions held; its numbers are right about the state it tested and its conclusion did not
+generalise.
+
+What keeps this interlock honest is therefore the *format*, not the pane: `read_scrollback` asks for
+`format: "ansi"`, which is outside the gate, and a test named for the defect fails if anyone changes
+it. On the state #231 did test — a detected, blocked agent holding a ring — `lines: 5000` still
+answers in **1 ms** with every row, `truncated: false`, and the viewport exactly where it was. What *is* slow is a live harness whose ring is **empty** — Claude Code clears
 the scrollback when it takes the screen, and never gets one back — where any read past
 `viewport_rows` costs a flat ~375 ms and returns the viewport anyway. That case is what is left of the interlock, so the node can only pay
 it by losing a race with an agent clearing its ring.
@@ -735,13 +703,17 @@ rather than a defect list:
   event is. Herdr rejects it without a `pane_id`, and **one invalid entry rejects the whole
   `events.subscribe` call** (#54) — so it has to be subscribed per pane and re-subscribed whenever
   the pane set changes, and getting that wrong silently costs every other subscription too.
-- **The stated payoff of node-side emulation has only partly been collected.** The argument in
+- **The stated payoff of node-side emulation is now two thirds collected.** The argument in
   [ADR 0001](./docs/adr/0001-the-node-runs-a-vt-emulator.md) was that selection, find and hyperlinks
-  become node features over a cell model rather than three client reimplementations. Hyperlinks did.
-  Selection is implemented in the client. Find does not exist at all. With one client shipping the
-  cost is zero; with a second it is the whole argument.
-  [`docs/04-wire-protocol.md`](./docs/04-wire-protocol.md) still states the claim in full, and should
-  be narrowed or the benefit collected.
+  become node features rather than three client reimplementations. Hyperlinks did. **Find now does
+  too** — and not over the cell model the ADR imagined: `pane.copy_search` searches herdr's *whole*
+  scrollback where the node's own ring is a window on it (#51/#511), so the honest node feature was
+  to ask herdr rather than to search what is held. Both clients send one `find` verb and get
+  positions in rows from the live row, which is the one coordinate the node's history and a client's
+  ring share.
+  **Selection is still implemented in the client, twice**, once in `kampr-tui` and once in Kotlin.
+  0.9's `pane.selection.read` does not change that: it returns plain text with no SGR and no OSC 8
+  (#510), where a selection is over the styled grid a client already holds.
 
 ## 9. Parked deliberately
 

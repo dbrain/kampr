@@ -37,6 +37,7 @@ ulid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+kampr-testkit = { path = "../kampr-testkit" }
 async-trait.workspace = true
 getrandom.workspace = true
 rcgen.workspace = true

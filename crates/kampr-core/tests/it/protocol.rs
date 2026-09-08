@@ -67,7 +67,7 @@ fn a_pane_entry_carries_the_node_qualified_id() {
             online: true,
             reachable: None,
             rtt_ms: Some(0.4),
-            herdr_version: Some("0.8.2".into()),
+            herdr_version: Some("0.9.0".into()),
             build: None,
             update: None,
             detail: None,

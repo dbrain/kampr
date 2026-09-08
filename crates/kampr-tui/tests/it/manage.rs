@@ -42,10 +42,17 @@ impl Conn {
     }
 
     fn greet(&self, nodes: Value, panes: Value, role: &str, manage: bool) {
+        self.greet_with(nodes, panes, role, manage, true);
+    }
+
+    fn greet_with(&self, nodes: Value, panes: Value, role: &str, manage: bool, find: bool) {
         self.send(json!({
             "t": "hello", "protocol": 1, "node_id": "01JNODE", "node_name": "comingclean",
             "build": "0.1.29", "role": role,
-            "caps": { "push": false, "scrollback": true, "conversation": true, "manage": manage }
+            "caps": {
+                "push": false, "scrollback": true, "conversation": true,
+                "manage": manage, "find": find
+            }
         }));
         self.send(json!({ "t": "herd", "nodes": nodes, "panes": panes }));
         self.send(json!({ "t": "prefs", "panes": {} }));
@@ -1191,4 +1198,157 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
     tokio::time::sleep(HUSH).await;
     app.match_view(Some(at), 120, 40);
     conn.sent_nothing().await;
+}
+
+/// **The refusal that is a question, not an outcome.**
+///
+/// herdr will not close a workspace that still has linked worktree workspaces open — the group
+/// goes together or nothing does (#514) — so the node counts what would go and refuses with
+/// `workspace_group_close_required`. Every other refusal ends the op; this one has to re-open,
+/// carrying the node's count, because the operator has a real second choice to make and no way to
+/// express it otherwise: `group` is not on the menu and never will be.
+#[tokio::test]
+async fn a_workspace_that_owns_worktrees_re_asks_instead_of_reporting_a_failure() {
+    let mut fake = Fake::start().await;
+    let (_client, mut events, mut conn, mut app) = desk(&mut fake).await;
+
+    shifted(&mut app, 'd');
+    tap(&mut app, KeyCode::Enter);
+
+    let sent = conn.op().await;
+    assert_eq!(sent["op"], "close");
+    assert!(
+        sent.get("group").is_none_or(|g| g == false),
+        "the first close must never take the group unasked: {sent}"
+    );
+    let at = sent["at"].clone();
+
+    let counted = "closing this workspace closes 3 workspaces — it and the 2 worktree workspaces \
+                   herdr linked to it, which cannot be closed separately";
+    conn.send(json!({
+        "t": "managed", "rid": sent["rid"], "op": "close", "ok": false,
+        "code": "workspace_group_close_required", "message": counted
+    }));
+    conn.send(json!({
+        "t": "error", "code": "workspace_group_close_required", "message": counted, "pane": null
+    }));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Error(_))).await;
+
+    let asked = painted(&mut app, 100, 20);
+    assert!(
+        asked.contains("3 workspaces"),
+        "the operator decides with the node's count in front of them:\n{asked}"
+    );
+    assert!(
+        !asked.contains("was refused"),
+        "a question is not a failure notice:\n{asked}"
+    );
+
+    tap(&mut app, KeyCode::Enter);
+    let group = conn.op().await;
+    assert_eq!(group["op"], "close");
+    assert_eq!(group["at"], at, "the second ask closes what the first one named");
+    assert_eq!(
+        group["group"], true,
+        "and it is the only thing that changed: {group}"
+    );
+}
+
+/// **`/ ? n N` were bound to nothing at all**, and that was honest: there was no search to give
+/// them. `pane.read recent` caps at 1000 rows with no offset, so every answer this client could
+/// have produced was about a window rather than about the pane — and the node can now search the
+/// whole scrollback through `pane.copy_search` (#511).
+///
+/// What this asserts is the round trip: the query leaves as a frame, the answer comes back as one,
+/// and the operator is taken to the match rather than told about it. `total` beyond the listed
+/// matches is the case that matters most for the wording — a search of four hundred rows says four
+/// hundred, and steps through the ones it was handed.
+#[tokio::test]
+async fn a_search_goes_to_the_node_and_lands_the_operator_on_the_match() {
+    let mut fake = Fake::start().await;
+    let (_client, mut events, mut conn, mut app) = desk(&mut fake).await;
+
+    // Copy mode, which is where herdr puts its own search grammar and where these four keys have
+    // always been bound (#290).
+    app.key(PREFIX);
+    ch(&mut app, '[');
+    ch(&mut app, '/');
+    let typing = painted(&mut app, 100, 20);
+    assert!(typing.contains("find ·"), "the prompt is on screen:\n{typing}");
+
+    typed(&mut app, "needle");
+    tap(&mut app, KeyCode::Enter);
+
+    let sent = conn.frame("find").await;
+    assert_eq!(sent["query"], "needle", "{sent}");
+    assert_eq!(
+        sent["backward"], false,
+        "`/` searches the way a pager's does: {sent}"
+    );
+
+    let pane = sent["pane"].as_str().expect("a pane").to_string();
+    conn.send(json!({
+        "t": "find", "pane": pane, "query": "needle", "total": 400, "current": 0,
+        "matches": [
+            { "from_bottom": 2500, "col": 4, "end_from_bottom": 2500, "end_col": 10, "text": "deep needle here" },
+            { "from_bottom": 12, "col": 0, "end_from_bottom": 12, "end_col": 6, "text": "shallow needle" }
+        ]
+    }));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Found { .. })).await;
+
+    let landed = painted(&mut app, 100, 20);
+    assert!(
+        landed.contains("1 of 400"),
+        "the count is herdr's, not the listed rows':\n{landed}"
+    );
+    assert!(
+        landed.contains("deep needle here"),
+        "and the row it matched is shown, even at a depth this client may not hold:\n{landed}"
+    );
+
+    ch(&mut app, 'n');
+    let stepped = painted(&mut app, 100, 20);
+    assert!(
+        stepped.contains("2 of 400") && stepped.contains("shallow needle"),
+        "`n` steps to the next match:\n{stepped}"
+    );
+}
+
+/// **A node with no `find` verb gets no find prompt.**
+///
+/// Every other verb on this wire is fire-and-forget, and an unknown `t` being ignored is exactly
+/// what makes a newer client safe against an older node. `find` is the exception: it owes an
+/// answer, so a client that opened a prompt, took a query and sent it would then wait for a frame
+/// that never arrives — with nothing on screen to say why. The phones this ships to update on
+/// their own schedule, so a client newer than its node is the ordinary case.
+#[tokio::test]
+async fn a_node_that_cannot_search_is_told_apart_from_one_that_found_nothing() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet_with(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+        true,
+        false,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    app.key(PREFIX);
+    ch(&mut app, '[');
+    ch(&mut app, '/');
+
+    let said = painted(&mut app, 100, 20);
+    assert!(
+        said.contains("older than this client"),
+        "the reason is said, not left to a prompt that never answers:\n{said}"
+    );
+    assert!(
+        !said.contains("↵ search"),
+        "and no prompt is opened at all:\n{said}"
+    );
 }

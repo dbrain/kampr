@@ -319,6 +319,7 @@ impl Provider for FleetProvider {
             cols: Some(run.geometry.cols),
             viewport_rows: run.geometry.rows,
             truncated: bytes.len() >= REPLAY_CAP,
+            first_row: None,
         }))
     }
 

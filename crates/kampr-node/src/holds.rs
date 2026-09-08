@@ -142,9 +142,9 @@ impl PaneHolds {
                 held.remove(&key);
             }
             drop(held);
-            // Only when the entry was still this hold's: a claim that superseded this one has
-            // already commanded its own width, and clearing it here would hand the stream back to
-            // an inference of rows the *new* hold has since resized away.
+            // Only when the entry was still this hold's: a claim that superseded this one owns the
+            // pane now, and telling the provider that *this* hold let go would rebuild the herd
+            // around a hold that is still standing.
             if ours {
                 provider.released(&key);
             }

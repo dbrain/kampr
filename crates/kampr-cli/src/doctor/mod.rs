@@ -8,6 +8,7 @@ mod cert;
 mod exposure;
 mod herd;
 mod host;
+mod integrations;
 mod observe;
 mod origin;
 mod render;

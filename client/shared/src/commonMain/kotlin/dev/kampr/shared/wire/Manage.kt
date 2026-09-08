@@ -83,7 +83,11 @@ sealed interface ManageOp {
         override val op: String get() = "rename"
     }
 
-    data class Close(val at: String) : ManageOp {
+    // `group` is the operator's *second* press. herdr refuses to break a worktree group up, so the
+    // first close comes back as `workspace_group_close_required` carrying the node's count of what
+    // would go, and this is what is sent once they have read it. Never defaulted true: one press
+    // would then close workspaces they never named.
+    data class Close(val at: String, val group: Boolean = false) : ManageOp {
         override val op: String get() = "close"
     }
 
@@ -227,7 +231,10 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             put("at", at)
             put("label", label?.let(::JsonPrimitive) ?: JsonNull)
         }
-        is ManageOp.Close -> put("at", at)
+        is ManageOp.Close -> {
+            put("at", at)
+            if (group) put("group", true)
+        }
         is ManageOp.Focus -> put("at", at)
         is ManageOp.AgentStart -> {
             put("at", at)

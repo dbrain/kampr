@@ -133,6 +133,13 @@ impl App {
             self.draw_keybinds(frame, area);
         }
         self.manage.render(frame.buffer_mut(), panes, &t);
+        // Under the manage strip in the draw order, so a modal that is up covers it rather than
+        // the other way round: the modal has the keyboard, and a line under it that looks live
+        // would be a control the operator cannot reach.
+        if !self.manage.active() {
+            self.find
+                .render(frame.buffer_mut(), panes, self.focus.as_deref(), &t);
+        }
         self.layout = layout;
     }
 

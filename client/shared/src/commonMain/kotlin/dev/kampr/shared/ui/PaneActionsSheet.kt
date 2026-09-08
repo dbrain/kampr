@@ -40,6 +40,7 @@ fun PaneActionsSheet(
     onManage: (ManageOp) -> Unit,
     onDismiss: () -> Unit,
     panes: List<PaneInfo> = emptyList(),
+    onFind: (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -74,6 +75,7 @@ fun PaneActionsSheet(
                     clearable = true,
                     zoomable = true,
                     onManage = ::send,
+                    onFind = onFind?.let { go -> { onDismiss(); go() } },
                 )
                 pane.tabId?.let { tabId ->
                     Target(
@@ -163,6 +165,9 @@ private fun Target(
     zoomable: Boolean,
     onManage: (ManageOp) -> Unit,
     holds: Int = 0,
+    // Only a pane has a scrollback to search; a tab and a workspace do not, so they are offered
+    // nothing rather than a control that would have to explain itself.
+    onFind: (() -> Unit)? = null,
     extra: @Composable (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
@@ -195,10 +200,23 @@ private fun Target(
                     // and "at the desk" was carrying the entire distinction. This one is herdr's
                     // `pane.zoom`: the pane fills its tab on the machine and its siblings go away,
                     // which is what the name now says (probe #265).
+                    //
+                    // The label also names what it costs. herdr routes a zoom through focus before
+                    // it works out whether the zoom changes anything, and focus marks every pane in
+                    // the tab seen — so even a toggle that is a no-op destroys the operator's
+                    // `done` marks for that whole tab (probe #515). That is not something a control
+                    // called "fill the tab" implies.
                     Chip(
                         "fill the tab", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
-                        label = "Make this $kind fill its tab at the desk, and put the others back when it already does",
+                        label = "Make this $kind fill its tab at the desk, and put the others back when it already does. " +
+                            "Clears the unread marks for every pane in that tab.",
                     )
+                }
+                onFind?.let {
+                    // A search of the pane's *whole* scrollback, which is a different question
+                    // from anything on this screen: what a client holds is a window on the
+                    // history, and the node asks herdr for the rest (probe #511).
+                    Chip("find", false, it, label = "Search this $kind's whole scrollback")
                 }
                 Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind", )
                 Chip(

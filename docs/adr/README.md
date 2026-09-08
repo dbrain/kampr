@@ -71,7 +71,7 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0001](./0001-the-node-runs-a-vt-emulator.md) | The node runs a VT emulator over streamed frames | Accepted |
 | [0002](./0002-kampr-never-resizes-a-pane.md) | Kampr never resizes a pane | Superseded in part by 0012 |
 | [0003](./0003-the-client-contract-is-a-cell-grid.md) | The client contract is a cell grid, not ANSI | Accepted |
-| [0004](./0004-scrollback-is-stitched-and-a-gap-discards.md) | Scrollback is stitched from `pane.read`, and a gap discards rather than splices | Accepted |
+| [0004](./0004-scrollback-is-stitched-and-a-gap-discards.md) | Scrollback is stitched from `pane.read`, and a gap discards rather than splices | Accepted, amended 2026-09-08 |
 | [0005](./0005-structure-comes-from-the-transcript.md) | Structure comes from the transcript, never from the grid | Accepted |
 | [0006](./0006-auth-is-in-the-node.md) | Auth is in the node, and the origin dictates the ladder | Accepted |
 | [0007](./0007-peers-dial-outbound-to-a-hub.md) | Peers dial outbound to a hub | Accepted |
@@ -81,3 +81,4 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0011](./0011-the-client-fits-itself-to-the-pane.md) | The client fits itself to the pane, and asks before it touches a pane's mouse | Accepted |
 | [0012](./0012-one-deliberate-resize-behind-a-panel.md) | One deliberate resize, behind a panel | Accepted, amended by 0013 |
 | [0013](./0013-a-standing-intent-to-match-the-view.md) | A standing intent to match the view | Accepted |
+| [0014](./0014-the-pane-width-is-read-not-inferred.md) | The pane's width is read, not inferred | Accepted |

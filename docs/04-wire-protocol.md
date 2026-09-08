@@ -13,8 +13,14 @@ The node runs one VT emulator per pane (`kampr-term`, `alacritty`-free, built on
 clients a cell grid. Clients parse no escape sequences. Consequences that are load-bearing:
 
 - One emulator per pane, shared by every viewer, not one per viewer.
-- Selection, find, and OSC 8 hyperlinks are node features over a cell model, not three client
-  reimplementations. Hyperlinks survive here where `pane.read` drops them (probe #36/#37).
+- OSC 8 hyperlinks are a node feature over the cell model rather than a client reimplementation,
+  and they survive here where `pane.read` drops them (probe #36/#37).
+- **Find is a node feature, but not over the cell model** — it is `find`/`find` below, and the node
+  answers it by asking herdr's `pane.copy_search`. The node's own ring is a window on the pane's
+  history (`pane.read recent` caps at 1000 rows with no offset, #51), so searching what is held
+  would answer a smaller question than the one asked (#511).
+- **Selection is still implemented in each client**, over the styled grid it already holds. 0.9's
+  `pane.selection.read` is not a substitute: it returns plain text with no SGR and no OSC 8 (#510).
 - Zoom and pan are pure rendering and reshape nothing (probe #17). The one op that reshapes a pane
   is `pane.size`, which an operator asks for by name — see [ADR 0012](adr/0012-one-deliberate-resize-behind-a-panel.md).
 
@@ -39,7 +45,8 @@ hostname would buy (findings §3.7).
 { "t": "hello", "protocol": 1, "node_id": "01J...", "node_name": "comingclean",
   "build": "0.1.21", "role": "full",          // "full" | "readonly"
   "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
-            "mesh": true },   // this node accepts peer links; see "The mesh"
+            "mesh": true,     // this node accepts peer links; see "The mesh"
+            "find": true },   // this node answers `find`; absent means it does not — see below
   "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
                                      // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
@@ -425,19 +432,28 @@ it is watching, successive reads overlap, so it stitches them into a ring that g
 History that scrolled away before the node started watching is unreachable, and `capped: true` says
 so rather than pretending the top of the ring is the top of history.
 
-**On a gap, the node discards what it held rather than keeping it behind a hole.** If output outruns
-the poll — more than 1000 rows between reads — the new read shares no overlap with the ring, so the
-two stretches are not adjacent and nothing can prove what sits between them. Splicing them would make
-`from_top` and `total_rows` fiction. The node drops the old rows, advances `from_top` by their count
-so absolute indices stay true, and sets `capped`.
+**On a gap the node refetches the missing rows, and discards only when it cannot.** If output
+outruns the poll — more than 1000 rows between reads — the new read shares no rows with the ring.
+The node knows *where* each read starts in herdr's own history (probe #519), so it names the missing
+span by position rather than inferring it, fetches it in one call and splices it in.
 
-That is a real loss, and a `cat` of a large file or a verbose build will cause it. Two things follow:
+Nothing about that reaches a client: `from_top`, `total_rows` and `capped` mean exactly what they
+meant, and a repaired ring simply has more rows and `complete: true`. The one visible difference is
+that **refilled rows carry no colour** — the only method that addresses history by row returns plain
+text (probe #510) — so a repaired span renders unstyled. It is a loss of styling on rows that would
+otherwise not exist at all.
 
-- **The node polls adaptively**, faster while a pane is producing output, so gaps stay rare rather
-  than being accepted as normal. This is the mitigation; the discard is the honest floor beneath it.
-- **Preserving history across a gap needs a wire change, and is deliberately not in v1** — it would
-  take either a per-segment `from_top` or a gap sentinel row, and both should be specified before
-  anyone implements them. Decide it on evidence that gaps still hurt after adaptive polling.
+**The discard is still the floor.** herdr's row numbers are positions in its current ring rather
+than identities: a retention trim renumbers them wholesale and says nothing about how far (#520). So
+the fetched rows are spliced only when eight of them demonstrably continue the ring's own tail, and
+a refusal falls back to dropping the old rows, advancing `from_top` by their count so absolute
+indices stay true, and setting `capped`.
+
+- **The node also polls adaptively**, faster while a pane is producing output, so gaps stay rare
+  rather than being routine. Refetching is the recovery; adaptive polling is what keeps it from
+  being needed often.
+- **No wire change was required after all.** This was reserved for a per-segment `from_top` or a gap
+  sentinel row; refilling the hole means there is no hole left to describe.
 
 A **width change** restarts the ring for a different reason: every stored row was wrapped at the old
 width, so nothing older can be trusted to line up. Same restart, distinct cause, and the log says
@@ -1131,6 +1147,10 @@ the same path but is **not** an error and does not close anything — it arrives
 // The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,
 // Codex needs Enter (probe #43). A client sends only the key it was offered in `pending.options`.
 { "t": "convo.load",  "pane": "01J.../w3:p2", "before": "opaque" }
+
+// Search this pane's WHOLE scrollback. `backward` defaults to true, the way `/` does in a pager;
+// `from` is a starting point in rows from the live row and defaults to the bottom.
+{ "t": "find", "pane": "01J.../w3:p2", "query": "panic", "backward": true, "from": 0 }
 // Per-pane, per-device preferences — zoom level, view choice, render mode. The node stores them
 // against the device, so they follow you between browsers on the same enrolled device.
 { "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
@@ -1180,6 +1200,42 @@ request, and must not treat the first one on a socket as the answer to its own w
 
 Values are opaque to the node: it stores and returns whatever JSON it is given, so `"1.6"` and
 `1.6` both round-trip and a client should read either.
+
+### `find` — the whole scrollback, not the rows anybody holds
+
+```jsonc
+{ "t": "find", "pane": "01J.../w3:p2", "query": "panic", "total": 400, "current": 0,
+  "matches": [
+    { "from_bottom": 2500, "col": 4, "end_from_bottom": 2500, "end_col": 9, "text": "…panic at…" }
+  ] }
+```
+
+**Positions are rows from the live row, and that is the whole reason they are usable.** The node's
+history indexing and a client's ring indexing are different spaces, but both are contiguous and both
+end on the same row — so `from_bottom` means the same thing at each end without either having to
+know the other's numbering.
+
+**`total` is every match; `matches` is a capped list.** The node reads each listed hit's row back
+one at a time, so a search of four hundred rows says four hundred and hands over the first few
+rather than making four hundred round trips to say so. A client shows both.
+
+**`text` is the row the hit is on**, which is what makes a result deeper than the client's own ring
+worth listing at all: it can be read even where it cannot be scrolled to.
+
+The node answers this by asking herdr's `pane.copy_search` rather than by searching the ring it
+holds, because the ring is a window: `pane.read recent` caps at 1000 rows with no offset (probe
+#51/#511). A provider with no herdr behind it — a fleet run's pty — answers with no matches and a
+`total` of zero rather than an error, because "nothing to search" is not a failed search.
+
+**`find` is the one verb on this wire that owes an answer, and the only one gated on a capability.**
+Everywhere else, an unknown `t` being ignored is exactly what lets a newer client talk to an older
+node. Here it is not: an ignored `find` is a search that never comes back, with nothing on the
+client to say why — and the phones this ships to update on their own schedule, so a client newer
+than its node is the ordinary case rather than the exotic one. So a client offers the affordance
+only when `hello.caps.find` is true, and hides it otherwise, which is the same rule the passkey
+button follows. **Across the mesh the hub asks the same question of the peer**, from that peer's own
+`hello`, exactly as it does for `att.fetch`: a `find` aimed at a pane on a node too old to answer is
+refused `unsupported` at the hub rather than relayed into silence.
 
 ### The fleet book
 

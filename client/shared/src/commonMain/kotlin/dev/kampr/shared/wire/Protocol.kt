@@ -47,12 +47,30 @@ data class RowDiff(val row: Int, val runs: List<Run> = emptyList())
 @Serializable
 data class Cursor(val col: Int = 0, val row: Int = 0, val visible: Boolean = true)
 
+// One search hit, positioned in rows from the live row. That coordinate is what makes it portable:
+// the node's history indexing and this client's ring indexing are different spaces, and both are
+// contiguous and both end on the same row. `text` is the matched row, so a match deeper than the
+// ring this client holds can still be listed even though it cannot be scrolled to.
+@Serializable
+data class FindMatch(
+    @SerialName("from_bottom") val fromBottom: Int,
+    val col: Int = 0,
+    @SerialName("end_from_bottom") val endFromBottom: Int = 0,
+    @SerialName("end_col") val endCol: Int = 0,
+    val text: String = "",
+)
+
 @Serializable
 data class Caps(
     val push: Boolean = false,
     val scrollback: Boolean = false,
     val conversation: Boolean = false,
     val manage: Boolean = false,
+    // Defaults to false, which is the whole point: `find` is the one verb on this wire that owes an
+    // answer, so a node that does not say it serves one is a node whose find sheet would wait for a
+    // frame that never comes. A phone updates on its own schedule and is routinely newer than the
+    // node it dials.
+    val find: Boolean = false,
 )
 
 // What the client may offer is decided here, never by inspecting the URL: an affordance that
@@ -401,6 +419,18 @@ sealed interface ServerMsg {
         val links: List<String>,
     ) : ServerMsg
 
+    // What a `find` matched over the pane's whole scrollback. `total` counts every match the node
+    // found, which is not `matches.size`: the list is capped so one keystroke cannot become
+    // hundreds of round trips on the node's side, and a client shows "3 of 400" without holding
+    // four hundred rows.
+    data class Found(
+        val pane: String,
+        val query: String,
+        val matches: List<FindMatch>,
+        val total: Int,
+        val current: Int?,
+    ) : ServerMsg
+
     data class Scrollback(
         val pane: String,
         val fromTop: Int,
@@ -553,6 +583,17 @@ sealed interface ClientMsg {
     data class AnswerSubmit(val pane: String) : ClientMsg
 
     data class ConvoLoad(val pane: String, val before: String?) : ClientMsg
+
+    // Search the pane's whole scrollback. The node does the searching: this client holds a window
+    // on the history and `pane.read recent` caps at 1000 rows with no offset, so a search here was
+    // a search of what happened to be in hand. `from` is in rows from the live row, the one
+    // coordinate the node's history and this client's ring share.
+    data class Find(
+        val pane: String,
+        val query: String,
+        val backward: Boolean = true,
+        val from: Int? = null,
+    ) : ClientMsg
 
     // A page of a conversation this pane's agent launched. `id` is opaque and is only ever handed
     // back: it is minted by the node that served the turn and proved against that pane's own

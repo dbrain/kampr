@@ -219,6 +219,14 @@ impl Client {
         self.send(json!({ "t": "input", "pane": pane, "text": text }))
     }
 
+    /// Search this pane's whole scrollback. The answer arrives as an [`Event::Found`], not as a
+    /// return value: a search of history that is not held here is a question for the node.
+    pub fn find(&self, pane: &str, query: &str, backward: bool, from: Option<u32>) -> bool {
+        self.send(json!({
+            "t": "find", "pane": pane, "query": query, "backward": backward, "from": from
+        }))
+    }
+
     pub fn keys(&self, pane: &str, keys: &[&str]) -> bool {
         self.send(json!({ "t": "input", "pane": pane, "keys": keys }))
     }
@@ -399,6 +407,7 @@ impl Inner {
             "grid.reset" => self.grid_reset(&message),
             "grid.patch" => self.grid_patch(&message),
             "scrollback" => self.scrollback(&message),
+            "find" => self.found(message),
             "convo" => self.convo(message),
             "convo.turn" => self.convo_turn(&message),
             "convo.facets" => self.convo_facets(&message),
@@ -673,6 +682,19 @@ impl Inner {
     /// An unrecognised code renders its `message`. The vocabulary is open — a hub forwards a
     /// peer's codes verbatim — so failing on one this build has never seen would hide the
     /// diagnosis the node went to the trouble of sending.
+    fn found(&self, message: Value) {
+        let Ok(found) = serde_json::from_value::<crate::frames::Found>(message) else {
+            return;
+        };
+        self.emit(Event::Found {
+            pane: found.pane,
+            query: found.query,
+            matches: found.matches,
+            total: found.total,
+            current: found.current,
+        });
+    }
+
     fn error(&self, message: Value) {
         let Ok(failure) = serde_json::from_value::<Failure>(message) else {
             return;

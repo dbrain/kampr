@@ -62,13 +62,16 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
    looking at, and a view too small to ask never asks.
 
-   **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is the only thing
-   that destroys herdr's `done` marker — the state herdr synthesises for a pane that finished
-   `working`→`idle` while *unfocused*, which is the operator's unread flag. `pane.focus`,
-   `tab.focus` and `workspace.focus` all clear it, because the rule is "whatever makes the pane
-   the session-focused pane", and Kampr's `focus` manage op routes all three. Every read leaves it
-   standing. So focus is a thing the operator presses, never a side effect of opening a view, and
-   every create op passes `focus: false`.
+   **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is what destroys
+   herdr's `done` marker — the state herdr synthesises for a pane that finished `working`→`idle`
+   while *unfocused*, which is the operator's unread flag. `pane.focus`, `tab.focus` and
+   `workspace.focus` all clear it, because the rule is "whatever makes the pane the session-focused
+   pane", and Kampr's `focus` manage op routes all three. **`pane.zoom` clears it too**, for the
+   whole tab and even when the zoom is a no-op, because herdr routes it through focus before it
+   decides whether anything changed (#515) — so "only the focus ops" was never the whole list, and
+   any new op has to be measured rather than assumed. Every read leaves it standing, including
+   every one herdr 0.9 added. So focus is a thing the operator presses, told what it costs, never a
+   side effect of opening a view, and every create op passes `focus: false`.
 
    A pane Kampr **created for a job of its own** is Kampr's: a short-lived TTY it spawned, ran a
    command in, and will tear down. It may be given a geometry at creation and while Kampr holds it,
@@ -211,6 +214,8 @@ cargo test --workspace
 cd client && env -u GRADLE_HOME ./gradlew check
 ```
 
-All four must be clean. The Rust suite includes live tests that drive a **real** `herdr` binary; if
-one is missing they skip loudly rather than pass quietly, and they are sensitive to machine load —
-re-run a failure alone before reporting it.
+All four must be clean. The Rust suite includes live tests that drive a **real** `herdr` binary, and
+they **require** one: with no `herdr` on PATH the suite fails, and it fails differently again for a
+herdr that is on PATH and never opens a socket, because a herdr that is present and broken is
+[#233](docs/03-probe-log.md) and must never read as "not installed". They are sensitive to machine
+load — re-run a failure alone before reporting it.

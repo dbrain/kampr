@@ -19,8 +19,8 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       # The node's integration suite is the only thing that exercises the real Herdr seam, and it
-      # skips itself when `herdr` is missing — which on a bare runner is always. Green CI without
-      # this step proves almost nothing about the node.
+      # fails outright when `herdr` is missing — which on a bare runner is always. This step is
+      # what makes that suite able to run at all.
       - name: install herdr
         run: |
           set -eu
@@ -36,14 +36,9 @@ jobs:
       - run: herdr --version
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test — a skipped integration suite is a failure, not a pass
-        run: |
-          set -euo pipefail
-          cargo test --workspace -- --nocapture 2>&1 | tee test.log
-          if grep -q "skipping: no herdr on PATH" test.log; then
-            echo "::error::the node integration suite skipped itself — herdr was installed but unreachable"
-            exit 1
-          fi
+      # No grep for a skip message any more: the suite panics rather than skipping, and it says
+      # which of the two failures it is — absent, or present and not listening (#233).
+      - run: cargo test --workspace
 
   # The release builds two Apple targets and every other job here builds Linux, so a Linux-only
   # libc constant compiled clean, passed CI, was tagged, and then failed both Apple jobs of the

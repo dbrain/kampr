@@ -121,6 +121,18 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
         LaunchedEffect(Unit) { state.closeSheet() }
         return
     }
+    // Not a `Sheet`: the find bar is opened *from* the actions sheet, which closes on the way, and
+    // a second entry in that enum would make "which sheet is up" answerable two ways.
+    state.findingOn?.let { paneId ->
+        val found by state.store.found.collectAsState()
+        FindSheet(
+            paneId = paneId,
+            breakpoint = breakpoint,
+            found = found,
+            onSearch = { state.find(paneId, it) },
+            onDismiss = state::closeFind,
+        )
+    }
     when (val sheet = state.sheet) {
         null -> Unit
         is Sheet.New -> {
@@ -156,6 +168,9 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 onManage = state::manage,
                 onDismiss = state::closeSheet,
                 panes = herd.panes,
+                // Absent rather than present-and-failing, the same rule the passkey button follows.
+                onFind = { state.openFind(pane.id) }
+                    .takeIf { state.store.hello.value?.caps?.find == true },
             )
         }
         is Sheet.Menu -> {

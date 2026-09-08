@@ -18,10 +18,18 @@ async fn main() -> Result<()> {
         Some(id) => snap.pane(id).context("pane not found")?,
         None => snap.panes.first().context("no panes in session")?,
     };
-    let (cols, rect_rows) = snap.geometry(&pane.pane_id).context("pane has no layout rect")?;
-    // The rect's height is not the PTY's, and observing at it crops the pane to its top rows
-    // (probe #205/#206) — which would read here as an emulator fault it is not.
+    let (rect_cols, rect_rows) = snap.geometry(&pane.pane_id).context("pane has no layout rect")?;
+    // **Neither half of the rect is the PTY**, and using either reads here as an emulator fault it
+    // is not. The height crops the pane to its top rows (#205/#206) and `viewport_rows` is herdr's
+    // own; the width is fiction on a headless pane (#68) and the honest answer is read off
+    // `pane.selection.read`, which bounds on the real grid (#509). Sizing this canary from the rect
+    // reported 37 of 41 rows matching against a pane that was streaming perfectly — the mismatch
+    // was the probe, not the emulator.
     let rows = pane.scroll.map_or(rect_rows, |s| s.viewport_rows as u32);
+    let cols = herdr
+        .pane_width(&pane.pane_id, Some(rect_cols as u16))
+        .await
+        .context("reading the pane's width")? as u32;
     println!(
         "pane {} — native {}x{} — agent {:?} — scrollback safe: {}",
         pane.pane_id,

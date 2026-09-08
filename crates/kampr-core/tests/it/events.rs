@@ -13,9 +13,15 @@ struct Session {
     socket: PathBuf,
 }
 
+/// How long a spawned herdr is given to open its socket before the wait is called a defect.
+const LISTENS_WITHIN: Duration = Duration::from_secs(10);
+
 impl Session {
-    async fn start(tag: &str) -> Option<Self> {
-        which("herdr")?;
+    // `herdr server` *is* the server: it runs until the socket is told to stop, which is what
+    // `Drop` does. Waiting on it here would block for the life of the session.
+    #[allow(clippy::zombie_processes)]
+    async fn start(tag: &str) -> Self {
+        let herdr = kampr_testkit::herdr_on_path();
         let name = format!("kampr-ev-{tag}-{}", std::process::id());
         assert_ne!(name, "default");
         let socket = herdr_home().join("sessions").join(&name).join("herdr.sock");
@@ -25,7 +31,7 @@ impl Session {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .ok()?;
+            .unwrap_or_else(|e| panic!("spawning `{} server --session {name}`: {e}", herdr.display()));
         for _ in 0..100 {
             if socket.exists() {
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -34,12 +40,12 @@ impl Session {
                     .herdr()
                     .call::<Value>("workspace.create", json!({ "label": "ev", "cwd": "/tmp" }))
                     .await
-                    .ok()?;
-                return Some(session);
+                    .expect("creating the throwaway workspace");
+                return session;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        None
+        kampr_testkit::herdr_never_listened(&name, &socket, LISTENS_WITHIN)
     }
 
     fn herdr(&self) -> Herdr {
@@ -82,14 +88,6 @@ impl Drop for Session {
     }
 }
 
-fn which(binary: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(binary))
-            .find(|candidate| candidate.is_file())
-    })
-}
-
 fn herdr_home() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -103,10 +101,7 @@ fn herdr_home() -> PathBuf {
 /// actually builds is accepted, and the same list with the `pane_id` dropped is not.
 #[tokio::test]
 async fn the_status_subscription_is_accepted_only_when_every_entry_names_its_pane() {
-    let Some(session) = Session::start("accept").await else {
-        eprintln!("skipping: herdr is not on PATH");
-        return;
-    };
+    let session = Session::start("accept").await;
     let herdr = session.herdr();
     let pane = herdr.snapshot().await.unwrap().panes[0].pane_id.clone();
 
@@ -141,10 +136,7 @@ async fn the_status_subscription_is_accepted_only_when_every_entry_names_its_pan
 /// as a permanent failure.
 #[tokio::test]
 async fn a_pane_that_closed_between_the_snapshot_and_the_subscribe_takes_the_whole_call() {
-    let Some(session) = Session::start("ghost").await else {
-        eprintln!("skipping: herdr is not on PATH");
-        return;
-    };
+    let session = Session::start("ghost").await;
     let herdr = session.herdr();
     let live = herdr.snapshot().await.unwrap().panes[0].pane_id.clone();
 

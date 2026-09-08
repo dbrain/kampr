@@ -10,7 +10,17 @@ use std::time::Duration;
 /// The floor the plugin manifest declares. Declared there, enforced here, and kept in step by
 /// [`tests::the_declared_floor_is_the_enforced_one`] — a manifest promising a version nothing
 /// checks is how a node ends up talking to a herdr that does not answer `observe`.
-const MIN_HERDR_VERSION: &str = "0.8.2";
+///
+/// **0.9.0 is a hard floor, not a preference.** Below it `pane.selection.read` does not exist, and
+/// that method is the node's only column count (#509) — a 0.8.2 herdr would leave every pane
+/// streamed at its layout rect, which #68 established is fiction. The floor is also why nothing
+/// here degrades gracefully to the old width inference: there is no old width inference.
+///
+/// Separately, and worth knowing when a mixed pair looks healthy: `terminal session observe` is
+/// **version-locked in both directions** (#516). A node whose binary is 0.9 and whose server is
+/// 0.8.2 answers every socket question correctly and streams nothing at all, which is #233
+/// exactly. `doctor`'s `observe` check is what catches it.
+const MIN_HERDR_VERSION: &str = "0.9.0";
 
 /// A herdr that is up answers this in microseconds; one that is wedged never answers at all.
 const PING_TIMEOUT: Duration = Duration::from_secs(2);
@@ -24,6 +34,7 @@ pub async fn checks(config: &Config, service_installed: bool) -> Vec<Check> {
         // ever checked.
         super::observe::check(config, &socket, service_installed).await,
         sessions_check(config, &socket, reachable).await,
+        super::integrations::check(&socket).await,
     ]
 }
 
@@ -200,9 +211,12 @@ mod tests {
     fn a_version_below_the_floor_is_caught_and_a_newer_one_is_not() {
         assert!(below_floor("0.8.1"));
         assert!(below_floor("0.7.9"));
-        assert!(!below_floor("0.8.2"));
-        assert!(!below_floor("0.8.3"));
-        assert!(!below_floor("v0.9.0-preview.2"));
+        // The version this whole tree was verified against until 0.9 landed, and now below the
+        // floor: it has no `pane.selection.read`, which is the node's only column count (#509).
+        assert!(below_floor("0.8.2"));
+        assert!(below_floor("0.8.3"));
+        assert!(!below_floor("0.9.0"));
+        assert!(!below_floor("v0.9.1-preview.2"));
         assert!(!below_floor("1.0.0"));
         assert!(!below_floor("nonsense"), "an unreadable version is not a refusal");
     }

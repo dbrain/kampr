@@ -11,7 +11,25 @@ machine and useless on a fresh one. A dependency pass stalled for an afternoon o
 | | | |
 |---|---|---|
 | Rust | **1.90+** | `rust-version` in the workspace manifest |
-| Herdr | **0.8.2+** (protocol 20) | the only version anything here is verified against |
+| Herdr | **0.9.0+** (protocol 22) | a hard floor, not a preference — see below |
+
+### Why 0.9.0 is a floor rather than a minimum tested version
+
+Two things below it are not degradations, they are absences.
+
+`pane.selection.read` is new in 0.9 and it is the node's **only** column count. Nothing in the
+socket API *reports* one — that is still true in 0.9 and #221 stands — but this method refuses a
+cursor column at or past the grid width, so a binary search reads the width exactly (#509). Against
+0.8.2 every pane would be streamed at its layout rect, which #68 established is fiction on a
+headless session. There is no fallback because there is no longer an inference to fall back to;
+the four hundred lines that used to do this job are gone.
+
+`terminal session observe` is **version-locked in both directions** (#516): a 0.9 client against a
+0.8.2 server and a 0.8.2 client against a 0.9 server both get `server closed connection`. The JSON
+socket, meanwhile, is happily cross-version. So upgrading the binary without restarting the server
+— or the reverse — produces a node that answers every question correctly with every pane blank,
+which is [#233](03-probe-log.md) exactly. **Move the binary and the server together**, and let
+`kampr doctor`'s `observe` check confirm it.
 
 ## Building the client
 

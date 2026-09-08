@@ -421,9 +421,13 @@ Over-asking clamps harmlessly (`lines: 5000` returns 1000, `truncated: true` —
 **The interlock** — read scrollback only when `max_offset_from_bottom > 0`. Encoded as
 `Pane::scrollback_is_safe_to_read` in `crates/kampr-herdr`. It used to also exclude panes with a
 detected `agent`, on Collie's documented hazard that `recent` with `lines > viewport_rows` harvests
-through the agent's own mouse-scroll interface; #231 measured it and it does not — a live `codex`
-and a live `claude` holding a ring both answer `lines: 5000` in 1 ms with the viewport unmoved. The
-slow read is a live harness whose ring is **empty**, which the surviving half excludes.
+through the agent's own mouse-scroll interface. **That hazard is real and #231 missed it** (#513):
+it needs `format: "text"` on an **idle** agent holding the **alternate screen** with mouse reporting
+on, and #231's `codex` and `claude` were **blocked** and on an ordinary ring — on that state
+`lines: 5000` really does answer in 1 ms with the viewport unmoved. So dropping the agent half was
+still right, but **what keeps the read safe is the format, not the interlock**: `read_scrollback`
+asks for `ansi`, which is outside the gate. The slow read is a live harness whose ring is **empty**,
+which the surviving half excludes.
 
 Agent panes were also said to lose nothing by it, being alt-screen with no ring to miss. A codex
 pane read back 402 rows of one, so what was excluded was real history.

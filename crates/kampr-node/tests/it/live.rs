@@ -1,8 +1,9 @@
 //! End-to-end against a real Herdr.
 //!
 //! Every test here runs in a throwaway named session created and destroyed by the test itself.
-//! `default` is never touched. When `herdr` is not on PATH the suite reports a skip rather than a
-//! failure, so it stays honest on a machine that has no herd.
+//! `default` is never touched. When `herdr` is not on PATH, or is on it and never opens a socket,
+//! the suite **fails** — see `kampr-testkit` for why a skip was the wrong answer and why those two
+//! are not the same failure.
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -24,9 +25,15 @@ struct Session {
     socket: PathBuf,
 }
 
+/// How long a spawned herdr is given to open its socket before the wait is called a defect.
+const LISTENS_WITHIN: Duration = Duration::from_secs(10);
+
 impl Session {
-    async fn start(tag: &str) -> Option<Self> {
-        which("herdr")?;
+    // `herdr server` *is* the server: it runs until the socket is told to stop, which is what
+    // `Drop` does. Waiting on it here would block for the life of the session.
+    #[allow(clippy::zombie_processes)]
+    async fn start(tag: &str) -> Self {
+        let herdr = kampr_testkit::herdr_on_path();
         // The tag does not make this unique — two tests already pass `identity` — and two tests in
         // this binary run at once. Sharing a name is sharing one herdr server, and the first of
         // them to finish stops it in `Drop`, out from under whichever is still using it.
@@ -40,15 +47,15 @@ impl Session {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .ok()?;
+            .unwrap_or_else(|e| panic!("spawning `{} server --session {name}`: {e}", herdr.display()));
         for _ in 0..100 {
             if socket.exists() {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                return Some(Self { name, socket });
+                return Self { name, socket };
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        None
+        kampr_testkit::herdr_never_listened(&name, &socket, LISTENS_WITHIN)
     }
 
     fn herdr(&self) -> kampr_herdr::Herdr {
@@ -236,14 +243,6 @@ fn server_pid(name: &str) -> Option<u32> {
     None
 }
 
-fn which(binary: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(binary))
-            .find(|candidate| candidate.is_file())
-    })
-}
-
 /// Leaves the session holding **only** the workspace this harness asked for.
 ///
 /// herdr's headless server creates a startup workspace of its own (#452) — one login shell in `$HOME`,
@@ -365,17 +364,31 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Option<Self> {
-        let session = Session::start(tag).await?;
+    async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Self {
+        let session = Session::start(tag).await;
         let created = session
             .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
             .await;
-        the_only_workspace(&session, created["workspace"]["workspace_id"].as_str()?).await;
-        a_pane_at_its_shell(&session, created["root_pane"]["pane_id"].as_str()?).await;
+        the_only_workspace(
+            &session,
+            created["workspace"]["workspace_id"]
+                .as_str()
+                .expect("herdr named the workspace it just created"),
+        )
+        .await;
+        a_pane_at_its_shell(
+            &session,
+            created["root_pane"]["pane_id"]
+                .as_str()
+                .expect("herdr named the root pane it just created"),
+        )
+        .await;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok()?;
-        let port = listener.local_addr().ok()?.port();
-        let state = tempfile::tempdir().ok()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let port = listener.local_addr().expect("the bound port").port();
+        let state = tempfile::tempdir().expect("a temporary state directory");
         let config_dir = state.path().join("config");
 
         let mut config = Config::bootstrap("testnode");
@@ -385,16 +398,26 @@ impl Harness {
         config.server.bind = format!("127.0.0.1:{port}");
         config.server.origin = format!("http://127.0.0.1:{port}");
         config.herdr.socket = session.socket.display().to_string();
+        // **The same binary that started the server, verbatim.** The node resolves `herdr` through
+        // `kampr_herdr::locate`, which reads `HERDR_BIN_PATH` *before* `PATH` — and herdr injects
+        // that variable into every pane it runs, so a suite run from inside a herd points the node
+        // at the operator's installed herdr while `Session::start` spawned whichever one is first
+        // on `PATH`. When those differ, `terminal session observe` is version-locked and refuses
+        // (#516): the node answers every socket question correctly and streams nothing, which is
+        // #233 with no diagnosis anywhere. Pinning them together is the whole fix.
+        config.herdr.binary = kampr_testkit::herdr_on_path().display().to_string();
         // Serve only this test's own session. The node discovers every herdr running on the
         // machine by default, and another test's throwaway herd is not this test's herd.
         config.herdr.sessions = Some(Vec::new());
         config.auth.audit = true;
         config.limits.client_queue = 32;
         tweak(&mut config);
-        config.save(&config_dir).ok()?;
+        config.save(&config_dir).expect("writing the test node's config");
 
         let origin = config.origin();
-        let node = Node::start(config, state.path()).await.ok()?;
+        let node = Node::start(config, state.path())
+            .await
+            .expect("starting the test node");
         let server = tokio::spawn({
             let app = http::router(node.clone());
             async move {
@@ -408,13 +431,13 @@ impl Harness {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Some(Self {
+        Self {
             _session: session,
             _state: state,
             node,
             origin,
             server,
-        })
+        }
     }
 
     async fn token(&self, role: Role) -> String {
@@ -760,13 +783,7 @@ macro_rules! harness {
         harness!($tag, |_| {})
     };
     ($tag:expr, $tweak:expr) => {
-        match Harness::start_with($tag, $tweak).await {
-            Some(h) => h,
-            None => {
-                eprintln!("skipping: no herdr on PATH");
-                return;
-            }
-        }
+        Harness::start_with($tag, $tweak).await
     };
 }
 
@@ -2036,10 +2053,7 @@ async fn a_forged_forwarded_header_does_not_buy_a_fresh_rate_limit_bucket() {
 /// proves the transport works and that HTTPS alone still buys no passkeys.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_node_can_terminate_tls_itself() {
-    let Some(session) = Session::start("tls").await else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
+    let session = Session::start("tls").await;
     session
         .call("workspace.create", json!({ "label": "tls", "cwd": "/tmp" }))
         .await;
@@ -2415,13 +2429,8 @@ async fn a_node_left_alone_never_starts_the_herdr_it_is_missing() {
 /// A named session is a separate herdr server, so it is a separate node — not an invisible one.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_herdr_session_on_the_host_is_its_own_node() {
-    let Some(first) = Session::start("multi-a").await else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
-    let Some(second) = Session::start("multi-b").await else {
-        return;
-    };
+    let first = Session::start("multi-a").await;
+    let second = Session::start("multi-b").await;
     first
         .call("workspace.create", json!({ "label": "one", "cwd": "/tmp" }))
         .await;
@@ -3386,7 +3395,7 @@ fn claude_transcript(cwd: &str, filler: usize) -> (String, String) {
 async fn become_harness(session: &Session, local: &str, dir: &Path, agent: &str) -> u32 {
     let binary = dir.join(agent);
     if !binary.exists() {
-        std::fs::copy(which("bash").expect("bash on PATH"), &binary).unwrap();
+        std::fs::copy(kampr_testkit::on_path("bash").expect("bash on PATH"), &binary).unwrap();
     }
     session
         .call(
@@ -4195,9 +4204,13 @@ async fn every_client_op_lands_on_a_real_herd() {
         .map(|p| p.id.clone())
         .collect();
     assert!(!doomed.is_empty(), "the probe workspace had no panes to lose");
+    // `group`, because this sweep made a worktree out of this workspace a few ops ago and herdr
+    // will not break the group up (#514). The bare close and its refusal are asserted on their own
+    // in `closing_a_workspace_that_owns_worktrees_asks_first_and_then_takes_the_group`; here the
+    // op just has to land.
     ok(
         &mut socket,
-        json!({ "t": "manage", "op": "close", "at": workspace }),
+        json!({ "t": "manage", "op": "close", "at": workspace, "group": true }),
         20,
     )
     .await;
@@ -4980,10 +4993,7 @@ async fn a_second_viewer_is_announced_on_the_pane_they_share() {
 /// herdr emits it and refuses to subscribe you to it — so no schema check can stand in for this.
 #[tokio::test(flavor = "multi_thread")]
 async fn herdr_accepts_every_event_the_node_subscribes_to() {
-    let Some(session) = Session::start("subs").await else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
+    let session = Session::start("subs").await;
     session
         .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
         .await;
@@ -5405,7 +5415,7 @@ impl Harnessed {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
         let binary = home.join("claude");
-        std::fs::copy(which("sleep").expect("sleep on PATH"), &binary).unwrap();
+        std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &binary).unwrap();
         Self {
             home: home.to_path_buf(),
             project,
@@ -5559,7 +5569,7 @@ async fn a_pane_herdr_has_no_rules_for_is_read_off_the_title_its_harness_writes(
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let binary = home.path().join("omp");
-    std::fs::copy(which("sleep").expect("sleep on PATH"), &binary).unwrap();
+    std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &binary).unwrap();
     let cwd = work.path().canonicalize().unwrap().display().to_string();
     let home_path = home.path().display().to_string();
     let h = harness!("omp-title", |c: &mut Config| c.journals.home = home_path);
@@ -7031,10 +7041,7 @@ async fn a_node_that_cannot_run_herdr_says_so_instead_of_promising_a_grid() {
 /// supervisor already retries for, so the whole story has to clear itself.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pane_recovers_on_its_own_once_herdr_can_be_run() {
-    let Some(real) = which("herdr") else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
+    let real = kampr_testkit::herdr_on_path();
     let bin = tempfile::tempdir().expect("a bin dir");
     let shim = bin.path().join("herdr");
     let h = harness!("recover", |c: &mut Config| {
@@ -7388,10 +7395,7 @@ async fn drain(socket: &mut Socket, quiet: Duration) {
 /// `active`, the `source`, and the `label` that replaced the sort-mode word in its header.
 #[tokio::test(flavor = "multi_thread")]
 async fn herdr_accepts_the_agents_view_the_node_sets_and_gives_the_desk_back_on_clear() {
-    let Some(session) = Session::start("agentview").await else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
+    let session = Session::start("agentview").await;
     let view = kampr_core::agent_view::View::by_name();
     let set = session
         .herdr()
@@ -8330,10 +8334,7 @@ async fn an_agent_pane_with_a_transcript(
     let transcript = project.join(format!("9f1c0b2e-0000-4000-8000-0000000{:05x}.jsonl", tag.len()));
 
     let home_path = home.path().display().to_string();
-    let h = match Harness::start_with(tag, |c: &mut Config| c.journals.home = home_path).await {
-        Some(h) => h,
-        None => panic!("no herdr on PATH"),
-    };
+    let h = Harness::start_with(tag, |c: &mut Config| c.journals.home = home_path).await;
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
     let _ = until(&mut socket, "hello", 10).await;
@@ -8882,11 +8883,7 @@ async fn a_hub_is_paged_every_time_because_the_turns_it_holds_are_on_nobodys_scr
 #[tokio::test(flavor = "multi_thread")]
 async fn a_named_session_closing_does_not_raise_the_alarm_for_the_machines_own_herdr() {
     recording_opens();
-    let (Some(mine), Some(theirs)) = (Session::start("ownherdr").await, Session::start("closes").await)
-    else {
-        eprintln!("skipping: no herdr on PATH");
-        return;
-    };
+    let (mine, theirs) = (Session::start("ownherdr").await, Session::start("closes").await);
     theirs
         .call("workspace.create", json!({ "label": "theirs", "cwd": "/tmp" }))
         .await;
@@ -9079,4 +9076,284 @@ fn row_text(row: &Value) -> String {
         .as_array()
         .map(|runs| runs.iter().filter_map(|r| r["x"].as_str()).collect())
         .unwrap_or_default()
+}
+
+/// **A worktree's parent workspace does not close on the first ask, and the refusal has to say so.**
+///
+/// herdr 0.9 refuses `workspace.close` on a workspace that has linked worktree workspaces open,
+/// with `workspace_group_close_required` (probe #514) — closing it takes the whole group or
+/// nothing. Kampr sent neither the flag nor a handler, so the op simply failed with herdr's own
+/// sentence and a client had nowhere to go from there.
+///
+/// What this asserts is the shape of the two-step: the first `close` is refused with a code a
+/// client can branch on and a message that counts what would go, and the same op with
+/// `group: true` — which is the operator having read that count and said yes — closes the group
+/// and takes the linked workspaces with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_workspace_that_owns_worktrees_asks_first_and_then_takes_the_group() {
+    let h = harness!("wt-group");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let _ = until(&mut socket, "hello", 10).await;
+    let node = h.node.node_id().to_string();
+
+    let repo = tempfile::tempdir().expect("a repo");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec![
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(repo.path())
+                .status()
+                .expect("git")
+                .success()
+        );
+    }
+    let repo_path = repo.path().display().to_string();
+
+    let created = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "workspace.create", "node": &node,
+                "label": "kampr-wt", "cwd": &repo_path }),
+        20,
+    )
+    .await;
+    let parent = created["id"].as_str().expect("a workspace id").to_string();
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "worktree.create", "node": &node, "cwd": &repo_path,
+                "branch": "kampr/group", "base": "main", "label": "wt-child" }),
+        30,
+    )
+    .await;
+
+    send(
+        &mut socket,
+        json!({ "t": "manage", "op": "close", "at": &parent }),
+    )
+    .await;
+    let refusal = until(&mut socket, "error", 15).await;
+    assert_eq!(
+        refusal["code"], "workspace_group_close_required",
+        "a client cannot offer the group close it has no code for: {refusal}"
+    );
+    let said = refusal["message"].as_str().expect("a message");
+    assert!(
+        said.contains('2'),
+        "the refusal has to count what would close, the way every other destructive one does: {said}"
+    );
+
+    ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "close", "at": &parent, "group": true }),
+        20,
+    )
+    .await;
+
+    let left = h._session.call("session.snapshot", json!({})).await["snapshot"]["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .len();
+    assert_eq!(
+        left, 1,
+        "the group close left something behind; only this harness's own workspace should remain"
+    );
+}
+
+/// **Find searches the pane, not the window the node happens to hold.**
+///
+/// `pane.read recent` caps at 1000 rows with no offset ([#51](#)/#510), so every search Kampr could
+/// have offered before was a search of a window — which is why `/ ? n N` were bound in the TUI to
+/// no handler at all. `pane.copy_search` covers herdr's whole retained scrollback (#511), and the
+/// positions come back as rows from the live row, the one coordinate herdr's history and a client's
+/// ring share.
+///
+/// The marker is printed **twice, far apart**, so the assertion is about depth rather than about
+/// finding anything: a search of the last 1000 rows finds the near one and cannot find the far one.
+#[tokio::test(flavor = "multi_thread")]
+async fn find_reaches_the_whole_scrollback_and_not_just_the_rows_the_node_holds() {
+    let h = harness!("find");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    let marker = format!("kamprfind{}", std::process::id());
+
+    // Deep, then 2500 rows of noise on top of it, then shallow. herdr's read cap is 1000.
+    for text in [
+        format!("clear; echo '{marker} deep'\n"),
+        "seq 1 2500\n".to_string(),
+        format!("echo '{marker} shallow'\n"),
+    ] {
+        h._session
+            .call("pane.send_text", json!({ "pane_id": local, "text": text }))
+            .await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+    // The width has to have been read once before a hit's text can be read back at it.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    send(&mut socket, json!({ "t": "find", "pane": pane, "query": marker })).await;
+    let found = until(&mut socket, "find", 30).await;
+    assert_eq!(found["pane"], pane.as_str(), "{found}");
+
+    let hits = found["matches"].as_array().expect("matches").clone();
+    let depths: Vec<u64> = hits.iter().filter_map(|m| m["from_bottom"].as_u64()).collect();
+    // Two `echo`s and two prompt lines that carry the command as typed; what matters is that one
+    // of them is far deeper than the read cap and the search still reached it.
+    assert!(
+        depths.iter().any(|&d| d > 1000),
+        "the search never reached past herdr's 1000-row read cap: {depths:?}"
+    );
+    assert!(
+        depths.iter().any(|&d| d < 100),
+        "and it has to still find the shallow one: {depths:?}"
+    );
+    assert!(
+        found["total"].as_u64().unwrap_or(0) >= depths.len() as u64,
+        "total counts the whole scrollback, not the listed rows: {found}"
+    );
+    assert!(
+        hits.iter()
+            .any(|m| m["text"].as_str().is_some_and(|t| t.contains(&marker))),
+        "a hit carries the row it matched, so a client too shallow to scroll there can still \
+         show it: {hits:?}"
+    );
+}
+
+/// **The two facts a gap repair rests on, measured against herdr rather than against the poller.**
+///
+/// A read has to know where it starts in herdr's own history, and the missing rows have to come
+/// back as *physical* rows. Both are herdr's arithmetic, and both are what would silently break if
+/// herdr changed: the ring logic on top of them is covered without a herdr at all, in
+/// `kampr-core`'s own `scrollback` tests.
+///
+/// **Deliberately not driven through the poller.** A version of this that burst a pane and waited
+/// for the ring to deepen passed alone and failed under a full-suite load — because under load the
+/// repair *correctly* declines: herdr's history moves between the read and the fetch, the anchor
+/// stops matching, and the honest discard takes over (#520, #523). That is the design working, so a
+/// test asserting it never happens is asserting something untrue.
+///
+/// - `first_row` is `L - K + 1`, and `L` is the last **content** row rather than the grid bottom —
+///   they differ by 208 on a pane with a blank tail (#518, #519).
+/// - `pane.selection.read` unwraps soft wraps and, after a reflow, joins rows that never wrapped;
+///   re-splitting at the grid width in display **cells** reconstructs the physical rows, where
+///   splitting by character count mismatches 61 of 63 on CJK (#521).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_says_where_it_starts_and_the_rows_it_left_out_come_back_one_per_physical_row() {
+    use kampr_core::provider::Provider;
+
+    let h = harness!("gaprows");
+    let pane = h.pane_id();
+    let (session, local) = h.node.resolve(&pane).expect("a local pane");
+
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": "clear; seq 1 400\n" }),
+        )
+        .await;
+
+    // Waited for rather than slept past: `read_scrollback` answers from the provider's *cached*
+    // snapshot, so a ring that exists in herdr is `None` here until the sweep has been round. After
+    // it arrives nothing else writes to this pane, so the assertions below race nothing.
+    let raw = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Ok(Some(raw)) = session.provider.read_scrollback(&local).await
+                && raw.first_row.is_some()
+            {
+                break raw;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the pane never reported a ring, so there was nothing to position"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    };
+    let start = raw.first_row.expect("the read says where it starts");
+    let rows: Vec<&str> = raw.text.trim_end_matches('\n').split('\n').collect();
+
+    // The same span, fetched by absolute position. If `first_row` is wrong by even one, these two
+    // are different rows — which is the whole reason a splice needs a position and not a guess.
+    let end = start + rows.len() as u32 - 1;
+    let fetched = session
+        .provider
+        .read_rows(&local, start, end)
+        .await
+        .expect("a fetch")
+        .expect("rows");
+    assert_eq!(
+        fetched.len(),
+        rows.len(),
+        "the fetch has to come back one entry per physical row, or a splice would be off by \
+         however many lines herdr chose to join (#521)",
+    );
+    let plain = |s: &str| {
+        let mut out = String::new();
+        let mut cs = s.chars();
+        while let Some(c) = cs.next() {
+            if c != '\u{1b}' {
+                out.push(c);
+                continue;
+            }
+            for c in cs.by_ref() {
+                if c.is_ascii_alphabetic() || c == '\u{7}' || c == '\u{5c}' {
+                    break;
+                }
+            }
+        }
+        out.trim_end().to_string()
+    };
+    let read: Vec<String> = rows.iter().map(|r| plain(r)).collect();
+    let back: Vec<String> = fetched.iter().map(|r| plain(r)).collect();
+    assert_eq!(
+        read, back,
+        "the rows fetched by position are not the rows the read returned, so `first_row` is wrong"
+    );
+
+    // A blank tail is where `bottom` and the last content row part company by the whole viewport,
+    // and where `bottom - K + 1` gives an answer that is out by hundreds (#518).
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": "printf '\\033[2J\\033[H'\n" }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let blank = session
+        .provider
+        .read_scrollback(&local)
+        .await
+        .expect("a read")
+        .expect("a ring");
+    if let Some(start) = blank.first_row {
+        let n = blank.text.trim_end_matches('\n').split('\n').count() as u32;
+        let back = session
+            .provider
+            .read_rows(&local, start, start + n - 1)
+            .await
+            .expect("a fetch")
+            .expect("rows");
+        assert_eq!(
+            back.len() as u32,
+            n,
+            "with a blank tail the position still has to name the rows the read returned"
+        );
+    }
 }

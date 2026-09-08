@@ -48,6 +48,10 @@ pub struct Caps {
     pub manage: bool,
     pub mesh: bool,
     pub attachments: bool,
+    /// **The one verb on this wire that owes an answer.** Everything else is fire-and-forget, and
+    /// an unknown `t` being ignored is what makes that safe; a `find` sent to a node with no verb
+    /// for it leaves a search waiting for a frame that will never arrive. Defaults false.
+    pub find: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -173,6 +177,16 @@ pub struct ConvoPage {
 
 /// Why a pane has no picture, or why an op was refused.
 ///
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Found {
+    pub pane: String,
+    pub query: String,
+    pub matches: Vec<kampr_core::wire::FindMatch>,
+    pub total: u32,
+    pub current: Option<u32>,
+}
+
 /// `code` is a **String** and not an enum on purpose: the vocabulary is open, a hub forwards a
 /// peer's codes verbatim, and a client that failed on one it did not know would hide the
 /// diagnosis it was sent.
@@ -209,6 +223,15 @@ pub enum Event {
     Scrollback {
         pane: String,
         doc: ScrollbackDoc,
+    },
+    /// What a `find` matched over the pane's whole scrollback. Positions are rows from the live
+    /// row, which is the coordinate a client's own ring shares with the node's history.
+    Found {
+        pane: String,
+        query: String,
+        matches: Vec<kampr_core::wire::FindMatch>,
+        total: u32,
+        current: Option<u32>,
     },
     Convo(ConvoPage),
     /// What a harness wrote down about the *session* rather than about a turn. Sent when a

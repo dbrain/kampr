@@ -527,8 +527,23 @@ internal fun AppScaffold(
         // Loud only about the pane in hand or the node it is on. Everything else is said quietly
         // where it belongs — the herd screen's offline dot, or the pane's own surface when the
         // operator opens it — rather than over whatever they are doing on another machine.
-        failure?.takeIf { saidOutLoud(it, (state.screen as? Screen.Pane)?.paneId) }
-            ?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+        failure?.takeIf { saidOutLoud(it, (state.screen as? Screen.Pane)?.paneId) }?.let {
+            // `pane` on this one carries the workspace the close named, which is the only place
+            // the target survives — the sheet that sent it is long gone by the time it is refused.
+            val target = it.takeIf { f -> f.code == "workspace_group_close_required" }?.pane
+            if (target != null) {
+                GroupCloseNotice(
+                    it.message,
+                    onCloseGroup = {
+                        state.manage(ManageOp.Close(target, group = true))
+                        state.store.dismissFailure()
+                    },
+                    onDismiss = state.store::dismissFailure,
+                )
+            } else {
+                ErrorStrip(it.message, it.code, state.store::dismissFailure)
+            }
+        }
         refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
         state.passkeyNote?.let {

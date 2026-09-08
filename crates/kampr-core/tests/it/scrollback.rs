@@ -17,11 +17,21 @@ fn labelled(lines: &[&str], cols: Option<u16>, viewport_rows: u16, truncated: bo
         cols,
         viewport_rows,
         truncated,
+        first_row: None,
     }
 }
 
 fn numbered(from: usize, to: usize) -> Vec<String> {
     (from..=to).map(|i| format!("line-{i}")).collect()
+}
+
+/// A read that knows where it sits in the provider's history — which is what lets the ring join
+/// two windows by arithmetic instead of by matching their text (probe #522).
+fn at(lines: &[&str], viewport_rows: u16, truncated: bool, first_row: Option<u32>) -> RawScrollback {
+    RawScrollback {
+        first_row,
+        ..labelled(lines, Some(80), viewport_rows, truncated)
+    }
 }
 
 fn refs(v: &[String]) -> Vec<&str> {
@@ -500,4 +510,135 @@ fn a_ring_that_is_only_growing_stays_in_the_era_it_started_in() {
         "the ring has to have trimmed, or nothing is tested"
     );
     assert_eq!(doc.era, era, "trimming keeps every row it kept, index and all");
+}
+
+/// **A ring of repeated lines stitches to the wrong place and says the history is complete.**
+///
+/// `overlap` finds the longest suffix of what is held that prefixes what arrived, and on output
+/// that repeats itself the longest such run is not the true one. A burst that pushes the read
+/// window clean past the held rows should be a gap — the honest discard `ScrollbackRing` was built
+/// to take (ADR 0004) — but the repetition gives `overlap` something to match, so it splices at an
+/// offset nothing chose and the hole simply vanishes.
+///
+/// What makes it the worst shape of bug this project knows: the document that comes out says
+/// `complete: true` and `capped: false`. It is not a read that failed, it is a read that failed and
+/// then looked exactly like one that worked — the same shape as the node that answered every
+/// question correctly with a dead `observe` (#233).
+///
+/// Measured against a real herdr 0.9.0 (probe #522): `yes 'SAME LINE' | head -400`, a read, then
+/// `head -4000`, a second read. The ring held herdr's absolute rows 0..361 and the incoming window
+/// started at absolute 3403 — a 3041-row hole — and `ingest` answered `Stitched { added: 599 }`.
+#[test]
+fn a_pane_that_repeats_itself_is_not_spliced_over_a_hole_and_called_complete() {
+    let same = vec!["SAME LINE"; 400];
+    let mut ring = ScrollbackRing::default();
+    // The first window starts at the top of herdr's history; it keeps 360 rows, so its last row is
+    // herdr's absolute 359.
+    assert!(matches!(
+        ring.ingest(&at(&same, 40, false, Some(0))),
+        Ingest::Fresh { .. }
+    ));
+    let held = ring.render().total_rows;
+
+    // The next window starts at absolute 3403 — a 3041-row hole — and every row of it is a row the
+    // ring already appears to hold. Nothing but the position can tell the two apart.
+    let after = vec!["SAME LINE"; 1000];
+    let landed = ring.ingest(&at(&after, 40, true, Some(3403)));
+
+    let doc = ring.render();
+    assert!(
+        matches!(landed, Ingest::Gap { .. }),
+        "a window that starts past everything held is a gap, however much the content repeats: \
+         {landed:?} — the ring went from {held} rows to {}",
+        doc.total_rows
+    );
+    assert!(
+        !doc.complete,
+        "and a document over a hole must never claim to be complete: {doc:?}"
+    );
+}
+
+/// The other half of the same fact: a window that *does* continue the ring is joined at the
+/// position it names, and the rows it re-sends are not appended a second time.
+#[test]
+fn a_window_that_continues_the_ring_is_joined_where_it_says_and_not_where_it_looks() {
+    let same = vec!["SAME LINE"; 400];
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&at(&same, 40, false, Some(0)));
+    let held = ring.render().total_rows;
+    assert_eq!(held, 360, "400 read, 40 of them the viewport");
+
+    // Starts at 300 — sixty rows back inside what is held — and runs 200 rows further on.
+    let next = vec!["SAME LINE"; 200];
+    let landed = ring.ingest(&at(&next, 40, false, Some(300)));
+    assert_eq!(
+        landed,
+        Ingest::Stitched { added: 100 },
+        "160 kept rows arrive, 60 of them already held: {landed:?}"
+    );
+    assert_eq!(ring.render().total_rows, 460);
+}
+
+/// **A gap is refilled rather than discarded — and only when the rows demonstrably continue.**
+///
+/// The ring's answer to a gap was to throw the operator's history away, which was the only honest
+/// answer while `pane.read recent` was the sole way in: capped at 1000 rows, no offset (#51). herdr
+/// 0.9 can address history by absolute row (#510), so the missing span is fetched and spliced.
+///
+/// The anchor is the whole of the safety. herdr's row numbers are positions in its *current* ring,
+/// not identities — a retention trim renumbers them wholesale and reports nothing about how far
+/// (#520) — so rows fetched against a ring that moved underneath would splice somebody else's
+/// history in and call it this pane's. Measured refusing on exactly that (#523).
+#[test]
+fn a_gap_is_refilled_when_the_rows_continue_it_and_refused_when_they_do_not() {
+    let first: Vec<String> = numbered(0, 399);
+    let mut ring = ScrollbackRing::default();
+    ring.ingest(&at(&refs(&first), 40, false, Some(0)));
+    // 400 read, 40 of them the viewport: the ring holds herdr's absolute 0..359.
+    assert_eq!(ring.render().total_rows, 360);
+
+    // The next window starts at 500 — rows 360..499 never arrived.
+    let later: Vec<String> = numbered(500, 699);
+    let raw = at(&refs(&later), 40, true, Some(500));
+    let gap = ring.gap_before(&raw).expect("a gap");
+    assert_eq!(
+        gap.hole,
+        (360, 499),
+        "the hole is named by position, not guessed from the text"
+    );
+    assert_eq!(
+        gap.fetch,
+        (352, 499),
+        "and the fetch reaches back over the ring's tail, which is what proves it is the same history"
+    );
+
+    // Rows that do not continue the ring — herdr trimmed underneath us and renumbered.
+    let unrelated: Vec<String> = (0..148).map(|i| format!("someone-elses-{i}")).collect();
+    assert!(
+        !ring.clone().splice(unrelated, &raw),
+        "rows that do not continue what is held are refused, and the discard stands"
+    );
+
+    // The real ones. The anchor overlaps the ring's tail, which is what proves they are the same
+    // history; the splice keeps only what is past it.
+    let missing: Vec<String> = numbered(352, 499);
+    let spliced = ring.splice(missing, &raw);
+    assert!(spliced, "rows that continue the ring are spliced");
+    assert_eq!(ring.render().total_rows, 500, "0..499 held, with the hole closed");
+
+    let landed = ring.ingest(&raw);
+    assert_eq!(
+        landed,
+        Ingest::Stitched { added: 160 },
+        "and the read that revealed the gap then joins normally: {landed:?}"
+    );
+    let doc = ring.render();
+    assert_eq!(doc.total_rows, 660, "0..659");
+    let rows = lines_of(&mut ring);
+    assert_eq!(rows.first().map(String::as_str), Some("line-0"));
+    assert_eq!(rows.last().map(String::as_str), Some("line-659"));
+    assert!(
+        rows.windows(2).all(|w| w[0] != w[1]),
+        "no row is repeated across the join"
+    );
 }

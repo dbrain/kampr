@@ -65,6 +65,13 @@ object Wire {
                 cursor = obj.decode<Cursor>("cursor"),
                 links = obj.strings("links"),
             )
+            "find" -> ServerMsg.Found(
+                pane = obj.str("pane") ?: return null,
+                query = obj.str("query") ?: "",
+                matches = obj.decodeList<FindMatch>("matches"),
+                total = obj.int("total") ?: 0,
+                current = obj.int("current"),
+            )
             "scrollback" -> ServerMsg.Scrollback(
                 pane = obj.str("pane") ?: return null,
                 fromTop = obj.int("from_top") ?: 0,
@@ -159,6 +166,11 @@ object Wire {
         is ClientMsg.AnswerSubmit -> buildJsonObject { put("t", "answer.submit"); put("pane", msg.pane) }
         is ClientMsg.ConvoLoad -> buildJsonObject {
             put("t", "convo.load"); put("pane", msg.pane); msg.before?.let { put("before", it) }
+        }
+        is ClientMsg.Find -> buildJsonObject {
+            put("t", "find"); put("pane", msg.pane); put("query", msg.query)
+            put("backward", msg.backward)
+            msg.from?.let { put("from", it) }
         }
         is ClientMsg.ConvoSub -> buildJsonObject {
             put("t", "convo.sub"); put("pane", msg.pane); put("id", msg.id)

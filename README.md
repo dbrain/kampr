@@ -28,7 +28,9 @@ running at your desk.
 
 ## TL;DR
 
-Herdr 0.8.2 or newer, running. Then, on the machine it is running on:
+Herdr **0.9.0 or newer**, running. (Upgrading an existing install? Herdr moves first and its server
+restarts — [why](#updating-past-0173-herdr-moves-first-and-its-server-restarts).) Then, on the
+machine it is running on:
 
 ```bash
 curl -fsSL https://github.com/dbrain/kampr/releases/latest/download/install.sh -o install.sh
@@ -134,7 +136,7 @@ optional.
 
 | | |
 |---|---|
-| Herdr | **0.8.2 or newer** (protocol 20), running, on every box |
+| Herdr | **0.9.0 or newer** (protocol 22), running, on every box. A hard floor: below it nothing on the socket reports a pane's column count, so every pane would be streamed at its layout rect, which is not its width (#68, #524) |
 | OS | Linux or macOS 11+. **Windows is not supported** — the node reaches Herdr over a Unix socket and supervises itself with systemd or launchd. Use WSL2. |
 | To build *from source* | Rust 1.90+ and **JDK 21 exactly** — every module pins `jvmToolchain(21)`, so a newer JDK is not a substitute. Not needed if you install a release. Full list in [`docs/09-toolchain.md`](docs/09-toolchain.md) |
 
@@ -486,6 +488,32 @@ kampr update --version v0.1.19     # go back to one that worked
 **Nothing updates itself, and a hub cannot update a peer.** A process that can type into every
 terminal on a host does not get to replace its own binary unasked, and a hub that could push
 binaries to peers would turn one compromised machine into code execution on all of them.
+
+#### Updating past 0.1.73: Herdr moves first, and its server restarts
+
+**0.1.74 requires Herdr 0.9.0.** Not as a preference — below it there is no way to ask a pane how
+wide it is, and the layout rect is not an answer (probe #68). On 0.8.2 this build streams a pane at
+its rect: one dead column on an attached pane, and on a headless one a 47-column rect over a
+93-column PTY, which loses half of every row (probe #524).
+
+So on each machine, in this order:
+
+```bash
+herdr update                       # 0.9.0 or newer
+herdr server stop && herdr         # or however you restart it — the panes end
+kampr update
+kampr doctor                       # `herdr` and `observe` both ok
+```
+
+**The restart is not optional, and skipping it is the quiet failure.** `herdr terminal session
+observe` — the half that streams every grid — is version-locked in both directions, while the JSON
+socket is happily cross-version (probe #516). So a machine whose binary moved and whose server did
+not answers every question correctly and shows every pane blank, which is
+[#233](docs/03-probe-log.md) exactly. `kampr doctor`'s `observe` check is what catches it.
+
+A node that ends up on an older Herdr says so on the herd rather than only in its log, so every
+client shows the reason; it keeps painting, because a pane at the wrong width still beats a blank
+one. Fix it and the panes come right on their own.
 
 ### Check the pipeline end to end
 

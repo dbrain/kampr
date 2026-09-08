@@ -80,6 +80,23 @@ pub struct ScrollbackDoc {
     pub era: u32,
 }
 
+/// How many rows either side of a join have to agree before it is made. Enough that repeated
+/// content cannot satisfy it by accident, short enough to survive a ring that trimmed one row.
+const ANCHOR: usize = 8;
+
+/// A hole between what the ring holds and what the next read starts at, and the range to fetch to
+/// close it.
+///
+/// `fetch` reaches back over the ring's own tail by `anchor` rows. Those rows are what prove the
+/// fetched history is *this* pane's history and not a renumbered ring's (#520); they are compared,
+/// not appended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Gap {
+    pub hole: (u32, u32),
+    pub fetch: (u32, u32),
+    pub anchor: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ingest {
     Fresh {
@@ -111,6 +128,12 @@ pub struct ScrollbackRing {
     cols: Option<u16>,
     /// Absolute index of `rows[0]`. Only ever increases.
     base: u32,
+    /// Where the ring's **last** row sits in the *provider's* history, and `None` while no read has
+    /// said. Distinct from [`Self::base`], which counts in the ring's own space and never moves
+    /// backwards: this one follows herdr's numbering, which a reflow or a retention trim renumbers
+    /// wholesale (probe #520). It is only ever compared against a `first_row` from the same read
+    /// generation, and every path that stops holding what it held replaces it.
+    end_abs: Option<u32>,
     /// See [`ScrollbackDoc::era`]. Bumped by every path that stops holding what it held.
     era: u32,
     capped: bool,
@@ -130,6 +153,7 @@ impl ScrollbackRing {
             rows: Vec::new(),
             cols: None,
             base: 0,
+            end_abs: None,
             era: 0,
             capped: false,
             max_rows: max_rows.max(1),
@@ -155,6 +179,87 @@ impl ScrollbackRing {
     /// send without laying twenty thousand rows out to find out.
     pub fn base(&self) -> u32 {
         self.base
+    }
+
+    /// The absolute rows this read has left out, when it has left any out.
+    ///
+    /// Asked *before* [`Self::ingest`], so a caller can fetch them and hand them back. `None` when
+    /// the read continues what is held, when either side has no position, or when the pane
+    /// re-wrapped underneath — a reflow renumbers herdr's whole row space (#520), so the rows a
+    /// stale `end_abs` names are not the rows it meant.
+    pub fn gap_before(&self, raw: &RawScrollback) -> Option<Gap> {
+        let start = raw.first_row?;
+        let end = self.end_abs?;
+        if self.rows.is_empty() {
+            return None;
+        }
+        if matches!((raw.cols, self.cols), (Some(now), Some(was)) if now != was) {
+            return None;
+        }
+        if start <= end.saturating_add(1) {
+            return None;
+        }
+        // The fetch reaches back over the ring's own tail, because rows that merely sit next to
+        // what is held prove nothing: it is the overlap that says these are the same history.
+        let anchor = ANCHOR.min(self.rows.len()) as u32;
+        Some(Gap {
+            hole: (end.saturating_add(1), start.saturating_sub(1)),
+            fetch: (
+                end.saturating_add(1).saturating_sub(anchor),
+                start.saturating_sub(1),
+            ),
+            anchor: anchor as usize,
+        })
+    }
+
+    /// Fills a gap with rows fetched by position, **only if they demonstrably continue what is
+    /// held**, and answers whether they did.
+    ///
+    /// The check is the whole of the safety. herdr's absolute row numbers are positions in its
+    /// current ring rather than identities: a retention trim renumbers them wholesale and reports
+    /// nothing about how far (#520), so a `missing` fetched against a ring that moved underneath
+    /// would splice unrelated history into the operator's scrollback and call it theirs. Measured
+    /// firing: with herdr trimmed to 663 rows under a burst, its reachable top was `B-005339`
+    /// while the ring's tail was `A-000861`, and the anchor refused (#523).
+    ///
+    /// A refusal is not a failure — the caller falls back to the honest discard, which is what it
+    /// did before any of this existed.
+    pub fn splice(&mut self, fetched: Vec<String>, raw: &RawScrollback) -> bool {
+        let Some(gap) = self.gap_before(raw) else {
+            return false;
+        };
+        let wanted = (gap.fetch.1 as usize)
+            .checked_sub(gap.fetch.0 as usize)
+            .and_then(|n| n.checked_add(1));
+        if wanted != Some(fetched.len()) {
+            return false;
+        }
+        let n = gap.anchor;
+        if n == 0 || n > fetched.len() {
+            return false;
+        }
+        let missing = fetched;
+        // The fetched rows are plain and the held rows carry their attributes, so they are compared
+        // on what they have in common: the characters, trimmed of the `\r` a CRLF read leaves on
+        // every row (#521).
+        let held_tail = &self.rows[self.rows.len() - n..];
+        if !held_tail
+            .iter()
+            .zip(missing.iter().take(n))
+            .all(|(a, b)| plain(&a.text) == plain(b))
+        {
+            return false;
+        }
+        self.rendered = None;
+        self.rows.extend(
+            missing
+                .into_iter()
+                .skip(n)
+                .map(|t| Row::new(format!("{}\r", plain(&t)))),
+        );
+        self.end_abs = Some(gap.hole.1);
+        self.trim();
+        true
     }
 
     pub fn ingest(&mut self, raw: &RawScrollback) -> Ingest {
@@ -184,7 +289,10 @@ impl ScrollbackRing {
             self.cols = Some(cols);
         }
         if rewrapped {
-            let dropped = self.restart(incoming);
+            // The position goes with the width. A reflow renumbers herdr's whole row space (#520),
+            // so an `end_abs` carried across one would be compared against numbers that no longer
+            // mean what it meant — which is the mis-splice this position exists to prevent.
+            let dropped = self.restart_at(incoming, raw.first_row);
             return Ingest::Rewrapped { dropped };
         }
         if self.rows.is_empty() {
@@ -197,6 +305,9 @@ impl ScrollbackRing {
             if self.base > 0 {
                 self.era += 1;
             }
+            self.end_abs = raw
+                .first_row
+                .map(|s| s.saturating_add(incoming.len().saturating_sub(1) as u32));
             self.rows = incoming;
             self.capped |= raw.truncated;
             self.trim();
@@ -204,13 +315,41 @@ impl ScrollbackRing {
                 rows: self.rows.len(),
             };
         }
+        // **A position, when the provider can give one, rather than a suffix match.** `overlap`
+        // finds the longest suffix of what is held that prefixes what arrived, and on output that
+        // repeats itself the longest such run is not the true one — a burst that pushed the window
+        // clean past everything held spliced at an offset nothing chose and the document came out
+        // `complete: true` over the hole (probe #522). A read that knows where it starts settles
+        // this arithmetically, and the only thing it can be wrong about is a provider that lied.
+        if let (Some(start), Some(end)) = (raw.first_row, self.end_abs) {
+            return match start > end.saturating_add(1) {
+                true => Ingest::Gap {
+                    dropped: self.restart_at(incoming, raw.first_row),
+                },
+                false => {
+                    // How much of the incoming window this ring already holds. Saturating because
+                    // a window that starts *below* the ring's own base is one the ring outgrew,
+                    // which is history it keeps rather than rows it re-adds.
+                    let already =
+                        usize::try_from(end.saturating_add(1).saturating_sub(start)).unwrap_or(usize::MAX);
+                    let added = incoming.len().saturating_sub(already);
+                    if added > 0 {
+                        self.rows.extend_from_slice(&incoming[incoming.len() - added..]);
+                        self.end_abs = Some(end.saturating_add(added as u32));
+                        self.trim();
+                    }
+                    Ingest::Stitched { added }
+                }
+            };
+        }
         match overlap(&self.rows, &incoming) {
             0 => Ingest::Gap {
-                dropped: self.restart(incoming),
+                dropped: self.restart_at(incoming, raw.first_row),
             },
             k => {
                 let added = incoming.len() - k;
                 self.rows.extend_from_slice(&incoming[k..]);
+                self.end_abs = self.end_abs.map(|e| e.saturating_add(added as u32));
                 self.trim();
                 Ingest::Stitched { added }
             }
@@ -279,10 +418,13 @@ impl ScrollbackRing {
     /// The newest read shares nothing with what we hold. Splicing them would fabricate adjacency
     /// between two unrelated stretches of history, so the old rows go and the ring says it is
     /// capped from here.
-    fn restart(&mut self, incoming: Vec<Row>) -> usize {
+    /// Starts again on `incoming`, remembering where it sits in the provider's history so the
+    /// *next* read can be joined by position rather than by a suffix match.
+    fn restart_at(&mut self, incoming: Vec<Row>, first_row: Option<u32>) -> usize {
         let dropped = self.rows.len();
         self.base += dropped as u32;
         self.era += 1;
+        self.end_abs = first_row.map(|s| s.saturating_add(incoming.len().saturating_sub(1) as u32));
         self.rows = incoming;
         self.capped = true;
         self.trim();
@@ -352,6 +494,26 @@ fn history_rows(raw: &RawScrollback) -> Vec<Row> {
     }
     let keep = lines.len().saturating_sub(raw.viewport_rows as usize);
     lines[..keep].iter().map(|l| Row::new(l.to_string())).collect()
+}
+
+/// A row reduced to what a fetched row and a held row can both be compared on: its characters,
+/// with SGR gone and the trailing `\r` a CRLF read leaves behind (#521) trimmed off.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // Every escape this can meet is a CSI or an OSC, and both end on a byte this skips to.
+        for c in chars.by_ref() {
+            if c.is_ascii_alphabetic() || c == '\u{7}' || c == '\u{5c}' {
+                break;
+            }
+        }
+    }
+    out.trim_end_matches(['\r', ' ']).to_string()
 }
 
 /// Longest suffix of `held` that is also a prefix of `incoming`.

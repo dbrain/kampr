@@ -291,6 +291,14 @@ impl Peers {
         self.link_for(id).is_some_and(|link| link.serves_attachments())
     }
 
+    /// Whether a pane's node can answer a `find`. False for a node that is offline, one this hub
+    /// has never met, and one whose build predates the verb — and the last of those is why this is
+    /// asked at all: every other relayed verb is fire-and-forget, so an older peer ignoring one
+    /// costs nothing, where an ignored `find` is a search that never comes back.
+    pub fn can_find(&self, id: &str) -> bool {
+        self.link_for(id).is_some_and(|link| link.serves_find())
+    }
+
     /// Pulls one attachment off a peer, a chunk at a time.
     ///
     /// `ceiling` is the caller's own decoded-bytes limit, enforced *before* anything is pulled —
@@ -498,7 +506,7 @@ impl Peers {
             "grid.reset" => link.grid_reset(&message),
             "grid.patch" => link.grid_patch(&message),
             "scrollback" => link.scrollback(&message),
-            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" => {
+            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" | "find" => {
                 link.passthrough(&message)
             }
             "error" => link.error(&message),
@@ -508,8 +516,13 @@ impl Peers {
             // peer's build answers `att.fetch`. A hub that guessed would advertise an attachment
             // button an older peer cannot serve, which is the bug this whole path exists to fix.
             "hello" => {
-                let serves = message["caps"]["attachments"].as_bool().unwrap_or(false);
-                link.state.lock().unwrap().attachments = serves;
+                let mut state = link.state.lock().unwrap();
+                state.attachments = message["caps"]["attachments"].as_bool().unwrap_or(false);
+                // The same question again for the one verb that owes an answer. A hub that
+                // relayed a `find` to a peer with no verb for it would leave the client waiting
+                // for a frame the peer will never send — and a herd routinely runs mixed builds,
+                // which is the whole reason this field exists for attachments too.
+                state.find = message["caps"]["find"].as_bool().unwrap_or(false);
             }
             // A fresh round trip is a change to the herd like any other: it is what a client
             // renders to say how far away a node is.
@@ -644,6 +657,7 @@ struct LinkState {
     rtt_ms: Option<f64>,
     pings: HashMap<u64, Instant>,
     attachments: bool,
+    find: bool,
 }
 
 impl LinkState {
@@ -750,6 +764,10 @@ impl PeerLink {
 
     fn serves_attachments(&self) -> bool {
         self.state.lock().unwrap().attachments
+    }
+
+    fn serves_find(&self) -> bool {
+        self.state.lock().unwrap().find
     }
 
     async fn fetch_attachment(

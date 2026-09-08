@@ -1,4 +1,4 @@
-# Herdr socket API — full method catalog (protocol 20, herdr 0.8.2)
+# Herdr socket API — full method catalog (protocol 22, herdr 0.9.0)
 
 - `ping` {}
 - `server.stop` {}
@@ -95,6 +95,27 @@
 
 # Events
 
+
+## added in herdr 0.9.0 (protocol 22)
+
+Purely additive over 0.8.2 — protocol 20 lost nothing. Semantics for the four this
+project has measured are in the probe log: `pane.selection.read` bounds on the grid
+width and reads an absolute scrollback range ([#509](../docs/03-probe-log.md),
+[#510](../docs/03-probe-log.md)), `pane.copy_search`/`pane.copy_motion` search the whole
+of it ([#511](../docs/03-probe-log.md)), and `pane.scroll` is a **global mutation** that
+moves the pane for every viewer ([#510](../docs/03-probe-log.md)).
+
+- `product_announcement.dismiss` {id:string, version:string}
+- `release_notes.dismiss` {version:string}
+- `command.invoke` {command_id:string, ?pane_id:string|null, ?selection:any, ?tab_id:string|null, ?workspace_id:string|null}
+- `client_shell.surface.set` {active:boolean}
+- `pane.scroll` {offset_from_bottom:integer, pane_id:string}
+- `pane.edit_scrollback` {pane_id:string}
+- `pane.selection.read` {anchor:PaneTextPoint, ?content_revision:integer|null, cursor:PaneTextPoint, pane_id:string}
+- `pane.copy_motion` {?content_revision:integer|null, cursor:PaneTextPoint, motion:PaneCopyMotion, pane_id:string}
+- `pane.copy_search` {content_revision:integer, cursor:PaneTextPoint, direction:PaneCopySearchDirection, pane_id:string, ?previous:any, query:string}
+- `pane.link.activate` {col:integer, ?content_revision:integer|null, ?offset_from_bottom:integer|null, pane_id:string, viewport_row:integer}
+- `integration.list` {}
 
 ## event kinds
 

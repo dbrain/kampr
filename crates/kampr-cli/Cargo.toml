@@ -39,5 +39,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+kampr-testkit = { path = "../kampr-testkit" }
 rcgen.workspace = true
 sqlx.workspace = true

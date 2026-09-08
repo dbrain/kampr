@@ -252,14 +252,14 @@ mod tests {
     fn a_binary_this_shell_can_run_and_the_service_cannot_is_a_failure_and_says_whose_path() {
         let check = verdict(
             &found(Origin::Path),
-            "herdr 0.8.2",
+            "herdr 0.9.0",
             Some(Err(not_found())),
             Some("/usr/local/bin:/usr/bin:/bin".into()),
             framed(),
         );
         assert_eq!(check.status, Status::Fail);
         assert!(check.detail.contains("/usr/local/bin:/usr/bin:/bin"), "{check:?}");
-        assert!(check.detail.contains("herdr 0.8.2"), "{check:?}");
+        assert!(check.detail.contains("herdr 0.9.0"), "{check:?}");
         assert!(check.fix.unwrap().contains("kampr service install"));
     }
 
@@ -267,7 +267,7 @@ mod tests {
     fn a_manager_that_cannot_be_asked_is_a_warning_rather_than_a_verdict() {
         let check = verdict(
             &found(Origin::Path),
-            "herdr 0.8.2",
+            "herdr 0.9.0",
             Some(Err(not_found())),
             None,
             framed(),
@@ -287,7 +287,7 @@ mod tests {
         ] {
             let check = verdict(
                 &found(origin),
-                "herdr 0.8.2",
+                "herdr 0.9.0",
                 Some(Ok(found(origin))),
                 Some("/usr/bin".into()),
                 framed(),
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_node_with_no_service_is_judged_on_its_own_shell_alone() {
-        let check = verdict(&found(Origin::Path), "herdr 0.8.2", None, None, framed());
+        let check = verdict(&found(Origin::Path), "herdr 0.9.0", None, None, framed());
         assert_eq!(check.status, Status::Ok, "{check:?}");
     }
 
@@ -311,7 +311,7 @@ mod tests {
     fn a_herdr_that_resolves_and_runs_and_cannot_stream_is_a_failure() {
         let check = verdict(
             &found(Origin::Path),
-            "herdr 0.8.2",
+            "herdr 0.9.0",
             Some(Ok(found(Origin::Path))),
             Some("/usr/bin".into()),
             Stream::Silent("`herdr terminal session observe n/w1:p1` exited without a frame".into()),
@@ -325,7 +325,7 @@ mod tests {
     fn a_herd_with_no_pane_to_try_leaves_the_stream_unproved_rather_than_green() {
         let check = verdict(
             &found(Origin::Path),
-            "herdr 0.8.2",
+            "herdr 0.9.0",
             Some(Ok(found(Origin::Path))),
             Some("/usr/bin".into()),
             Stream::Unchecked("no pane on /run/herdr.sock to try it against".into()),

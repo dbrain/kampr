@@ -291,6 +291,19 @@ impl PaneRegistry {
     /// and it gets a ring of its own. The `superseded` answer — the harness that took the
     /// screen, and whose ring holds the shell session that ran before it — belongs to
     /// [`accumulate_history`], which is the only place a ring exists to be superseded.
+    /// Search this pane's whole history through the provider. See [`Provider::find`] — the ring
+    /// held here is not what is searched, because it is a window on what herdr holds and the
+    /// operator asked about the pane.
+    pub async fn find(
+        &self,
+        pane_id: &str,
+        query: &str,
+        backward: bool,
+        from: Option<u32>,
+    ) -> Result<Option<crate::provider::Found>> {
+        self.provider.find(pane_id, query, backward, from).await
+    }
+
     pub async fn scrollback(&self, pane_id: &str) -> Result<Option<ScrollbackDoc>> {
         if let Some(entry) = self.lookup(pane_id) {
             return Ok(Some(entry.history.lock().unwrap().render()));
@@ -700,6 +713,38 @@ async fn accumulate_history(
         let mut gapped = false;
         let mut failed = false;
         let before = document(&ring.lock().unwrap());
+        // **Fill the hole before the ring is told about it.** A read that starts past everything
+        // held is a gap, and the ring's answer to a gap is to throw the operator's history away
+        // (ADR 0004) — which was the only honest answer while there was no way to address history
+        // by position. There is one now (#510), so the rows are fetched and offered first, and the
+        // splice happens only if they demonstrably continue what is held. A refusal falls straight
+        // through to the discard, which is what happened before any of this existed.
+        let repaired = match &outcome {
+            Ok(Some(raw)) => ring.lock().unwrap().gap_before(raw),
+            _ => None,
+        };
+        if let (Some(gap), Ok(Some(raw))) = (repaired, &outcome) {
+            let (from, to) = gap.fetch;
+            let rows = provider.read_rows(&pane_id, from, to).await;
+            let filled = match rows {
+                Ok(Some(rows)) => ring.lock().unwrap().splice(rows, raw),
+                Ok(None) => false,
+                Err(e) => {
+                    debug!(pane = %pane_id, error = %e, "could not fetch the rows a gap left out");
+                    false
+                }
+            };
+            match filled {
+                true => info!(
+                    pane = %pane_id, rows = gap.hole.1 - gap.hole.0 + 1,
+                    "history outran the poll; the gap was refetched",
+                ),
+                false => warn!(
+                    pane = %pane_id, from = gap.hole.0, to = gap.hole.1,
+                    "history outran the poll and the gap could not be refetched; the ring restarts",
+                ),
+            }
+        }
         let added = match outcome {
             Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
                 Ingest::Fresh { rows } => rows,

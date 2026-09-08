@@ -107,6 +107,7 @@ pub struct App {
     pub options: Options,
     pub router: Router,
     pub manage: Manage,
+    pub find: crate::find::Find,
     pub mouse: Mouse,
     pub images: Images,
     pub convo: Convo,
@@ -170,6 +171,7 @@ impl App {
             options,
             router: Router::with_prefix(options.prefix),
             manage: Manage::new(),
+            find: crate::find::Find::default(),
             mouse: Mouse::new(),
             images,
             convo: Convo::new(),
@@ -250,6 +252,20 @@ impl App {
             Event::Error(failure) => {
                 self.note(failure.message.clone());
                 self.manage.observe(event);
+            }
+            Event::Found {
+                pane,
+                query,
+                matches,
+                total,
+                current,
+            } => {
+                self.find.found(pane, query, matches.clone(), *total, *current);
+                // Landing on the first hit is the search: a result list nobody is taken to is a
+                // notice, and `/` in every pager this borrows from moves the view.
+                if let Some(from_bottom) = self.find.at(pane) {
+                    self.show_match(pane, from_bottom);
+                }
             }
             Event::Managed(_) | Event::Caps(_) => self.manage.observe(event),
             Event::Scrollback { pane, .. } => self.absorb_ring(pane),

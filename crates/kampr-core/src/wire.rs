@@ -76,6 +76,27 @@ fn is_first_era(era: &u32) -> bool {
     *era == 0
 }
 
+/// One hit, positioned the way a client can use it.
+///
+/// `from_bottom` is the row's distance from the live row, which is what makes this portable between
+/// herdr's scrollback and a client's ring without either having to know the other's indexing. A
+/// match that spans a wrap ends on a different row, so `end_from_bottom` is carried rather than
+/// assumed equal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindMatch {
+    pub from_bottom: u32,
+    pub col: u16,
+    pub end_from_bottom: u32,
+    pub end_col: u16,
+    /// The matching row's text, so a client can list results it is not deep enough to scroll to.
+    pub text: String,
+}
+
+/// serde needs a function for a `true` default.
+fn yes() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowRuns {
     pub row: u32,
@@ -462,6 +483,24 @@ pub enum ServerMsg {
     },
     #[serde(rename = "styles")]
     Styles(Styles),
+    /// What a `find` matched, over the pane's whole scrollback.
+    ///
+    /// Positions are **rows from the bottom**, the coordinate a client can act on: its own ring is
+    /// contiguous and ends on the same row herdr's does, so a match at `from_bottom` is that many
+    /// rows up from the end of whatever it holds — and one deeper than its ring goes is a match it
+    /// can name but not show, which is worth saying rather than hiding.
+    ///
+    /// `total` counts every match in the scrollback, not the ones listed: a client shows "3 of 41"
+    /// without holding 41 rows.
+    #[serde(rename = "find")]
+    Find {
+        pane: String,
+        query: String,
+        matches: Vec<FindMatch>,
+        total: u32,
+        /// Which of `matches` the search landed on, or `None` when nothing matched.
+        current: Option<u32>,
+    },
     #[serde(rename = "grid.reset")]
     GridReset {
         pane: String,
@@ -666,6 +705,12 @@ pub enum ErrorCode {
     /// which is the socket being down and the whole herd with it: here the node is answering, the
     /// pane list is right, and only the frames are missing.
     StreamUnavailable,
+    /// A `close` naming a workspace that has linked worktree workspaces open. herdr will not break
+    /// the group up (#514), so the only closes available are the whole group or nothing — and
+    /// which of those the operator meant is not something a node may decide for them. The message
+    /// counts what would go; a client that knows this code offers the group close, and one that
+    /// does not renders the sentence, which the wire's rule already required of it.
+    WorkspaceGroupCloseRequired,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -734,6 +779,26 @@ pub enum ClientMsg {
         id: String,
         #[serde(default)]
         before: Option<String>,
+    },
+    /// Search this pane's **whole** scrollback, not the rows a client happens to hold.
+    ///
+    /// A verb of its own rather than a field on `watch`, because it is a question with an answer
+    /// and `watch` is a subscription — and because a node that has never heard of it must ignore
+    /// the frame, which is what a new `t` gets for free.
+    ///
+    /// `from` is where to search from, in **rows from the bottom** — the one coordinate herdr's
+    /// scrollback and a client's ring share exactly, since both are contiguous and both end on the
+    /// live row. Absent means the bottom.
+    #[serde(rename = "find")]
+    Find {
+        pane: String,
+        query: String,
+        /// `true` searches towards the top, which is what `/` means in a pager and what herdr's
+        /// own copy mode does.
+        #[serde(default = "yes")]
+        backward: bool,
+        #[serde(default)]
+        from: Option<u32>,
     },
     #[serde(rename = "resync")]
     Resync,

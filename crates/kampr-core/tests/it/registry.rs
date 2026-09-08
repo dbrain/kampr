@@ -442,6 +442,7 @@ fn read_at(lines: &[String], viewport_rows: u16, cols: u16) -> RawScrollback {
         cols: Some(cols),
         viewport_rows,
         truncated: true,
+        first_row: None,
     }
 }
 

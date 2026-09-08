@@ -27,6 +27,19 @@ pub struct Workspace {
     pub label: Option<String>,
     #[serde(default)]
     pub agent_status: AgentStatus,
+    /// Present only on a workspace that sits in a git repository, and the only thing that names
+    /// the group `workspace.close` refuses to break up (#514): the parent carries
+    /// `is_linked_worktree: false`, every worktree herdr made from it carries `true` and the
+    /// parent's `repo_key`.
+    #[serde(default)]
+    pub worktree: Option<Worktree>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Worktree {
+    pub repo_key: String,
+    #[serde(default)]
+    pub is_linked_worktree: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -292,14 +305,25 @@ impl Pane {
     /// True only when herdr actually holds scrollback for this pane — alt-screen panes report
     /// zero, and so does an agent that clears the scrollback when it takes the screen.
     ///
-    /// **A detected harness is not the second half of this.** The inherited rule also excluded
-    /// agent panes, on the documented hazard that reading above the viewport there makes herdr
-    /// harvest through the agent's mouse-scroll interface and move the operator's screen. It does
-    /// not: measured against a live `codex` and a live `claude`, both herdr-detected and both
-    /// holding a ring, `lines: 5000` comes back in **1 ms** with the whole ring and the viewport
-    /// untouched, and a pane deliberately marked an agent while running a mouse-mode program
-    /// received no wheel bytes at all (probe #231). Excluding them cost the node history on the
-    /// one kind of pane it exists to serve.
+    /// **A detected harness is not the second half of this — but the hazard behind that rule is
+    /// real, and it is gated on the read rather than on the pane.** The inherited rule excluded
+    /// agent panes on the documented risk that reading above the viewport makes herdr harvest
+    /// through the agent's mouse-scroll interface and move the operator's screen. It does exactly
+    /// that (probe #513, superseding #231) — for `format: "text"` with `source: "recent"` or
+    /// `"recent_unwrapped"` and `lines` above the screen's row count, on a pane whose detected
+    /// agent is **idle** and which holds the **alternate screen** with mouse reporting on. 5.3
+    /// seconds of injected wheel events, on 0.9.0 and identically on 0.8.2.
+    ///
+    /// #231 measured a live `codex` and a live `claude` that were **blocked** and holding an
+    /// ordinary ring, so none of those conditions held; on that state `lines: 5000` really does
+    /// come back in 1 ms with the whole ring and the viewport untouched. What was wrong was the
+    /// generalisation, not the numbers.
+    ///
+    /// **So the safety here is the format, and it is not incidental.** `read_scrollback` asks for
+    /// `format: "ansi"`, which is outside the gate, and
+    /// `the_scrollback_read_never_asks_for_text_and_never_makes_herdr_scroll_a_pane` fails if that
+    /// changes. Excluding agent panes instead cost the node history on the one kind of pane it
+    /// exists to serve, and would not have been the thing protecting anybody.
     ///
     /// **The other half was recorded with the wrong mechanism, and its cost is gone.** Claude Code
     /// does not clear the scrollback: it sets `\e[?1049h` and takes the **alternate screen** —
@@ -344,10 +368,13 @@ mod tests {
         .unwrap()
     }
 
-    /// Probe #231 — reading above the viewport on a detected-agent pane. The hazard the interlock
-    /// inherited was never measured: a real `codex` and a real `claude`, both herdr-detected,
-    /// both holding a ring, answer `lines: 5000` in **1 ms** with every row of the ring and the
-    /// viewport exactly where it was.
+    /// Probe #231 — reading above the viewport on a detected-agent pane. A real `codex` and a real
+    /// `claude`, both herdr-detected, both **blocked** and holding a ring, answer `lines: 5000` in
+    /// **1 ms** with every row of the ring and the viewport exactly where it was. So a harness in
+    /// the pane is not by itself a reason to withhold history, which is all this predicate says.
+    ///
+    /// It is *not* the reason the read is safe. That is the format (#513): the harvest gate wants
+    /// `format: "text"`, and `read_scrollback` asks for `ansi`.
     #[test]
     fn a_ring_is_a_ring_whether_or_not_a_harness_is_in_the_pane() {
         assert!(pane(None, 361).scrollback_is_safe_to_read());
@@ -366,4 +393,53 @@ mod tests {
         assert!(!pane(None, 0).scrollback_is_safe_to_read());
         assert!(!pane(Some("claude"), 0).scrollback_is_safe_to_read());
     }
+}
+
+/// What [`Herdr::find`] resolved a `pane.copy_search` into.
+#[derive(Debug, Clone)]
+pub struct Matches {
+    pub hits: Vec<Hit>,
+    pub total: u32,
+    pub current: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Hit {
+    /// Distance from the live row — the coordinate a client's ring shares with herdr's scrollback.
+    pub from_bottom: u32,
+    pub col: u16,
+    pub end_from_bottom: u32,
+    pub end_col: u16,
+    /// herdr's own absolute row, kept so the row's text can be read back without converting twice.
+    pub row: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchReply {
+    pub matches: Vec<MatchRange>,
+    pub total: u32,
+    #[serde(default)]
+    pub current: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MatchRange {
+    pub start: Point,
+    pub end: Point,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct Point {
+    pub row: u32,
+    pub col: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MotionReply {
+    pub content_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SelectionReply {
+    pub text: String,
 }

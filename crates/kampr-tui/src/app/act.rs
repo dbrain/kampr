@@ -39,6 +39,16 @@ impl App {
                 }
             }
         }
+        // The find prompt takes the keyboard the same way the modal above it does, and for the
+        // same reason: every character of a query is a character some other surface would claim.
+        match self.find.key(key) {
+            crate::find::Took::Ignored => {}
+            crate::find::Took::Consumed => return,
+            crate::find::Took::Search { query, backward } => {
+                self.search(&query, backward);
+                return;
+            }
+        }
         if self.router.mode() == Mode::Pane
             && !crate::keymap::same(key, self.router.prefix())
             && self.conversation_key(key)
@@ -412,6 +422,10 @@ impl App {
                 Some(url) => self.note(format!("nothing here could open {url}")),
                 None => self.note("no link has been offered"),
             },
+            SearchForward => self.open_find(false),
+            SearchBack => self.open_find(true),
+            RepeatSearch => self.step_search(true),
+            RepeatSearchBack => self.step_search(false),
             ReloadConfig | Settings | EditScrollback => self.note("not in this build"),
             other => self.begin_manage(other),
         }
@@ -632,6 +646,45 @@ impl App {
             held.history().doc().rows.into_iter().map(|r| r.cells).collect();
         drop(state);
         self.rings.insert(pane.to_string(), rows);
+    }
+
+    /// Hidden rather than disabled when the node has no verb for it, which is the rule every other
+    /// affordance here follows. A prompt that took a query and then waited for ever would be worse
+    /// than saying so, and a client newer than the node it dialled is ordinary.
+    fn open_find(&mut self, backward: bool) {
+        if !self.client.state().caps().find {
+            self.note("this node has no search — it is older than this client");
+            return;
+        }
+        self.find.open(backward);
+    }
+
+    /// Sends the query to the node, which is the only thing that can answer it: this client holds
+    /// a window on the pane's history and the search is of the whole of it (#511).
+    fn search(&mut self, query: &str, backward: bool) {
+        let Some(pane) = self.focus.clone() else {
+            self.note("no pane to search");
+            return;
+        };
+        if !self.client.find(&pane, query, backward, None) {
+            self.note("not delivered — the socket is down");
+        }
+    }
+
+    fn step_search(&mut self, forward: bool) {
+        let Some(pane) = self.focus.clone() else { return };
+        match self.find.step(&pane, forward) {
+            Some(from_bottom) => self.show_match(&pane, from_bottom),
+            None => self.note("nothing to step through — search first"),
+        }
+    }
+
+    /// Puts the matched row on screen with a little history above it, because a match pinned to
+    /// the top edge is a match with no context, and the context is what somebody searching wants.
+    pub(super) fn show_match(&mut self, pane: &str, from_bottom: u32) {
+        const CONTEXT: u32 = 3;
+        let at = u16::try_from(from_bottom.saturating_sub(CONTEXT)).unwrap_or(u16::MAX);
+        self.scrolls.insert(pane.to_string(), at);
     }
 
     fn scroll(&mut self, dir: Dir) {

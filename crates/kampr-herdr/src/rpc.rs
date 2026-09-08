@@ -91,7 +91,7 @@ impl Herdr {
 
     /// **A subscription list is all-or-nothing, twice over.** An entry that omits a required
     /// `pane_id` is refused before the stream opens (probe #54); an entry naming a pane that has
-    /// since closed is answered with `pane_not_found` and the socket is then closed (probe #76).
+    /// since closed is answered with `pane_not_found` and the socket is then closed (probe #107).
     /// Both take the whole call with them, so a caller re-derives its pane set from a fresh
     /// snapshot and retries rather than treating either as fatal.
     pub async fn subscribe(&self, subs: &[Sub]) -> Result<Subscription> {

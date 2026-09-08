@@ -8,6 +8,7 @@
 pub mod app;
 
 pub mod convo;
+pub mod find;
 pub mod image;
 pub mod input;
 pub mod keymap;

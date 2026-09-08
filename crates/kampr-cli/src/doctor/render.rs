@@ -1,6 +1,9 @@
 use super::{Report, Status};
 
-const LABEL: usize = 12;
+/// Wide enough for the longest check id **plus a space**, which is the part that was wrong:
+/// `permissions` is eleven and fitted, `integrations` is twelve and ran straight into its own
+/// detail — `integrations0 installed`. A pad equal to the longest id is not a pad.
+const LABEL: usize = 13;
 const WIDTH: usize = 92;
 
 pub fn print(report: &Report) {

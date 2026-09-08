@@ -77,7 +77,7 @@ const CONCURRENT_TRANSFERS: usize = 4;
 /// reader who opened one asked for all of it.
 const SUB_PAGE: usize = 200;
 
-const CLIENT_VERBS: [&str; 10] = [
+const CLIENT_VERBS: [&str; 11] = [
     "watch",
     "unwatch",
     "answer.submit",
@@ -86,6 +86,7 @@ const CLIENT_VERBS: [&str; 10] = [
     "answer",
     "convo.load",
     "convo.sub",
+    "find",
     "resync",
     "ping",
 ];
@@ -675,6 +676,12 @@ impl Session {
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
             ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
+            ClientMsg::Find {
+                pane,
+                query,
+                backward,
+                from,
+            } => self.find(&pane, &query, backward, from).await,
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
@@ -883,6 +890,64 @@ impl Session {
                     .error(ErrorCode::NotFound, "no such conversation", Some(pane));
             }
         }
+    }
+
+    /// Search the pane's whole scrollback, on the machine that owns it.
+    ///
+    /// Relayed rather than answered when the pane is a peer's, for the same reason `convo.load` is:
+    /// the history lives where the pane does, and a hub holds no ring of its own to search.
+    async fn find(&self, pane: &str, query: &str, backward: bool, from: Option<u32>) {
+        let Some((session, local)) = self.node.resolve(pane) else {
+            // Relayed only to a peer that says it can answer. Every other verb this hub forwards is
+            // fire-and-forget, so an older peer ignoring one costs nothing; an ignored `find` is a
+            // search that never comes back, with nothing on the client to say why.
+            if !self.node.peers.can_find(pane) {
+                self.wire.error(
+                    ErrorCode::Unsupported,
+                    "that machine's node is older than this one and has no search",
+                    Some(pane),
+                );
+                return;
+            }
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "find", "pane": pane, "query": query, "backward": backward, "from": from }),
+            );
+            return;
+        };
+        match session.registry.find(&local, query, backward, from).await {
+            Ok(Some(found)) => self.wire.send(&ServerMsg::Find {
+                pane: pane.into(),
+                query: query.into(),
+                matches: found
+                    .hits
+                    .into_iter()
+                    .map(|h| kampr_core::wire::FindMatch {
+                        from_bottom: h.from_bottom,
+                        col: h.col,
+                        end_from_bottom: h.end_from_bottom,
+                        end_col: h.end_col,
+                        text: h.text,
+                    })
+                    .collect(),
+                total: found.total,
+                current: found.current,
+            }),
+            // A provider with no history to search is not a failure of the search — the fleet's
+            // panes are ptys this process forked and have no herdr behind them.
+            Ok(None) => self.wire.send(&ServerMsg::Find {
+                pane: pane.into(),
+                query: query.into(),
+                matches: Vec::new(),
+                total: 0,
+                current: None,
+            }),
+            // `stale_content` is the pane having scrolled between the revision and the search
+            // (#511). It is a retry, not a failure of the query, and the message says so.
+            Err(e) => self
+                .wire
+                .error(ErrorCode::HerdrUnavailable, &e.to_string(), Some(pane)),
+        };
     }
 
     fn convo_load(&self, pane: &str, before: Option<&str>) {
@@ -1705,6 +1770,13 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // A client that knows about the mesh can show a per-node latency and a version skew; one that
     // does not ignores the field and sees a herd it cannot tell apart, which is still correct.
     value["caps"]["mesh"] = json!(node.config.mesh.accept);
+    // **A search has an answer, so a client has to know whether one is coming.** Every other verb
+    // on this wire is fire-and-forget, and an unknown `t` being ignored is exactly what makes it
+    // safe. `find` is not: a client that sends one to a node with no verb for it waits for a frame
+    // that will never arrive, and the phones this ships to update on their own schedule — a client
+    // newer than the node it dials is the ordinary case, not the exotic one. So the affordance is
+    // gated on this rather than on the client's own build.
+    value["caps"]["find"] = json!(true);
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
     // and the point of that route is that bytes never share a queue with terminal frames.
@@ -2530,6 +2602,7 @@ mod tests {
                 cols: Some(20),
                 viewport_rows: 1,
                 truncated: false,
+                first_row: None,
             });
         }
 
