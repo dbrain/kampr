@@ -102,3 +102,67 @@ class RowsBackTest {
         assertEquals(0, saying("$RING rows back"), "the strip is still reporting the ring's depth")
     }
 }
+
+// The operator, on a new terminal, running `df -h` until it filled the screen: *"when full wait
+// maybe 2s then it's consistently jumping up to the last `df -h` entry"*. Nothing scrolled — the
+// **cell** changed. The opening zoom used to be a fill over the live grid *plus the ring*, so the
+// same pane answered 1.067x with no history and 0.560x once the node's first scrollback frame
+// landed about two seconds later, and the text halved under a reader who had chosen nothing.
+//
+// The operator on the fill itself, which produced both ends of its range: *"sometimes being zoomed
+// at 0.4x which is ridiculously small, other times 3.7x which is ridiculously large. 1.0x seems to
+// be the best on all devices."* A constant cannot be derived a second time, so there is nothing
+// left to re-derive and nothing to freeze.
+@OptIn(ExperimentalTestApi::class)
+class OpeningZoomTest {
+    @Test
+    fun aNewTerminalOpensAtOneToOneAndTheRingArrivingDoesNotResizeIt() = runComposeUiTest {
+        val pane = PaneState(Phone.PANE, StyleTable())
+        pane.applyReset(
+            ServerMsg.GridReset(
+                pane = Phone.PANE,
+                cols = 94,
+                rows = 40,
+                rowsData = (0 until 40).map { RowDiff(it, listOf(Run(0, "/dev/nvme0n1p2 1.8T 64% /"))) },
+                cursor = Cursor(27, 39, true),
+                links = emptyList(),
+            ),
+        )
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(pane, session, width = 411.dp, height = 914.dp)
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 2)
+        waitForIdle()
+        assertEquals(1f, session.view.zoom, 0.001f, "a pane opens at 1.0x")
+        val cell = session.grid.cellHeight
+
+        // The node's first scrollback frame, the one that used to halve the cell.
+        pane.applyPatch(
+            ServerMsg.GridPatch(
+                pane = Phone.PANE,
+                rows = listOf(RowDiff(39, listOf(Run(0, "[dbrain@giftofthemagi2 ~]$ ")))),
+                cursor = Cursor(27, 39, true),
+                links = emptyList(),
+            ),
+        )
+        pane.applyScrollback(
+            ServerMsg.Scrollback(
+                pane = Phone.PANE,
+                fromTop = 0,
+                rows = (0 until 52).map { RowDiff(it, listOf(Run(0, "scrolled off $it"))) },
+                totalRows = 52,
+                complete = true,
+                capped = false,
+            ),
+        )
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 4)
+        waitForIdle()
+
+        assertEquals(1f, session.view.zoom, 0.001f, "the ring arriving re-derived the zoom")
+        assertEquals(
+            cell,
+            session.grid.cellHeight,
+            0.001f,
+            "the cell changed size under a reader who had chosen nothing",
+        )
+    }
+}

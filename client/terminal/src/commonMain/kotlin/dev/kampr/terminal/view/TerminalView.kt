@@ -350,20 +350,9 @@ fun TerminalView(
         // whose operator had touched nothing. A ring that goes away has not made the pane shorter.
         var deepestRing by remember(pane.id) { mutableIntStateOf(0) }
         if (rows.historyRows > deepestRing) deepestRing = rows.historyRows
-        LaunchedEffect(
-            pane.id, pane.painted, cols, deepestRing > 0, paint.width, paint.insetTop, stored,
-            breakpoint, base,
-        ) {
+        LaunchedEffect(pane.id, pane.painted, stored, presets) {
             if (!pane.painted || view.chosen || view.scrolled) return@LaunchedEffect
-            val fill = defaultZoom(
-                paint, cols, rows.liveRows, deepestRing, base.width, base.height,
-                ceiling = if (breakpoint == Breakpoint.Desktop) 1f else Float.MAX_VALUE,
-                // Wherever 1.0x still leaves a usable pane's worth of columns on the screen. That
-                // is the desk, a split half and a rotated phone; a portrait phone shows 52 columns
-                // of 13sp text and is left to the fit ladder.
-                floor = if (paint.width >= MIN_PANE_COLS * base.width) 1f else 0f,
-            )
-            if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(fill)
+            if (stored != null) view.setZoom(stored, presets) else view.adoptDefault(DEFAULT_ZOOM)
         }
         val zoom = if (view.zoom > 0f) view.zoom else 1f
         val metrics = remember(cache, zoom, fontEpoch) { cache.metrics((BASE_CELL_SP * zoom).sp) }

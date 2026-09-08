@@ -2,7 +2,6 @@ package dev.kampr.terminal
 
 import dev.kampr.terminal.view.CaretBand
 import dev.kampr.terminal.view.PaintRect
-import dev.kampr.terminal.view.defaultZoom
 import dev.kampr.terminal.view.followCursorPan
 import dev.kampr.terminal.view.caretBand
 import dev.kampr.terminal.view.contentFloor
@@ -25,25 +24,6 @@ private fun close(a: Float, b: Float, tolerance: Float = 0.01f) =
     assertTrue(abs(a - b) < tolerance, "expected $b, got $a")
 
 class GeometryTest {
-    @Test
-    fun defaultZoomFillsAtLeastOneAxis() {
-        val paint = phone()
-        val zoom = defaultZoom(paint, cols = 94, liveRows = 40, historyRows = 0, CELL_W, CELL_H)
-        val fitWidth = paint.width / (94 * CELL_W)
-        val fitHeight = paint.height / (40 * CELL_H)
-        close(zoom, maxOf(fitWidth, fitHeight))
-        assertTrue(zoom > minOf(fitWidth, fitHeight), "min() is what letterboxes")
-    }
-
-    @Test
-    fun fillIsComputedAgainstThePaintRectangleNotTheInsetOne() {
-        val wide = phone(insetTop = 0f, insetBottom = 0f)
-        val chromed = phone()
-        val a = defaultZoom(wide, 94, 40, 0, CELL_W, CELL_H)
-        val b = defaultZoom(chromed, 94, 40, 0, CELL_W, CELL_H)
-        assertEquals(a, b, "insetting the fill reintroduces the letterbox the insets exist to avoid")
-    }
-
     @Test
     fun theLastLiveRowSettlesClearOfTheChrome() {
         val paint = phone()
@@ -90,15 +70,6 @@ class GeometryTest {
         assertTrue(offRight < 0f && offRight >= minPan)
         val visible = 80 * CELL_W + offRight
         assertTrue(visible in 0f..390f, "the caret must land inside the viewport")
-    }
-
-    @Test
-    fun aPaneWithHistoryFillsWidthBecauseHistoryFillsTheHeight() {
-        val paint = phone()
-        val zoom = defaultZoom(paint, cols = 94, liveRows = 40, historyRows = 1200, CELL_W, CELL_H)
-        close(zoom, paint.width / (94 * CELL_W))
-        val surfaceHeight = 1240 * CELL_H * zoom
-        assertTrue(surfaceHeight > paint.height, "history has to cover the height it claims to fill")
     }
 
     @Test

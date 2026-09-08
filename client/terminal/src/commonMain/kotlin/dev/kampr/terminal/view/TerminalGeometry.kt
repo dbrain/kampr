@@ -1,6 +1,5 @@
 package dev.kampr.terminal.view
 
-import dev.kampr.shared.model.surfaceGeometry
 import kotlin.math.max
 import kotlin.math.min
 
@@ -98,45 +97,24 @@ fun zoomPresets(paintWidth: Float, cols: Int, baseCellWidth: Float): ZoomPresets
     )
 }
 
-// max(fit-width, fit-height), never min: fitting inside both axes is exactly what leaves blank
-// space below the last row. The rows available to fill the height are history plus the live
-// viewport, because the space above a short grid carries history rather than nothing — on an
-// alt-screen pane with no ring this collapses back to max(fit-width, fit-height).
+// What a pane opens at, and it is a constant on purpose.
 //
-// `ceiling` is for the caller whose viewport is much bigger than the grid, which on a desktop is
-// the ordinary case: a fresh 40x12 pane in a 1624x1000 window fills to 3.6x, legible long before
-// it got there. It caps the magnification only, and it belongs to the caller because it is a fact
-// about the surface and not about the grid. A phone has no room to spare: capping there
-// letterboxes, which is what the max above prevents.
+// It used to be a fill: the largest zoom that put the grid — **and its scrollback** — inside the
+// viewport, floored at 1.0x wherever the window was wide enough and capped at 1.0x on a desk. The
+// operator, who had it produce both ends of its range: *"its resulting in sometimes being zoomed at
+// 0.4x which is ridiculously small, other times 3.7x which is ridiculously large. 1.0x seems to be
+// the best on all devices."*
 //
-// `floor` is the same argument the other way up, and it is the operator's: *"default is often 0.4x
-// and is tiny tiny … maybe we push towards 1.0x being at least default"*. Fitting a wide pane into
-// a window is only worth doing while the result can be read — a 300-column pane on a desk fits at
-// 0.7x, which is 13sp of text at nine — and the whole pane at a size nobody can read is not a view
-// of it. The caller decides where that stops mattering, because it is the *window* that decides:
-// below the width where 1.0x still leaves a usable pane on the screen, a floor would pin a phone
-// to a fifth of a pane instead, and Fit width is what it is for.
-fun defaultZoom(
-    paint: PaintRect,
-    cols: Int,
-    liveRows: Int,
-    historyRows: Int,
-    baseCellWidth: Float,
-    baseCellHeight: Float,
-    ceiling: Float = Float.MAX_VALUE,
-    floor: Float = 0f,
-): Float = min(
-    ceiling,
-    surfaceGeometry(
-        viewportWidth = paint.width,
-        viewportHeight = paint.height,
-        cols = cols,
-        liveRows = liveRows + historyRows.coerceAtLeast(0),
-        historyRows = 0,
-        cellWidth = baseCellWidth,
-        cellHeight = baseCellHeight,
-    ).zoom,
-).coerceAtLeast(min(floor, ceiling))
+// **And a fill that counts the ring cannot be derived twice.** The rows it had to fill were the
+// live grid plus whatever history the pane held, so the same pane answered 1.067x with no ring and
+// **0.560x** once the node's first scrollback frame landed — measured on a real pane, about two
+// seconds after `df -h` first scrolled the grid. Nothing had moved: the cell halved under a reader
+// who had chosen nothing, which is the jump the operator reported as the terminal not sticking to
+// the bottom. A constant has no second derivation and nothing to re-derive it from.
+//
+// The fit ladder still exists and is still one press away — `ZoomPresets` carries fit-width — but
+// it is somewhere the operator goes rather than somewhere a pane starts.
+const val DEFAULT_ZOOM = 1f
 
 // Where the surface may rest while it is following: the band of scroll values that leave the
 // caret inside the content rectangle *and* the end of the record no higher than the bottom of it,
