@@ -1,11 +1,24 @@
 package dev.kampr.shared.model
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.RowDiff
 
 class CellBuffer(cols: Int, rows: Int) {
-    var cols: Int = cols
+    // **Snapshot state, and only these two.** The pane's shape is what `TerminalView` lays the
+    // surface out from — the pan clamp, the cell under the pointer, the count the column strip
+    // prints, the grid half of `rows.total` — and held in plain `var`s a reflow never told the
+    // composition it had happened. A change in the row count showed up second-hand, through the
+    // record's distance from the bottom; a change in the column count showed up nowhere at all, so
+    // a desk window dragged wider left the surface laid out at the old width.
+    //
+    // The cells themselves stay plain arrays: they are read per row inside the draw, they change
+    // on every frame the pane paints, and `revision` is what invalidates that draw. These two are
+    // read once per operation and change only when the node reshapes the pane.
+    var cols: Int by mutableIntStateOf(cols)
         private set
-    var rows: Int = rows
+    var rows: Int by mutableIntStateOf(rows)
         private set
 
     var glyphs: IntArray = IntArray(cols * rows) { BLANK }
@@ -49,7 +62,10 @@ class CellBuffer(cols: Int, rows: Int) {
     fun apply(diff: RowDiff) {
         val row = diff.row
         if (row < 0 || row >= rows) return
-        val base = row * cols
+        // Read once. `cols` is snapshot state so that a reflow reaches the composition, and this
+        // loop runs per cell of every row the node sends.
+        val stride = cols
+        val base = row * stride
         var col = 0
         runs@ for (run in diff.runs) {
             val style = run.s.toShort()
@@ -60,7 +76,7 @@ class CellBuffer(cols: Int, rows: Int) {
             while (i < run.x.length) {
                 val glyph = glyphAt(run.x, i)
                 i += glyphUnits(glyph)
-                if (col + width > cols) break@runs
+                if (col + width > stride) break@runs
                 glyphs[base + col] = glyph
                 styles[base + col] = style
                 links[base + col] = link
@@ -78,7 +94,7 @@ class CellBuffer(cols: Int, rows: Int) {
                 cell++
             }
         }
-        while (col < cols) {
+        while (col < stride) {
             glyphs[base + col] = BLANK
             styles[base + col] = 0
             links[base + col] = 0
@@ -97,9 +113,10 @@ class CellBuffer(cols: Int, rows: Int) {
     fun marksAt(col: Int, row: Int): String = marks[row * cols + col]
 
     fun rowText(row: Int): String {
-        val base = row * cols
-        val builder = StringBuilder(cols)
-        for (col in 0 until cols) {
+        val stride = cols
+        val base = row * stride
+        val builder = StringBuilder(stride)
+        for (col in 0 until stride) {
             val glyph = glyphs[base + col]
             if (glyph != TAIL) builder.appendGlyph(glyph).append(marks[base + col])
         }

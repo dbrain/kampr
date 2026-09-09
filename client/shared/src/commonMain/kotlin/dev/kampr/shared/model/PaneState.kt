@@ -38,13 +38,25 @@ class ScrollbackStore {
     private val rows = LinkedHashMap<Int, RowDiff>()
     private var bytes = 0
 
-    var fromTop: Int = 0
+    // **Snapshot state, because the surface is as tall as the ring is deep.** `TerminalView`
+    // derives the whole geometry from these in its composition body — `originY`, the travel, both
+    // floors, whether the wheel belongs to Kampr or to the program — while the renderer that
+    // consumes that geometry indexes rows in a `drawBehind` which `revision` *does* invalidate.
+    // Held in plain `var`s the two disagreed by exactly one batch every time output scrolled the
+    // grid without moving the caret: nothing told the composition the surface had grown, so the
+    // picture was drawn a batch too low and stayed there, and the next batch added to it.
+    //
+    // `df -h` on a full screen is that pane precisely. The prompt lands on the same row at the
+    // same column after every run, so `pane.cursor` — the only snapshot state that body reads
+    // about the pane's shape — never changes, and the operator watched the terminal walk back
+    // into its own history one command at a time and stop there.
+    var fromTop: Int by mutableIntStateOf(0)
         private set
-    var totalRows: Int = 0
+    var totalRows: Int by mutableIntStateOf(0)
         private set
-    var complete: Boolean = false
+    var complete: Boolean by mutableStateOf(false)
         private set
-    var capped: Boolean = false
+    var capped: Boolean by mutableStateOf(false)
         private set
 
     private var highestIndex = -1
@@ -58,7 +70,7 @@ class ScrollbackStore {
     // overlap (ADR 0004) — and what comes back afterwards is the same rows a second time rather
     // than rows the pane produced. Counted rather than flagged so a reader of it can tell "since I
     // last looked" from "right now" without anything having to clear it.
-    var restarts: Int = 0
+    var restarts: Int by mutableIntStateOf(0)
         private set
 
     // History arrives as one document then tails; a later message carries only new rows, so it

@@ -116,7 +116,13 @@ class TerminalViewState {
 
     val displayZoom: Float get() = zoom * layerScale
 
-    var chosen = false
+    // Snapshot state for the reason the ring and the cell buffer are: it is read in
+    // `TerminalView`'s composition body, where it picks whether the view grid is counted in base
+    // cells or drawn ones — and that grid is what the standing hold claims the pane at. `rescale`
+    // writes `zoom` on the same call and so invalidates incidentally today, which is the only
+    // reason nothing has gone wrong; a zoom that lands on the value it already had writes nothing,
+    // and then the flag moves with nothing watching it.
+    var chosen by mutableStateOf(false)
         private set
 
     // The opening scroll is re-derived as history, prefs and the measured insets land — all of

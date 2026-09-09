@@ -42,7 +42,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.PaneState
@@ -130,10 +129,6 @@ private const val SPEECH_SETTLE_MS = 450L
 // back inside one repaint interval.
 internal const val CARET_SETTLE_MS = 200L
 
-// Mirrors the header PaneScreen floats over this surface and the answer strip it shows while a
-// prompt is outstanding. Chrome insets the scrollable content; it never insets the paint.
-private const val PENDING_BAR_DP = 52f
-
 // The review strip is chrome like any other: without insetting for it the row the reader is
 // being read is the row sitting behind the controls that read it.
 private const val REVIEW_BAR_DP = 52f
@@ -166,9 +161,6 @@ private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
     Breakpoint.Landscape -> 44f
     Breakpoint.Portrait -> 108f
 }
-
-private fun pendingInsetPx(pane: PaneState, density: Density): Float =
-    if (pane.pending != null) with(density) { PENDING_BAR_DP.dp.toPx() } else 0f
 
 // How long the window has to hold still before its size is asked for.
 //
@@ -306,8 +298,15 @@ fun TerminalView(
         // the taller of the two. The floor is for the layouts that have no key row at all — the
         // grid is still allowed under the handle, the controls floating over it are not.
         val safe = LocalSafeArea.current
-        val chromeBottom =
-            max(session.keyRowHeight, with(density) { safe.bottom.toPx() }) + pendingInsetPx(pane, density)
+        // **A question the agent is asking is not chrome.** This stood off a 52 dp answer strip as
+        // well, and nothing has ever drawn one here — `PendingStrip` is the conversation's, and
+        // `PaneScreen` refuses chips on this surface on purpose, because the dialog is on the grid
+        // a few rows up and the key row under it types into the pane. The band of nothing was
+        // visible on the desk, and it was counted: `viewRows` is measured in the content rectangle,
+        // so a question opening took three rows off the view and the standing hold claimed the
+        // pane at the smaller size — an agent's dialog reshaping the operator's pane twice, which
+        // is the one thing rule 3 forbids.
+        val chromeBottom = max(session.keyRowHeight, with(density) { safe.bottom.toPx() })
         // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
         // from its own size is what would leave blank rows under the last line.
         val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
@@ -428,10 +427,10 @@ fun TerminalView(
         // the wrong band.
         val below = rows.liveRows - pane.cursor.row
         var settledBelow by remember(pane.id, pane.painted) { mutableIntStateOf(below) }
-        // Keyed on the reading rather than collected from a `snapshotFlow`, because `CellBuffer`
-        // is not snapshot state: a resize changes how many rows sit below the caret without
-        // moving the caret, and only a composition sees that. Re-keying is the cancellation —
-        // a caret that has not stopped never reaches the assignment.
+        // Keyed on the reading rather than collected from a `snapshotFlow`: a resize changes how
+        // many rows sit below the caret without moving the caret, and this is the reading that
+        // sees it. Re-keying is the cancellation — a caret that has not stopped never reaches the
+        // assignment.
         // **Symmetric, and it has to be**: a full-screen repaint sweeps the caret from the top of
         // its block to the bottom, so a caret reading that has got smaller is as likely to be a
         // sweep as it is to be output. #380 is that defect and `aRepaintThatSweepsTheCaretAcross`
@@ -1172,8 +1171,8 @@ fun TerminalView(
                 // The same two numbers the grid is painted between, handed to the sheet as its
                 // box. Standing it off the key row alone left it free to grow up under the pane
                 // header, which is where a third of it went; and `chromeBottom` rather than the
-                // key row is what also holds it off a pending bar and off the gesture handle on a
-                // layout that has no key row.
+                // key row is what also holds it off the gesture handle on a layout that has no key
+                // row.
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .absolutePadding(
