@@ -388,16 +388,40 @@ class PaneScrollTest {
     }
 
     // A row of travel asks for a row, and what is left over is kept: rounding each frame's few
-    // pixels to nothing is a drag that moves the finger and never the pane.
+    // pixels to nothing is a drag that moves the finger and never the pane. The rows are queued
+    // rather than sent (#527), so the accounting is read off the queue and then drained.
     @Test
     fun aRefusedDragAsksForARowPerRowAndCarriesTheRemainder() {
         val sent = mutableListOf<String>()
         val scroll = PaneScroll(ScrollKeys.CursorKeys) { sent += it }
         repeat(4) { scroll.refused(30f, step = 100f, col = 0, row = 0) }
-        assertEquals(listOf("\u001bOA"), sent, "120px of travel across four frames asked for ${sent.size} rows")
+        assertEquals(1, scroll.queued, "120px of travel across four frames asked for one row")
         scroll.refused(-260f, step = 100f, col = 0, row = 0)
-        assertEquals(3, sent.size, "the drag turned round and the other direction was not sent")
-        assertTrue(sent.drop(1).all { it == "\u001bOB" }, "back up the screen is a scroll down")
+        // A row queued and not yet sent, against two rows the other way, is one row the other way:
+        // reversing inside a gesture costs the program nothing rather than two wasted round trips.
+        assertEquals(-1, scroll.queued, "the drag turned round and the rows did not net off")
+        while (scroll.drain()) Unit
+        assertEquals(listOf("\u001bOB"), sent, "back up the screen is a scroll down")
+    }
+
+    // The bound on how far a finger may run ahead of the program. Pacing without one queues
+    // seconds of scrolling nobody can cancel, which is worse than the coalescing it fixes (#527).
+    @Test
+    fun aFingerMayNotRunMoreThanAScreenfulAheadOfTheProgram() {
+        val scroll = PaneScroll(ScrollKeys.Wheel) { }
+        repeat(400) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        assertTrue(scroll.queued in 1..50, "400 rows of travel queued ${scroll.queued} reports")
+    }
+
+    // The wheel is inside the pipeline's capacity already — a hand makes 10-30 detents a second
+    // against the 20-35 it returns — so a notch is not queued behind anything (#527).
+    @Test
+    fun aWheelNotchIsNotPacedBecauseAHandNeverOutrunsTheProgram() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
+        scroll.notch(up = true, col = 0, row = 0)
+        assertEquals(1, sent.size, "a notch waited for a pace it does not need")
+        assertEquals(0, scroll.queued)
     }
 
     // The instrument, not the behaviour. A gesture that reaches a program is the one thing this
@@ -410,6 +434,7 @@ class PaneScrollTest {
         val trace = ScrollTrace(on = true) { lines += it }
         val scroll = PaneScroll(ScrollKeys.Wheel, trace) { }
         repeat(5) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        while (scroll.drain()) Unit
         scroll.notch(up = true, col = 0, row = 0)
         trace.arrived()
         scroll.rest()
@@ -438,10 +463,12 @@ class PaneScrollTest {
         val sent = mutableListOf<String>()
         val scroll = PaneScroll(ScrollKeys.CursorKeys) { sent += it }
         scroll.refused(90f, step = 100f, col = 0, row = 0)
-        assertEquals(emptyList(), sent, "90 of a 100px row was already a row")
+        assertEquals(0, scroll.queued, "90 of a 100px row was already a row")
         scroll.rest()
         scroll.refused(90f, step = 100f, col = 0, row = 0)
-        assertEquals(emptyList(), sent, "the last drag's leftovers arrived in this one")
+        assertEquals(0, scroll.queued, "the last drag's leftovers arrived in this one")
+        while (scroll.drain()) Unit
+        assertEquals(emptyList(), sent)
     }
 
     // The whole table, because the defect was one row of it: `ctrl+shift+C` lowercased to `c` and

@@ -749,11 +749,19 @@ fun TerminalView(
         // once the surface underneath is spent. `paneScrollKeys` decides whether anything may be
         // sent at all and in what dialect; a read-only viewer sends nothing whatever it says,
         // because these are pty bytes.
-        val scrollToPane = when {
-            io.readOnly || rows.historyRows > 0 -> null
-            else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
-                PaneScroll(keys, session.scrollTrace) { report ->
-                    io.send(ClientMsg.InputText(pane.id, report))
+        // **Remembered, because it now carries a queue.** A drag's leftover fraction of a row was
+        // always meant to survive to the next frame, and a fresh instance every recomposition
+        // could only keep it by accident — a spent surface stops writing `scrollY`, so nothing
+        // recomposes mid-drag and the same instance happened to live. The paced queue and its pump
+        // cannot be built on that.
+        val keptScroll = rows.historyRows > 0
+        val scrollToPane = remember(pane.id, io.readOnly, keptScroll, info?.agent, info?.cmd) {
+            when {
+                io.readOnly || keptScroll -> null
+                else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
+                    PaneScroll(keys, session.scrollTrace, scope) { report ->
+                        io.send(ClientMsg.InputText(pane.id, report))
+                    }
                 }
             }
         }
