@@ -40,6 +40,7 @@ import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
 import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.CoroutineScope
@@ -127,6 +128,8 @@ private const val RECENT_ADDRESSES = 5
 // an *unrelated* patch may land in front of the one carrying the pane, and the cost of overrunning
 // it is that the operator lands on the herd, which is where they were.
 private const val CREATE_OPEN_WINDOW_MS = 15_000.0
+
+private const val WORKSPACE_CREATE = "workspace.create"
 
 class AppState(
     private val scope: CoroutineScope,
@@ -445,6 +448,35 @@ class AppState(
         connection.manage(op)
     }
 
+    // The + beside a machine. There is no sheet in front of this one, so the two things a sheet
+    // does for a create — open what it made, and say when the node refused — are both here.
+    //
+    // Nothing is filled in on purpose: a workspace with no label and no directory is herdr's own
+    // default, which is a shell in the operator's home. Everything that has a decision in it is
+    // still behind the bar's +.
+    fun quickWorkspace(nodeId: String) {
+        if (!store.canManage) return
+        // A stale ack from an earlier op would otherwise be read as this one's.
+        store.clearManaged()
+        quickWorkspaceBy = wallClockMillis() + CREATE_OPEN_WINDOW_MS
+        manage(ManageOp.WorkspaceCreate(nodeId))
+    }
+
+    // Bounded for the same reason `creating` is: nothing settles a structural op before its ack,
+    // and an intent nobody cancelled would one day act on somebody else's.
+    private var quickWorkspaceBy: Double? = null
+
+    private fun quickWorkspaceAcked(ack: ServerMsg.Managed) {
+        val deadline = quickWorkspaceBy ?: return
+        if (ack.op != WORKSPACE_CREATE) return
+        quickWorkspaceBy = null
+        if (wallClockMillis() > deadline) return
+        // A press that silently does nothing is the worst of the three endings, and the node's
+        // refusal is the only thing that knows why — a cold host that could not be started, a
+        // machine that has gone since the herd was drawn.
+        if (ack.ok) opening(ack.id) else store.noteRefusal(ack)
+    }
+
     // Whether the find bar is up, and for which pane. Held here rather than in the bar so that
     // leaving the pane closes it: a query bar over a pane it was not opened on would send the next
     // search to the wrong history.
@@ -638,6 +670,7 @@ class AppState(
                 reconcileNotifications(it)
             }
         }
+        scope.launch { store.managed.collect { ack -> ack?.let(::quickWorkspaceAcked) } }
     }
 }
 

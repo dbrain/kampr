@@ -197,15 +197,20 @@ positional secret is invisible to it, and the blind spots are enumerated and tes
 cannot drift from the node's behaviour. An explicit save is allowed, with that warning; deleting is
 the part that actually holds.
 
-And **pressing a saved command does not run it.** It fills the run box, and the ordinary "Run on N
-machines" confirmation is still the only thing that fans out. One press across the whole herd should
-not be cheaper than typing it.
+And **a remembered command has two presses, which do different things.** Pressing the row fills the
+run box, where the line can be read and edited before it goes anywhere; the **Run** button on the
+same row fans it out on the spot. That button is the answer to *"I run this every day and I do not
+want three presses for it"* — and what makes it safe to be one press is that it is a control of its
+own, labelled with the line and with the number of machines it is about to reach. The rule it
+narrows is still the rule: nothing that is *aimed at the box* may fan out by accident.
 
 ## Using it
 
 **On a phone or in the browser:** the fleet glyph on the herd screen opens the board; **Run** asks
 for a command and sends it to every machine that can be reached, with what this node remembers under
-the box — Saved, then the last five. A waiting host shows its question inline with the choices the
+the box — Saved, then the last five, each with a **Run** of its own. An empty board puts those same
+entries on itself, so the run somebody makes every morning is one press from the screen they land
+on. A waiting host shows its question inline with the choices the
 prompt declared, so the commonest reply is one tap.
 
 **In the terminal client:** `prefix` then `shift+e` asks for a command and runs it everywhere;

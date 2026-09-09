@@ -14,10 +14,12 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.NodeInfo
 
 // Root-window coordinates for the corner a context menu hangs off, which is the pointer's own cell
 // on a desk (#426) and the "…" glyph's own box when a finger asked. Null on a phone, where the menu
@@ -36,6 +38,10 @@ interface ManageIo {
     // `openActions` because `ManageIo` is implemented by test doubles in four modules and two of
     // them are not this one's to edit; `AppManage` is the only implementor that answers it.
     fun openMenu(paneId: String, at: MenuAnchor? = null) = openActions(paneId)
+
+    // The + beside one machine: a workspace on that host, with nothing to fill in. There is no
+    // sheet in front of it, so the ack and the refusal are both `AppState`'s to catch.
+    fun quickWorkspace(nodeId: String) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -43,6 +49,7 @@ private object NoManage : ManageIo {
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) = Unit
     override fun openMenu(paneId: String, at: MenuAnchor?) = Unit
+    override fun quickWorkspace(nodeId: String) = Unit
 }
 
 val LocalManage: ProvidableCompositionLocal<ManageIo> = staticCompositionLocalOf { NoManage }
@@ -64,6 +71,10 @@ class AppManage(private val state: AppState) : ManageIo {
     override fun openMenu(paneId: String, at: MenuAnchor?) {
         state.openSheet(Sheet.Menu(paneId, at))
     }
+
+    override fun quickWorkspace(nodeId: String) {
+        state.quickWorkspace(nodeId)
+    }
 }
 
 @Composable
@@ -77,6 +88,27 @@ fun NewAction(paneId: String? = null, target: Dp = TOUCH, modifier: Modifier = M
         target,
         modifier,
     ) { manage.openNew(paneId) }
+}
+
+// The host's own +, beside the machine it makes something on. The bar's + opens the sheet — the
+// machine picker, the label, the directory, the variables, the worktrees, the named sessions — and
+// that is the right screen for all of those and the wrong one for "a terminal on that box", which
+// is the thing asked for most and the thing with nothing in it to decide.
+//
+// Asked of `isReachable` rather than of `online`: a manage op is served by the node, and the node
+// starts a stopped herdr for one (#324, #325), so the host this is most use on is the cold one.
+@Composable
+fun QuickWorkspaceAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = Modifier) {
+    val manage = LocalManage.current
+    if (!manage.enabled || !node.isReachable) return
+    GlyphAction(
+        KamprIcons.plus,
+        "New workspace on ${node.name}",
+        Kampr.tokens.color.accent,
+        target,
+        modifier,
+        chip = 22.dp,
+    ) { manage.quickWorkspace(node.id) }
 }
 
 @Composable

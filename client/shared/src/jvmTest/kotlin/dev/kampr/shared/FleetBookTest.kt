@@ -29,8 +29,10 @@ import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.FleetScreen
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.wire.FleetCommand
+import dev.kampr.shared.wire.FleetInfo
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -43,6 +45,18 @@ private val HERD = Herd(
         NodeInfo(id = "n2", name = "two", kind = "peer", online = true),
     ),
     known = true,
+)
+
+// A board with a run on it, which is the only state the book is reachable from the sheet in: the
+// quick links belong to the *empty* board and are gone the moment anything is running.
+private val BUSY = HERD.copy(
+    panes = listOf(
+        PaneInfo(
+            id = "n1/fleet-1",
+            nodeId = "n1",
+            fleet = FleetInfo(cohort = "c1", command = "pacman -Syu", state = "running", startedUnix = 1_700_000_000),
+        ),
+    ),
 )
 
 private val SAVED = FleetCommand(id = "b1", args = listOf("kampr", "update"), label = "update everything")
@@ -187,6 +201,40 @@ class FleetBookTest {
         assertEquals("kampr update", board.ran, "the sheet did not open with the line in the box")
     }
 
+
+    /// The operator, on 0.1.74: *"can we add a run button to the saved fleet history so i can
+    /// quickly run something i often run without going through dialogues etc"*.
+    ///
+    /// **This is the rule above being narrowed on purpose, not broken.** What must not happen is a
+    /// press meant for the box becoming a fan-out across the herd, so the row body still stages and
+    /// the run is a control of its own — labelled with the line *and* with the number of machines
+    /// it is about to reach, which is the fact the confirmation existed to carry.
+    @Test
+    fun aRememberedCommandRunsFromItsOwnButtonWithoutTheSheetsOwn() = runComposeUiTest {
+        val board = open(book(saved = listOf(SAVED)), BUSY)
+        onNodeWithContentDescription("Run kampr update on 2 machines").performClick()
+        assertEquals("kampr update", board.ran)
+    }
+
+    /// And the row beside it still stages: the two are different presses on the same row, and the
+    /// one that fans out is the one that says so.
+    @Test
+    fun theRowBesideThatButtonStillStagesRatherThanRunning() = runComposeUiTest {
+        val board = open(book(saved = listOf(SAVED)), BUSY)
+        onNodeWithContentDescription("Put kampr update in the box").performClick()
+        assertNull(board.ran, "a saved command fanned out across the herd on one press")
+    }
+
+    /// The empty board's quick links get the same button, which is the whole of what the operator
+    /// asked for: the board they land on, the command they run every day, one press.
+    @Test
+    fun aQuickLinkOnTheEmptyBoardRunsFromItsOwnButtonToo() = runComposeUiTest {
+        val board = board(book(saved = listOf(SAVED)))
+        onNodeWithContentDescription("Run kampr update on 2 machines").performClick()
+        waitForIdle()
+        assertEquals("kampr update", board.ran)
+    }
+
     /// A node that has never run anything says what it always said. The quick links are what the
     /// memory *adds* to the empty board, not a replacement for it.
     @Test
@@ -227,7 +275,7 @@ class FleetBookTest {
 
     // The sheet is behind **Run**, which is where the operator goes to run something — so the
     // memory lives beside the box rather than on a screen of its own.
-    private fun ComposeUiTest.open(book: ServerMsg.FleetBook): Pressed {
+    private fun ComposeUiTest.open(book: ServerMsg.FleetBook, herd: Herd = HERD): Pressed {
         val board = Pressed()
         setContent {
             CompositionLocalProvider(
@@ -236,7 +284,7 @@ class FleetBookTest {
             ) {
                 Box(Modifier.size(411.dp, 891.dp)) {
                     FleetScreen(
-                        herd = HERD,
+                        herd = herd,
                         breakpoint = Breakpoint.Portrait,
                         onOpenPane = {},
                         onAnswer = { _, _ -> },

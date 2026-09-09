@@ -82,10 +82,16 @@ fun FleetScreen(
             }
         }
         if (cohorts.isEmpty()) {
-            EmptyBoard(targets.size, canRun, if (canRun) quickRuns(book) else emptyList()) {
-                staged = it
-                composing = true
-            }
+            EmptyBoard(
+                hosts = targets.size,
+                canRun = canRun,
+                quick = if (canRun) quickRuns(book) else emptyList(),
+                onStage = {
+                    staged = it
+                    composing = true
+                },
+                onRun = onRun,
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -158,6 +164,7 @@ private fun EmptyBoard(
     canRun: Boolean,
     quick: List<FleetCommand>,
     onStage: (FleetCommand) -> Unit,
+    onRun: (String) -> Unit,
 ) {
     val tokens = Kampr.tokens
     Column(
@@ -180,36 +187,49 @@ private fun EmptyBoard(
         // arriving at it has come to start something. Reaching what the node already remembers
         // used to be Run, then the entry, then Run; from here it is the entry, then Run.
         //
-        // What it is *not* is a way to fan a command across the herd on one press. A quick link
-        // stages the line exactly as the sheet's own rows do, and the sheet's button is still the
-        // only thing that fires — see `RunSheet`, where that rule is written down.
+        // A quick link has the two presses the sheet's own rows have: the card stages the line, and
+        // **Run** fans it out from here — one press, named with the line and with how many machines
+        // it reaches. `RunSheet` is where that rule is written down.
         if (quick.isNotEmpty()) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                quick.forEach { QuickRun(it, onStage) }
+                quick.forEach { QuickRun(it, hosts, onStage, onRun) }
             }
         }
     }
 }
 
 @Composable
-private fun QuickRun(command: FleetCommand, onStage: (FleetCommand) -> Unit) {
+private fun QuickRun(
+    command: FleetCommand,
+    hosts: Int,
+    onStage: (FleetCommand) -> Unit,
+    onRun: (String) -> Unit,
+) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(tokens.color.surface2, shape)
-            .action("Put ${command.command} in the run box", { onStage(command) }, shape)
             .padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // The label never replaces the command, on this screen for the same reason it does not in
-        // the sheet: what is about to run on every machine in the herd has to be readable.
-        command.label?.let { KText(it, tokens.type.bodyStrong, tokens.color.text, maxLines = 1) }
-        KText(command.command, tokens.type.captionSmall, tokens.color.accent, maxLines = 2)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .action("Put ${command.command} in the run box", { onStage(command) }),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            // The label never replaces the command, on this screen for the same reason it does not
+            // in the sheet: what is about to run on every machine in the herd has to be readable.
+            command.label?.let { KText(it, tokens.type.bodyStrong, tokens.color.text, maxLines = 1) }
+            KText(command.command, tokens.type.captionSmall, tokens.color.accent, maxLines = 2)
+        }
+        RunNow(command, hosts) { onRun(command.command) }
     }
 }
 

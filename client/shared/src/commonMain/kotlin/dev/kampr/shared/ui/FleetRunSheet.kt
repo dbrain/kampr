@@ -36,10 +36,11 @@ import dev.kampr.shared.wire.ServerMsg
 // that is about to run, beside the number of machines it is about to run on. Those are the two
 // facts somebody pressing this can be surprised by, and neither of them is a rule to remember.
 //
-// **Pressing a remembered command stages it; it never runs it.** A saved command is a one-press
-// fan-out across every machine in the herd, and it fires through exactly the confirmation a typed
-// one does — the same host count on the same button, with the line in the box where it can be read
-// and edited first. One press across the whole herd should not be cheaper than typing it out.
+// **A remembered command has two presses, and they do different things.** The row stages it — the
+// line in the box, where it can be read and edited before it goes anywhere — and the **Run** button
+// beside it fans it out on the spot. What the second one may never be is the *accidental* half of
+// the first: it is a control of its own, and it is labelled with the line and with the number of
+// machines it is about to reach, which is the fact the extra press was carrying.
 //
 // The host count is on the button because the number of machines is the part of this decision that
 // is easy to be wrong about, and it is resolved *now* rather than remembered: a saved entry carries
@@ -69,6 +70,11 @@ internal fun RunSheet(
     // One argument, because that is what the line is now: the node hands it to a shell whole, and
     // the rule that reads it flattens on whitespace exactly as it always did for `sh -c '…'`.
     val carries = if (ready) secretish(listOf(line)) else null
+
+    fun runNow(command: FleetCommand) {
+        val text = command.command.trim()
+        if (text.isNotEmpty()) onRun(text)
+    }
 
     fun stage(command: FleetCommand) {
         val text = command.command
@@ -156,14 +162,18 @@ internal fun RunSheet(
                 title = "Saved",
                 empty = "Nothing kept yet. Type a command and press Save.",
                 commands = book.saved,
+                hosts = hosts,
                 onStage = ::stage,
+                onRun = ::runNow,
                 onBook = onBook,
             )
             BookSection(
                 title = "Recent",
                 empty = "No commands yet. What you run here shows up in this list.",
                 commands = book.recent,
+                hosts = hosts,
                 onStage = ::stage,
+                onRun = ::runNow,
                 onBook = onBook,
             )
         }
@@ -175,7 +185,9 @@ private fun BookSection(
     title: String,
     empty: String,
     commands: List<FleetCommand>,
+    hosts: Int,
     onStage: (FleetCommand) -> Unit,
+    onRun: (FleetCommand) -> Unit,
     onBook: (ManageOp) -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -192,7 +204,7 @@ private fun BookSection(
                 .fillMaxWidth()
                 .background(tokens.color.surface2, RoundedCornerShape(tokens.radii.md)),
         ) {
-            commands.forEach { command -> BookRow(command, onStage, onBook) }
+            commands.forEach { command -> BookRow(command, hosts, onStage, onRun, onBook) }
         }
     }
 }
@@ -200,7 +212,9 @@ private fun BookSection(
 @Composable
 private fun BookRow(
     command: FleetCommand,
+    hosts: Int,
     onStage: (FleetCommand) -> Unit,
+    onRun: (FleetCommand) -> Unit,
     onBook: (ManageOp) -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -237,6 +251,29 @@ private fun BookRow(
             tokens.color.mute,
             Modifier.action("Forget ${command.command}", { onBook(ManageOp.FleetDrop(command.id)) }),
         )
+        RunNow(command, hosts) { onRun(command) }
+    }
+}
+
+// The one-press fan-out, on the board and in the sheet's own list. One implementation because the
+// two are the same press with the same thing to say about it, and the label is where it is said:
+// the line, and how many machines it reaches. A press this cheap that did not name its reach would
+// be the thing rule 3's neighbours are all shaped around avoiding.
+@Composable
+internal fun RunNow(command: FleetCommand, hosts: Int, onRun: () -> Unit) {
+    val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.sm)
+    Box(
+        modifier = Modifier
+            .background(tokens.color.accent, shape)
+            .touchable(LANDSCAPE_TOUCH)
+            .action("Run ${command.command} on $hosts machine${if (hosts == 1) "" else "s"}", onRun, shape)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        DisableSelection {
+            KText("Run", tokens.type.button, tokens.color.onAccent)
+        }
     }
 }
 

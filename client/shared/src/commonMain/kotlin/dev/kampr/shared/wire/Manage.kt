@@ -173,9 +173,9 @@ sealed interface ManageOp {
     // re-deriving "the same command" from a re-typed line is a second chance to disagree, and a
     // disagreement here means the command in the history *and* in Saved.
     //
-    // Nothing about it runs anything. A saved command is staged into the run sheet and fires
-    // through the same confirmation a typed one does — one press across the whole herd should not
-    // be cheaper than typing it.
+    // Nothing about it runs anything: this op only writes the line down. What runs a remembered
+    // command is the **Run** button on its own row, which fans it out on one press and says on the
+    // press how many machines that is — see `RunSheet`.
     data class FleetSave(
         val entry: String? = null,
         val args: List<String> = emptyList(),

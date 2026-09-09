@@ -312,10 +312,19 @@ fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
             .named("${node.name}, $reach, ${formatLatency(node.rttMs ?: measuredRtt)}")
             .padding(padding),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        LabelText(node.name, tokens.type.sectionLabel, tokens.color.text)
-        KText("$reach · ${formatLatency(node.rttMs ?: measuredRtt)}", tokens.type.meta, tokens.color.mute)
+        // `weight(fill = false)` rather than a plain child: this row is 260 dp wide inside the
+        // sidebar, and `GlyphAction`'s `Modifier.size` coerces to the constraint it is handed — so
+        // a long machine name does not clip, it takes the + down to 0 x 0 and nothing looks wrong.
+        LabelText(node.name, tokens.type.sectionLabel, tokens.color.text, Modifier.weight(1f, fill = false))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            KText("$reach · ${formatLatency(node.rttMs ?: measuredRtt)}", tokens.type.meta, tokens.color.mute)
+            QuickWorkspaceAction(node, LANDSCAPE_TOUCH)
+        }
     }
 }
 

@@ -95,6 +95,19 @@ class KamprStore {
 
     fun prefsFor(paneId: String): PanePrefs = _prefs.value[paneId] ?: PanePrefs()
 
+    // A manage op refused with nothing in front of it to catch the answer. The sheet reads its own
+    // ack and shows the reason in place; the + beside a machine opens nothing and closes nothing,
+    // so its refusal has nowhere else to land. Subjectless on purpose — it is about neither a pane
+    // nor a node the operator is looking at, and `saidOutLoud` speaks those out loud.
+    fun noteRefusal(ack: ServerMsg.Managed) {
+        if (ack.ok) return
+        _failure.value = ServerMsg.Failure(
+            code = ack.code ?: ack.op,
+            message = ack.message ?: "${ack.op} was refused.",
+            pane = null,
+        )
+    }
+
     fun dismissFailure() {
         _failure.value?.pane?.let { paneStates[it]?.clearRefusal() }
         _failure.value = null
