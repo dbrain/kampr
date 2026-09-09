@@ -65,11 +65,20 @@ internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): St
 //
 // Positive is into history — the same sense `TerminalViewState.scrollY` uses — so a finger pulled
 // *down* the screen asks for what is above it, and that is a scroll *up*.
-class PaneScroll(val keys: ScrollKeys, private val send: (String) -> Unit) {
+class PaneScroll(
+    val keys: ScrollKeys,
+    private val trace: ScrollTrace? = null,
+    private val send: (String) -> Unit,
+) {
     private var carried = 0f
 
+    private fun report(up: Boolean, col: Int, row: Int) {
+        trace?.sent(keys)
+        send(scrollReport(keys, up, col, row))
+    }
+
     fun notch(up: Boolean, col: Int, row: Int) {
-        repeat(keys.perNotch) { send(scrollReport(keys, up, col, row)) }
+        repeat(keys.perNotch) { report(up, col, row) }
     }
 
     fun refused(distance: Float, step: Float, col: Int, row: Int) {
@@ -77,11 +86,11 @@ class PaneScroll(val keys: ScrollKeys, private val send: (String) -> Unit) {
         carried += distance
         while (carried >= step) {
             carried -= step
-            send(scrollReport(keys, up = true, col = col, row = row))
+            report(up = true, col = col, row = row)
         }
         while (carried <= -step) {
             carried += step
-            send(scrollReport(keys, up = false, col = col, row = row))
+            report(up = false, col = col, row = row)
         }
     }
 
@@ -89,5 +98,6 @@ class PaneScroll(val keys: ScrollKeys, private val send: (String) -> Unit) {
     // arrives before the finger has travelled it.
     fun rest() {
         carried = 0f
+        trace?.flush(keys)
     }
 }

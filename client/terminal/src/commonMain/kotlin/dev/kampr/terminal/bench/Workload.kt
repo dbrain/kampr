@@ -119,11 +119,34 @@ class LineFactory(private val rng: Rng) {
         return runs
     }
 
+    fun transcript(cols: Int, seq: Int): List<Run> {
+        val body = fill((cols - 24).coerceAtLeast(8))
+        return listOf(
+            Run(BenchStyles.DIM, four(seq % 9999) + " │ "),
+            Run(BenchStyles.BOLD_GREEN, "⏺ "),
+            Run(BenchStyles.BOLD_BLUE, WORDS[rng.int(WORDS.size)] + "("),
+            Run(BenchStyles.YELLOW, PATHS[rng.int(PATHS.size)]),
+            Run(BenchStyles.DEFAULT, ") "),
+            Run(BenchStyles.TRUECOLOR_BASE + (seq % BenchStyles.TRUECOLOR_COUNT), body),
+        )
+    }
+
     private fun words(n: Int): String {
         builder.setLength(0)
         repeat(n) {
             if (builder.isNotEmpty()) builder.append(' ')
             builder.append(WORDS[rng.int(WORDS.size)])
+        }
+        return builder.toString()
+    }
+
+    private fun fill(width: Int): String {
+        builder.setLength(0)
+        while (true) {
+            val word = WORDS[rng.int(WORDS.size)]
+            if (builder.length + word.length + 1 > width) break
+            if (builder.isNotEmpty()) builder.append(' ')
+            builder.append(word)
         }
         return builder.toString()
     }
@@ -288,6 +311,12 @@ class Workload(private var profile: Profile, private var cols: Int, private var 
     fun history(paneId: String, depth: Int): ServerMsg.Scrollback {
         val diffs = ArrayList<RowDiff>(depth)
         for (row in 0 until depth) diffs.add(RowDiff(row, factory.line(cols, row % 6, row)))
+        return ServerMsg.Scrollback(paneId, 0, diffs, depth, complete = true, capped = false)
+    }
+
+    fun transcript(paneId: String, depth: Int): ServerMsg.Scrollback {
+        val diffs = ArrayList<RowDiff>(depth)
+        for (row in 0 until depth) diffs.add(RowDiff(row, factory.transcript(cols, row)))
         return ServerMsg.Scrollback(paneId, 0, diffs, depth, complete = true, capped = false)
     }
 }

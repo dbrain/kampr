@@ -39,6 +39,7 @@ import dev.kampr.terminal.render.ResolvedStyles
 import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.TextCache
 import dev.kampr.terminal.view.BASE_CELL_SP
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.time.TimeSource
 
@@ -55,6 +56,7 @@ class Scenario(
     val forced: RenderMode? = null,
     val zoom: ZoomMode = ZoomMode.None,
     val history: Int = 0,
+    val walk: Int = 0,
 )
 
 object BenchPlan {
@@ -62,6 +64,9 @@ object BenchPlan {
     private const val R = 30
     private const val WC = 200
     private const val WR = 50
+    private const val SC = 289
+    private const val SR = 69
+    private const val RING = 3000
 
     val scenarios: List<Scenario> = listOf(
         Scenario("74x30 idle", C, R, Profile.Idle),
@@ -82,10 +87,28 @@ object BenchPlan {
         Scenario("200x50 worst auto", WC, WR, Profile.Worst),
         Scenario("200x50 mixed zoom-redraw", WC, WR, Profile.Mixed, zoom = ZoomMode.Redraw),
         Scenario("200x50 mixed zoom-layer", WC, WR, Profile.Mixed, zoom = ZoomMode.Layer),
+        Scenario("289x69 scrollback walk 1/frame", SC, SR, Profile.Idle, history = RING, walk = 1),
+        Scenario("289x69 scrollback walk 3/frame", SC, SR, Profile.Idle, history = RING, walk = 3),
+        Scenario("289x69 scrollback walk 10/frame", SC, SR, Profile.Idle, history = RING, walk = 10),
+        Scenario("289x69 scrollback walk 25/frame", SC, SR, Profile.Idle, history = RING, walk = 25),
+        Scenario(
+            "289x69 scrollback walk 25/frame run-cache",
+            SC, SR, Profile.Idle, RenderMode.CachedRuns, history = RING, walk = 25,
+        ),
+        Scenario(
+            "289x69 scrollback walk 25/frame glyph-cache",
+            SC, SR, Profile.Idle, RenderMode.PerGlyph, history = RING, walk = 25,
+        ),
     )
 }
 
-class BenchResult(val scenario: Scenario, val report: Report, val hitPct: Float, val mode: RenderMode)
+class BenchResult(
+    val scenario: Scenario,
+    val report: Report,
+    val hitPct: Float,
+    val mode: RenderMode,
+    val historyRows: Int,
+)
 
 private fun two(x: Float): String {
     val v = (x * 100).toInt()
@@ -106,7 +129,8 @@ fun BenchResult.toLine(): String = "KAMPR_BENCH $platformLabel | ${scenario.name
     " dropped=${report.dropped}" +
     " drop_pct=${two(report.dropPct)}" +
     " cache_hit_pct=${two(hitPct * 100f)}" +
-    " mode=$mode"
+    " mode=$mode" +
+    " history_rows=$historyRows"
 
 class BenchRunner(
     private val scenarios: List<Scenario>,
@@ -123,12 +147,14 @@ class BenchRunner(
     val results = ArrayList<BenchResult>()
     val current: Scenario get() = scenarios[index.coerceAtMost(scenarios.size - 1)]
     val total: Int get() = scenarios.size
-    val phase: String get() = if (finished) "done" else if (frame < warmup) "warmup" else "measure"
+    val measuring: Boolean get() = !finished && frame >= warmup
+    val phase: String get() = if (finished) "done" else if (measuring) "measure" else "warmup"
 
     fun tick(
         stats: FrameStats,
         hitRate: Float,
         mode: RenderMode,
+        historyRows: Int,
         onNext: (Scenario) -> Unit,
     ) {
         if (finished) return
@@ -138,7 +164,7 @@ class BenchRunner(
             return
         }
         if (frame < warmup + measured) return
-        results.add(BenchResult(current, stats.report(BUDGET_MS), hitRate, mode))
+        results.add(BenchResult(current, stats.report(BUDGET_MS), hitRate, mode, historyRows))
         emitBench(results.last().toLine())
         index++
         frame = 0
@@ -155,6 +181,42 @@ class BenchRunner(
 private class Timing {
     var intervalMs = 0f
     var modelMs = 0f
+}
+
+// Probe #525: every other scenario pins the origin to the bottom of the surface, so the clip lands
+// at the end of the ring and the history branch of SurfaceRows.into, along with the run cache's
+// behaviour under a moving viewport, goes unmeasured. This walks the origin back a fixed number of
+// rows a frame and wraps inside the ring, so every measured frame paints a viewport of history and
+// nothing else — one that has drifted back onto the live grid is measuring what already was.
+private class Walk {
+    private var speed = 0
+    private var offset = 0
+    private var worst = -1
+
+    var painted = 0
+        private set
+
+    val history: Int get() = worst.coerceAtLeast(0)
+
+    fun start(rowsPerFrame: Int) {
+        speed = rowsPerFrame
+        offset = 0
+        worst = -1
+        painted = 0
+    }
+
+    fun advance() {
+        offset += speed
+    }
+
+    fun back(total: Int, history: Int, viewRows: Int, measuring: Boolean): Int {
+        val travel = history - viewRows
+        val back = if (speed == 0 || travel <= 0) 0 else total - history + offset % travel
+        val first = (total - viewRows - back).coerceAtLeast(0)
+        painted = (history - first).coerceIn(0, viewRows)
+        if (measuring && (worst < 0 || painted < worst)) worst = painted
+        return back
+    }
 }
 
 // The bench drives the shipping GridRenderer, TextCache and ModeSelector through the shipping
@@ -178,6 +240,7 @@ private fun BenchBody() {
     val workload = remember { Workload(Profile.Mixed, 74, 30) }
     val stats = remember { FrameStats() }
     val timing = remember { Timing() }
+    val walk = remember { Walk() }
     val runner = remember { BenchRunner(BenchPlan.scenarios) }
 
     var tick by remember { mutableIntStateOf(0) }
@@ -196,7 +259,7 @@ private fun BenchBody() {
 
     LaunchedEffect(tokens) {
         apply(pane, BenchStyles.table())
-        start(scenario, pane, workload, modes)
+        start(scenario, pane, workload, modes, walk)
         var lastNanos = 0L
         var elapsed = 0.0
         var lastHud = 0.0
@@ -211,6 +274,7 @@ private fun BenchBody() {
                 val mark = TimeSource.Monotonic.markNow()
                 for (msg in workload.step(BENCH_PANE, dt, elapsed)) apply(pane, msg)
                 timing.modelMs = (mark.elapsedNow().inWholeMicroseconds / 1000.0).toFloat()
+                walk.advance()
 
                 if (scenario.zoom != ZoomMode.None) {
                     val phase = elapsed / 2500.0
@@ -228,10 +292,10 @@ private fun BenchBody() {
                     lastHud = elapsed
                     hud = stats.report(BUDGET_MS)
                 }
-                runner.tick(stats, modes.hitRate, modes.mode) { next ->
+                runner.tick(stats, modes.hitRate, modes.mode, walk.history) { next ->
                     scenario = next
                     zoom = 1f
-                    start(next, pane, workload, modes)
+                    start(next, pane, workload, modes, walk)
                     renderer.reset()
                 }
                 if (runner.finished && !done) done = true
@@ -255,6 +319,8 @@ private fun BenchBody() {
                     tick
                     val mark = TimeSource.Monotonic.markNow()
                     styles.sync(pane.styles)
+                    val viewRows = ceil(size.height / metrics.height).toInt()
+                    val back = walk.back(rows.total, rows.historyRows, viewRows, runner.measuring)
                     renderer.draw(
                         scope = this,
                         rows = rows,
@@ -262,7 +328,7 @@ private fun BenchBody() {
                         cellWidth = metrics.width,
                         cellHeight = metrics.height,
                         originX = 0f,
-                        originY = size.height - rows.total * metrics.height,
+                        originY = size.height - (rows.total - back) * metrics.height,
                         cursorCol = pane.cursor.col,
                         cursorRow = pane.cursor.row,
                         cursorOn = pane.cursor.visible,
@@ -277,7 +343,10 @@ private fun BenchBody() {
                     )
                 },
         )
-        Hud(hud, scenario, runner, done, modes.mode, Modifier.align(Alignment.TopStart).padding(6.dp))
+        Hud(
+            hud, scenario, runner, done, modes.mode, walk.painted,
+            Modifier.align(Alignment.TopStart).padding(6.dp),
+        )
     }
 }
 
@@ -293,13 +362,29 @@ private fun apply(pane: PaneState, msg: ServerMsg) {
     }
 }
 
-private fun start(scenario: Scenario, pane: PaneState, workload: Workload, modes: ModeSelector) {
+private fun start(
+    scenario: Scenario,
+    pane: PaneState,
+    workload: Workload,
+    modes: ModeSelector,
+    walk: Walk,
+) {
     workload.reconfigure(scenario.profile, scenario.cols, scenario.rows)
     modes.forced = scenario.forced
     modes.reset()
+    walk.start(scenario.walk)
     pane.scrollback.clear()
     pane.applyReset(workload.reset(BENCH_PANE, true))
-    if (scenario.history > 0) pane.applyScrollback(workload.history(BENCH_PANE, scenario.history))
+    if (scenario.history == 0) return
+    // A ring of repeated rows holds the run cache near 100% and measures nothing, so the one that
+    // gets walked is built from rows that are mostly unique and wear several pens each.
+    pane.applyScrollback(
+        if (scenario.walk > 0) {
+            workload.transcript(BENCH_PANE, scenario.history)
+        } else {
+            workload.history(BENCH_PANE, scenario.history)
+        },
+    )
 }
 
 @Composable
@@ -309,6 +394,7 @@ private fun Hud(
     runner: BenchRunner,
     done: Boolean,
     mode: RenderMode,
+    historyRows: Int,
     modifier: Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -319,7 +405,10 @@ private fun Hud(
     )
     Column(modifier.background(tokens.color.bar)) {
         BasicText("kampr terminal bench · $platformLabel", style = style)
-        BasicText("[${runner.index + 1}/${runner.total} ${runner.phase}] ${scenario.name} · $mode", style = style)
+        BasicText(
+            "[${runner.index + 1}/${runner.total} ${runner.phase}] ${scenario.name} · $mode · hist=$historyRows",
+            style = style,
+        )
         report?.let {
             BasicText(
                 "frame p50=${two(it.intervalP50)} p95=${two(it.intervalP95)} p99=${two(it.intervalP99)}",
@@ -334,7 +423,8 @@ private fun Hud(
         if (done) for (result in runner.results) {
             BasicText(
                 "${result.scenario.name}: draw50=${two(result.report.drawP50)} " +
-                    "drop=${result.report.dropped} hit=${two(result.hitPct * 100f)}",
+                    "drop=${result.report.dropped} hit=${two(result.hitPct * 100f)} " +
+                    "hist=${result.historyRows}",
                 style = style,
             )
         }

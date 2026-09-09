@@ -94,6 +94,7 @@ import dev.kampr.terminal.review.ReviewSurface
 import dev.kampr.terminal.review.historyEdgeLabel
 import dev.kampr.terminal.review.historyEdgeSpoken
 import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.scrollTracing
 import dev.kampr.terminal.input.clickReports
 import dev.kampr.terminal.input.paneTakesClicks
 import dev.kampr.terminal.input.paneScrollKeys
@@ -283,6 +284,14 @@ fun TerminalView(
             val line = logical.lineAt(rows.historyRows + pane.cursor.row, pane.cursor.col).first.trim()
             spokenLine = if (line.isEmpty()) "blank line" else line
         }
+    }
+
+    // The frame that answers a scroll report. Gated so a pane nobody is tracing collects nothing:
+    // `scrollTracing` is set at the entry point before anything composes, which is why reading a
+    // plain `var` here is safe where reading one for the pane's *shape* was not.
+    LaunchedEffect(pane, session) {
+        if (!scrollTracing) return@LaunchedEffect
+        snapshotFlow { pane.revision }.collect { session.scrollTrace.arrived() }
     }
 
     // Resolving the anchor against the surface as it is now is how a reader learns that the row
@@ -743,7 +752,9 @@ fun TerminalView(
         val scrollToPane = when {
             io.readOnly || rows.historyRows > 0 -> null
             else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
-                PaneScroll(keys) { report -> io.send(ClientMsg.InputText(pane.id, report)) }
+                PaneScroll(keys, session.scrollTrace) { report ->
+                    io.send(ClientMsg.InputText(pane.id, report))
+                }
             }
         }
 

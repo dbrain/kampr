@@ -9,6 +9,7 @@ import dev.kampr.terminal.file.FilePeek
 import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.input.Latches
+import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.review.ReviewState
 import dev.kampr.terminal.view.GridProbe
 import dev.kampr.terminal.view.TerminalViewState
@@ -33,6 +34,10 @@ class PaneSession(val paneId: String) {
     var handover by mutableStateOf<Handover>(Handover.Idle)
     val latches = Latches()
     val confirm = ConfirmState()
+
+    // What a gesture asked a program for when Kampr has no ring to move — off unless the entry
+    // point turned it on, and one boolean per report when it is.
+    val scrollTrace = ScrollTrace()
 
     var keyboardOpen by mutableStateOf(false)
         private set

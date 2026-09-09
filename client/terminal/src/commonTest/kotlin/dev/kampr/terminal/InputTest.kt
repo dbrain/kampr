@@ -12,6 +12,7 @@ import dev.kampr.terminal.input.KeyLayouts
 import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.input.ScrollKeys
 import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.chordSendsControl
@@ -397,6 +398,37 @@ class PaneScrollTest {
         scroll.refused(-260f, step = 100f, col = 0, row = 0)
         assertEquals(3, sent.size, "the drag turned round and the other direction was not sent")
         assertTrue(sent.drop(1).all { it == "\u001bOB" }, "back up the screen is a scroll down")
+    }
+
+    // The instrument, not the behaviour. A gesture that reaches a program is the one thing this
+    // client cannot see the cost of from outside — `dumpsys gfxinfo` counts frames the app drew,
+    // which on a live pane swung between 0% and 12.5% jank on identical idle windows — so the
+    // count has to be taken where the reports are actually sent, and it has to be right.
+    @Test
+    fun theTraceCountsEveryReportAGesturePutOnTheWire() {
+        val lines = mutableListOf<String>()
+        val trace = ScrollTrace(on = true) { lines += it }
+        val scroll = PaneScroll(ScrollKeys.Wheel, trace) { }
+        repeat(5) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        scroll.notch(up = true, col = 0, row = 0)
+        trace.arrived()
+        scroll.rest()
+        assertEquals(1, lines.size, "one gesture is one line")
+        assertTrue(
+            lines[0].contains("reports=6"),
+            "five rows of drag and one notch is six reports on the wire, not ${lines[0]}",
+        )
+        assertTrue(lines[0].contains("frames=1"), "the frame that answered them was not counted")
+    }
+
+    // A pane nobody asked to trace pays nothing and says nothing.
+    @Test
+    fun anUntracedPaneEmitsNothingAtAll() {
+        val lines = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Wheel, ScrollTrace(on = false) { lines += it }) { }
+        repeat(5) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        scroll.rest()
+        assertEquals(emptyList(), lines)
     }
 
     // Leftovers belong to the gesture that made them. Carried across, the first row of a fresh
