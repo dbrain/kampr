@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.net.AttachmentBytes
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.kampr.shared.ui.LocalPaneIo

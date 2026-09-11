@@ -42,6 +42,7 @@ private fun sink(): Pair<Recorder, InputSink> {
 
 private fun allCaps() = (KeyLayouts.portrait + KeyLayouts.portraitFn + KeyLayouts.landscape +
     KeyLayouts.landscapeFn).flatten().filterNotNull()
+    .filter { it.kind != CapKind.Blank }
     .flatMap { listOfNotNull(it, it.alternate) }
 
 class InputTest {
@@ -65,11 +66,11 @@ class InputTest {
     }
 
     @Test
-    fun aClosedKeyboardStaysClosedWhenACharacterIsSent() {
+    fun aClosedKeyboardStaysClosedWhenACapSendsItsKey() {
         val (_, keys) = sink()
         val session = PaneSession("n/w1:p1")
-        val slash = allCaps().first { it.label == "/" }
-        capPress(slash, session, keys)
+        val tab = allCaps().first { it.label == "tab" }
+        capPress(tab, session, keys)
         assertFalse(session.keyboardOpen, "a cap that sends its own key must not raise a keyboard")
     }
 
@@ -98,20 +99,25 @@ class InputTest {
         val ctrl = allCaps().first { it.label == "ctrl" }
         val alt = allCaps().first { it.label == "alt" }
         val fn = allCaps().first { it.label == "fn" }
+        val shift = allCaps().first { it.latch == Latch.Shift }
 
-        // Holding ctrl rides shift; holding fn locks the layer. Neither is waiting for a letter.
-        for (cap in listOf(ctrl, fn)) {
-            val session = PaneSession("n/w1:p1")
-            capHold(cap, session, keys)
-            assertFalse(session.keyboardOpen, "holding ${cap.label} takes no letter")
+        for (cap in listOf(shift, fn)) {
+            val pressed = PaneSession("n/w1:p1")
+            capPress(cap, pressed, keys)
+            assertFalse(pressed.keyboardOpen, "${cap.label} takes no letter")
+            val held = PaneSession("n/w1:p1")
+            capHold(cap, held, keys)
+            assertFalse(held.keyboardOpen, "holding ${cap.label} takes no letter")
         }
 
-        // Alt has no rider now that fn has a cap of its own, so holding it locks alt — and a
-        // locked alt is the same unfinishable chord an armed one is, waiting on a letter this row
-        // does not carry.
-        val locked = PaneSession("n/w1:p1")
-        capHold(alt, locked, keys)
-        assertTrue(locked.keyboardOpen, "a locked alt is a chord with nothing on this row to finish it")
+        // Neither prefix has a rider now that shift and fn have caps of their own, so holding one
+        // locks it — and a locked prefix is the same unfinishable chord an armed one is, waiting on
+        // a letter this row does not carry.
+        for (cap in listOf(ctrl, alt)) {
+            val locked = PaneSession("n/w1:p1")
+            capHold(cap, locked, keys)
+            assertTrue(locked.keyboardOpen, "a locked ${cap.label} is a chord with nothing on this row to finish it")
+        }
 
         for ((cap, latch) in listOf(ctrl to Latch.Ctrl, alt to Latch.Alt)) {
             val session = PaneSession("n/w1:p1")
@@ -315,6 +321,31 @@ class InputTest {
             "landscape" to (KeyLayouts.landscape to KeyLayouts.landscapeFn),
         )) {
             assertEquals(fnSlot(pair.first), fnSlot(pair.second), "$name moves its fn key")
+        }
+    }
+
+    // The operator: *"when I use / or | on the virtual keyboard it doesn't end up in the keyboard
+    // history like the real one"*. A cap writes straight to the pane, past the buffer the soft
+    // keyboard reads its suggestions and corrections from, so the field lets go of the line it was
+    // mirroring — and a symbol the keyboard already has cost the operator the word in front of it.
+    // A cap earns its slot by being a key the soft keyboard does not have.
+    @Test
+    fun noCapTypesACharacterTheSoftKeyboardAlreadyHas() {
+        for (cap in allCaps().filter { it.kind == CapKind.Text }) {
+            val printable = cap.send.length == 1 && cap.send[0].code >= 0x20 && cap.send[0] != '\u007f'
+            assertFalse(printable, "${cap.label} types a character the soft keyboard already has")
+        }
+    }
+
+    // The slot `/` had is where shift went. It rides the arrows, tab and home/end already on this
+    // row, and it was reachable only as a long press on ctrl that nothing on the row named.
+    @Test
+    fun shiftHasACapOfItsOwnOnTheLayoutsThatCarryTheArrows() {
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portrait, "landscape" to KeyLayouts.landscape)) {
+            assertTrue(
+                rows.flatten().filterNotNull().any { it.kind == CapKind.Latch && it.latch == Latch.Shift },
+                "$name reaches shift only by a gesture nothing names",
+            )
         }
     }
 

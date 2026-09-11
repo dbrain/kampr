@@ -3,6 +3,7 @@ package dev.kampr.conversation
 import dev.kampr.conversation.md.MdBlock
 import dev.kampr.conversation.md.parseMarkdown
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
@@ -134,18 +135,19 @@ class LiveTurnTest {
 
     // Withdrawal is the same id with no blocks. Nothing else on the wire says "forget that turn",
     // and a client that renders it anyway leaves a blank card where the preview was.
+    //
+    // It is taken out of the list rather than left there empty, which is what keeps the *next*
+    // preview at the end of the transcript instead of in the slot this one held — see
+    // `LivePreviewPlacementTest`.
     @Test
     fun aWithdrawnLiveTurnIsNotRendered() {
         val store = storeWith(RICH_CONVO, LIVE_TURN, LIVE_WITHDRAWN)
         val turns = store.pane("01JNODE.../w3:p2").turns
-        val live = turns.single { it.id == LIVE_TURN_ID }
-        assertTrue(live.blocks.isEmpty())
-        assertFalse(live.isVisible())
+        assertTrue(turns.none { it.id == LIVE_TURN_ID }, "the withdrawn preview is still in the transcript")
         assertEquals(
             turns.count { it.blocks.isNotEmpty() },
             turns.filter { it.isVisible() }.size,
             "the visible list is exactly the turns that still carry something",
         )
-        assertFalse(turns.filter { it.isVisible() }.any { it.id == LIVE_TURN_ID })
     }
 }

@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
-use crate::composer::{Caret, Composed, ComposerReader};
+use crate::composer::{Caret, Composed, ComposerReader, ListeningReader};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -208,6 +208,10 @@ impl JournalAdapter for ClaudeAdapter {
 
     fn composer(&self) -> Option<ComposerReader> {
         Some(composer)
+    }
+
+    fn listening(&self) -> Option<ListeningReader> {
+        Some(listening)
     }
 
     fn facets(&self, transcript: &Path, marker: Option<&SessionMarker>) -> Facets {
@@ -536,4 +540,8 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
 
 pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
     crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
+}
+
+pub fn listening(screen: &[&str], caret: Caret) -> bool {
+    crate::composer::listening(screen, caret, &LAYOUT)
 }

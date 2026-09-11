@@ -13,6 +13,7 @@ import dev.kampr.conversation.md.Markdown
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.wire.Attachment
@@ -27,11 +28,6 @@ sealed interface TurnHead {
     data class Stamp(val text: String?) : TurnHead
     data object None : TurnHead
 }
-
-/// The node's reserved id for the message a harness is still writing. It is scraped off the pane's
-// screen, so it is an approximation of a turn that does not exist yet: it is revised as the text
-// grows, and withdrawn — same id, no blocks — the moment the harness writes the real record.
-const val LIVE_TURN_ID = "live"
 
 /** A withdrawn live turn carries no blocks and is not a turn any more. */
 fun Turn.isVisible(): Boolean = blocks.isNotEmpty()

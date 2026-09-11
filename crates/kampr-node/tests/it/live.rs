@@ -9775,3 +9775,110 @@ async fn a_read_says_where_it_starts_and_the_rows_it_left_out_come_back_one_per_
         );
     }
 }
+
+/// The report: *"when I enter initial text in the conversation pane (new Claude instance) and
+/// press send sometimes it just adds a line break and doesn't actually submit"*.
+///
+/// Measured on Claude 2.1.268: a reply written before its composer is drawn does not submit, and
+/// one written after does, every time (#535). The stand-in is a `claude` that takes the terminal
+/// raw at once, the way Claude does inside 100 ms, and reads nothing until it is told to; then it
+/// notes whether any input was already waiting for it, draws a composer with the caret in it, and
+/// records what it is given.
+///
+/// The mutation that must fail: write the input the moment it arrives, and it is waiting for the
+/// harness before the harness has drawn anywhere to put it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_to_a_harness_still_starting_waits_for_its_composer_and_then_submits() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("booting", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let idle = dir.path().join("idle");
+    let go = dir.path().join("go");
+    let keys = dir.path().join("keys");
+    let script = dir.path().join("boot.sh");
+    let binary = dir.path().join("claude");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&idle)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(&script, BOOTING_HARNESS).unwrap();
+    std::fs::copy(kampr_testkit::on_path("bash").expect("bash on PATH"), &binary).unwrap();
+
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let launch = [&binary, &script, &idle, &go, &keys]
+        .map(|p| p.display().to_string())
+        .join(" ");
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": format!("{launch}\n") }),
+        )
+        .await;
+
+    let mut seen = (None, None);
+    for _ in 0..100 {
+        if let Some(entry) = h.node.herd().pane(&pane) {
+            seen = (entry.agent.clone(), entry.cmd.clone());
+        }
+        if seen.0.as_deref() == Some("claude") && seen.1.as_deref() == Some("claude") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        (seen.0.as_deref(), seen.1.as_deref()),
+        (Some("claude"), Some("claude")),
+        "the stand-in was never on the herd as a running claude (agent, cmd)"
+    );
+
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "run the tests" }),
+    )
+    .await;
+    send(&mut socket, json!({ "t": "input", "pane": pane, "text": "\r" })).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    std::fs::write(&go, "").unwrap();
+
+    let mut given = Vec::new();
+    for _ in 0..100 {
+        given = std::fs::read(&keys).unwrap_or_default();
+        if given.ends_with(b"\r") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&given),
+        "run the tests\r",
+        "the reply was waiting for the harness before it had drawn its composer"
+    );
+}
+
+/// Takes the terminal raw and reads nothing until `$2` exists, waiting on the fifo `$1` with a
+/// builtin so that nothing but the stand-in is ever the pane's foreground job. Then it writes
+/// `early:` to `$3` if input was already waiting, draws Claude's composer with the caret in it,
+/// and appends everything it is given.
+const BOOTING_HARNESS: &str = r#"stty raw -echo
+exec 3<>"$1"
+until [ -e "$2" ]; do read -t 0.1 -u 3; done
+if read -t 0; then printf 'early:' > "$3"; fi
+printf '\033[2J\033[H\342\224\200\342\224\200\342\224\200\r\n\342\235\257\302\240\r\n\342\224\200\342\224\200\342\224\200\033[2;3H'
+exec cat >> "$3"
+"#;

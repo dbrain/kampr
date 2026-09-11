@@ -30,7 +30,7 @@ pub use agy::AgyAdapter;
 pub use attach::{Att, Fetched, FileRef, Locator, Origin, Source};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
-pub use composer::{Caret, Composed, ComposerFeed, ComposerReader};
+pub use composer::{Caret, Composed, ComposerFeed, ComposerReader, ListeningReader};
 pub use error::JournalError;
 pub use facet::{
     Compaction, FacetFeed, FacetFold, Facets, Mode, Queued, QueuedReader, Timing, Title, TitleSource, Titles,

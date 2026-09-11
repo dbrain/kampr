@@ -202,3 +202,56 @@ fn said(text: &str) -> Composed {
         clear: Some("\u{3}"),
     }
 }
+
+/// Whether the harness is reading its keys yet, which is not the same question as what the box
+/// holds: an empty composer and one the operator has typed into are both a harness that will take
+/// a reply, and a `claude` that has painted its banner and not yet its box is one that will not.
+/// Measured on 2.1.268 (`research/probe/submit-while-booting.py`): a reply sent before the box was
+/// drawn was held or lost every time, and one sent the frame after it submitted every time.
+#[test]
+fn a_harness_is_listening_once_its_composer_is_drawn_with_the_caret_in_it() {
+    let listening = claude().listening().expect("claude's box is measured");
+    for name in ["claude-empty", "claude-typed"] {
+        let (body, caret) = capture(name);
+        let rows: Vec<&str> = body.lines().collect();
+        assert!(
+            listening(&rows, caret),
+            "{name}: a drawn composer read as a harness still booting"
+        );
+    }
+
+    let launching = ["$ claude", ""];
+    assert!(
+        !listening(&launching, Caret { col: 0, row: 1 }),
+        "a shell line is not a composer"
+    );
+
+    let banner = [
+        " \u{2590}\u{259b}\u{2588}\u{2588}\u{2588}\u{259c}\u{258c}   Claude Code v2.1.268",
+        "\u{259d}\u{259c}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{259b}\u{2598}  Haiku 4.5",
+        "",
+    ];
+    assert!(
+        !listening(&banner, Caret { col: 0, row: 2 }),
+        "a banner with no box under it is still booting"
+    );
+
+    let (body, caret) = capture("claude-empty");
+    let rows: Vec<&str> = body.lines().collect();
+    let elsewhere = Caret {
+        col: 0,
+        row: caret.row.saturating_sub(5),
+    };
+    assert!(
+        !listening(&rows, elsewhere),
+        "a box the caret is not in is not the one taking keys"
+    );
+}
+
+/// A harness nobody has measured booting is not guessed at: no reader, so nothing is held for it.
+#[test]
+fn only_a_harness_measured_booting_says_whether_it_is_listening() {
+    assert!(codex().listening().is_none());
+    assert!(agy().listening().is_none());
+    assert!(omp().listening().is_none());
+}

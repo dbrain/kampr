@@ -11,6 +11,8 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -112,10 +114,12 @@ internal fun ComposeUiTest.phoneTerminal(
     width: Dp = 411.dp,
     height: Dp = 914.dp,
     io: PaneIo = HushIo,
+    keyboard: SoftwareKeyboardController? = null,
 ): MutableState<SafeArea> {
     val bars = mutableStateOf(Phone.BARS)
     setContent {
         CompositionLocalProvider(
+            LocalSoftwareKeyboardController provides (keyboard ?: LocalSoftwareKeyboardController.current),
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides io,
             LocalSafeArea provides bars.value,

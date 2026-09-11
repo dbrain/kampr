@@ -240,6 +240,10 @@ class SubConversation(val handle: String) {
 // older turns, and the tail of a watched pane is newer.
 enum class Unanchored { Above, Below }
 
+// The node's reserved id for the message a harness is still painting: revised under this id as the
+// text grows, and withdrawn under it — same id, no blocks — when the record lands.
+const val LIVE_TURN_ID = "live"
+
 fun mergeTurns(into: MutableList<Turn>, page: List<Turn>, unanchored: Unanchored = Unanchored.Above) {
     var after = -1
     val waiting = mutableListOf<Turn>()
@@ -472,7 +476,17 @@ class PaneState(val id: String, val styles: StyleTable) {
         // revision routinely names turns older than the window this client is holding. Filed at
         // the end, those became the newest thing on a view that pins to its own end, and the
         // reader was left looking at a message from an hour before (#411).
-        mergeTurns(turns, msg.turns, Unanchored.Below)
+        // **The preview is always the newest thing this pane has to say**, and it is the one turn
+        // whose id outlives what it was carrying: the harness's message is revised under it as the
+        // text grows and withdrawn under it when the record lands. Merged by id like any other
+        // turn, that withdrawal *replaces* the preview where it stands rather than taking it out,
+        // so every turn filed afterwards goes below it — and the next message's preview reappears
+        // in the slot the last one left, in the middle of the conversation, growing above messages
+        // older than it. Taken out and appended, it is where the reader is already looking.
+        val (live, recorded) = msg.turns.partition { it.id == LIVE_TURN_ID }
+        if (live.isNotEmpty()) turns.removeAll { it.id == LIVE_TURN_ID }
+        mergeTurns(turns, recorded, Unanchored.Below)
+        turns += live.filter { it.blocks.isNotEmpty() }
         // A pane that has moved to a session which has written nothing is withdrawn turn by turn,
         // and what that leaves is a transcript with nothing drawable in it — but the cursor and
         // the `more` flag it was paged under outlive the turns, and they name a transcript this

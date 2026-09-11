@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::attach::{Fetched, Origin};
-use crate::composer::ComposerReader;
+use crate::composer::{ComposerReader, ListeningReader};
 use crate::error::JournalError;
 use crate::facet::{FacetFeed, FacetFold, Facets};
 use crate::live::ScreenReader;
@@ -136,6 +136,13 @@ pub trait JournalAdapter: Send + Sync {
         None
     }
 
+    /// Says whether the harness has drawn its composer and is reading keys, for the harnesses
+    /// somebody has measured booting. `None` — the default — is a harness a reply is never held
+    /// for, whatever state it is in.
+    fn listening(&self) -> Option<ListeningReader> {
+        None
+    }
+
     /// Reads the prompts waiting behind the turn that is running, for the harnesses that draw
     /// them on the screen and record nothing about them.
     ///
@@ -233,6 +240,11 @@ impl Registry {
     /// has been measured. A harness nobody has probed publishes no desk line at all.
     pub fn composer(&self, pane_agent: Option<&str>) -> Option<ComposerReader> {
         pane_agent.and_then(|agent| self.adapters.get(agent))?.composer()
+    }
+
+    /// Whether a pane running `pane_agent` is reading keys yet, for the harnesses measured booting.
+    pub fn listening(&self, pane_agent: Option<&str>) -> Option<ListeningReader> {
+        self.adapters.get(pane_agent?)?.listening()
     }
 
     /// How to read the queue of a pane running `pane_agent`, for the harnesses that keep it on the

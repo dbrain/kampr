@@ -2313,3 +2313,169 @@ async fn a_hub_link_the_network_dropped_without_closing_is_noticed_and_dialled_a
     peer.stop();
     hub.stop();
 }
+
+/// The operator, on a pane on another machine: *"i started claude on my phone on a new pane, opened
+/// on wasm desktop - tried scrolling but it's scrolling back in bash history instead of claude
+/// history"*.
+///
+/// A harness on the alternate screen takes herdr's ring with it, so the node drops the shell era
+/// that ran before it (#244, and the era it stamps is what says so). A client watching at that
+/// moment is told; a client that arrives **after** it is told nothing at all, because the hub
+/// pushes a relayed pane's history only when it has rows to push — and a superseded ring has none.
+/// What that leaves on a second screen is whatever it already held: the shell era, under a live
+/// conversation, with `TerminalView` keeping the wheel for it because `historyRows` is not zero.
+///
+/// The mutation that must fail: push the initial document only when the hub holds rows, and the
+/// joiner hears nothing about the era it is looking at.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_joining_a_relayed_pane_is_told_which_era_it_is_looking_at() {
+    sessions!(hub_session, peer_session);
+    let hub_home = Home::new();
+    let peer_home = Home::new();
+    let hub = Running::start(&hub_home, &hub_session, "front").await;
+
+    let now = kampr_auth::now();
+    let code = hub
+        .node
+        .auth
+        .store()
+        .mesh()
+        .invite(now, now + 600)
+        .await
+        .expect("a join code");
+    let peer_node_id = peer_home.settle("laptop");
+    join(&peer_home, "laptop", &peer_node_id, &hub.origin, &code).await;
+    let peer = Running::start(&peer_home, &peer_session, "laptop").await;
+
+    let owned_by_peer = |id: &str| id == peer_node_id || id.starts_with(&format!("{peer_node_id}."));
+    herd_becomes(&hub.node, 45, |herd| {
+        herd.panes.iter().any(|p| owned_by_peer(&p.node_id))
+    })
+    .await;
+    let pane = hub
+        .node
+        .herd()
+        .panes
+        .iter()
+        .find(|p| owned_by_peer(&p.node_id))
+        .expect("a pane on the peer")
+        .id
+        .clone();
+    let local = pane.split_once('/').expect("a global id").1.to_string();
+
+    // The first screen: a client watching while the pane is still a shell, which is what puts the
+    // shell era into the hub's relayed history and onto that client.
+    let mut first = hub.connect().await;
+    until(&mut first, "hello", 10).await;
+    send(
+        &mut first,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut first, "grid.reset", 20).await;
+    send(
+        &mut first,
+        json!({ "t": "input", "pane": pane, "text": "echo SHELL-ERA-MARKER; seq 1 200\n" }),
+    )
+    .await;
+    let era_before = era_of(&mut first, &pane, 60, |d| d.marked)
+        .await
+        .expect("the shell era never landed");
+
+    // The harness, as #244 measured one: a copy of bash under the agent's name, so herdr labels
+    // the pane, and the alternate screen with no `3J`, so herdr keeps no ring behind it.
+    let dir = tempfile::tempdir().expect("a dir");
+    let binary = dir.path().join("claude");
+    std::fs::copy(kampr_testkit::on_path("bash").expect("bash on PATH"), &binary).expect("a copy");
+    peer_session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": format!("exec {}\n", binary.display()) }),
+        )
+        .await;
+    // **The label is herdr's own and it is on herdr's clock** (#360, #405): the node drops the era
+    // before a harness only for a pane herdr calls an agent, so the alternate screen has to wait
+    // for the name — sent before it, the pane is a shell taking a screen and the ring stands.
+    labelled(&peer_session, &local, 180).await;
+    send(
+        &mut first,
+        json!({ "t": "input", "pane": pane, "text": "printf '\\033[?1049h'; printf 'THE HARNESS SCREEN\\n'\n" }),
+    )
+    .await;
+    let superseded = era_of(&mut first, &pane, 90, |d| d.era != era_before)
+        .await
+        .expect("the peer never superseded the shell era");
+
+    // The second screen, arriving after all of that — the phone started it, the desktop opened it.
+    let mut second = hub.connect().await;
+    until(&mut second, "hello", 10).await;
+    send(
+        &mut second,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until(&mut second, "grid.reset", 20).await;
+    let told = era_of(&mut second, &pane, 20, |_| true).await;
+
+    peer.stop();
+    assert_eq!(
+        told,
+        Some(superseded),
+        "a client joining a pane whose ring was superseded was never told which era it is looking \
+         at, so anything it still holds stays on the surface and keeps the wheel",
+    );
+}
+
+/// Waits until herdr itself calls this pane a `claude`, which is what makes its screen a harness's
+/// rather than a shell's.
+async fn labelled(session: &Session, pane: &str, seconds: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut saw = Value::Null;
+    while tokio::time::Instant::now() < deadline {
+        saw = session.call("pane.get", json!({ "pane_id": pane })).await["pane"].clone();
+        if saw["agent"] == "claude" {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("herdr never labelled {pane} a claude; it last said {saw}");
+}
+
+/// The era of the first `scrollback` frame for `pane` that `want` accepts, or `None` if none
+/// arrives in time.
+async fn era_of(
+    socket: &mut Socket,
+    pane: &str,
+    seconds: u64,
+    want: impl Fn(&RelayedRing) -> bool,
+) -> Option<u64> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let Some(m) = recv(socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        if m["t"] != "scrollback" || m["pane"] != pane {
+            continue;
+        }
+        let rows = m["rows"].as_array().cloned().unwrap_or_default();
+        let ring = RelayedRing {
+            era: m["era"].as_u64().unwrap_or_default(),
+            marked: rows.iter().any(|r| {
+                r["runs"]
+                    .as_array()
+                    .map(|runs| runs.iter().filter_map(|x| x["x"].as_str()).collect::<String>())
+                    .unwrap_or_default()
+                    .contains("SHELL-ERA-MARKER")
+            }),
+        };
+        if want(&ring) {
+            return Some(ring.era);
+        }
+    }
+    None
+}
+
+struct RelayedRing {
+    era: u64,
+    marked: bool,
+}

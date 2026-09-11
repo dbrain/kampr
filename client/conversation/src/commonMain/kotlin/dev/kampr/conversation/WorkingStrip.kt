@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText

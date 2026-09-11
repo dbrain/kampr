@@ -1,5 +1,6 @@
 package dev.kampr.conversation
 
+import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn

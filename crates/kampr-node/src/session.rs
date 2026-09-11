@@ -45,6 +45,15 @@ const SCROLLBACK_FLOOR: Duration = Duration::from_millis(100);
 const PENDING_RETRY: Duration = Duration::from_millis(500);
 const PENDING_ATTEMPTS: u32 = 12;
 
+/// How long input waits for a harness to start reading its keys, and how often it looks.
+///
+/// Claude 2.1.268 drew its composer 0.8-4.5 s after it was started, and a reply sent the frame
+/// after the box appeared submitted every time (#535). The ceiling bounds what a harness that
+/// never draws one costs — a trust dialog, a layout nobody measured — because the socket's later
+/// messages wait behind this, and a client gives up on a socket that has told it nothing for 25 s.
+const BOOT_HOLD: Duration = Duration::from_secs(8);
+const BOOT_LOOK: Duration = Duration::from_millis(50);
+
 /// How often a live session re-reads its own device row. The broadcast covers a revocation made
 /// in this process; this covers one made by `kampr setup` in another, and a Tier 0 expiry that
 /// nothing announces at all.
@@ -1174,9 +1183,46 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
+        self.until_listening(&session.registry, &local, pane).await;
         if let Err(e) = session.registry.write(&local, input).await {
             self.wire
                 .error(offline_code(&session), &e.to_string(), Some(pane));
+        }
+    }
+
+    /// **A reply written to a harness that has not drawn its composer does not submit** (#535): on
+    /// Claude 2.1.268 every one sent before the box appeared sat unsubmitted in it or was lost
+    /// outright, and every one sent after it submitted. The conversation view offers a fresh agent
+    /// the moment herdr names it, up to four seconds before Claude draws its box, so a first reply
+    /// typed quickly was exactly this.
+    ///
+    /// Held inline rather than queued, because the socket is read in order behind this await — the
+    /// text and the carriage return that follows it as its own message cannot pass each other. And
+    /// held only where all three hold: a harness measured booting, no transcript yet, and that
+    /// harness still the pane's foreground job. A label outlives the harness it names, and a shell
+    /// left behind by a `claude` that quit before its first prompt would otherwise hold every
+    /// keystroke typed into it for the whole ceiling. A pane nobody is streaming has no screen to
+    /// read and is not held.
+    async fn until_listening(&self, registry: &PaneRegistry, local: &str, pane: &str) {
+        let Some(listening) = self.node.herd().pane(pane).and_then(|entry| {
+            let booting = !entry.has_conversation && entry.cmd.is_some() && entry.cmd == entry.agent;
+            booting
+                .then(|| self.node.journals().listening(entry.agent.as_deref()))
+                .flatten()
+        }) else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + BOOT_HOLD;
+        while let Some(screen) = registry.screen(local) {
+            let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+            if listening(&rows, screen.caret) {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                warn!(pane = %pane, "the harness never drew its composer; the input goes anyway");
+                return;
+            }
+            tokio::time::sleep(BOOT_LOOK).await;
         }
     }
 

@@ -84,8 +84,11 @@ fun PaneKeyRow(
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
             ) {
                 for (cap in row) {
-                    if (cap == null) Spacer(Modifier.width(if (compact) 14.dp else 10.dp))
-                    else Cap(cap, session, sink, compact, enabled)
+                    when {
+                        cap == null -> Spacer(Modifier.width(if (compact) 14.dp else 10.dp))
+                        cap.kind == CapKind.Blank -> Spacer(Modifier.weight(1f))
+                        else -> Cap(cap, session, sink, compact, enabled)
+                    }
                 }
             }
         }
@@ -232,6 +235,7 @@ internal fun capPress(cap: KeyCap, session: PaneSession, sink: InputSink) {
             session.settleLatch(which)
         }
         CapKind.Keyboard -> session.toggleKeyboard()
+        CapKind.Blank -> Unit
         CapKind.Text -> {
             sink.press(cap)
             session.reclaimKeyboard()
@@ -247,6 +251,7 @@ internal fun capHold(cap: KeyCap, session: PaneSession, sink: InputSink) {
             session.settleLatch(hold ?: cap.latch)
         }
         CapKind.Keyboard -> session.toggleKeyboard()
+        CapKind.Blank -> Unit
         CapKind.Text -> {
             sink.press(cap.alternate ?: cap)
             session.reclaimKeyboard()

@@ -1,6 +1,6 @@
 package dev.kampr.terminal.input
 
-enum class CapKind { Text, Latch, Keyboard }
+enum class CapKind { Text, Latch, Keyboard, Blank }
 
 data class KeyCap(
     val label: String,
@@ -38,18 +38,17 @@ private val insert = csi("ins", Esc.INSERT)
 private val delete = csi("del", Esc.DELETE)
 private val keyboard = KeyCap("kbd", CapKind.Keyboard)
 
-private val escape = text("esc", Esc.ESCAPE, alternate = text("~"))
+// A slot with nothing in it, so the navigation group stays in the same columns on every row.
+private val blank = KeyCap("", CapKind.Blank)
 
-// Shift latches on a long press of Ctrl: the row is eight columns wide, every one of them is
-// spoken for by the artboard, and shift is the modifier this row's own keys already carry — the
-// arrows and tab take it, and a letter needs the soft keyboard anyway.
-//
-// Fn used to ride on Alt the same way, and it is the one that could not. It does not modify the
-// next key, it *replaces the row*, and a layer whose only way in is an unlabelled long press is a
-// layer nobody finds — the operator asked for a way to see the function keys that were already
-// there. So it has a cap.
-private val ctrl = latch("ctrl", Latch.Ctrl, Latch.Shift)
+private val escape = text("esc", Esc.ESCAPE)
+
+// Every modifier has a cap. Shift and fn both used to ride a long press — shift on ctrl, fn on
+// alt — because every slot was spoken for, and a key whose only way in is an unlabelled long press
+// is a key nobody finds.
+private val ctrl = latch("ctrl", Latch.Ctrl)
 private val alt = latch("alt", Latch.Alt)
+private val shift = latch("shift", Latch.Shift)
 private val fnKey = latch("fn", Latch.Fn)
 private val tab = text("tab", Esc.TAB, alternate = csi("tab", Esc.BACKTAB))
 
@@ -70,12 +69,12 @@ private val navBottom = listOf(end, left, down, right)
 
 private fun fn(n: Int) = csi("F$n", Esc.function(n))
 
-// null is the fixed separator track between the modifier/symbol group and the navigation group.
+// null is the fixed separator track between the modifier group and the navigation group.
 typealias KeyRowSpec = List<KeyCap?>
 
 // A cap paints two or three characters because that is all a 44 dp square holds. None of them is
-// what the key is called, and a slash read aloud as "slash" is the difference between a key row a
-// screen reader can drive and a row of forty unnamed buttons.
+// what the key is called, and an arrow read aloud as "up arrow" is the difference between a key row
+// a screen reader can drive and a row of forty unnamed buttons.
 private val SPOKEN = mapOf(
     "esc" to "Escape",
     "ctrl" to "Control",
@@ -94,16 +93,6 @@ private val SPOKEN = mapOf(
     "\u2193" to "Down arrow",
     "\u2190" to "Left arrow",
     "\u2192" to "Right arrow",
-    "/" to "Slash",
-    "\\" to "Backslash",
-    "|" to "Pipe",
-    "~" to "Tilde",
-    "&" to "Ampersand",
-    "*" to "Asterisk",
-    "$" to "Dollar",
-    "\"" to "Double quote",
-    "'" to "Apostrophe",
-    "`" to "Backtick",
 )
 
 private val FUNCTION = Regex("^F(\\d{1,2})$")
@@ -116,9 +105,15 @@ object KeyLayouts {
     // underscore are both on the soft keyboard's first symbol page and the function keys are on
     // nothing at all. It sits in the **same slot on the layer it turns on**, beside `kbd`, so
     // pressing it twice is two presses in one place.
+    //
+    // **Nothing here types a character the soft keyboard already has.** A cap writes to the pane
+    // past the buffer the keyboard reads its suggestions and corrections from, so the field lets
+    // go of the line it was mirroring (`FieldTextInput`) — a `/` pressed here cost the operator the
+    // word in front of it, where the keyboard's own `/` kept it. `/` and `|` gave their slots to
+    // shift and to nothing, and landscape's row of eight symbols went with them.
     val portrait: List<KeyRowSpec> = listOf(
         listOf(escape, ctrl, alt, tab, null) + navTop,
-        listOf(text("/", "/", text("\\")), text("|", "|", text("&")), fnKey, keyboard, null) + navBottom,
+        listOf(shift, blank, fnKey, keyboard, null) + navBottom,
     )
 
     // **Twelve caps, and the modifiers they are pressed with.** The operator: *"we have a `fn`
@@ -142,21 +137,13 @@ object KeyLayouts {
     )
 
     val landscape: List<KeyRowSpec> = listOf(
-        listOf(
-            escape, ctrl, alt, tab,
-            text("/", "/", text("\\")), text("|", "|", text("&")), fnKey, keyboard,
-            null,
-        ) + navTop,
-        listOf(
-            text("~"), text("&"), text("*"), text("$"),
-            text("\\"), text("\""), text("'"), text("`"),
-            null,
-        ) + navBottom,
+        listOf(escape, ctrl, alt, tab, shift, blank, fnKey, keyboard, null) + navTop,
+        List(8) { blank } + listOf(null) + navBottom,
     )
 
     // Twelve across a row that has the width for them, and the two modifiers a chord takes. `ins`
-    // and `del` go with the symbols and are not lost: they are what `home` and `end` hold, on
-    // every layout including this one — and `esc` and the back-tab that used to sit in these two
+    // and `del` are not lost: they are what `home` and `end` hold, on every layout including this
+    // one — and `esc` and the back-tab that used to sit in these two
     // slots are on the layer below, which is where the keys this layer is not about belong.
     val landscapeFn: List<KeyRowSpec> = listOf(
         listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fnKey, keyboard, null) + navTop,

@@ -28,6 +28,9 @@ pub struct Composed {
 /// keeps no state, and every call sees the whole grid.
 pub type ComposerReader = fn(&[&str], Caret) -> Option<Composed>;
 
+/// Whether one harness is reading its keys yet. See [`listening`].
+pub type ListeningReader = fn(&[&str], Caret) -> bool;
+
 /// The operator's unsent line, or `None` when the composer is empty or cannot be read.
 ///
 /// Runs *downwards* from the composer marker, which is the opposite of the live preview beside it
@@ -39,18 +42,8 @@ pub type ComposerReader = fn(&[&str], Caret) -> Option<Composed>;
 /// Codex paints its model and directory two columns in, one blank row below the box, and a walk
 /// that ran on into it would hand back a sentence with a path glued to the end.
 pub fn read(screen: &[&str], caret: Caret, layout: &Layout, clear: Option<&'static str>) -> Option<Composed> {
-    let head = screen.iter().rposition(|line| opens(line, layout.prompt))?;
-    let mut last = head;
-    for (at, line) in screen.iter().enumerate().skip(head + 1) {
-        if !is_continuation(line, layout.indent) {
-            break;
-        }
-        last = at;
-    }
+    let (head, last) = holding_caret(screen, caret, layout)?;
     let caret_row = caret.row as usize;
-    if caret_row < head || caret_row > last {
-        return None;
-    }
     // The caret resting where the operator's first character would go is an empty composer,
     // whatever is painted to the right of it. It is also where `ctrl+a` leaves the caret on all
     // three harnesses with the line still full, which is a line this reports nothing for rather
@@ -65,6 +58,28 @@ pub fn read(screen: &[&str], caret: Caret, layout: &Layout, clear: Option<&'stat
     }
     let text = text.trim().to_string();
     (!text.is_empty()).then_some(Composed { text, clear })
+}
+
+/// A composer is drawn and the caret is in it: the harness is reading its keys. A reply written to
+/// Claude before this is true does not submit, and one written after it does (#535).
+pub fn listening(screen: &[&str], caret: Caret, layout: &Layout) -> bool {
+    holding_caret(screen, caret, layout).is_some()
+}
+
+/// The composer's rows — its marked row and every wrapped continuation under it — when the caret
+/// is on one of them.
+fn holding_caret(screen: &[&str], caret: Caret, layout: &Layout) -> Option<(usize, usize)> {
+    let head = screen.iter().rposition(|line| opens(line, layout.prompt))?;
+    let mut last = head;
+    for (at, line) in screen.iter().enumerate().skip(head + 1) {
+        if !is_continuation(line, layout.indent) {
+            break;
+        }
+        last = at;
+    }
+    (head..=last)
+        .contains(&(caret.row as usize))
+        .then_some((head, last))
 }
 
 /// Claude separates its `❯` from the text with a **non-breaking space** where Codex and agy use an

@@ -78,6 +78,7 @@ import dev.kampr.terminal.file.handoverAfter
 import dev.kampr.terminal.file.handoverName
 import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
+import dev.kampr.terminal.input.ImeDismissal
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.PaneTextInput
@@ -943,6 +944,7 @@ fun TerminalView(
         // offscreen div took the focus straight back off the sheet each frame and `preventDefault`ed
         // Escape and every ctrl chord into the shell, and no key ever reached the sheet at all.
         // `Modifier.modal`'s Escape-to-dismiss could not work in a browser while this was ungated.
+        ImeDismissal(session)
         PaneTextInput(
             session = session,
             sink = sink,

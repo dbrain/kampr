@@ -276,6 +276,10 @@ pub struct History {
     /// [`ScrollbackDoc::era`]: it is the only thing that tells a refill from a tail, because the
     /// two land on the same index.
     era: u32,
+    /// Whether the peer has ever said anything about this pane's ring, which is not the same as
+    /// holding rows of it: a harness on the alternate screen leaves an era with no rows at all,
+    /// and a client joining then still has to be told which era it is looking at (#537).
+    seen: bool,
 }
 
 impl History {
@@ -283,10 +287,16 @@ impl History {
         self.rows.is_empty()
     }
 
+    /// Whether this hub has been told anything at all about the pane's ring.
+    pub fn seen(&self) -> bool {
+        self.seen
+    }
+
     /// Answers whether what is now held replaces what was, rather than continuing it — which the
     /// caller has to relay as a document of its own, since a delta "since the old end" cannot say
     /// it.
     pub fn absorb(&mut self, doc: &ScrollbackDoc) -> bool {
+        self.seen = true;
         self.complete = doc.complete;
         self.capped |= doc.capped;
         let restart = doc.era != self.era

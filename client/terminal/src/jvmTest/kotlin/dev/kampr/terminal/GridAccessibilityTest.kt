@@ -183,14 +183,14 @@ class GridAccessibilityTest {
         val sink = InputSink(GRID_PANE, io, session.latches)
         setContent { Themed(io) { PaneKeyRow(session, sink, compact = false, enabled = true) } }
 
-        for (name in listOf("Escape key", "Control", "Tab key", "Up arrow key", "Slash key", "Page up key")) {
+        for (name in listOf("Escape key", "Control", "Shift", "Tab key", "Up arrow key", "Page up key")) {
             onNodeWithContentDescription(name).assertExists()
         }
-        onNodeWithContentDescription("Slash key")
+        onNodeWithContentDescription("Tab key")
             .assertHeightIsAtLeast(44.dp)
             .performSemanticsAction(SemanticsActions.OnClick)
         assertTrue(
-            io.sent.any { it is ClientMsg.InputText && it.text == "/" },
+            io.sent.any { it is ClientMsg.InputText && it.text == "\t" },
             "a semantics click on a cap sent nothing: ${io.sent}",
         )
     }

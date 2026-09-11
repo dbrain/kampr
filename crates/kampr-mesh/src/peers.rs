@@ -1252,7 +1252,12 @@ impl RemoteWatcher {
         drop(shadow);
         let history = pane.history.lock().unwrap();
         let sent_history = history.end();
-        if !history.is_empty() {
+        // **On having been told, not on holding rows** (#537). A harness that takes the alternate
+        // screen leaves the peer's ring empty in a *new era*, and a joiner handed nothing at all
+        // goes on drawing whatever it already had — the shell session from before the harness,
+        // under a live conversation, with the wheel still spending itself on those rows because
+        // `historyRows` never reached zero.
+        if history.seen() {
             initial.push(RemoteEvent::Scrollback(history.doc()));
         }
         drop(history);
