@@ -16,8 +16,10 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.runDesktopComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalPaneIo
@@ -134,6 +136,7 @@ private fun ComposeUiTest.terminal(
     io: PaneIo,
     size: Pair<Dp, Dp>,
     session: PaneSession? = null,
+    status: () -> ConnectionStatus = { ConnectionStatus.Live("full") },
     shown: () -> Boolean = { true },
 ) {
     setContent {
@@ -142,6 +145,7 @@ private fun ComposeUiTest.terminal(
             LocalPaneIo provides io,
             LocalSafeArea provides Phone.BARS,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
+            LocalConnectionStatus provides status(),
         ) {
             Box(Modifier.size(size.first, size.second).keyboardInset()) {
                 if (shown()) {
@@ -198,6 +202,39 @@ private fun ComposeUiTest.settled(io: MatchIo, mode: SizeMode): ManageOp.PaneSiz
 // operator who said no is not asked again. See ADR 0013.
 @OptIn(ExperimentalTestApi::class)
 class MatchingTheViewTest {
+    // **A socket dying is how a matched hold ends** — ADR 0013 point 1, and what
+    // `a_matched_pane_is_put_back_when_the_socket_holding_it_stops_answering` proves from the
+    // node's side: the lease goes with the socket and the pane is put back to the geometry it was
+    // found at. So a reconnect arrives at a pane that is no longer held.
+    //
+    // Nothing asked for it again. The claim's keys are the pane id and the *view's* geometry, and
+    // a reconnect moves neither; `claimed` is `remember(paneId)` and stays true, so the strip went
+    // on saying the desk sees this pane at this shape for the whole outage and after it. Rule 3
+    // wants the hold visible wherever it is held, and this made it visible where it was not.
+    //
+    // The mutation that must fail: drop the connection from the effect's keys, and the second
+    // claim never goes.
+    @Test
+    fun aReconnectClaimsThePaneAgainRatherThanGoingOnBelievingItHoldsOne() = runComposeUiTest {
+        val io = SessionIo()
+        var status: ConnectionStatus by mutableStateOf(ConnectionStatus.Live("full"))
+        terminal(grid(cols = 94), io, DESK, status = { status })
+        quiet(1_000)
+        assertEquals(1, io.claims.size, "a desk did not claim the pane at all: ${io.claims}")
+
+        status = ConnectionStatus.Offline("the wifi went", 1_000)
+        quiet(400)
+        status = ConnectionStatus.Live("full")
+        quiet(1_000)
+
+        assertEquals(
+            2,
+            io.claims.size,
+            "the pane was never claimed again after the socket came back, so a desk-sized window " +
+                "shows a pane at its own geometry while the strip says it is held: ${io.claims}",
+        )
+    }
+
     @Test
     fun aDeskSizedTerminalHoldsThePaneAtTheSizeItCanShow() = runComposeUiTest {
         val io = MatchIo()

@@ -139,6 +139,10 @@ pub struct ScrollbackRing {
     capped: bool,
     max_rows: usize,
     rendered: Option<Vec<RowDiff>>,
+    /// The width [`rendered`](Self::rendered) was laid out at. A row arriving wider than every row
+    /// before it changes the grid a full lay-out would produce, so the cache stops being the thing
+    /// a full lay-out would have built and has to go.
+    rendered_cols: u16,
 }
 
 impl Default for ScrollbackRing {
@@ -158,6 +162,7 @@ impl ScrollbackRing {
             capped: false,
             max_rows: max_rows.max(1),
             rendered: None,
+            rendered_cols: 0,
         }
     }
 
@@ -273,7 +278,6 @@ impl ScrollbackRing {
         if incoming.is_empty() && !self.rows.is_empty() {
             return Ingest::Stitched { added: 0 };
         }
-        self.rendered = None;
         // A width change re-wraps every stored row, so nothing older can be trusted to line up.
         // The ring adopts the new width *before* restarting on it (probe #112): a restart that
         // kept the old one would find every later read disagreeing with it too, and throw the
@@ -308,6 +312,7 @@ impl ScrollbackRing {
             self.end_abs = raw
                 .first_row
                 .map(|s| s.saturating_add(incoming.len().saturating_sub(1) as u32));
+            self.rendered = None;
             self.rows = incoming;
             self.capped |= raw.truncated;
             self.trim();
@@ -336,6 +341,7 @@ impl ScrollbackRing {
                     if added > 0 {
                         self.rows.extend_from_slice(&incoming[incoming.len() - added..]);
                         self.end_abs = Some(end.saturating_add(added as u32));
+                        self.extend_rendered(added);
                         self.trim();
                     }
                     Ingest::Stitched { added }
@@ -350,30 +356,90 @@ impl ScrollbackRing {
                 let added = incoming.len() - k;
                 self.rows.extend_from_slice(&incoming[k..]);
                 self.end_abs = self.end_abs.map(|e| e.saturating_add(added as u32));
+                self.extend_rendered(added);
                 self.trim();
                 Ingest::Stitched { added }
             }
         }
     }
 
-    /// Held rather than rebuilt: a client polls this every three seconds per pane, and laying out
-    /// twenty thousand rows of ANSI is tens of milliseconds of a tokio worker with no `.await` in
-    /// it to yield at. Every path that moves a row drops the cache.
+    /// The width a full lay-out would use: the widest row held, never the pane's own.
+    ///
+    /// It is read over the whole ring rather than over the rows being laid out, so that laying
+    /// out a tail produces exactly the rows laying out everything would have produced. See
+    /// [`lay_out`] for what a grid too narrow for its widest row does.
+    fn layout_cols(&self) -> u16 {
+        self.rows.iter().map(|r| r.cols).max().unwrap_or(1).max(1)
+    }
+
+    fn ensure_rendered(&mut self) {
+        if self.rendered.is_some() {
+            return;
+        }
+        let cols = self.layout_cols();
+        self.rendered = Some(lay_out(&self.rows, self.base, cols));
+        self.rendered_cols = cols;
+    }
+
+    /// Lay out the rows just appended and join them onto what is already laid out.
+    ///
+    /// **This is what lets history keep up with the grid.** A full lay-out is linear in the ring's
+    /// whole depth — measured at 2 ms per thousand rows, so 55 ms at the 20 000-row bound — and
+    /// paying it on every read is what forced the poll and the socket's floor to be slow enough
+    /// that the rows a reader was looking at could be seconds behind the pane (probe #529). An
+    /// append costs its own rows and nothing else.
+    ///
+    /// **It is sound because herdr's rows do not lean on each other.** `pane.read source=recent
+    /// format=ansi` re-emits every row's colour on the row itself and closes it again at the end —
+    /// a colour set once and spanning three lines comes back as three independently styled rows,
+    /// and so does an unclosed bold (probe #530). So a row laid out on its own is the row it would
+    /// have been laid out as in company, and the only thing that can invalidate that is the grid
+    /// getting wider underneath it.
+    fn extend_rendered(&mut self, added: usize) {
+        if added == 0 || self.rendered.is_none() {
+            return;
+        }
+        let cols = self.layout_cols();
+        if cols != self.rendered_cols {
+            self.rendered = None;
+            return;
+        }
+        let from = self.rows.len() - added;
+        let laid = lay_out(&self.rows[from..], self.base + from as u32, cols);
+        if let Some(cached) = self.rendered.as_mut() {
+            cached.extend(laid);
+        }
+    }
+
+    /// Held rather than rebuilt: laying out twenty thousand rows of ANSI is tens of milliseconds
+    /// of a tokio worker with no `.await` in it to yield at. Every path that moves a row already
+    /// held drops the cache; an append extends it.
     pub fn render(&mut self) -> ScrollbackDoc {
+        self.render_from(None)
+    }
+
+    /// The tail a reader has not been sent, or the whole ring when what they hold is not this
+    /// ring's to add to.
+    ///
+    /// `sent_era` is the half that cannot be inferred: a ring that was discarded and filled again
+    /// advances past everything it dropped, so a refill lands exactly where a tail would land and
+    /// the indices alone cannot tell the two apart (see [`ScrollbackDoc::era`]).
+    pub fn render_since(&mut self, sent_rows: u32, sent_era: u32) -> ScrollbackDoc {
+        let from = (self.era == sent_era).then_some(sent_rows);
+        self.render_from(from)
+    }
+
+    fn render_from(&mut self, from: Option<u32>) -> ScrollbackDoc {
+        self.ensure_rendered();
         // A depth, not a highest index: the ring spans `from_top .. from_top + total_rows`.
-        let total_rows = self.rows.len() as u32;
-        let rows = match self.rendered.as_ref() {
-            Some(rows) => rows.clone(),
-            None => {
-                let rows = lay_out(&self.rows, self.base);
-                self.rendered = Some(rows.clone());
-                rows
-            }
-        };
+        let end = self.base + self.rows.len() as u32;
+        let from_top = from.unwrap_or(self.base).clamp(self.base, end);
+        let cached = self.rendered.as_deref().unwrap_or_default();
+        let at = cached.partition_point(|r| r.row < from_top);
         ScrollbackDoc {
-            from_top: self.base,
-            rows,
-            total_rows,
+            from_top,
+            rows: cached[at..].to_vec(),
+            total_rows: end - from_top,
             complete: self.base == 0,
             capped: self.capped,
             era: self.era,
@@ -421,6 +487,7 @@ impl ScrollbackRing {
     /// Starts again on `incoming`, remembering where it sits in the provider's history so the
     /// *next* read can be joined by position rather than by a suffix match.
     fn restart_at(&mut self, incoming: Vec<Row>, first_row: Option<u32>) -> usize {
+        self.rendered = None;
         let dropped = self.rows.len();
         self.base += dropped as u32;
         self.era += 1;
@@ -458,6 +525,11 @@ impl ScrollbackRing {
         }
         self.rows.drain(..excess);
         self.base += excess as u32;
+        // The same rows off the front of the cache. A trimmed row keeps the absolute index it
+        // had, so what is left still lines up with what is held.
+        if let Some(cached) = self.rendered.as_mut() {
+            cached.drain(..excess.min(cached.len()));
+        }
         self.capped = true;
     }
 }
@@ -467,11 +539,10 @@ impl ScrollbackRing {
 /// and `Grid::scroll_up` drops rows off the *top* — while `from_top`, `total_rows` and every row
 /// index still describe the original span. That is a silent discard of exactly the kind ADR 0004
 /// exists to make loud, and the label goes too narrow routinely (probe #68).
-fn lay_out(rows: &[Row], base: u32) -> Vec<RowDiff> {
+fn lay_out(rows: &[Row], base: u32, cols: u16) -> Vec<RowDiff> {
     if rows.is_empty() {
         return Vec::new();
     }
-    let cols = rows.iter().map(|r| r.cols).max().unwrap_or(1).max(1);
     let mut term = Emulator::new(cols, rows.len().min(u16::MAX as usize) as u16);
     // herdr separates rows with LF alone, which moves down without returning the carriage.
     let joined: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();

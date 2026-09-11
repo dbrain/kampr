@@ -361,9 +361,21 @@ async fn a_peer_dropping_costs_its_own_panes_and_nothing_else() {
         .expect("the watcher was told something");
     match told {
         Some(RemoteEvent::Error { code, .. }) => assert_eq!(code, "node_offline"),
-        None => {}
         other => panic!("expected an offline error, got {other:?}"),
     }
+    // **And then the stream ends**, which is the half being told does not cover. The reader is a
+    // loop: one error and then more waiting is a pane frozen for ever behind a herd that turns
+    // green again the moment the peer redials, with input still reaching the pane down the new
+    // link. Only a watcher falling behind used to end a queue, so `pump_peer_pane`'s `node_offline`
+    // branch — written for exactly this — could never be reached.
+    let ended = tokio::time::timeout(Duration::from_secs(2), watching_laptop.recv())
+        .await
+        .expect("the watcher was left parked on a stream whose peer had already gone");
+    assert!(ended.is_none(), "expected the stream to end, got {ended:?}");
+    assert!(
+        !watching_laptop.overrun(),
+        "a peer leaving is not a watcher falling behind, and the reader tells them apart on this",
+    );
     assert_eq!(
         peers.watch("01JA/w1:p1", false).unwrap_err().code(),
         ErrorCode::NodeOffline

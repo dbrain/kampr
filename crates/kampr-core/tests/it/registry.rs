@@ -624,8 +624,10 @@ async fn new_hyperlinks_ride_a_patch_as_a_delta_in_arrival_order() {
 #[test]
 fn the_cadence_is_derived_from_the_measured_row_rate() {
     let policy = HistoryPolicy::default();
-    assert_eq!(policy.interval_for_rate(1000.0), Duration::from_millis(400));
-    assert_eq!(policy.interval_for_rate(2000.0), Duration::from_millis(200));
+    // The budget is how far behind the grid a reader's history may be, so the interval is that
+    // many rows' worth of time at the measured rate (probe #529).
+    assert_eq!(policy.interval_for_rate(40.0), Duration::from_millis(200));
+    assert_eq!(policy.interval_for_rate(16.0), Duration::from_millis(500));
     assert_eq!(
         policy.interval_for_rate(100_000.0),
         policy.fastest,

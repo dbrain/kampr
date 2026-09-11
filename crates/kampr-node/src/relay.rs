@@ -3,7 +3,14 @@ use kampr_core::wire::ErrorCode;
 use kampr_mesh::{Peers, RemoteEvent, RemoteWatcher};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::debug;
+
+/// How often a relayed pane whose peer has gone asks whether it is back.
+///
+/// It costs nothing while the peer is away — the check reads the herd this hub already holds — and
+/// the task itself lives exactly as long as the watch, so an operator who leaves the pane ends it.
+const PEER_RETRY: Duration = Duration::from_secs(1);
 
 /// One peer pane, relayed to one client.
 ///
@@ -49,7 +56,8 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
             // frozen grid forever. The two ways a relayed stream ends are opposite facts and must
             // not read alike — the peer went away, or this hub refused to hold a transcript for a
             // client that had stopped draining it.
-            let (code, detail) = match watcher.overrun() {
+            let overrun = watcher.overrun();
+            let (code, detail) = match overrun {
                 true => (
                     ErrorCode::StreamUnavailable,
                     "this client fell too far behind this pane for the hub to catch it up",
@@ -57,7 +65,25 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
                 false => (ErrorCode::NodeOffline, "the node serving this pane left the herd"),
             };
             wire.error(code, detail, Some(&global));
-            return;
+            // **A peer that left may come back, and the pane the operator never stopped looking at
+            // should move again when it does.** The hub builds a fresh link on a redial with no
+            // panes on it, so nothing reattaches a reader that is still here — and until it does,
+            // the herd goes green, input still reaches the pane down the new link, and the grid
+            // alone stays dead. That is the shape #233 taught this project to fear, and telling
+            // the reader once is only half of the answer to it.
+            //
+            // The ceiling is the opposite case and is not retried: that watcher was ended because
+            // *this* client could not keep up, and watching again would only do it again.
+            if overrun {
+                return;
+            }
+            watcher = rewatch(&peers, &global, conversation).await;
+            for event in watcher.initial() {
+                if !emit(&peers, &wire, &global, event, &mut paged) {
+                    return;
+                }
+            }
+            continue;
         };
         if matches!(event, RemoteEvent::Update(_)) && wire.outbox().congested() {
             let dropped = wire.outbox().purge_pane(&global);
@@ -69,6 +95,22 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         }
         if !emit(&peers, &wire, &global, event, &mut paged) {
             return;
+        }
+    }
+}
+
+/// Waits for this pane's node to rejoin the herd, then watches it again.
+///
+/// **Every refusal is retried, including "no node owns that pane".** A redial takes the peer's
+/// remembered row out before its new link has said what it holds, so the pane is briefly owned by
+/// nothing at all — and giving up on that answer would lose the reader to the one instant the
+/// recovery exists for. Nothing here needs its own ceiling: this task is the watch, so it ends
+/// when the operator leaves the pane or the socket goes.
+async fn rewatch(peers: &Arc<Peers>, global: &str, conversation: bool) -> RemoteWatcher {
+    loop {
+        tokio::time::sleep(PEER_RETRY).await;
+        if let Ok(watcher) = peers.watch(global, conversation) {
+            return watcher;
         }
     }
 }

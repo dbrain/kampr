@@ -237,6 +237,14 @@ impl App {
                 self.client.request_caps();
             }
             Event::Disconnected { reason } => {
+                // **The lease went with the socket** (ADR 0013 point 1): the node let it go and
+                // put the pane back the moment this client stopped answering. Remembering it here
+                // is what stopped the reconnect asking again — [`Self::matching_step`] declines a
+                // target it believes it already holds — so a desk-sized window came back showing
+                // the pane at its own geometry, with the strip saying it was held and the menu
+                // offering to stop a hold nobody had.
+                self.matching = None;
+                self.settling = None;
                 self.note(reason.clone());
                 self.convo.absorb(event);
             }

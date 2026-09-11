@@ -22,6 +22,8 @@ import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.typography
+import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
@@ -118,6 +120,10 @@ internal fun ComposeUiTest.phoneTerminal(
             LocalPaneIo provides io,
             LocalSafeArea provides bars.value,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
+            // `KamprApp` provides this once above every screen, so a pane composed without it is a
+            // pane with no socket — and a view that has no socket claims nothing, which is what a
+            // reconnect has to be able to undo (ADR 0013 point 1: the lease ends with the socket).
+            LocalConnectionStatus provides ConnectionStatus.Live("full"),
         ) {
             // The shape the phone stacks: the app root pays the keyboard once, and the pane fills
             // what is left. Nothing inside knows the keyboard is there — which is the whole point,

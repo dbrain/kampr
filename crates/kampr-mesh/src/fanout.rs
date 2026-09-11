@@ -60,6 +60,30 @@ impl Fanout {
                 None => false,
             });
     }
+
+    /// Every watcher is told the stream is over, after whatever it is already owed.
+    ///
+    /// **A peer going away and a watcher falling behind are opposite facts, and only the second
+    /// used to end a queue.** So a relayed pane whose link dropped emitted one error and then left
+    /// its reader parked on `ready` for ever, holding a grid that would never move again — while
+    /// the herd went green the moment the peer redialled and input still reached the pane down the
+    /// new link. One of two paths dead and every other surface answering correctly, which is the
+    /// shape [#233](../../../docs/03-probe-log.md) taught this project to fear.
+    /// [`relay::pump_peer_pane`] has always carried the branch for this; nothing fired it.
+    ///
+    /// `overrun` is deliberately left alone — it is what tells the two endings apart.
+    pub fn end(&self) {
+        self.subscribers
+            .lock()
+            .unwrap()
+            .retain(|weak| match weak.upgrade() {
+                Some(subscriber) => {
+                    subscriber.end();
+                    true
+                }
+                None => false,
+            });
+    }
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +120,11 @@ impl Subscriber {
 
     pub fn overrun(&self) -> bool {
         self.queue.lock().unwrap().overrun
+    }
+
+    fn end(&self) {
+        self.queue.lock().unwrap().ended = true;
+        self.ready.notify_one();
     }
 
     fn take(&self) -> Option<Delivery> {

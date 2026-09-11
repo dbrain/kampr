@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
@@ -52,6 +53,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.answering
 import dev.kampr.shared.ui.LocalPaneIo
@@ -168,7 +170,17 @@ fun ConversationView(
     val shown = if (tail == null) rows else rows + TranscriptRow.Working(tail)
     val stamps = remember(shown, now) { stepStamps(shown, now) }
     val hits = remember(rows, query) { searchHits(rows, query) }
-    val leading = if (pane.convoMore) 1 else 0
+    // **`more` is this client's memory and `has_conversation` is the node's answer, and the offer
+    // needs both.** The cursor and `more` a page was read under outlive the transcript they came
+    // from: an agent quit and started again in the same terminal names no session until it writes
+    // its marker (#259, #311), so for that window the node has nothing to resolve and no
+    // withdrawal to send — it cannot yet say which session the pane moved to, only that there is
+    // no transcript on it. `has_conversation` is exactly that statement, and it is defined as
+    // whether `convo.load` will answer with anything. Offering to page across it put a press on
+    // the screen the node had already said it would refuse, and drew the refusal over the
+    // conversation: *"other times it shows a 404 ... recovers when session started properly"*.
+    val pageable = pane.convoMore && info?.hasConversation != false
+    val leading = if (pageable) 1 else 0
 
     val scope = rememberCoroutineScope()
     // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
@@ -189,10 +201,11 @@ fun ConversationView(
     // Paging backwards is the whole point of the opaque cursor: ask once per cursor, and let the
     // node decide there is nothing older by clearing `more`.
     var asked by remember { mutableStateOf<String?>(null) }
+    val offering by rememberUpdatedState(pageable)
     LaunchedEffect(pane.id) {
         snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
             val cursor = pane.convoCursor
-            if (first <= 1 && pane.convoMore && cursor != null && cursor != asked) {
+            if (first <= 1 && offering && cursor != null && cursor != asked) {
                 asked = cursor
                 io.send(ClientMsg.ConvoLoad(pane.id, cursor))
             }
@@ -319,6 +332,20 @@ fun ConversationView(
         io.send(ClientMsg.ConvoSub(pane.id, sub.id))
         opened.add(sub)
     }
+    // **And again when the socket comes back**, because the follow is per-socket: the node holds
+    // it on the pane handle the watch built and a reconnect builds a new one empty. Nothing else
+    // re-announced it — a sub is asked for when the reader opens it and never again, and the cached
+    // sub survives a reconnect — so the panel kept the turns it had and never took another while
+    // the subagent went on working. The conversation around it catching up normally is what made
+    // that read as the subagent having stopped rather than as the view being dead.
+    val live = LocalConnectionStatus.current is ConnectionStatus.Live
+    var wasLive by remember(pane.id) { mutableStateOf(live) }
+    LaunchedEffect(live) {
+        if (live && !wasLive) {
+            opened.lastOrNull()?.let { io.send(ClientMsg.ConvoSub(pane.id, it.id)) }
+        }
+        wasLive = live
+    }
 
     CompositionLocalProvider(LocalOpenSub provides openSub) {
         opened.lastOrNull()?.let { sub ->
@@ -388,7 +415,7 @@ fun ConversationView(
                         // separates it from the next one, outside its own paint.
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                     ) {
-                        if (pane.convoMore) {
+                        if (pageable) {
                             item(key = "older") {
                                 DisableSelection {
                                     Row(
@@ -575,7 +602,15 @@ internal fun handoverOf(pane: PaneState, io: PaneIo, picked: PickedFile): Handov
         return Handover.Refused("$name is larger than the 8 MiB a node will take.")
     }
     pane.clearRefusal()
+    val undelivered = pane.undelivered
     io.send(ClientMsg.Paste(pane.id, Base64.encode(picked.bytes), picked.name))
+    // **A paste with no socket to go down is a refusal, not a send.** It is dropped rather than
+    // queued for the reason a keystroke is — replayed on a reconnect it types a path into whatever
+    // has the pane by then — and a strip still reading "sent" over bytes that were dropped is the
+    // lie that drop exists to prevent.
+    if (pane.undelivered > undelivered) {
+        return Handover.Refused("$name was not sent: there is no connection to the node.")
+    }
     return Handover.Sent(name)
 }
 

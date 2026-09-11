@@ -1622,6 +1622,188 @@ fn text_of(cols: &[Option<char>]) -> String {
     cols.iter().flatten().collect::<String>().trim_end().to_string()
 }
 
+/// **The seam between the live grid and the history under it, measured while a command is still
+/// producing output.**
+///
+/// The operator, on a phone: *"scrolling panes seem to miss lines, ill do stuff like a git pull
+/// script for a few dirs and docker compose up -d and it will scroll through but the history will
+/// skip lines and then update. so there will be gaps in the data that will get filled."*
+///
+/// The client draws the two halves as one document with the grid pinned directly under the last
+/// history row it holds — `SurfaceRows`: *"history runs [0, historyRows), the live viewport
+/// follows it and is pinned to the bottom"*. That join is only true if the node's ring has every
+/// row that has left the grid. It does not: the ring is filled by a poll whose cadence is sized
+/// against herdr's thousand-row read cap rather than against what a reader can see, and the socket
+/// then sits on a floor of its own before sending. For the span of both, the rows that scrolled off
+/// the top of the grid are in neither half — missing from the surface entirely rather than blank —
+/// and they arrive later in one batch, which is the gap that fills.
+///
+/// It is invisible on a desk, where the pane is matched to the view and the viewport is the grid.
+/// On a phone it is the top of the screen: probe [#526](#) measured that pane's viewport holding 52
+/// rows against a live grid of 30, so 22 rows of every frame are ring.
+///
+/// Every row is numbered, so the gap is counted rather than inferred: the last row the client has
+/// been sent as history, against the first row of the grid it is being shown beside it.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_history_a_reader_is_shown_under_the_grid_joins_onto_it() {
+    let h = harness!("seam");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": true }),
+    )
+    .await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+
+    // Roughly forty rows a second for ten seconds, which is the shape of a `git pull` over a few
+    // directories rather than a burst: fast enough that the ring is always behind, slow enough
+    // that it is never the thousand-row cap doing it.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane,
+                "text": "for i in $(seq 1 400); do echo \"ROW $i\"; sleep 0.025; done\n" }),
+    )
+    .await;
+
+    let number = |text: &str| -> Option<u64> { text.trim().strip_prefix("ROW ")?.trim().parse::<u64>().ok() };
+
+    let mut grid: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+    let mut history: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+    let mut worst = 0i64;
+    let mut samples = 0u32;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    while std::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane.as_str() {
+            continue;
+        }
+        match message["t"].as_str() {
+            Some("grid.reset") => {
+                grid.clear();
+                for row in message["rows_data"].as_array().cloned().unwrap_or_default() {
+                    grid.insert(row["row"].as_u64().unwrap_or(0), text_of(&columns(&row["runs"])));
+                }
+            }
+            Some("grid.patch") => {
+                for row in message["rows"].as_array().cloned().unwrap_or_default() {
+                    grid.insert(row["row"].as_u64().unwrap_or(0), text_of(&columns(&row["runs"])));
+                }
+            }
+            Some("scrollback") => {
+                for row in message["rows"].as_array().cloned().unwrap_or_default() {
+                    history.insert(row["row"].as_u64().unwrap_or(0), text_of(&columns(&row["runs"])));
+                }
+            }
+            _ => continue,
+        }
+
+        // The last numbered row the client holds as history, and the first numbered row of the
+        // grid it is being shown directly beneath it.
+        let Some(below) = history.values().filter_map(|t| number(t)).max() else {
+            continue;
+        };
+        let Some(above) = grid.values().filter_map(|t| number(t)).min() else {
+            continue;
+        };
+        // Only while the command is still running: once it stops, the poll catches up and the
+        // seam closes, which is the "gets filled" half of the report and not the defect.
+        if above < 40 || below >= 395 {
+            continue;
+        }
+        samples += 1;
+        worst = worst.max(above as i64 - below as i64 - 1);
+    }
+
+    assert!(samples > 0, "the command never produced a measurable seam");
+    eprintln!("KAMPRSEAM samples={samples} worst_gap={worst}");
+    // Measured at 10 on this machine against the 158 the old cadence produced (probe #529). The
+    // bound is loose enough to survive a loaded runner and far under the defect: reinstating
+    // either half of it — the two-second ring poll or the three-second socket floor — is seconds
+    // of output and hundreds of rows, not tens.
+    assert!(
+        worst <= 24,
+        "the client was shown {worst} rows of output joined onto history that does not continue \
+         it, over {samples} samples",
+    );
+}
+
+/// **A commit presses Enter, and Enter into a shell runs whatever line is sitting in it.**
+///
+/// `answer` reads the pane at the moment of the press for exactly this reason — *"a dialog that has
+/// gone in the meantime answers nothing rather than pressing Enter into whatever replaced it"* —
+/// and `answer.submit`, which is the half that actually commits, took no read at all. Its only gate
+/// was which harness the pane is running, so a commit arriving after the dialog had gone wrote
+/// right-arrow and Enter (#421) into whatever had the pane by then.
+///
+/// It arrives late by ordinary means rather than by a race: a client queues it across a dropped
+/// socket and sends it on reconnect, measured at twenty seconds. The operator sees a command they
+/// never submitted run, with nothing on screen connecting it to anything they did.
+///
+/// The mutation that must fail: commit on the harness name alone, and the pane runs the line.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_commit_for_a_question_that_has_gone_presses_nothing_into_what_replaced_it() {
+    let h = harness!("commit");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+
+    // A pane the node will find commit keys for, with no dialog anywhere on it.
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    // A line sitting at the prompt, unsubmitted. Split so the screen shows the command and only
+    // running it can put the bare word on a line of its own.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "echo KAMPR\"\"RAN" }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    send(&mut socket, json!({ "t": "answer.submit", "pane": pane })).await;
+
+    let refused = until_pane(&mut socket, "error", &pane, 20).await;
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no longer on the screen"),
+        "a commit was accepted for a pane with no question on it: {refused}",
+    );
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let read = h
+        ._session
+        .call(
+            "pane.read",
+            json!({ "pane_id": local, "source": "visible", "format": "text", "strip_ansi": true }),
+        )
+        .await;
+    let screen = read["read"]["text"].as_str().unwrap_or_default().to_string();
+    assert!(
+        !screen.lines().any(|line| line.trim() == "KAMPRRAN"),
+        "the commit ran the line the operator had not submitted:\n{screen}",
+    );
+}
+
 /// Probe #210, end to end against a real herdr rather than against an idea of one: herdr spends
 /// two columns on a double-width glyph and addresses the next glyph at col+2, so a frame that
 /// spends one leaves a blank behind every wide character for good.
@@ -2898,6 +3080,75 @@ async fn a_matched_pane_is_put_back_when_the_socket_holding_it_stops_answering()
         rows_settle_at(&h._session, &local, found_rows, 45).await,
         "a pane held at the size of a window nobody is looking at any more was left there; it is \
          {} rows and it was found at {found_rows}",
+        viewport_rows(&h._session, &local).await,
+    );
+}
+
+/// **A pane switch is an `unwatch`, and it must not be a release.**
+///
+/// The operator, on the wasm desktop: *"sometimes switching to a pane does not resize, so i end up
+/// with an itty bitty view of something that was previously large"*. The two halves of the lease
+/// were written a day apart with opposite ideas of how long it lives. The node let it go the
+/// moment the pane stopped being watched — and a pane switch unwatches the pane being left
+/// ([`AppState.go`]) — while the client goes on holding the pane in `MatchHolds` for
+/// `MATCH_LINGER_MS`, which is exactly what stops a switch away and back writing two geometries
+/// onto two panes and bouncing them. So coming back inside the linger found a pane the node had
+/// already put back, and a client that knew it was still held and therefore asked for nothing.
+///
+/// ADR 0013 point 1 is unambiguous about which side is wrong: the lease is owned by the socket,
+/// and *"a closed laptop is a socket that stops answering — that is what ends the hold rather
+/// than anything the client remembered to send"*. A watch is not a socket. The client's release
+/// is what ends a matched hold, the socket dropping is its ceiling, and
+/// [`a_matched_pane_is_put_back_when_the_socket_holding_it_stops_answering`] is that ceiling
+/// proved.
+///
+/// The client sends no second claim here on purpose. That is the whole defect: `MatchHolds.claim`
+/// short-circuits a pane already held at exactly this grid, because a re-claim supersedes the
+/// controller and herdr shows the desk's own geometry in the gap.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_the_operator_switched_away_from_and_came_back_to_is_still_held_at_their_view() {
+    let h = harness!("matchswitch");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut socket, &pane, &local).await;
+    paint_screen(&mut socket, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let matched_rows = (found_rows + 3).max(30);
+    let ack = ok(
+        &mut socket,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": found_cols + 24, "rows": matched_rows, "mode": "match" }),
+        30,
+    )
+    .await;
+    assert_eq!(ack["matched"], json!(true), "{ack}");
+    assert!(
+        rows_settle_at(&h._session, &local, matched_rows, 20).await,
+        "the match never landed, so there is nothing for the switch to lose; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    // The operator goes to look at another pane, then comes back. On the same socket, because it
+    // is the same operator at the same window: this is a screen change, not a disconnection.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+
+    assert!(
+        rows_stay_at(&h._session, &local, matched_rows, 20).await,
+        "a pane switch let the operator's matched hold go, so they came back to a pane at its own \
+         geometry with a client that believed it was still held and asked for nothing; the pane is \
+         {} rows and the view is {matched_rows}",
         viewport_rows(&h._session, &local).await,
     );
 }
@@ -5328,7 +5579,12 @@ async fn herdr_says(session: &Session, pane: &str, want: &str) {
 /// This is a read, so it moves nothing (#357), and it waits on `agent` too: a status that settled
 /// before herdr saw the process is the fallback for a pane with no agent, not this pane's.
 async fn herdr_has_scraped(session: &Session, pane: &str) {
-    herdr_pane(session, pane, 30, "scraped an agent out of", |p| {
+    // Generous on purpose. herdr publishes its own detection about four seconds after the process
+    // appears (#405) and on its own clock, and thirty seconds is inside what a loaded runner can
+    // spend getting there: this failed once in a full-suite run with `agent_status: unknown` and
+    // passed three times alone. A deadline is not the assertion here — the scrape still has to
+    // happen — and the sibling caller above already waits four minutes for the same event.
+    herdr_pane(session, pane, 180, "scraped an agent out of", |p| {
         p["agent"] == "claude" && p["agent_status"] == "idle"
     })
     .await;
@@ -5592,7 +5848,8 @@ async fn a_pane_herdr_has_no_rules_for_is_read_off_the_title_its_harness_writes(
                 ) }),
             )
             .await;
-        herdr_pane(&h._session, &local, 30, "labelled an omp in", |p| {
+        // Same herdr clock, same reason as `herdr_has_scraped` — long enough for a loaded runner.
+        herdr_pane(&h._session, &local, 180, "labelled an omp in", |p| {
             p["agent"] == "omp"
                 && p["terminal_title"]
                     .as_str()
@@ -6201,6 +6458,167 @@ async fn an_agent_quit_and_run_again_takes_the_previous_conversation_off_the_cli
     fixture.announce(second, "22222222-2222-4222-8222-222222222222");
 
     retired(&mut socket, &pane, &stale).await;
+}
+
+/// Writes a transcript of `n` turns, so there is something above a cursor to page back to.
+fn a_conversation_of(fixture: &Harnessed, id: &str, label: &str, n: usize) {
+    let mut out = String::new();
+    for i in 1..=n {
+        let at = (time::OffsetDateTime::now_utc() + time::Duration::seconds(-600 + i as i64))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let record = json!({
+            "type": "assistant", "uuid": format!("{id}-{i}"), "cwd": fixture.cwd, "timestamp": at,
+            "message": { "content": [ { "type": "text", "text": format!("{label} {i}") } ] },
+        });
+        out.push_str(&format!("{record}\n"));
+    }
+    std::fs::write(fixture.project.join(format!("{id}.jsonl")), out).unwrap();
+}
+
+/// **A page of the conversation the pane has already left, answered as though it were this one's.**
+///
+/// The warm conversation is the whole of what an open cost, kept for the next reader of the same
+/// pane (#409) — and [`Warm`] says in as many words what makes it servable: *"`opened` and `handle`
+/// are what say the transcript below is still the right transcript, and without them a warm pump
+/// would page the conversation of a session the pane has since left."*
+///
+/// The pump checks them on its first tick. `convo.load` checked neither. It pages straight out of
+/// the handle's journal, which on a re-watch is the previous pump's parse — so a load that arrives
+/// before that first tick is answered, **successfully**, with the turns of the session that ran in
+/// this terminal before the one the operator is looking at. That is not a read that failed; it is
+/// one that failed and looked like it worked, which is the shape [#233](#) taught this project to
+/// fear.
+///
+/// The client asks the moment the conversation screen opens, off a cursor it kept from the session
+/// before, so the window is reached by opening a pane rather than by any race an operator could
+/// avoid.
+///
+/// The mutation that must fail: serve the journal without asking whether the pump has confirmed it,
+/// and the first session's turns come back under the second session's pane.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pane_does_not_page_the_conversation_of_the_session_before_it() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("leak", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    // Deep enough that the opening page is a page and there is history above its cursor.
+    let first = fixture.start(&h._session, &local).await;
+    fixture.announce(first, "11111111-1111-4111-8111-111111111111");
+    a_conversation_of(
+        &fixture,
+        "11111111-1111-4111-8111-111111111111",
+        "FIRST SESSION",
+        60,
+    );
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let cursor = opening["cursor"]
+        .as_str()
+        .expect("a cursor to page back from")
+        .to_string();
+    assert_eq!(opening["more"], json!(true), "{opening}");
+
+    // The operator goes to look at something else, quits the agent, and starts another one.
+    send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+    fixture.stop(&h._session, &local, first).await;
+    let second = fixture.start(&h._session, &local).await;
+    fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+    a_conversation_of(
+        &fixture,
+        "22222222-2222-4222-8222-222222222222",
+        "SECOND SESSION",
+        3,
+    );
+
+    // Back to the pane. Wait until this node has settled on the second session, so what follows
+    // is not a race but the ordinary state an operator returns to.
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let settled = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut reopened = None;
+    while tokio::time::Instant::now() < settled && reopened.is_none() {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane.as_str() || message["t"] != "convo" {
+            continue;
+        }
+        if serde_json::to_string(&message["turns"])
+            .unwrap_or_default()
+            .contains("SECOND SESSION 3")
+        {
+            reopened = Some(message);
+        }
+    }
+    let reopened = reopened.expect("the pane never settled on the second session");
+    assert_eq!(
+        reopened["more"],
+        json!(false),
+        "the second session is three turns deep; there is nothing above them: {reopened}",
+    );
+
+    // The conversation screen asks for older turns off the cursor it kept from the session before.
+    // The transcript now open has never heard of that turn.
+    send(
+        &mut socket,
+        json!({ "t": "convo.load", "pane": pane, "before": cursor }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["pane"] != pane.as_str() {
+            continue;
+        }
+        if message["t"] == "error" {
+            return;
+        }
+        if message["t"] != "convo" {
+            continue;
+        }
+        let turns: Vec<String> = message["turns"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|t| t["blocks"][0]["text"].as_str())
+            .map(str::to_string)
+            .collect();
+        assert!(
+            turns.is_empty(),
+            "a cursor this transcript has never heard of was answered with a page of it anyway, \
+             which the client files above the conversation as older turns: {turns:?}",
+        );
+        return;
+    }
+    panic!("the ask for older turns was never answered at all");
 }
 
 /// The other half of the same gap, and the one that actually happens: the transcript **does not

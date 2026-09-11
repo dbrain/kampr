@@ -36,17 +36,25 @@ private const val REFUSED =
     "This node no longer recognises this device. It was removed, or the node was set up again. " +
         "Pair it once more to get back in."
 
-// Keystrokes are addressed to the shell in front of the operator now. A queue that outlives the
-// socket replays a half-typed command into a live shell a reconnect later — measured at twenty
-// seconds — so input is dropped the moment there is nowhere to put it and the pane says so.
-// Everything else here is a standing intent that is still true after a reconnect and keeps its
-// place in the queue.
+// Writes addressed to whatever is on the pane *now*. A queue that outlives the socket replays a
+// half-typed command into a live shell a reconnect later — measured at twenty seconds — so these
+// are dropped the moment there is nowhere to put them and the pane says so. Everything else here
+// is a standing intent that is still true after a reconnect and keeps its place in the queue.
+//
+// **The test is what the write lands on, not whether it looks like a keystroke.** `answer.submit`
+// and `paste` were on the wrong side of that for being neither: the node turns a commit into
+// right-arrow then Enter (#421), so one replayed after a drop is Enter pressed into a shell line
+// the operator never submitted, or into an agent's prompt box they were still writing in. A paste
+// types a path into whatever has the pane by then. Neither is still true a reconnect later, and
+// the harm is the same harm this list was written for.
 private val ClientMsg.typing: String?
     get() = when (this) {
         is ClientMsg.InputText -> pane
         is ClientMsg.InputB64 -> pane
         is ClientMsg.InputKeys -> pane
         is ClientMsg.Answer -> pane
+        is ClientMsg.AnswerSubmit -> pane
+        is ClientMsg.Paste -> pane
         else -> null
     }
 

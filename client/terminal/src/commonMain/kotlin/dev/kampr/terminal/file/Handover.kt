@@ -39,6 +39,14 @@ suspend fun handoverOf(pane: PaneState, io: PaneIo, picked: PickedFile): Handove
     }
     val b64 = withContext(Dispatchers.Default) { Base64.encode(picked.bytes) }
     pane.clearRefusal()
+    val undelivered = pane.undelivered
     io.send(ClientMsg.Paste(pane.id, b64, picked.name))
+    // **A paste with no socket to go down is a refusal, not a send.** It is dropped rather than
+    // queued for the reason a keystroke is — replayed on a reconnect it types a path into whatever
+    // has the pane by then — and a strip still reading "sent" over bytes that were dropped is the
+    // lie that drop exists to prevent.
+    if (pane.undelivered > undelivered) {
+        return Handover.Refused("$name was not sent: there is no connection to the node.")
+    }
     return Handover.Sent(name)
 }

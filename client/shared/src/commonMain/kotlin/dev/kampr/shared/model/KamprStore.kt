@@ -188,9 +188,14 @@ class KamprStore {
     // end nothing else announces: the node has no frame meaning "never mind", so the herd entry
     // clearing is the recovery signal. Every other code stays until it is dismissed, because every
     // other code is an answer to something the operator asked for.
+    //
+    // `node_offline` on a relayed pane is the same shape and was missing from it. The hub now
+    // watches the pane again when its peer rejoins the herd, so the grid comes back on its own —
+    // and a red strip still saying the node left, over a pane that is moving, is the lie the
+    // recovery was added to stop.
     private fun dropRepairedFault() {
         val failure = _failure.value ?: return
-        if (failure.code != "stream_unavailable") return
+        if (failure.code != "stream_unavailable" && failure.code != "node_offline") return
         val pane = failure.pane ?: return
         if (paneInfo(pane)?.detail == null) _failure.value = null
     }

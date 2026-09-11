@@ -140,6 +140,49 @@ class FreshAgentTest {
             )
         }
 
+    // The same report again, from the window the withdrawal has not reached yet: *"conversation
+    // screen sometimes shows the new conversation pane other times it shows a 404 ... when reusing
+    // a terminal that previously had another Claude attached before exiting and opening claude
+    // again - recovers when season started properly but it's jank at the time"*.
+    //
+    // The test above is the case where the node got a word in. This is the case where it has not
+    // and cannot: a harness writes its marker when it opens and its transcript later still (#259,
+    // #311), so between two sessions the pane names nothing, nothing resolves, and there is no
+    // withdrawal to send because the node cannot yet tell which session the pane has moved to.
+    //
+    // What the node *can* say in that window it already says every time it patches the herd:
+    // `has_conversation` is false. That is the transcript half of the pair, and it is defined as
+    // whether `convo.load` will answer with anything — so a view that offers to page anyway is
+    // offering a press the node has already said it will refuse, and `not_found` drawn over the
+    // conversation is what the operator calls the 404.
+    //
+    // The mutation that must fail: page on `convoMore` alone, and the offer comes back with a
+    // `convo.load` behind it.
+    @Test
+    fun aPaneBetweenTwoSessionsDoesNotAskForATranscriptTheNodeSaysIsNotThere() = runComposeUiTest {
+        val store = KamprStore()
+        store.accept(
+            ServerMsg.Convo(
+                pane = PANE_ID, cursor = "a-1", more = true,
+                turns = listOf(proseTurn("a-1", "an answer from the run before")),
+            ),
+        )
+
+        // No withdrawal. The agent was quit and started again while nobody could see it, and all
+        // the node knows so far is that there is no transcript on this pane.
+        val io = conversation(
+            demoInfo(conversation = false, converses = true, status = "idle"),
+            store,
+        )
+
+        onNodeWithText("loading earlier turns").assertDoesNotExist()
+        assertEquals(
+            emptyList(),
+            io.sent.filterIsInstance<ClientMsg.ConvoLoad>().toList(),
+            "the pane asked to page a transcript the node had already said it does not have",
+        )
+    }
+
     // The two panes that genuinely have nothing to read are still told so, and told which of the
     // two reasons it is.
     @Test

@@ -54,6 +54,8 @@ import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
+import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
@@ -189,8 +191,19 @@ private fun MatchTheView(
     // view to be worth a reflow, and everything below answers to *that* rather than to the switch:
     // a strip saying a pane is held, and a release for a hold nobody took, are both lies.
     //
+    // **A socket dying is how a matched hold ends** (ADR 0013 point 1): the node lets the lease go
+    // with the socket and puts the pane back. So a reconnect arrives at a pane this client no
+    // longer holds, and nothing else here moves on one — `cols` and `rows` are the *view's* own
+    // geometry, which a dropped socket does not change, and `claimed` is remembered per pane. The
+    // claim was therefore never re-issued and the strip went on saying the desk sees this pane at
+    // this shape, over a pane already given back.
+    val live = LocalConnectionStatus.current is ConnectionStatus.Live
     var claimed by remember(paneId) { mutableStateOf(false) }
-    LaunchedEffect(paneId, on, cols, rows) {
+    LaunchedEffect(paneId, on, cols, rows, live) {
+        if (!live) {
+            claimed = false
+            return@LaunchedEffect
+        }
         if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
         claimed = io.claimMatch(paneId, cols, rows)

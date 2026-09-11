@@ -365,6 +365,7 @@ impl Peers {
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),
             superseded: AtomicBool::new(false),
+            gone: AtomicBool::new(false),
         });
         // A key is a node's identity, so a second link holding the same one is that node dialling
         // again before this hub noticed the first socket die. Two rows for one peer publish it
@@ -440,11 +441,18 @@ impl Peers {
         let state = link.state.lock().unwrap();
         let detail = format!("{} is not connected: {reason}", link.name);
         for pane in link.panes.lock().unwrap().values().filter_map(Weak::upgrade) {
-            pane.fail("node_offline", &detail);
+            pane.gone("node_offline", &detail);
         }
         // A half-served attachment ends with the link rather than waiting out its own deadline:
         // the request behind it is a client holding a socket open for bytes that cannot arrive.
         link.transfers.lock().unwrap().clear();
+        // And a manage op in flight, for the same reason and one more: it is a control the
+        // operator is watching a spinner on. Dropping its waiter answers it now instead of after
+        // `MANAGE_TIMEOUT`, and the flag is what makes that answer *"that node is not connected"*
+        // rather than *"that node did not answer"* — which is a peer that is there and slow, and
+        // the wrong thing to tell somebody whose laptop just closed.
+        link.gone.store(true, Ordering::Relaxed);
+        link.manages.lock().unwrap().clear();
         // A superseded link is the same node's previous socket, and its successor is already
         // serving: remembering it would list that node twice, once offline for ever.
         if !link.superseded.load(Ordering::Relaxed) {
@@ -694,6 +702,10 @@ pub struct PeerLink {
     next_request: AtomicU64,
     closed: Arc<tokio::sync::Notify>,
     closed_reason: Mutex<Option<String>>,
+    /// Set when the link has been taken out of service, so a request that was in flight reports
+    /// *why* it will not be answered. `closed_reason` cannot: it is set by [`Self::close`] alone,
+    /// and a peer that simply stops talking never goes through it.
+    gone: AtomicBool,
     superseded: AtomicBool,
 }
 
@@ -747,7 +759,10 @@ impl PeerLink {
             Ok(Ok(reply)) => Ok(reply),
             _ => {
                 self.manages.lock().unwrap().remove(&id);
-                Err(RelayError::NoAnswer)
+                match self.gone.load(Ordering::Relaxed) {
+                    true => Err(RelayError::Offline(format!("{} is not connected", self.name))),
+                    false => Err(RelayError::NoAnswer),
+                }
             }
         }
     }
@@ -880,13 +895,11 @@ impl PeerLink {
                 self.request(json!({
                     "t": "watch", "pane": pane, "scrollback": true, "conversation": true
                 }))?;
-                existing.conversation.store(true, Ordering::Relaxed);
             }
             return Ok(watcher);
         }
         let remote = Arc::new(RemotePane {
             pane: pane.to_string(),
-            conversation: AtomicBool::new(conversation),
             shadow: Mutex::new(Shadow::default()),
             history: Mutex::new(History::default()),
             fanout: Fanout::new(fanout),
@@ -1176,7 +1189,6 @@ pub struct PeerHold {
 #[derive(Debug)]
 struct RemotePane {
     pane: String,
-    conversation: AtomicBool,
     shadow: Mutex<Shadow>,
     history: Mutex<History>,
     fanout: Fanout,
@@ -1193,6 +1205,13 @@ impl RemotePane {
             code: code.to_string(),
             message: message.to_string(),
         });
+    }
+
+    /// The error, and then the end of the stream — in that order, because a queue drains what it
+    /// is owed before it reports the ending. See [`Fanout::end`].
+    fn gone(&self, code: &str, message: &str) {
+        self.fail(code, message);
+        self.fanout.end();
     }
 
     fn geometry(&self) -> (u16, u16) {
@@ -1327,6 +1346,7 @@ mod tests {
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),
             superseded: AtomicBool::new(false),
+            gone: AtomicBool::new(false),
         })
     }
 

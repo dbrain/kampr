@@ -642,3 +642,86 @@ fn a_gap_is_refilled_when_the_rows_continue_it_and_refused_when_they_do_not() {
         "no row is repeated across the join"
     );
 }
+
+/// **The cache a poll extends has to be the cache a single lay-out would have built.**
+///
+/// History only keeps up with the grid because an append lays out its own rows and joins them on
+/// (probe #529: a full lay-out is linear in the ring's depth, 55 ms at the 20 000-row bound, and
+/// paying it per read is what made a reader's history seconds behind the pane). That is only sound
+/// because herdr re-emits every row's styling on the row itself (probe #530), so a row laid out
+/// alone is the row it would have been laid out as in company.
+///
+/// Filled seven rows at a time through overlapping reads, the way the poller really fills it,
+/// against the same content ingested once.
+///
+/// The mutation that must fail: lay the tail out at its own widest row rather than the ring's, or
+/// keep the cache across a row that widens the grid, and the rows stop matching.
+#[test]
+fn a_ring_filled_a_few_rows_at_a_time_renders_what_one_filled_in_one_go_renders() {
+    let lines: Vec<String> = (1..=900)
+        .map(|i| match i % 5 {
+            0 => format!("\u{1b}[31mline-{i} a colour that is never closed"),
+            1 => format!("\u{1b}[1mline-{i} bold\u{1b}[0m"),
+            2 => format!("line-{i} plain"),
+            3 => format!("\u{1b}[38;5;208mline-{i} orange\u{1b}[0m"),
+            // A row wider than everything around it, which is the one thing that may not be
+            // joined onto a cache laid out without it.
+            _ => format!("line-{i} {}", "wide ".repeat(i % 17)),
+        })
+        .collect();
+
+    let mut whole = ScrollbackRing::new(20000);
+    whole.ingest(&raw(&refs(&lines), 200, 0, false));
+    let want = whole.render();
+
+    let mut piecemeal = ScrollbackRing::new(20000);
+    let mut at = 0usize;
+    while at < lines.len() {
+        let end = (at + 7).min(lines.len());
+        // Successive reads overlap, and the overlap is what proves adjacency.
+        let start = at.saturating_sub(3);
+        piecemeal.ingest(&raw(&refs(&lines[start..end]), 200, 0, false));
+        at = end;
+    }
+    let got = piecemeal.render();
+
+    assert_eq!(got.from_top, want.from_top, "the ring starts somewhere else");
+    assert_eq!(got.total_rows, want.total_rows, "a different number of rows");
+    assert_eq!(
+        got.rows.len(),
+        want.rows.len(),
+        "a different number of laid-out rows"
+    );
+    for (g, w) in got.rows.iter().zip(want.rows.iter()) {
+        assert_eq!(g.row, w.row, "rows fell out of step");
+        assert_eq!(g.cells, w.cells, "row {} was laid out differently", g.row);
+    }
+}
+
+/// The tail a socket has not been sent is the tail, and a ring that restarted underneath it is the
+/// whole ring however adjacent the indices look.
+#[test]
+fn a_reader_is_sent_the_tail_it_is_missing_and_a_restart_is_sent_whole() {
+    let mut ring = ScrollbackRing::new(20000);
+    let first = numbered(1, 300);
+    ring.ingest(&raw(&refs(&first), 80, 0, false));
+    let opening = ring.render();
+    assert_eq!(opening.from_top, 0);
+    let sent = opening.from_top + opening.total_rows;
+    let era = opening.era;
+
+    let grown = numbered(1, 340);
+    ring.ingest(&raw(&refs(&grown), 80, 0, false));
+    let tail = ring.render_since(sent, era);
+    assert_eq!(tail.from_top, 300, "the reader was sent rows it already had");
+    assert_eq!(tail.rows.len(), 40, "the tail is the forty rows that are new");
+    assert_eq!(tail.total_rows, 40);
+
+    // A read sharing nothing with what is held restarts the ring, and what the reader holds is
+    // not this era's however well the numbers line up.
+    let elsewhere: Vec<String> = (1..=50).map(|i| format!("other-{i}")).collect();
+    ring.ingest(&raw(&refs(&elsewhere), 80, 0, true));
+    let after = ring.render_since(tail.from_top + tail.total_rows, era);
+    assert_ne!(after.era, era, "the restart did not bump the era");
+    assert_eq!(after.rows.len(), 50, "a restarted ring was sent as a tail");
+}

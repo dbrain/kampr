@@ -82,8 +82,24 @@ pub struct RegistryConfig {
 /// under-count by three orders of magnitude.
 #[derive(Debug, Clone, Copy)]
 pub struct HistoryPolicy {
-    /// Rows allowed to accumulate between reads. Well under the 1000-row cap, because the rate
-    /// estimate always lags the pane by one interval.
+    /// Rows allowed to accumulate between reads — which is also **how far behind the pane a
+    /// reader's history is allowed to be**, and that is the tighter of the two demands.
+    ///
+    /// It was 400, sized only as a margin under herdr's 1000-row cap, and at that budget a pane
+    /// producing forty rows a second was read twice a second: the rows that had left the live grid
+    /// sat in neither half of what the client draws for seconds at a time, and the surface joined
+    /// the grid straight onto history that did not continue it. Measured on a real pane at that
+    /// rate, the worst seam was **158 rows** (probe #529).
+    ///
+    /// So the budget is now the display bound, and the cap margin is a consequence of it rather
+    /// than its purpose. The lay-out this pays for is incremental
+    /// ([`ScrollbackRing::render_since`]), so a read costs its own rows instead of the ring's
+    /// whole depth, which is what makes a cadence this fast affordable at all.
+    ///
+    /// **What it costs herdr was counted rather than argued**: +1.4 calls a second on a producing
+    /// watched pane, the scrollback read itself going 0.2 → 0.9/s, against a seam of 79 rows
+    /// becoming 10 (probe #533). The interval is derived from a *smoothed* rate and the ring is
+    /// only re-read once it has moved, so the fivefold the formula suggests does not arrive.
     pub row_budget: u32,
     pub fastest: Duration,
     /// Ceiling while the pane is producing frames at all.
@@ -96,7 +112,7 @@ pub struct HistoryPolicy {
 impl Default for HistoryPolicy {
     fn default() -> Self {
         Self {
-            row_budget: 400,
+            row_budget: 8,
             fastest: Duration::from_millis(100),
             quiet: Duration::from_secs(2),
             idle: Duration::from_secs(30),
@@ -314,6 +330,24 @@ impl PaneRegistry {
         let mut ring = ScrollbackRing::new(self.config.scrollback_max_rows);
         ring.ingest(&raw);
         Ok(Some(ring.render()))
+    }
+
+    /// The rows of a watched pane's history a reader has not been sent yet.
+    ///
+    /// The whole ring when `sent_era` says what they hold belongs to a run of rows this one did not
+    /// grow from — the indices cannot say it on their own (see [`ScrollbackDoc::era`]).
+    pub async fn scrollback_since(
+        &self,
+        pane_id: &str,
+        sent_rows: u32,
+        sent_era: u32,
+    ) -> Result<Option<ScrollbackDoc>> {
+        if let Some(entry) = self.lookup(pane_id) {
+            return Ok(Some(
+                entry.history.lock().unwrap().render_since(sent_rows, sent_era),
+            ));
+        }
+        self.scrollback(pane_id).await
     }
 
     /// Bumps when a watched pane's history document moves, so a client can be sent it when there

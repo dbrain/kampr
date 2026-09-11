@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithText
@@ -11,13 +14,18 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -53,6 +61,26 @@ private fun pane(vararg frames: String): Pair<KamprStore, PaneState> {
     return store to store.pane(PANE_ID)
 }
 
+private class SubIo : PaneIo {
+    val sent = mutableListOf<ClientMsg>()
+    override fun send(msg: ClientMsg) {
+        sent += msg
+    }
+    override fun prefs(paneId: String) = PanePrefs()
+    override fun show(view: PaneView) = Unit
+}
+
+@Composable
+private fun Screen(pane: PaneState, io: PaneIo, status: ConnectionStatus) {
+    CompositionLocalProvider(
+        LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+        LocalPaneIo provides io,
+        LocalConnectionStatus provides status,
+    ) {
+        Box(Modifier.fillMaxSize()) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) }
+    }
+}
+
 @Composable
 private fun Screen(pane: PaneState) {
     CompositionLocalProvider(
@@ -66,6 +94,48 @@ private fun Screen(pane: PaneState) {
 // The operator's ask, verbatim: *see what the agent is doing by selecting it.*
 @OptIn(ExperimentalTestApi::class)
 class SubConversationSurfaceTest {
+    // **A follow is per-socket.** The node holds it on the pane handle the watch built, and a
+    // reconnect builds a new one empty — so unless something re-announces it, the panel keeps the
+    // turns it had and never takes another while the subagent goes on working. The whole reason to
+    // open one is to watch it work.
+    //
+    // Nothing did: a sub is asked for when the reader opens it and never again, and the cached sub
+    // survives a reconnect. The parent conversation catching up normally is what made that read as
+    // the subagent having stopped rather than as the view being dead — every other surface
+    // answering correctly, which is the shape #233 taught this project to fear.
+    //
+    // Re-asking is free by the rule the open path already relies on: the page is `fresh`, so a
+    // second ask is how a running subagent's latest step arrives.
+    //
+    // The mutation that must fail: drop the re-announce, and the second ask never goes.
+    @Test
+    fun aSubagentTheReaderHadOpenIsFollowedAgainAfterAReconnect() = runComposeUiTest {
+        val (_, pane) = pane(LAUNCHING, LAUNCHED)
+        val io = SubIo()
+        var status: ConnectionStatus by mutableStateOf(ConnectionStatus.Live("full"))
+        setContent { Screen(pane, io, status) }
+        waitForIdle()
+        onNodeWithContentDescription(CARD).performClick()
+        waitForIdle()
+        assertEquals(
+            1,
+            io.sent.count { it is ClientMsg.ConvoSub },
+            "opening a subagent did not ask the node to follow it: ${io.sent}",
+        )
+
+        status = ConnectionStatus.Offline("the wifi went", 1_000)
+        waitForIdle()
+        status = ConnectionStatus.Live("full")
+        waitForIdle()
+
+        assertEquals(
+            2,
+            io.sent.count { it is ClientMsg.ConvoSub },
+            "the follow died with the socket and nothing asked for it again, so this panel would " +
+                "never take another turn: ${io.sent}",
+        )
+    }
+
     @Test
     fun aTurnThatLaunchedAnAgentOffersToOpenItByKindAndTitle() = runComposeUiTest {
         val (_, pane) = pane(LAUNCHING)

@@ -196,7 +196,29 @@ impl Journal for FileJournal {
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page {
         let store = self.parser.store();
         let turns = store.turns();
-        let end = before.and_then(|id| store.position(id)).unwrap_or(turns.len());
+        // **A cursor this transcript has never heard of is not a cursor at the end of it.**
+        //
+        // It used to fall through to `turns.len()`, which is the answer for *no* cursor — so a
+        // client paging off a cursor it kept from the session that ran in this pane before was
+        // handed the newest page of the session running in it now, and filed the whole of the
+        // conversation it was already looking at above itself as older turns. A read that failed
+        // and looked like one that worked (#233).
+        //
+        // There is no page above a turn that is not here, and saying so is what lets the client
+        // stop asking.
+        let end = match before {
+            Some(id) => match store.position(id) {
+                Some(at) => at,
+                None => {
+                    return Page {
+                        turns: Vec::new(),
+                        cursor: None,
+                        more: false,
+                    };
+                }
+            },
+            None => turns.len(),
+        };
         let cut = end.saturating_sub(limit);
         let start = opening(turns, cut, end.saturating_sub(limit.saturating_mul(REACH)));
         let slice = turns[start..end].to_vec();

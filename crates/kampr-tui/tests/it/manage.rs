@@ -1200,6 +1200,45 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
     conn.sent_nothing().await;
 }
 
+/// **A socket dying is how a matched hold ends** (ADR 0013 point 1): the node lets the lease go and
+/// puts the pane back the moment this client stops answering, which is what
+/// `a_matched_pane_is_put_back_when_the_socket_holding_it_stops_answering` proves from the node's
+/// end. So a reconnect arrives at a pane that is no longer held.
+///
+/// This client remembered it anyway, and [`matching_step`] declines a target it believes it already
+/// holds — so a desk-sized window came back showing the pane at its own small geometry, the strip
+/// still said it was holding it, and the menu offered to *stop* a hold nobody had. Rule 3 wants the
+/// hold visible wherever it is held; that made it visible where it was not.
+///
+/// The mutation that must fail: leave `matching` standing across `Event::Disconnected`, and the
+/// second claim never goes.
+#[tokio::test]
+async fn a_reconnect_claims_the_pane_again_rather_than_believing_it_still_holds_one() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+    app.match_view(Some(at), 120, 40);
+    let claimed = conn.op().await;
+    assert_eq!(claimed["mode"], "match", "{claimed}");
+
+    app.absorb(&Event::Disconnected {
+        reason: "the wifi went".to_string(),
+    });
+
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    let again = conn.op().await;
+    assert_eq!(
+        again["mode"], "match",
+        "the pane was never claimed again after the socket came back: {again}",
+    );
+    assert_eq!((&again["cols"], &again["rows"]), (&json!(120), &json!(40)));
+}
+
 /// **The refusal that is a question, not an outcome.**
 ///
 /// herdr will not close a workspace that still has linked worktree workspaces open — the group

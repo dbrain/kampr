@@ -1346,6 +1346,59 @@ async fn a_peer_dialling_again_replaces_the_link_it_had() {
     hub.stop();
 }
 
+/// **A peer coming back is not a pane coming back, and it used to be the operator's job to notice.**
+///
+/// A link dropping told every pane on it once and then left its reader parked: only a watcher
+/// falling behind ended a fan-out queue, so `pump_peer_pane`'s `node_offline` branch — written for
+/// exactly this — could not be reached. Then the peer redialled, the hub republished the node, the
+/// sidebar went green, and `input` resolved down the *new* link while the grid never moved again.
+/// One of two paths dead with every other surface answering correctly, which is [#233](#)'s shape
+/// at the mesh hop, and recovery meant backing out of the pane and going in again.
+///
+/// So the queue ends with the link, and the reader watches again when the pane's node is back. The
+/// watch that reaches the returning peer here is the hub's own: nothing is sent on the viewer's
+/// socket after the first one.
+///
+/// The mutation that must fail: stop ending the queue on `detach`, or return instead of
+/// re-watching, and the second `watch` never reaches the peer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relayed_pane_a_client_never_stopped_watching_is_watched_again_when_its_peer_comes_back() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let pane = "01JBACK/w1:p1";
+
+    let mut peer = Scripted::join(&hub, &peer_home, "01JBACK", "laptop").await;
+    peer.advertise(&[("01JBACK", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let mut viewer = hub.connect().await;
+    until(&mut viewer, "hello", 10).await;
+    send(&mut viewer, json!({ "t": "watch", "pane": pane })).await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["t"], "watch", "{asked}");
+    assert_eq!(asked["pane"], pane);
+
+    // The socket dies with nobody saying goodbye, which is what a closed laptop looks like.
+    drop(peer);
+    let told = refusal(&mut viewer, pane, "node_offline", 20).await;
+    assert_eq!(told["code"], "node_offline", "{told}");
+
+    // And it comes back — enrolled already, so no join code — holding the same pane.
+    let mut back = Scripted::dial(&hub, &peer_home, "01JBACK", "laptop", None).await;
+    back.advertise(&[("01JBACK", "laptop")], &[pane]).await;
+
+    let rewatched = back.next_but_ping().await;
+    assert_eq!(
+        rewatched["t"], "watch",
+        "a pane the operator never stopped looking at was not watched again when its node came \
+         back, so its grid stays dead under a herd that has gone green: {rewatched}",
+    );
+    assert_eq!(rewatched["pane"], pane);
+
+    hub.stop();
+}
+
 /// Style ids are minted append-only by one encoder per link, so a batch that starts past the end
 /// of the table this hub holds is not a gap — there is no honest way to make one — and the number
 /// is unbounded, so resizing to it is an allocation a forty-byte message can ask for.

@@ -38,10 +38,14 @@ impl ConvoWarmth {
     /// the caller's alone until [`put`](Self::put) hands it back.
     pub fn take(&self, pane: &str) -> Warmth {
         let mut kept = self.0.lock().unwrap();
-        match kept.iter().position(|(id, _)| id == pane) {
+        let taken = match kept.iter().position(|(id, _)| id == pane) {
             Some(at) => kept.remove(at).1,
             None => warmth(),
-        }
+        };
+        // Whoever is picking this up has not checked it yet, however well checked it was by the
+        // pump that put it down. See [`Warm::confirmed`].
+        taken.lock().unwrap().confirmed = false;
+        taken
     }
 
     /// Hands a pane's conversation back when its watcher lets go.
@@ -83,6 +87,35 @@ mod tests {
         let table = ConvoWarmth::default();
         table.put("p1", opened("/t/one.jsonl"));
         assert_eq!(held(&table, "p1"), Some(PathBuf::from("/t/one.jsonl")));
+    }
+
+    /// **A warm parse is presence, not currency**, and the table is where that distinction has to
+    /// be enforced: whoever picks a conversation up has not checked it, however thoroughly the
+    /// pump that put it down had.
+    ///
+    /// Without this the handle a re-watch builds is holding the previous session's transcript,
+    /// open and answering, for as long as it takes the new pump to reach its first tick — and a
+    /// conversation screen asks for older turns the moment it opens.
+    ///
+    /// The mutation that must fail: hand the entry back as it was put down, and a pane pages the
+    /// conversation of the session before it.
+    #[test]
+    fn a_conversation_handed_to_a_new_reader_is_one_nobody_has_checked_yet() {
+        let table = ConvoWarmth::default();
+        let warm = opened("/t/one.jsonl");
+        warm.lock().unwrap().confirmed = true;
+        table.put("p1", warm);
+
+        let taken = table.take("p1");
+        assert!(
+            !taken.lock().unwrap().confirmed,
+            "a parse was handed to a pump that has not checked it, marked as checked",
+        );
+        assert_eq!(
+            taken.lock().unwrap().opened,
+            Some(PathBuf::from("/t/one.jsonl")),
+            "and the parse itself still has to survive, or none of this was worth keeping",
+        );
     }
 
     /// A journal hands back what changed *since the last read*, so two pumps reading one would

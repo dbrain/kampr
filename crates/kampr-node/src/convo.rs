@@ -64,6 +64,16 @@ pub struct Warm {
     pub opened: Option<PathBuf>,
     pub handle: Option<Handle>,
     pub facets: Option<FacetFeed>,
+    /// Whether the pump running now has checked that the transcript in `journal` is this pane's
+    /// current one, rather than the one a previous pump left warm here.
+    ///
+    /// **A warm parse is presence, not currency.** It is the whole point of [`crate::warm`] that it
+    /// outlives the pump that built it, so on a re-watch the handle's journal is already open and
+    /// already answers — with the conversation of whatever session last ran in this pane. The two
+    /// checks in [`pump_convo`] are what settle it, and nothing may page the journal until they
+    /// have run: a `convo.load` arrives the moment a conversation screen opens, which is the same
+    /// moment a pane is re-watched.
+    pub confirmed: bool,
 }
 
 impl Warm {
@@ -88,6 +98,7 @@ pub fn warmth() -> Warmth {
         opened: None,
         handle: None,
         facets: None,
+        confirmed: false,
     }))
 }
 
@@ -418,6 +429,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             warm.lock().unwrap().forget();
             due = true;
         }
+
+        // Both checks above are what [`Warm`] means by `opened` and `handle` saying the transcript
+        // below is still the right transcript. Until they have run, this pump has said nothing
+        // about the parse it inherited, and [`Warm::confirmed`] is what stops `convo.load` paging
+        // it in the meantime.
+        warm.lock().unwrap().confirmed = true;
 
         // A pane starting a turn is about to have a transcript whether or not it had one before,
         // so the retries a fresh session already spent looking for a file that did not exist yet

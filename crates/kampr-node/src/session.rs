@@ -23,13 +23,21 @@ use tracing::{debug, warn};
 
 /// The least time between two `scrollback` frames on one socket.
 ///
-/// Not a poll any more — the ring says when it has moved ([`kampr_core::PaneRegistry::
-/// scrollback_changes`]) and this socket is woken then. What it still is, is a **floor**: a busy
-/// pane's ring moves ten times a second and laying twenty thousand rows out per socket per move
-/// is a tokio worker with no `.await` in it. Three seconds is the cadence the poll it replaced
-/// ran at, so the rendering cost per watcher is exactly what it was, and the frame now arrives
-/// *when there is one* rather than up to three seconds later.
-const SCROLLBACK_FLOOR: Duration = Duration::from_secs(3);
+/// Not a poll — the ring says when it has moved ([`kampr_core::PaneRegistry::scrollback_changes`])
+/// and this socket is woken then. What it is, is a **floor** on how often a busy pane's ring is
+/// laid out and sent to one socket.
+///
+/// It was three seconds, and three seconds was the whole cost of laying twenty thousand rows out
+/// per socket per move — a tokio worker with no `.await` in it. That is no longer what a send
+/// costs: the lay-out is incremental and a socket is handed only the rows it has not had
+/// ([`kampr_core::PaneRegistry::scrollback_since`]), so the work scales with what the pane just
+/// produced rather than with everything it has ever produced.
+///
+/// What the floor was buying instead was a reader whose history ran seconds behind the grid drawn
+/// directly beneath it — 158 rows of output in neither half of the surface at forty rows a second
+/// (probe #529). At the ring's own fastest cadence there is nothing to coalesce, so the floor is
+/// now that cadence and no slower.
+const SCROLLBACK_FLOOR: Duration = Duration::from_millis(100);
 
 /// How often, and how many times, a blocked pane is re-read for a question its screen had not
 /// finished painting. Bounded so a harness whose dialog Kampr cannot parse costs a handful of
@@ -854,10 +862,23 @@ impl Session {
             );
             return;
         }
-        let Some(transcript) = self.panes.get(pane).and_then(|handle| {
-            let guard = handle.convo.lock().unwrap();
-            guard.as_ref().map(|open| open.path().to_path_buf())
-        }) else {
+        // The same gate `convo_load` takes, because this is the same `Arc` and here it is the
+        // *containment root*: a sub id is a network-supplied path fragment, and what makes serving
+        // one safe is that it resolves under the session tree of the transcript this node derived
+        // for this pane. A warm parse nobody has checked yet is the previous session's transcript,
+        // so proving containment against it proves the wrong thing in both directions — a sub of
+        // the session the pane has left resolves and is served, and a sub of the one it is on now
+        // fails as "no such conversation" on a card the reader can see. See
+        // [`convo::Warm::confirmed`].
+        let Some(transcript) = self
+            .panes
+            .get(pane)
+            .filter(|handle| handle.warm.lock().unwrap().confirmed)
+            .and_then(|handle| {
+                let guard = handle.convo.lock().unwrap();
+                guard.as_ref().map(|open| open.path().to_path_buf())
+            })
+        else {
             self.wire
                 .error(ErrorCode::NotFound, "this pane has no conversation", Some(pane));
             return;
@@ -960,7 +981,13 @@ impl Session {
         let page = self
             .panes
             .get(pane)
-            // Older turns from the transcript already on the screen: a page that merges.
+            // Older turns from the transcript already on the screen: a page that merges — but only
+            // once this pane's pump has said the transcript under the handle is the one the pane
+            // is on *now*. A re-watch hands the handle the previous pump's parse, already open and
+            // already answering, and a conversation screen asks for older turns the moment it
+            // opens — so the unchecked window is reached by opening a pane rather than by any race
+            // an operator could avoid. See [`convo::Warm::confirmed`].
+            .filter(|handle| handle.warm.lock().unwrap().confirmed)
             .and_then(|handle| convo::page(&handle.convo, pane, before, false));
         match page {
             Some(page) => {
@@ -1064,9 +1091,20 @@ impl Session {
     }
 
     fn unwatch(&mut self, pane: &str) {
-        // Before the handle, because a pane nobody is watching is a pane nobody has a terminal
-        // view of — and a hold that outlived its view is exactly the write rule 3 forbids.
-        self.matched.remove(pane);
+        // **The lease is not dropped here, and a watch is not what bounds it.** A pane switch
+        // unwatches the pane being left, so letting go here put the pane back the moment the
+        // operator looked at anything else — while the client goes on holding it for
+        // `MATCH_LINGER_MS`, which is what stops a switch away and back writing two geometries
+        // onto two panes and bouncing them. Coming back inside that window therefore found a pane
+        // the node had already restored and a client that knew it was still held and so asked for
+        // nothing: *"switching to a pane does not resize, so i end up with an itty bitty view of
+        // something that was previously large"*.
+        //
+        // ADR 0013 point 1 says which side is wrong. The lease is owned by the **socket** — the
+        // client's scoped release ends it, and the socket going away is its ceiling, which is what
+        // covers the closed laptop that never sends one. Keeping the token here is also what keeps
+        // that release scoped: an unscoped one supersedes whatever hold is standing, including a
+        // newer viewer's, which is the failure ADR 0013 files under "a bug in the token".
         if let Some(handle) = self.panes.remove(pane) {
             handle.stop();
             self.audit("unwatch", Some(pane), None);
@@ -1290,6 +1328,24 @@ impl Session {
             );
             return;
         };
+        // **Read fresh, exactly as [`Self::moves_to`] does and for the same reason.** A commit is
+        // right-arrow and then Enter (#421), and Enter into a shell runs whatever line is sitting
+        // in it. Its only gate was which harness the pane is running, which says nothing about
+        // whether the question is still there.
+        //
+        // It arrives late by ordinary means rather than by a race: a client queues this across a
+        // dropped socket and sends it on reconnect, measured at twenty seconds. So the question
+        // has to still be on the screen, or this presses Enter into whatever replaced it — a shell
+        // line the operator never submitted, or an agent's prompt box they were still writing in.
+        let standing = pending::read(&session.herdr, &local, agent.as_deref()).await;
+        if !standing.is_some_and(|p| p.multi) {
+            self.wire.error(
+                ErrorCode::BadRequest,
+                "the question this was committing is no longer on the screen",
+                Some(pane),
+            );
+            return;
+        }
         self.audit("answer.submit", Some(pane), Some(json!({ "agent": agent })));
         for stroke in keys {
             if let Err(e) = session
@@ -2184,32 +2240,27 @@ async fn send_history(
     sent_rows: &mut u32,
     sent_era: &mut u32,
 ) -> Option<bool> {
-    let Ok(Some(mut doc)) = registry.scrollback(local).await else {
-        return Some(false);
-    };
+    // The tail this socket has not had yet, trimmed by the ring rather than here — which is what
+    // keeps the cost of a send proportional to what the pane just produced.
+    //
     // **A new era is news even when the indices say nothing happened.** The ring a harness
     // superseded ends exactly where the rows it dropped ended, so `end` does not move and this
     // socket would be told nothing at all — and the refill that follows lands on the same index
     // again, which is what made the client count the shell era as output the pane had just
-    // produced (probe #498).
-    let era = doc.era;
-    let restarted = era != *sent_era;
+    // produced (probe #498). `render_since` answers a restart with the whole ring for that reason:
+    // what this socket holds is not this era's, so a tail would leave it holding the era before it
+    // underneath the rows it was just sent.
+    let Ok(Some(doc)) = registry.scrollback_since(local, *sent_rows, *sent_era).await else {
+        return Some(false);
+    };
     // `total_rows` is a depth, so the ring ends here; `sent_rows` is the same index, one message
     // ago.
     let end = doc.from_top + doc.total_rows;
-    if !restarted && end == *sent_rows && doc.from_top <= *sent_rows {
+    if doc.era == *sent_era && end == *sent_rows {
         return Some(false);
     }
-    // The tail this socket has not had yet. Not on a restart: what it holds is not this era's, so
-    // trimming to what it is missing would leave it holding the era before it under the rows it
-    // was sent.
-    if !restarted && doc.from_top <= *sent_rows {
-        doc.rows.retain(|r| r.row >= *sent_rows);
-        doc.from_top = (*sent_rows).min(end);
-        doc.total_rows = end - doc.from_top;
-    }
     *sent_rows = end;
-    *sent_era = era;
+    *sent_era = doc.era;
     wire.send_scrollback(global, &doc).then_some(true)
 }
 
