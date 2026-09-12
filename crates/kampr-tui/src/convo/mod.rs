@@ -1342,7 +1342,7 @@ pub(super) fn lay_block(block: &Block, at: &Laying<'_>, produced: Option<u32>, o
             ];
             if at.newest_launch == Some(id.as_str()) {
                 spans.push(Span::styled(
-                    "  ⟨ ^b O to open ⟩".to_string(),
+                    "  ⟨ prefix shift+o to open ⟩".to_string(),
                     Style::default().fg(theme.mute),
                 ));
             }
