@@ -11,6 +11,10 @@ pub enum Mode {
     Copy,
     Resize,
     Navigate,
+    /// What a transcript search leaves behind. It is modal for the same reason copy mode is: the
+    /// surface underneath is a reply box, and `n` at a conversation is a letter somebody is
+    /// writing unless something has taken the keyboard and said so.
+    Results,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +55,12 @@ pub enum Action {
     HerdView,
     /// The fleet board. `prefix+shift+f` is unbound in #289's table, like `shift+h`.
     FleetView,
+    /// Take the line half-typed at the pane's own keyboard into the reply box, and empty it
+    /// there. `prefix+shift+c` is unbound in #289's table; plain `c` is herdr's own new-tab.
+    TakeDeskLine,
+    /// Read the conversation this pane's agent launched. `prefix+shift+o` is unbound in #289's
+    /// table; plain `o` is this client's own link-opener and is not free.
+    OpenLaunched,
     /// One command, every online node. `prefix+shift+e` for execute.
     FleetRun,
     FocusPane(Dir),
@@ -179,6 +189,10 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(FleetView)
     } else if shifted(key, 'e') {
         Bind::Do(FleetRun)
+    } else if shifted(key, 'c') {
+        Bind::Do(TakeDeskLine)
+    } else if shifted(key, 'o') {
+        Bind::Do(OpenLaunched)
     } else if shifted(key, 'v') {
         Bind::Do(ToggleView)
     } else if plain(key, '?') {
@@ -209,6 +223,10 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(EditScrollback)
     } else if plain(key, '[') {
         Bind::Enter(Mode::Copy)
+    } else if plain(key, 'y') {
+        Bind::Do(Copy)
+    } else if plain(key, '/') {
+        Bind::Do(SearchForward)
     } else if plain(key, 'z') {
         Bind::Do(ZoomPane)
     } else if plain(key, 'r') {
@@ -332,7 +350,22 @@ pub fn lookup(mode: Mode, key: KeyEvent) -> Option<Bind> {
         Mode::Copy => copy(key),
         Mode::Resize => resize(key),
         Mode::Navigate => navigate(key),
+        Mode::Results => results(key),
     }
+}
+
+/// Stepping the hits a transcript search found. `enter` leaves rather than opening anything: the
+/// step *is* the opening — the transcript is already on the turn.
+pub fn results(key: KeyEvent) -> Option<Bind> {
+    use Action::*;
+    let bind = match key.code {
+        KeyCode::Esc | KeyCode::Enter => Bind::Leave,
+        KeyCode::Down | KeyCode::Char('n') | KeyCode::Char('j') => Bind::Do(RepeatSearch),
+        KeyCode::Up | KeyCode::Char('N') | KeyCode::Char('k') => Bind::Do(RepeatSearchBack),
+        KeyCode::Char('q') => Bind::Leave,
+        _ => return None,
+    };
+    Some(bind)
 }
 
 /// The footers herdr draws, word for word (#290), so the strip under a Kampr pane says what the
@@ -350,5 +383,8 @@ pub fn footer(mode: Mode) -> Option<&'static str> {
         Mode::Navigate => Some(
             "NAVIGATE the sidebar  esc back · up/down row · enter open · space beside · tab cycle · 1-9 workspace",
         ),
+        // None: this mode's own row is the result line, which says both what was found and which
+        // keys step it. A footer over the top of that would cover the answer with the question.
+        Mode::Results => None,
     }
 }

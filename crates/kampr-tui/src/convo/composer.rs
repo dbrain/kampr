@@ -52,6 +52,18 @@ impl Composer {
         self.text(pane).is_empty()
     }
 
+    /// Words moved here from somewhere else, in front of whatever is already being written: they
+    /// were typed first, and `input` would have appended this draft to them anyway.
+    pub fn take(&mut self, pane: &str, text: &str) {
+        let draft = self.drafts.entry(pane.to_string()).or_default();
+        let after = std::mem::take(&mut draft.text);
+        draft.text = match after.is_empty() {
+            true => text.to_string(),
+            false => format!("{text} {after}"),
+        };
+        draft.cursor = draft.text.len();
+    }
+
     pub fn key(&mut self, pane: &str, key: KeyEvent) -> Typed {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);

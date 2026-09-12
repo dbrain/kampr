@@ -139,6 +139,8 @@ impl App {
         if !self.manage.active() {
             self.find
                 .render(frame.buffer_mut(), panes, self.focus.as_deref(), &t);
+            self.search
+                .render(frame.buffer_mut(), panes, self.focus.as_deref(), &t);
         }
         self.layout = layout;
     }

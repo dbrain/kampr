@@ -78,6 +78,21 @@ class MarkdownTest {
         assertTrue(blocks[2] is MdBlock.Quote)
     }
 
+    // A reader copies a quote to paste it somewhere that is not a transcript, so what comes off
+    // the button is what was quoted: the markers are the transcript's own punctuation. Kept from
+    // the body the parse already stripped rather than rebuilt from the blocks, which have had
+    // their inline markup and their table pipes taken apart by then.
+    @Test
+    fun aQuoteKeepsTheWordsItQuotedWithoutTheMarkersThatMarkedThem() {
+        val quote = parseMarkdown(
+            "> Herdr's `truncated` means there was more than you asked for.\n>\n> > not that we hit the cap\n"
+        ).single() as MdBlock.Quote
+        assertEquals(
+            "Herdr's `truncated` means there was more than you asked for.\n\n> not that we hit the cap",
+            quote.text,
+        )
+    }
+
     @Test
     fun inlineMarkupIsSpannedNotLeftAsSyntax() {
         val styles = testInlineStyles()

@@ -237,8 +237,23 @@ impl Client {
         self.send(json!({ "t": "answer", "pane": pane, "key": key }))
     }
 
+    /// Search this pane's whole **transcript** — the conversation the harness recorded, which is
+    /// not the scrollback [`Client::find`] searches. The answer arrives as an
+    /// [`Event::ConvoFound`], so it is gated on `caps.convo_find` for the same reason `find` is.
+    pub fn convo_find(&self, pane: &str, query: &str) -> bool {
+        self.send(json!({ "t": "convo.find", "pane": pane, "query": query }))
+    }
+
     pub fn convo_load(&self, pane: &str, before: Option<&str>) -> bool {
         self.send(json!({ "t": "convo.load", "pane": pane, "before": before }))
+    }
+
+    /// A page of a conversation the pane's agent launched, named by the handle a `sub` block
+    /// carried. **The handle is opaque and resolved by handing it back** — it is not a path and a
+    /// client must not build one. The node then follows what it answers with, one at a time, and
+    /// asking for another replaces it.
+    pub fn convo_sub(&self, pane: &str, id: &str, before: Option<&str>) -> bool {
+        self.send(json!({ "t": "convo.sub", "pane": pane, "id": id, "before": before }))
     }
 
     /// A merge, not a replacement: it names the keys it is changing and a `null` value removes
@@ -409,6 +424,7 @@ impl Inner {
             "scrollback" => self.scrollback(&message),
             "find" => self.found(message),
             "convo" => self.convo(message),
+            "convo.find" => self.convo_found(&message),
             "convo.turn" => self.convo_turn(&message),
             "convo.facets" => self.convo_facets(&message),
             "convo.composer" => self.convo_composer(&message),
@@ -620,6 +636,19 @@ impl Inner {
         }
     }
 
+    fn convo_found(&self, message: &Value) {
+        let Some(pane) = message["pane"].as_str() else {
+            return;
+        };
+        let matches = serde_json::from_value(message["matches"].clone()).unwrap_or_default();
+        self.emit(Event::ConvoFound {
+            pane: pane.to_string(),
+            query: message["query"].as_str().unwrap_or_default().to_string(),
+            matches,
+            total: message["total"].as_u64().unwrap_or_default() as u32,
+        });
+    }
+
     fn convo_turn(&self, message: &Value) {
         let Some(pane) = message["pane"].as_str() else {
             return;
@@ -627,6 +656,7 @@ impl Inner {
         self.emit(Event::ConvoTurn {
             pane: pane.to_string(),
             turns: decode(message.get("turns")),
+            sub: message["sub"].as_str().map(str::to_string),
         });
     }
 

@@ -52,6 +52,10 @@ pub struct Caps {
     /// an unknown `t` being ignored is what makes that safe; a `find` sent to a node with no verb
     /// for it leaves a search waiting for a frame that will never arrive. Defaults false.
     pub find: bool,
+    /// The transcript search beside it, promised **separately**: a peer can be new enough for one
+    /// and predate the other, and one promise standing in for the other is a search that hangs.
+    #[serde(rename = "convo.find")]
+    pub convo_find: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -173,6 +177,10 @@ pub struct ConvoPage {
     pub more: bool,
     pub fresh: bool,
     pub turns: Vec<Value>,
+    /// The handle of a conversation the pane's agent **launched**, absent on the pane's own. A
+    /// page wearing one is always `fresh`: a launched conversation shares no turn id with the
+    /// transcript it was launched from, so there is nothing to merge it into.
+    pub sub: Option<String>,
 }
 
 /// Why a pane has no picture, or why an op was refused.
@@ -234,6 +242,14 @@ pub enum Event {
         current: Option<u32>,
     },
     Convo(ConvoPage),
+    /// What a `convo.find` matched over the pane's whole transcript. `total` is every matching
+    /// **turn**; `matches` is a capped list of them, newest first.
+    ConvoFound {
+        pane: String,
+        query: String,
+        matches: Vec<kampr_core::wire::ConvoMatch>,
+        total: u32,
+    },
     /// What a harness wrote down about the *session* rather than about a turn. Sent when a
     /// conversation opens and again whenever it moves, and the newest one **replaces** what is
     /// held rather than merging into it.
@@ -244,6 +260,9 @@ pub enum Event {
     ConvoTurn {
         pane: String,
         turns: Vec<Value>,
+        /// Which conversation these turns belong to: absent for the pane's own, and the handle of
+        /// a launched one the node is following for a reader who opened it.
+        sub: Option<String>,
     },
     /// The line the operator has half-typed at the pane's own keyboard and not yet sent. `text` is
     /// `None` when the composer is empty, and `clear` is the keystroke measured to empty it —

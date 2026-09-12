@@ -118,6 +118,8 @@ pub struct App {
     pub router: Router,
     pub manage: Manage,
     pub find: crate::find::Find,
+    /// The transcript's own search, which is a different history from the one `find` asks about.
+    search: crate::convo::Search,
     pub mouse: Mouse,
     pub images: Images,
     pub convo: Convo,
@@ -194,6 +196,7 @@ impl App {
             router: Router::with_prefix(options.prefix),
             manage: Manage::new(),
             find: crate::find::Find::default(),
+            search: crate::convo::Search::default(),
             mouse: Mouse::new(),
             images,
             convo: Convo::new(),
@@ -303,11 +306,30 @@ impl App {
             }
             Event::Managed(_) | Event::Caps(_) => self.manage.observe(event),
             Event::Scrollback { pane, .. } => self.absorb_ring(pane),
+            Event::ConvoFound {
+                pane,
+                query,
+                matches,
+                total,
+            } => {
+                self.search.found(pane, query, matches.clone(), *total, true);
+                self.aim_at_match(&pane.clone());
+            }
             Event::Convo(_)
             | Event::ConvoTurn { .. }
             | Event::ConvoFacets { .. }
             | Event::ConvoComposer { .. }
-            | Event::Pending(_) => self.convo.absorb(event),
+            | Event::Pending(_) => {
+                self.convo.absorb(event);
+                // **The walk to a hit is pages arriving one at a time.** A turn forty back is in
+                // a page this client has never held, and asking for the next one only as the last
+                // lands is what keeps the walk bounded by the transcript rather than by a loop.
+                if let Event::Convo(page) = event
+                    && let Some(before) = self.convo.walking(&page.pane)
+                {
+                    self.client.convo_load(&page.pane, Some(&before));
+                }
+            }
             _ => {}
         }
     }

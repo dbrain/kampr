@@ -45,7 +45,10 @@ impl Router {
     }
 
     pub fn modal(&self) -> bool {
-        matches!(self.mode(), Mode::Copy | Mode::Resize | Mode::Navigate)
+        matches!(
+            self.mode(),
+            Mode::Copy | Mode::Resize | Mode::Navigate | Mode::Results
+        )
     }
 
     pub fn footer(&self) -> Option<&'static str> {

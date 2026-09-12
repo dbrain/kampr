@@ -418,6 +418,38 @@ do that a herdr at the desk cannot.
 
 **Done when** `⚑ blocked` in the sidebar is one keystroke from reading the question and answering it.
 
+### What the surface grew after that, and what each of them was
+
+The transcript shipped as a thing to read, and four of the things a reader does with one were
+missing. Each is a key rather than a control because there is nowhere to put a control: the row at
+the foot is borrowed and the surface under it is a reply box, so a bare letter is a letter somebody
+is writing.
+
+- **`prefix shift+o` — the conversation this agent launched.** A `sub` block fell through to
+  `Unknown` and was dropped, so the CLI drew the tool card that started a subagent and nothing at
+  all about what it went on to say. Newest first and then back through the older ones, because a
+  turn that launched three at once gives a reader no other way to name which they mean. The node
+  follows one at a time, so opening another replaces it; `esc` comes back. Turns carrying a handle
+  nobody is reading are dropped rather than filed against the pane — the whole reason they were
+  never inlined is that they are not what the pane's agent said.
+- **`prefix /` — the transcript, not the scrollback.** Two histories, one key: on a grid it is
+  `find` over what was drawn, on a conversation it is `convo.find` over what the harness recorded.
+  The hits are turns, so stepping one walks back with `convo.load` until the page holding it lands
+  — the same walk the reader makes by scrolling. Gated on `caps["convo.find"]`, and a node without
+  it is not asked: the count then covers the turns held here and says `so far`, because a count
+  over the page the reader opened on must never read as though it covered the conversation.
+- **`prefix y` — the code block.** The mouse is captured and copy mode walks the pane's ring, so a
+  reader who wanted the command an agent had just written had no way at all to get it out. What it
+  takes is the block's **own** text, not the rows that were painted — those are clipped at the
+  pane's width — and without the newline a fence ends with, because a command copied with its
+  return on it is a command the paste runs.
+- **`prefix shift+c` — the line left at the desk.** `input` appends to whatever is half-typed at
+  the pane's own keyboard, so a reply sent from here submits as one run-on line. The strip has
+  always said so and there was no way to act on it. The words move into the reply box **before**
+  the pane is emptied, and the key that empties it is the one the node measured for that harness —
+  a harness nobody has measured one for is offered nothing, because a guess deletes part of
+  somebody's sentence or quits their agent.
+
 ---
 
 ## W9 — Naming that says what a pane *is*

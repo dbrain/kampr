@@ -8,7 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use kampr_client::{Client, Event, Policy, Role, Session, Via};
 use kampr_core::Backoff;
 use kampr_tui::app::{App, Options};
-use kampr_tui::convo::Convo;
+use kampr_tui::convo::{Convo, More};
 use kampr_tui::image::Images;
 use kampr_tui::mouse::Click;
 use kampr_tui::theme::PHOSPHOR;
@@ -57,6 +57,7 @@ fn revision(pane: &str, turns: Value) -> Event {
     Event::ConvoTurn {
         pane: pane.to_string(),
         turns: serde_json::from_value(turns).expect("turns"),
+        sub: None,
     }
 }
 
@@ -628,7 +629,7 @@ fn a_cursor_that_is_absent_is_not_the_same_as_more_being_false() {
     };
 
     let (before, screen) = asked(Some("t_1"), true);
-    assert_eq!(before.as_deref(), Some("t_1"));
+    assert_eq!(before, Some(More::Pane("t_1".into())));
     assert!(screen.contains("pgup for earlier turns"), "{screen}");
 
     // `more` says there is history and no cursor names it: there is nothing this client can ask
@@ -664,8 +665,8 @@ fn paging_past_the_top_of_what_is_held_hands_the_key_back_for_a_convo_load() {
         "the top of what is held is where the node takes over"
     );
     assert_eq!(
-        convo.load_more(PANE).as_deref(),
-        Some("t_0"),
+        convo.load_more(PANE),
+        Some(More::Pane("t_0".into())),
         "and the cursor is what it is asked with"
     );
     assert!(!convo.key("01JNODE/w1:p9", pgup), "a pane with nothing held");
@@ -760,10 +761,15 @@ impl Conn {
     }
 
     fn greet_as(&self, panes: Value, role: &str) {
+        self.greet_with(panes, role, true);
+    }
+
+    fn greet_with(&self, panes: Value, role: &str, convo_find: bool) {
         self.send(json!({
             "t": "hello", "protocol": 1, "node_id": "01JNODE", "node_name": "comingclean",
             "build": "0.1.29", "role": role,
-            "caps": { "push": false, "scrollback": true, "conversation": true, "manage": true }
+            "caps": { "push": false, "scrollback": true, "conversation": true, "manage": true,
+                      "convo.find": convo_find }
         }));
         self.send(json!({
             "t": "herd",
@@ -1723,4 +1729,403 @@ async fn the_reply_box_is_not_painted_over_by_the_row_the_chrome_borrows() {
         lines[22].contains("type a reply"),
         "and the box is on the row above it, not underneath it:\n{screen}"
     );
+}
+
+// ---- a conversation the pane's agent launched -------------------------------------------------
+
+fn sub(id: &str, kind: &str, title: &str) -> Value {
+    json!([{ "b": "sub", "id": id, "kind": kind, "title": title }])
+}
+
+/// The page a `convo.sub` is answered with: an ordinary `convo` frame wearing one additive field,
+/// and **always `fresh`** — a launched conversation shares no turn id with the pane's own.
+fn launched_page(pane: &str, id: &str, turns: Value) -> Event {
+    Event::Convo(
+        serde_json::from_value(json!({
+            "pane": pane, "sub": id, "fresh": true, "cursor": null, "more": false, "turns": turns
+        }))
+        .expect("a convo page"),
+    )
+}
+
+fn launched_turn(pane: &str, id: &str, turns: Value) -> Event {
+    Event::ConvoTurn {
+        pane: pane.to_string(),
+        sub: Some(id.to_string()),
+        turns: serde_json::from_value(turns).expect("turns"),
+    }
+}
+
+/// A `sub` block used to fall through to `Unknown` and be dropped, so the CLI showed the tool card
+/// that launched a subagent and nothing at all about the conversation it started — which the phone
+/// has offered to open since the harness plane landed.
+#[test]
+fn a_conversation_the_turn_launched_is_a_card_rather_than_a_block_that_is_dropped() {
+    let mut convo = one_turn(sub("h1", "explore", "find every call site of pane.size"));
+    let screen = screen(&mut convo, 70, 16);
+    assert!(screen.contains("explore"), "{screen}");
+    assert!(screen.contains("find every call site"), "{screen}");
+}
+
+/// The handle is opaque and resolved by handing it back: the client asks by the id the block
+/// carried and never builds a path of its own.
+#[tokio::test]
+async fn opening_a_launched_conversation_asks_the_node_for_it_and_draws_it_in_place_of_the_panes() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([
+            turn("t_a", "assistant", None, md("I will look for the call sites.")),
+            turn(
+                "t_b",
+                "assistant",
+                None,
+                sub("h1", "explore", "find every call site")
+            ),
+        ]),
+    ));
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT));
+
+    let asked = conn.sent("convo.sub").await;
+    assert_eq!(asked["pane"], PANE);
+    assert_eq!(asked["id"], "h1");
+
+    app.absorb(&launched_page(
+        PANE,
+        "h1",
+        json!([turn("s_1", "assistant", None, md("nine call sites"))]),
+    ));
+    let screen = painted(&mut app, 80, 20);
+    assert!(screen.contains("nine call sites"), "{screen}");
+    assert!(
+        !screen.contains("I will look for the call sites"),
+        "the pane's own conversation is not what is being read:\n{screen}"
+    );
+
+    // A subagent's transcript grows while it runs, and what it grows by arrives carrying the same
+    // handle. It is **appended**, not merged the way a page is.
+    app.absorb(&launched_turn(
+        PANE,
+        "h1",
+        json!([turn("s_2", "assistant", None, md("and two in the tests"))]),
+    ));
+    let screen = painted(&mut app, 80, 20);
+    assert!(
+        row_of(&screen, "nine call sites") < row_of(&screen, "and two in the tests"),
+        "a turn still being written runs forwards:\n{screen}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let screen = painted(&mut app, 80, 20);
+    assert!(
+        screen.contains("I will look for the call sites"),
+        "esc comes back to the pane's own conversation:\n{screen}"
+    );
+    assert!(!screen.contains("nine call sites"), "{screen}");
+}
+
+/// A turn carrying a handle nobody is reading is not the pane's conversation, and appending it
+/// there would put a subagent's words in the pane agent's mouth.
+#[test]
+fn a_turn_for_a_launched_conversation_never_lands_in_the_panes_own() {
+    let mut convo = one_turn(md("the pane's own answer"));
+    convo.absorb(&launched_turn(
+        PANE,
+        "h1",
+        json!([turn("s_1", "assistant", None, md("a subagent's answer"))]),
+    ));
+    let screen = screen(&mut convo, 70, 16);
+    assert!(screen.contains("the pane's own answer"), "{screen}");
+    assert!(!screen.contains("a subagent's answer"), "{screen}");
+}
+
+// ---- taking a code block out of the transcript ------------------------------------------------
+
+/// The transcript is not the grid: the mouse is captured, copy mode walks the pane's ring, and a
+/// reader who wanted the command an agent just wrote had no way at all to get it out. What comes
+/// off the key is the block's **own** text — not the rows that were painted, which are clipped at
+/// the pane's width.
+#[test]
+fn the_newest_code_block_at_or_above_the_fold_is_what_the_copy_key_takes() {
+    let mut convo = Convo::new();
+    convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([
+            turn(
+                "t_1",
+                "assistant",
+                None,
+                md("first:\n\n```sh\nherdr pane list --json\n```\n")
+            ),
+            turn(
+                "t_2",
+                "assistant",
+                None,
+                md("filler one\n\nfiller two\n\nfiller three")
+            ),
+            turn(
+                "t_3",
+                "assistant",
+                None,
+                md("then:\n\n```sh\nkampr doctor\n```\n")
+            ),
+        ]),
+    ));
+
+    let _ = screen(&mut convo, 60, 10);
+    assert_eq!(convo.code(PANE).as_deref(), Some("kampr doctor"));
+
+    // Scrolled to the top, the newest block is below the fold and the one the reader is looking
+    // at is the older one.
+    convo.key(PANE, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    let _ = screen(&mut convo, 60, 10);
+    assert_eq!(convo.code(PANE).as_deref(), Some("herdr pane list --json"));
+}
+
+#[test]
+fn a_transcript_with_no_code_in_it_has_nothing_to_copy() {
+    let mut convo = one_turn(md("no fences here"));
+    let _ = screen(&mut convo, 60, 10);
+    assert_eq!(convo.code(PANE), None);
+}
+
+#[tokio::test]
+async fn the_copy_key_says_what_it_took_and_never_reaches_the_pane() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn(
+            "t_1",
+            "assistant",
+            None,
+            md("run it:\n\n```sh\ncargo test --workspace\n```\n")
+        )]),
+    ));
+    let _ = painted(&mut app, 80, 20);
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    let screen = painted(&mut app, 80, 20);
+    assert!(screen.contains("copied"), "{screen}");
+    assert!(
+        !conn.heard().await.iter().any(|frame| frame["t"] == "input"),
+        "a copy is this client's own gesture and nothing goes to the pane"
+    );
+}
+
+// ---- searching the transcript -----------------------------------------------------------------
+
+fn hit(turn: &str, from_end: u32, text: &str) -> Value {
+    json!({ "turn": turn, "role": "assistant", "from_end": from_end, "hits": 1, "text": text })
+}
+
+fn found(pane: &str, query: &str, total: u32, matches: Value) -> Event {
+    Event::ConvoFound {
+        pane: pane.to_string(),
+        query: query.to_string(),
+        matches: serde_json::from_value(matches).expect("matches"),
+        total,
+    }
+}
+
+fn typed(app: &mut App, word: &str) {
+    for c in word.chars() {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+}
+
+async fn searching(fake: &mut Fake, client: &Arc<Client>, node_searches: bool) -> (App, Conn) {
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet_with(
+        json!([entry(PANE, Some("claude"), "working", true)]),
+        "full",
+        node_searches,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        Some("t_1"),
+        true,
+        json!([
+            turn(
+                "t_1",
+                "assistant",
+                None,
+                md("the scrollbar column is the one it keeps back")
+            ),
+            turn("t_2", "assistant", None, md("filler")),
+            turn("t_3", "assistant", None, md("and the width has to be inferred")),
+        ]),
+    ));
+    let _ = painted(&mut app, 90, 20);
+    (app, conn)
+}
+
+/// A conversation opens on a page of the newest turns and pages backwards only as the reader
+/// reaches the top, so a client searching what it holds is searching that page — and cannot know
+/// by how much its count is short. The node holds the whole folded transcript.
+#[tokio::test]
+async fn searching_a_transcript_asks_the_node_rather_than_the_page_the_reader_is_holding() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let (mut app, mut conn) = searching(&mut fake, &client, true).await;
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    typed(&mut app, "scrollbar");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let asked = conn.sent("convo.find").await;
+    assert_eq!(asked["pane"], PANE);
+    assert_eq!(asked["query"], "scrollbar");
+
+    app.absorb(&found(
+        PANE,
+        "scrollbar",
+        41,
+        json!([
+            hit("t_1", 2, "…the scrollbar column is the one it keeps back…"),
+            hit("a_98", 40, "…why does the scrollbar keep a column back…"),
+        ]),
+    ));
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("1 of 41"), "{screen}");
+    assert!(screen.contains("the scrollbar column"), "{screen}");
+
+    // A turn this client holds is aimed at rather than paged for.
+    assert!(
+        conn.heard().await.iter().all(|frame| frame["t"] != "convo.load"),
+        "the hit is already held"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("2 of 41"), "{screen}");
+
+    // The second hit is forty turns back, which is a page this client does not hold: the walk is
+    // the same `convo.load` the reader makes by scrolling.
+    let asked = conn.sent("convo.load").await;
+    assert_eq!(asked["before"], "t_1");
+
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let screen = painted(&mut app, 90, 20);
+    assert!(!screen.contains("2 of 41"), "esc puts the search away:\n{screen}");
+}
+
+/// **A count that covers the page the reader opened on must not read as though it covered the
+/// conversation.** A node that never promised the verb is not asked for it.
+#[tokio::test]
+async fn a_node_that_cannot_search_a_transcript_is_not_asked_and_the_count_says_what_it_covers() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let (mut app, mut conn) = searching(&mut fake, &client, false).await;
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    typed(&mut app, "the");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("so far"), "{screen}");
+    assert!(
+        conn.heard().await.iter().all(|frame| frame["t"] != "convo.find"),
+        "a verb the node never promised is never sent"
+    );
+}
+
+// ---- the line somebody left at the pane's own keyboard ----------------------------------------
+
+fn desk_without_a_clear(pane: &str, text: &str) -> Event {
+    Event::ConvoComposer {
+        pane: pane.to_string(),
+        text: Some(text.to_string()),
+        clear: None,
+    }
+}
+
+/// `input` is `pane.send_text` and **appends**, so a reply sent from here joins onto whatever is
+/// half-typed at the desk and submits as one run-on line. The strip has always said so; this is
+/// the way out of it, and the order matters — the words are here before they are gone there.
+#[tokio::test]
+async fn taking_the_line_left_at_the_desk_moves_the_words_here_before_it_empties_it_there() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.convo.absorb(&page(
+        PANE,
+        true,
+        None,
+        false,
+        json!([turn("t_1", "assistant", None, md("what shall I do?"))]),
+    ));
+    app.absorb(&desk(PANE, Some("push the branch when")));
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+
+    let screen = painted(&mut app, 90, 20);
+    assert!(
+        screen.contains("push the branch when"),
+        "the words are in the box here:\n{screen}"
+    );
+    let sent = conn.sent("input").await;
+    assert_eq!(
+        sent["text"], "\u{3}",
+        "and the pane is emptied with the key the node measured for that harness"
+    );
+}
+
+/// **A guessed key deletes part of somebody's sentence or quits their agent**: `ctrl+u` takes one
+/// visual row of Claude's wrapped line and `ctrl+c` arms an exit on agy. A harness nobody has
+/// measured one for is offered nothing at all.
+#[tokio::test]
+async fn a_harness_with_no_measured_clear_is_not_offered_the_takeover() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([entry(PANE, Some("claude"), "working", true)]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = showing_conversation(&client);
+    app.absorb(&desk_without_a_clear(PANE, "push the branch when"));
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+
+    assert!(
+        conn.heard().await.iter().all(|frame| frame["t"] != "input"),
+        "nothing is sent into a pane on a guess"
+    );
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("nobody has measured"), "{screen}");
 }

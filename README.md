@@ -440,8 +440,14 @@ and it is the **client's**, not the node's, for the reason herdr gives for `--re
 memory beats remote config. `KAMPR_TUI_PREFIX=ctrl+a` moves it out of the way so `ctrl+b` reaches
 the pane's own program.
 
-An agent pane opens on its **conversation**, not its grid, with the markdown rendered as markdown
-and images inline where the terminal can draw them. `ctrl+b shift+V` switches to the live grid.
+Every pane opens on its **terminal**, and `ctrl+b shift+V` swaps it for the conversation —
+markdown rendered as markdown, images inline where the terminal can draw them, and a reply box that
+sends on enter rather than typing each character into the agent as it arrives. The choice sticks
+per pane. Once you are in one: `ctrl+b /` searches the **whole** transcript the agent recorded,
+which is not the page on screen and not the same history `find` searches; `ctrl+b y` copies the
+code block you are looking at; `ctrl+b shift+O` reads the conversation a subagent is having; and
+`ctrl+b shift+C` takes the half-typed line somebody left at the pane's own keyboard, because a
+reply sent from here would otherwise join onto it.
 
 A pane wider than your terminal is cropped and panned rather than reflowed, because Kampr never
 resizes a pane ([ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md)). It will ask *your

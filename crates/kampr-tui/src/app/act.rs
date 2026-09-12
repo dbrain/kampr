@@ -51,7 +51,17 @@ impl App {
             crate::find::Took::Ignored => {}
             crate::find::Took::Consumed => return,
             crate::find::Took::Search { query, backward } => {
-                self.search(&query, backward);
+                self.search_scrollback(&query, backward);
+                return;
+            }
+        }
+        // The transcript's search prompt, for the same reason the one above it takes the keyboard:
+        // every character of a query is a character the reply box would otherwise claim.
+        match self.search.key(key) {
+            crate::convo::Searched::Ignored => {}
+            crate::convo::Searched::Consumed => return,
+            crate::convo::Searched::Search(query) => {
+                self.search_transcript(&query);
                 return;
             }
         }
@@ -70,6 +80,11 @@ impl App {
         }
         if before != Mode::Navigate && self.router.mode() == Mode::Navigate {
             self.show_what_is_being_navigated();
+        }
+        // Leaving the results puts the line down with them: a standing count over a transcript
+        // nothing is stepping any more is a surface that looks live and answers no key.
+        if before == Mode::Results && self.router.mode() != Mode::Results {
+            self.search.close();
         }
     }
 
@@ -133,6 +148,12 @@ impl App {
             self.client.answer(&pane, &offered);
             return true;
         }
+        // **Back out of a launched conversation before the box gets the key.** A draft the
+        // composer would have cleared is kept: the reader is leaving a surface, not abandoning
+        // what they were writing to the pane underneath it.
+        if key.code == crossterm::event::KeyCode::Esc && self.convo.leave_launched(&pane) {
+            return true;
+        }
         // The transcript's own scrolling, which is a different surface from the pane's ring and
         // from the box below it. Left and right are the box's, so they are not offered here.
         if matches!(
@@ -143,9 +164,16 @@ impl App {
                 | crossterm::event::KeyCode::PageDown
         ) {
             if key.code == crossterm::event::KeyCode::PageUp
-                && let Some(before) = self.convo.load_more(&pane)
+                && let Some(more) = self.convo.load_more(&pane)
             {
-                self.client.convo_load(&pane, Some(&before));
+                match more {
+                    crate::convo::More::Pane(before) => {
+                        self.client.convo_load(&pane, Some(&before));
+                    }
+                    crate::convo::More::Launched { id, before } => {
+                        self.client.convo_sub(&pane, &id, Some(&before));
+                    }
+                }
                 return true;
             }
             if self.convo.key(&pane, key) {
@@ -472,6 +500,8 @@ impl App {
             Wider => self.resplit(5),
             Narrower => self.resplit(-5),
             Taller | Shorter => self.note("the mosaic is one row — there is no height to give"),
+            OpenLaunched => self.open_launched(),
+            TakeDeskLine => self.take_desk_line(),
             ToggleView => self.toggle_view(),
             ToggleMouse => self.toggle_mouse(),
             Copy => self.copy(),
@@ -545,8 +575,21 @@ impl App {
 
     /// **The selection, not the grid.** A whole-screen copy is not what `prefix [ y` means at a
     /// desk, and it is not what the operator dragged over.
+    /// **One key, two surfaces.** On the grid it is the selection a drag left behind; on a
+    /// transcript there is no selection to have — the mouse is captured and copy mode walks the
+    /// pane's ring, not the conversation — so it is the code block the reader is looking at.
     fn copy(&mut self) {
         let Some(pane) = self.focus.clone() else { return };
+        if self.view(&pane) == View::Conversation {
+            match self.convo.code(&pane) {
+                Some(text) => {
+                    crate::osc52(&text);
+                    self.note(format!("copied {} lines of code", text.lines().count()));
+                }
+                None => self.note("no code block above the fold to copy"),
+            }
+            return;
+        }
         let text = {
             let state = self.client.state();
             let Some(held) = state.pane(&pane) else { return };
@@ -565,6 +608,76 @@ impl App {
         };
         crate::osc52(&text);
         self.note(format!("copied {} characters", text.chars().count()));
+    }
+
+    /// Takes what is half-typed at the pane's own keyboard, because `input` **appends** to it: a
+    /// sentence begun at the desk and a reply sent from here submit as one run-on line, and the
+    /// strip that says so is the only warning there has ever been.
+    ///
+    /// The words arrive in the box **before** the pane is emptied, so a dropped socket costs a
+    /// clear that did not happen rather than a sentence that is nowhere.
+    fn take_desk_line(&mut self) {
+        let Some(pane) = self.focus.clone() else { return };
+        let Some((line, clear)) = self
+            .convo
+            .desk_line(&pane)
+            .map(|(l, c)| (l.to_string(), c.map(str::to_string)))
+        else {
+            self.note("nothing is half-typed at that pane's own keyboard");
+            return;
+        };
+        let Some(clear) = clear else {
+            self.note("nobody has measured how to empty this harness's composer — left alone");
+            return;
+        };
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        self.composer.take(&pane, &line);
+        match self.client.input(&pane, &clear) {
+            true => self.note("taken — the pane's own line is yours now"),
+            false => self.note("not delivered — the socket is down"),
+        }
+    }
+
+    /// The conversation the pane's agent launched, opened for reading.
+    ///
+    /// **Newest first, then back through the older ones**, because a turn that launched three
+    /// subagents at once gives a reader no other way to name which one they want, and the newest
+    /// is the one the question is nearly always about. The node follows one at a time, so opening
+    /// another is what replaces it.
+    fn open_launched(&mut self) {
+        let Some(pane) = self.focus.clone() else { return };
+        if self.view(&pane) != View::Conversation {
+            self.note("prefix shift+v for the conversation first");
+            return;
+        }
+        let launches = self.convo.launches(&pane);
+        if launches.is_empty() {
+            self.note("this agent has not launched a conversation");
+            return;
+        }
+        let at = match self.convo.reading(&pane).and_then(|open| {
+            launches
+                .iter()
+                .position(|launch| launch.id == open)
+                .map(|at| at.checked_sub(1).unwrap_or(launches.len() - 1))
+        }) {
+            Some(at) => at,
+            None => launches.len() - 1,
+        };
+        let launch = launches[at].clone();
+        self.convo.open_launched(&pane, &launch);
+        self.client.convo_sub(&pane, &launch.id, None);
+        match launches.len() {
+            1 => self.note(format!("{} · esc to come back", launch.head)),
+            total => self.note(format!(
+                "{} · {} of {total} launched · esc to come back",
+                launch.head,
+                total - at
+            )),
+        }
     }
 
     /// What the pointer left behind on the pane that was just drawn: the text of a finished drag,
@@ -712,7 +825,19 @@ impl App {
     /// Hidden rather than disabled when the node has no verb for it, which is the rule every other
     /// affordance here follows. A prompt that took a query and then waited for ever would be worse
     /// than saying so, and a client newer than the node it dialled is ordinary.
+    /// **Two histories, one key.** A pane's scrollback is what was drawn on it; its transcript is
+    /// what the agent recorded, which outlives any number of `clear`s — so the surface on screen
+    /// decides which of them `/` is about. Copy mode walks the grid whatever view is under it, so
+    /// a search opened from inside it is the grid's.
     fn open_find(&mut self, backward: bool) {
+        let conversation = self
+            .focus
+            .clone()
+            .is_some_and(|pane| self.view(&pane) == View::Conversation);
+        if conversation && self.router.mode() != Mode::Copy {
+            self.search.open();
+            return;
+        }
         if !self.client.state().caps().find {
             self.note("this node has no search — it is older than this client");
             return;
@@ -720,9 +845,43 @@ impl App {
         self.find.open(backward);
     }
 
+    /// The whole transcript where the node has the verb, and the turns held here where it has
+    /// not. **The count says which**, because one that covers the page the reader opened on must
+    /// never read as though it covered the conversation.
+    fn search_transcript(&mut self, query: &str) {
+        let Some(pane) = self.focus.clone() else {
+            self.note("no pane to search");
+            return;
+        };
+        self.router.enter(Mode::Results);
+        if self.client.state().caps().convo_find && self.client.convo_find(&pane, query) {
+            self.search.asking(&pane, query);
+            return;
+        }
+        let matches = self.convo.search_held(&pane, query);
+        let total = matches.len() as u32;
+        self.search.found(&pane, query, matches, total, false);
+        self.aim_at_match(&pane);
+    }
+
+    /// Puts the transcript on the turn the search is standing on, walking back through pages
+    /// where the hit is older than anything held.
+    pub(super) fn aim_at_match(&mut self, pane: &str) {
+        let Some(turn) = self.search.at(pane).map(|hit| hit.turn.clone()) else {
+            return;
+        };
+        match self.convo.aim(pane, &turn) {
+            crate::convo::Aimed::Shown => {}
+            crate::convo::Aimed::Paging(before) => {
+                self.client.convo_load(pane, Some(&before));
+            }
+            crate::convo::Aimed::Gone => self.note("that turn is older than this transcript goes"),
+        }
+    }
+
     /// Sends the query to the node, which is the only thing that can answer it: this client holds
     /// a window on the pane's history and the search is of the whole of it (#511).
-    fn search(&mut self, query: &str, backward: bool) {
+    fn search_scrollback(&mut self, query: &str, backward: bool) {
         let Some(pane) = self.focus.clone() else {
             self.note("no pane to search");
             return;
@@ -734,6 +893,13 @@ impl App {
 
     fn step_search(&mut self, forward: bool) {
         let Some(pane) = self.focus.clone() else { return };
+        if self.router.mode() == Mode::Results {
+            match self.search.step(&pane, forward).is_some() {
+                true => self.aim_at_match(&pane),
+                false => self.note("nothing to step through"),
+            }
+            return;
+        }
         match self.find.step(&pane, forward) {
             Some(from_bottom) => self.show_match(&pane, from_bottom),
             None => self.note("nothing to step through — search first"),

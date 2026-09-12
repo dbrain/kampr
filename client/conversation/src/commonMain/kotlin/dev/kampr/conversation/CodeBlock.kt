@@ -13,14 +13,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -30,14 +25,9 @@ import dev.kampr.conversation.syntax.langSpec
 import dev.kampr.conversation.syntax.scan
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.glyphFallback
-import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.Surface
-import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.named
-import dev.kampr.shared.ui.touchable
-import kotlinx.coroutines.delay
 
 @Composable
 fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Modifier) {
@@ -72,42 +62,6 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
                 softWrap = false,
             )
         }
-    }
-}
-
-@Composable
-fun CopyButton(text: String, lang: String? = null) {
-    val tokens = Kampr.tokens
-    // LocalClipboard replaces this, but its ClipEntry can only be built from a platform-native
-    // object, so a plain string still has no common-code path in CMP 1.11.
-    @Suppress("DEPRECATION")
-    val clipboard = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
-    LaunchedEffect(copied) {
-        if (copied) {
-            delay(1400)
-            copied = false
-        }
-    }
-    Row(
-        Modifier
-            .touchable(LANDSCAPE_TOUCH)
-            .action(
-                if (copied) "Copied" else "Copy the ${lang ?: "code"} block",
-                {
-                    clipboard.setText(AnnotatedString(text))
-                    copied = true
-                },
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        IconGlyph(ConversationIcons.copy, 11.dp, if (copied) tokens.color.done else tokens.color.dim)
-        KText(
-            if (copied) "Copied" else "Copy",
-            tokens.type.micro,
-            if (copied) tokens.color.done else tokens.color.dim,
-        )
     }
 }
 

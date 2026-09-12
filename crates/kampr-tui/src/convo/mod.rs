@@ -6,14 +6,17 @@
 
 mod composer;
 mod markdown;
+mod search;
 mod stamps;
 
 pub use composer::{Composer, Typed};
+pub use search::{Search, Took as Searched};
 
 use crate::image::{Attachment, Images};
 use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use kampr_client::{Event, Pending, Role};
+use kampr_core::wire::ConvoMatch;
 use markdown::markdown;
 use pulldown_cmark::Alignment;
 use ratatui::buffer::Buffer;
@@ -103,6 +106,16 @@ pub(super) enum Block {
         #[serde(default)]
         text: String,
     },
+    /// A conversation this turn **launched**, offered for opening rather than spoken here. Its
+    /// own turns are deliberately not inlined: drawing them under this turn would be saying the
+    /// pane's agent said what a subagent said.
+    Sub {
+        id: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+    },
     /// A `b` this build has never heard of. The wire is additive, so an unknown block is ignored
     /// rather than failing the page it arrived in.
     #[serde(other)]
@@ -152,6 +165,36 @@ impl Turn {
         self.kind.as_deref() == Some(QUEUED)
     }
 
+    /// **What a client draws**, which is what a search over it may promise: a card's own header
+    /// rather than the marker it replaced, a tool's label rather than its output, a launched
+    /// conversation's type and title rather than its turns — those belong to another transcript
+    /// and are not on this screen to be found.
+    fn text(&self) -> String {
+        self.blocks
+            .iter()
+            .map(|block| match block {
+                Block::Md { text, att: None } => text.clone(),
+                Block::Md { att: Some(att), .. } => [att.name.clone(), att.mime.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<String>>()
+                    .join(" "),
+                Block::Code { text, .. } => text.clone(),
+                Block::Tool { name, summary, .. } => match summary {
+                    Some(summary) => format!("{name} {summary}"),
+                    None => name.clone(),
+                },
+                Block::Diff { path, text } => match path {
+                    Some(path) => format!("{path}\n{text}"),
+                    None => text.clone(),
+                },
+                Block::Sub { kind, title, .. } => headline(kind.as_deref(), title.as_deref()),
+                Block::Unknown => String::new(),
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
     fn lines(&self) -> usize {
         self.blocks
             .iter()
@@ -165,6 +208,13 @@ impl Turn {
 
 pub(super) enum Piece {
     Line(Line<'static>),
+    /// The rule above a code block, carrying the block's **own** text. A copy takes this rather
+    /// than the rows that were painted: those are clipped at the pane's width, and a command
+    /// pasted with its tail missing is worse than one that could not be copied at all.
+    Code {
+        head: Line<'static>,
+        text: String,
+    },
     Image {
         att: Attachment,
         marker: Line<'static>,
@@ -186,6 +236,9 @@ pub struct Marks {
 struct Laid {
     width: u16,
     revision: u64,
+    /// Where each turn starts, so a search hit can be aimed at by the id it names rather than by
+    /// a row number that means nothing until the page holding it has landed.
+    heads: Vec<(String, usize)>,
     /// A read-only device is never offered a path out of a tool call — the node answers one
     /// `403` — so the affordance is laid against the **live** role and re-laid when it moves.
     writes: bool,
@@ -203,6 +256,10 @@ struct Transcript {
     /// invisible unless it is said. Empty arrives as `text: null` and takes the line down, the
     /// same shape `pending` uses, because neither has a resolved event.
     desk: Option<String>,
+    /// The keystroke measured to empty **that harness's** composer, carried rather than looked up
+    /// because the three do not agree and a guessed key deletes part of somebody's sentence or
+    /// quits their agent. Absent where nobody has measured one, and then no takeover is offered.
+    clear: Option<String>,
     /// Lines held back from the bottom. Zero is pinned to the newest turn, which is where a
     /// conversation belongs.
     scroll: usize,
@@ -215,6 +272,10 @@ struct Transcript {
     /// save. Filled from [`Images::offer`] as the fetches land.
     notes: HashMap<String, String>,
     requested: HashSet<String>,
+    /// A turn a search is aiming at, standing until the page holding it has landed and been laid
+    /// out: a hit forty turns back names a turn this client does not hold yet, and the walk to it
+    /// is pages arriving one at a time.
+    aiming: Option<String>,
     /// The summaries the reader has opened. A summary is drawn shut, so this is the departure
     /// from the default rather than the state of every turn.
     open: HashSet<String>,
@@ -308,6 +369,40 @@ impl Transcript {
         true
     }
 
+    /// The newest code block at or above the bottom edge of the view. **Not "on screen"**: a
+    /// block the reader has scrolled past the top of is still the one they were last looking at,
+    /// and only what lies below the fold is a block they have not reached yet.
+    fn code(&self) -> Option<&str> {
+        let laid = self.laid.as_ref()?;
+        let bottom = laid.pieces.len().saturating_sub(self.scroll);
+        laid.pieces
+            .iter()
+            .take(bottom)
+            .rev()
+            .find_map(|piece| match piece {
+                // **Without the newline a fence ends with.** A command copied with its return still
+                // on it is a command the paste *runs*, in whatever shell the operator pasted it into,
+                // and the wire's own `code` blocks do not carry one either.
+                Piece::Code { text, .. } => Some(text.trim_end_matches('\n')),
+                _ => None,
+            })
+    }
+
+    fn launches(&self) -> Vec<Launch> {
+        self.turns
+            .iter()
+            .filter(|turn| turn.visible())
+            .flat_map(|turn| turn.blocks.iter())
+            .filter_map(|block| match block {
+                Block::Sub { id, kind, title } => Some(Launch {
+                    id: id.clone(),
+                    head: headline(kind.as_deref(), title.as_deref()),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn showing(&self) -> bool {
         self.turns.iter().chain(self.queued.iter()).any(Turn::visible)
     }
@@ -317,9 +412,79 @@ impl Transcript {
     }
 }
 
+/// A conversation the pane's agent launched, as a `sub` block offers it: the handle to hand back
+/// and the words the card shows for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub id: String,
+    pub head: String,
+}
+
+/// What a page-back at the top of the transcript on screen is a page of. The pane's own
+/// conversation and a launched one are paged by **different verbs** — `convo.load` and
+/// `convo.sub` — so a client that kept one cursor would ask the wrong node question at the top of
+/// a subagent's transcript.
+/// What aiming the transcript at a turn took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Aimed {
+    /// It is held; the next frame is on it.
+    Shown,
+    /// It is older than what is held: this is the cursor to page back with, and the aim stands
+    /// until the page that holds it lands.
+    Paging(String),
+    /// Older than what is held, with nothing left to page with.
+    Gone,
+}
+
+/// The line a match is on, clipped around it rather than shipped whole — a tool's output is one
+/// block and can be thousands of columns.
+fn line_of(text: &str, needle: &str) -> String {
+    let lower = text.to_lowercase();
+    let at = lower.find(needle).unwrap_or(0);
+    text.lines()
+        .find(|line| line.to_lowercase().contains(needle))
+        .map(|line| line.trim().chars().take(160).collect())
+        .unwrap_or_else(|| text[at..].chars().take(160).collect())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum More {
+    Pane(String),
+    Launched { id: String, before: String },
+}
+
+/// One a reader has open. **One per pane and never a stack**: the node follows a single launched
+/// conversation at a time and asking for another replaces it, so a client holding two would be
+/// drawing a transcript nothing is feeding.
+struct Reading {
+    id: String,
+    head: String,
+    held: Transcript,
+}
+
 #[derive(Debug, Default)]
 pub struct Convo {
     panes: HashMap<String, Transcript>,
+    launched: HashMap<String, Reading>,
+}
+
+impl std::fmt::Debug for Reading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reading").field("id", &self.id).finish()
+    }
+}
+
+fn headline(kind: Option<&str>, title: Option<&str>) -> String {
+    let words: Vec<&str> = [kind, title]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .collect();
+    match words.is_empty() {
+        true => "a conversation this turn launched".to_string(),
+        false => words.join(" · "),
+    }
 }
 
 impl std::fmt::Debug for Transcript {
@@ -366,7 +531,12 @@ impl Convo {
                 held.touch();
             }
             Event::Convo(page) => {
-                let held = self.panes.entry(page.pane.clone()).or_default();
+                // **A page wearing a handle is not this pane's conversation.** It is the one the
+                // reader opened, and merging it into the pane's would put a subagent's words in
+                // the pane agent's mouth — which is the reason the turns were never inlined.
+                let Some(held) = self.receiving(&page.pane, page.sub.as_deref()) else {
+                    return;
+                };
                 // `fresh` is the node saying it could not name the turns to withdraw: a socket it
                 // has no history for, because this client reconnected or that node restarted.
                 if page.fresh {
@@ -377,13 +547,16 @@ impl Convo {
                 held.cursor = page.cursor.clone();
                 held.more = page.more;
             }
-            Event::ConvoTurn { pane, turns } => {
-                let held = self.panes.entry(pane.clone()).or_default();
+            Event::ConvoTurn { pane, turns, sub } => {
+                let Some(held) = self.receiving(pane, sub.as_deref()) else {
+                    return;
+                };
                 held.revise(decode(turns));
             }
-            Event::ConvoComposer { pane, text, .. } => {
+            Event::ConvoComposer { pane, text, clear } => {
                 let held = self.panes.entry(pane.clone()).or_default();
                 held.desk = text.clone().filter(|line| !line.trim().is_empty());
+                held.clear = clear.clone();
                 held.laid = None;
             }
             Event::Pending(pending) => {
@@ -406,6 +579,142 @@ impl Convo {
         }
     }
 
+    /// Which transcript a frame belongs to. `None` is a frame for a launched conversation
+    /// **nobody is reading** — the reader left while it was in flight — and it is dropped rather
+    /// than filed anywhere, because the only other place to put it is a lie.
+    fn receiving(&mut self, pane: &str, sub: Option<&str>) -> Option<&mut Transcript> {
+        let Some(id) = sub else {
+            return Some(self.panes.entry(pane.to_string()).or_default());
+        };
+        let reading = self.launched.get_mut(pane).filter(|r| r.id == id)?;
+        Some(&mut reading.held)
+    }
+
+    /// The transcript on screen for this pane, which is a launched conversation while one is open
+    /// and the pane's own otherwise. Every surface that scrolls, pages or folds goes through here
+    /// so that a key pressed at what is drawn moves what is drawn.
+    fn showing_mut(&mut self, pane: &str) -> Option<&mut Transcript> {
+        match self.launched.get_mut(pane) {
+            Some(reading) => Some(&mut reading.held),
+            None => self.panes.get_mut(pane),
+        }
+    }
+
+    /// The line half-typed at the pane's own keyboard, and the key measured to empty it there.
+    /// **Both or neither**: the words are worth taking only where they can also be cleared, or
+    /// the reply joins onto them all over again.
+    pub fn desk_line(&self, pane: &str) -> Option<(&str, Option<&str>)> {
+        let held = self.panes.get(pane)?;
+        Some((held.desk.as_deref()?, held.clear.as_deref()))
+    }
+
+    /// Puts the view on the turn a search hit names, and says what that took.
+    ///
+    /// **The coordinate is a turn id and not a row**, because a hit the node found may be in a
+    /// page this client has never held — and then the walk to it is the same `convo.load` the
+    /// reader makes by scrolling, which is what keeps what is held contiguous.
+    pub fn aim(&mut self, pane: &str, turn: &str) -> Aimed {
+        let Some(held) = self.showing_mut(pane) else {
+            return Aimed::Gone;
+        };
+        held.aiming = Some(turn.to_string());
+        if held.at(turn).is_some() {
+            held.laid = None;
+            return Aimed::Shown;
+        }
+        match held.more.then(|| held.cursor.clone()).flatten() {
+            Some(before) => Aimed::Paging(before),
+            None => Aimed::Gone,
+        }
+    }
+
+    /// The next page to ask for while an aim is still standing, or `None` when there is nothing
+    /// left to walk — the turn landed, or the transcript ran out before it did.
+    pub fn walking(&self, pane: &str) -> Option<String> {
+        let held = match self.launched.get(pane) {
+            Some(reading) => &reading.held,
+            None => self.panes.get(pane)?,
+        };
+        let want = held.aiming.as_deref()?;
+        if held.at(want).is_some() {
+            return None;
+        }
+        held.more.then(|| held.cursor.clone()).flatten()
+    }
+
+    /// The same search over the turns this client holds, for a node that never promised the verb.
+    /// **Newest first**, the order the node answers in and the direction paging goes.
+    pub fn search_held(&self, pane: &str, query: &str) -> Vec<ConvoMatch> {
+        let held = match self.launched.get(pane) {
+            Some(reading) => &reading.held,
+            None => match self.panes.get(pane) {
+                Some(held) => held,
+                None => return Vec::new(),
+            },
+        };
+        let needle = query.to_lowercase();
+        let visible: Vec<&Turn> = held.turns.iter().filter(|turn| turn.visible()).collect();
+        let last = visible.len().saturating_sub(1);
+        visible
+            .iter()
+            .enumerate()
+            .rev()
+            .filter_map(|(at, turn)| {
+                let text = turn.text();
+                let hits = text.to_lowercase().matches(&needle).count() as u32;
+                (hits > 0).then(|| ConvoMatch {
+                    turn: turn.id.clone(),
+                    role: turn.role.clone(),
+                    at: turn.at.clone(),
+                    from_end: (last - at) as u32,
+                    hits,
+                    text: line_of(&text, &needle),
+                })
+            })
+            .collect()
+    }
+
+    /// What the copy key takes off the transcript on screen, which is a launched conversation's
+    /// while one is open.
+    pub fn code(&self, pane: &str) -> Option<String> {
+        let held = match self.launched.get(pane) {
+            Some(reading) => &reading.held,
+            None => self.panes.get(pane)?,
+        };
+        held.code().map(str::to_string)
+    }
+
+    /// Every conversation this pane's transcript says its agent launched, oldest first.
+    pub fn launches(&self, pane: &str) -> Vec<Launch> {
+        let Some(held) = self.panes.get(pane) else {
+            return Vec::new();
+        };
+        held.launches()
+    }
+
+    /// The handle of the launched conversation being read, if one is.
+    pub fn reading(&self, pane: &str) -> Option<&str> {
+        self.launched.get(pane).map(|r| r.id.as_str())
+    }
+
+    /// Opens one, empty: the page is asked for separately and the view swaps at once so the
+    /// keystroke is answered by the screen rather than by the round trip.
+    pub fn open_launched(&mut self, pane: &str, launch: &Launch) {
+        self.launched.insert(
+            pane.to_string(),
+            Reading {
+                id: launch.id.clone(),
+                head: launch.head.clone(),
+                held: Transcript::default(),
+            },
+        );
+    }
+
+    /// Back to the pane's own conversation, and whether there was one to come back from.
+    pub fn leave_launched(&mut self, pane: &str) -> bool {
+        self.launched.remove(pane).is_some()
+    }
+
     pub fn pending(&self, pane: &str) -> Option<&Pending> {
         self.panes.get(pane)?.pending.as_ref()
     }
@@ -425,7 +734,7 @@ impl Convo {
     /// the agent's PTY. Nothing here produces an app-level action — the transcript is its own
     /// scrolling surface, and the pane's ring is a different one that must not move with it.
     pub fn key(&mut self, pane: &str, key: KeyEvent) -> bool {
-        let Some(held) = self.panes.get_mut(pane) else {
+        let Some(held) = self.showing_mut(pane) else {
             return false;
         };
         let page = held.height().clamp(1, 20);
@@ -452,7 +761,7 @@ impl Convo {
     /// The wheel over this pane's transcript. Same window `up`/`down` move, and the same reason it
     /// is separate from the pane's ring: two scrolling surfaces that must not move together.
     pub fn wheel(&mut self, pane: &str, up: bool, by: usize) -> bool {
-        let Some(held) = self.panes.get_mut(pane) else {
+        let Some(held) = self.showing_mut(pane) else {
             return false;
         };
         held.scroll = match up {
@@ -474,9 +783,21 @@ impl Convo {
     /// The `before` cursor for a `convo.load`. **Absent is not `more: false`.** A page with no
     /// cursor cannot be paged from however loudly `more` says there is history behind it; a page
     /// with a cursor and `more: false` has reached the start of the transcript.
-    pub fn load_more(&mut self, pane: &str) -> Option<String> {
-        let held = self.panes.get(pane)?;
-        held.more.then(|| held.cursor.clone()).flatten()
+    pub fn load_more(&mut self, pane: &str) -> Option<More> {
+        match self.launched.get(pane) {
+            Some(reading) => {
+                let before = reading.held.more.then(|| reading.held.cursor.clone()).flatten()?;
+                Some(More::Launched {
+                    id: reading.id.clone(),
+                    before,
+                })
+            }
+            None => {
+                let held = self.panes.get(pane)?;
+                let before = held.more.then(|| held.cursor.clone()).flatten()?;
+                Some(More::Pane(before))
+            }
+        }
     }
 
     pub fn render(
@@ -496,6 +817,9 @@ impl Convo {
         // starting and its first prompt — and an empty transcript that says so is the answer,
         // not a fall-through to the grid.
         let held = self.panes.entry(pane.to_string()).or_default();
+        // **The strips stay the pane's** while a launched conversation is being read. The
+        // question is the pane's to answer and the reply box types into the pane, so a subagent's
+        // transcript borrows the screen and nothing else.
         let mut strip = held
             .pending
             .as_ref()
@@ -506,9 +830,22 @@ impl Convo {
             strip.chip_row += 1;
         }
         let rows = (strip.lines.len() as u16).min(area.height);
-        let body = Rect {
+        let mut body = Rect {
             height: area.height - rows,
             ..area
+        };
+        if let Some(head) = self.launched.get(pane).map(|r| r.head.clone())
+            && body.height > 0
+        {
+            buf.set_line(body.x, body.y, &reading_head(&head, theme), body.width);
+            body = Rect {
+                y: body.y + 1,
+                height: body.height - 1,
+                ..body
+            };
+        }
+        let Some(held) = self.showing_mut(pane) else {
+            return Marks::default();
         };
         held.lay(body.width, theme, role.writes());
         let mut marks = held.paint(buf, body, pane, images, role);
@@ -533,6 +870,19 @@ impl Convo {
         }
         marks
     }
+}
+
+/// The one row that says whose conversation is on screen, pinned above the transcript rather than
+/// scrolling with it: a reader who has paged away from the top must still be able to tell that
+/// what they are reading is not the pane's own.
+fn reading_head(head: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  ◂ {head}"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  esc to come back".to_string(), Style::default().fg(theme.mute)),
+    ])
 }
 
 fn decode(turns: &[Value]) -> Vec<Turn> {
@@ -567,26 +917,31 @@ impl Transcript {
                 Style::default().fg(theme.mute),
             ))),
         }
+        let newest = self.launches().pop().map(|launch| launch.id);
         let at = Laying {
             width,
             theme,
             inline: &self.inline,
             notes: &self.notes,
             writes,
+            newest_launch: newest.as_deref(),
         };
         // The queue stands at the foot, after everything recorded: it is what has not happened
         // yet, and the transcript is pinned to its own end.
+        let mut heads = Vec::new();
         for turn in self
             .turns
             .iter()
             .chain(self.queued.iter())
             .filter(|t| t.visible())
         {
+            heads.push((turn.id.clone(), pieces.len()));
             lay_turn(turn, &at, &self.open, &mut pieces);
         }
         self.laid = Some(Laid {
             width,
             revision: self.revision,
+            heads,
             writes,
             pieces,
         });
@@ -598,6 +953,17 @@ impl Transcript {
         };
         let rows = area.height as usize;
         let ceiling = laid.pieces.len().saturating_sub(rows);
+        // The aim is spent here rather than where it was taken, because this is the first place
+        // that knows both where the turn was drawn and how much of it a screen this tall holds.
+        if let Some(at) = self
+            .aiming
+            .as_deref()
+            .and_then(|want| laid.heads.iter().find(|(id, _)| id == want))
+            .map(|(_, at)| *at)
+        {
+            self.scroll = ceiling.saturating_sub(at);
+            self.aiming = None;
+        }
         self.scroll = self.scroll.min(ceiling);
         let top = ceiling - self.scroll;
         let mut marks = Marks::default();
@@ -605,7 +971,7 @@ impl Transcript {
         for (row, piece) in laid.pieces.iter().skip(top).take(rows).enumerate() {
             let y = area.y + row as u16;
             match piece {
-                Piece::Line(line) => {
+                Piece::Line(line) | Piece::Code { head: line, .. } => {
                     buf.set_line(area.x, y, line, area.width);
                 }
                 Piece::Image { att, marker, file } => {
@@ -693,6 +1059,9 @@ pub(super) struct Laying<'a> {
     pub inline: &'a HashSet<String>,
     pub notes: &'a HashMap<String, String>,
     pub writes: bool,
+    /// The newest launched conversation this transcript holds, which is the one the key opens and
+    /// so the only card that may say so.
+    pub newest_launch: Option<&'a str>,
 }
 
 impl Laying<'_> {
@@ -705,6 +1074,7 @@ impl Laying<'_> {
             inline,
             notes,
             writes: false,
+            newest_launch: None,
         }
     }
 }
@@ -807,10 +1177,13 @@ pub(super) fn lay_block(block: &Block, at: &Laying<'_>, produced: Option<u32>, o
                 (false, None) => "code".to_string(),
             };
             let rule = (width as usize).saturating_sub(head.chars().count() + 4);
-            out.push(Piece::Line(Line::styled(
-                format!("  {head} {}", "─".repeat(rule)),
-                Style::default().fg(theme.mute),
-            )));
+            out.push(Piece::Code {
+                head: Line::styled(
+                    format!("  {head} {}", "─".repeat(rule)),
+                    Style::default().fg(theme.mute),
+                ),
+                text: text.clone(),
+            });
             let mut shown = 0;
             for line in text.lines() {
                 shown += 1;
@@ -895,6 +1268,23 @@ pub(super) fn lay_block(block: &Block, at: &Laying<'_>, produced: Option<u32>, o
             }
         }
         Block::Diff { path, text } => diff(path.as_deref(), text, width, theme, out),
+        // Offered, not inlined. The hint rides on the newest, which is the one the key opens.
+        Block::Sub { id, kind, title } => {
+            let mut spans = vec![
+                Span::styled("  ⇲ ".to_string(), Style::default().fg(theme.accent)),
+                Span::styled(
+                    headline(kind.as_deref(), title.as_deref()),
+                    Style::default().fg(theme.text),
+                ),
+            ];
+            if at.newest_launch == Some(id.as_str()) {
+                spans.push(Span::styled(
+                    "  ⟨ ^b O to open ⟩".to_string(),
+                    Style::default().fg(theme.mute),
+                ));
+            }
+            out.push(Piece::Line(Line::from(spans)));
+        }
         Block::Unknown => {}
     }
 }

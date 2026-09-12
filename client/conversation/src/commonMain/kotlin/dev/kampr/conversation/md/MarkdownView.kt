@@ -20,7 +20,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.selection.DisableSelection
 import dev.kampr.conversation.CodeCard
+import dev.kampr.conversation.CopyGlyph
 import dev.kampr.conversation.markMatches
 import dev.kampr.conversation.rememberConversationPalette
 import dev.kampr.conversation.rememberInlineStyles
@@ -69,11 +71,15 @@ private fun MarkdownBlock(block: MdBlock, query: String) {
 
         MdBlock.Rule -> Box(Modifier.fillMaxWidth().height(1.dp).background(palette.rule))
 
-        is MdBlock.Quote -> MarkdownBlocks(
-            block.blocks,
-            query,
-            Modifier.quoteRule(tokens.color.accent).padding(start = 12.dp),
-        )
+        is MdBlock.Quote -> Row(
+            Modifier.fillMaxWidth().quoteRule(tokens.color.accent),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            MarkdownBlocks(block.blocks, query, Modifier.weight(1f).padding(start = 12.dp))
+            // A caption is chrome: dragging across the quote must copy what was quoted, not the
+            // control offering to copy it.
+            DisableSelection { CopyGlyph(block.text, "quote") }
+        }
 
         is MdBlock.Bullets -> Column(
             Modifier.fillMaxWidth(),

@@ -20,10 +20,56 @@ pub struct Find {
     result: Option<Result>,
 }
 
+/// The query line, and the four keys every search surface in this client answers with. Shared so
+/// that the transcript's search and the scrollback's cannot drift into two grammars for what looks
+/// like one prompt.
 #[derive(Debug)]
-struct Prompt {
-    buf: String,
-    backward: bool,
+pub struct Prompt {
+    pub buf: String,
+    pub backward: bool,
+}
+
+/// What a key did to a prompt.
+pub enum Typing {
+    Changed,
+    Cancelled,
+    /// Enter on a query worth running. An empty one cancels instead: there is nothing to search
+    /// for and a client that asked would be waiting on an answer about nothing.
+    Run(String),
+}
+
+impl Prompt {
+    pub fn new(backward: bool) -> Self {
+        Self {
+            buf: String::new(),
+            backward,
+        }
+    }
+
+    pub fn key(&mut self, key: KeyEvent) -> Typing {
+        match key.code {
+            KeyCode::Esc => Typing::Cancelled,
+            KeyCode::Enter => match self.buf.is_empty() {
+                true => Typing::Cancelled,
+                false => Typing::Run(std::mem::take(&mut self.buf)),
+            },
+            KeyCode::Backspace => {
+                self.buf.pop();
+                Typing::Changed
+            }
+            KeyCode::Char(c) => {
+                self.buf.push(c);
+                Typing::Changed
+            }
+            _ => Typing::Changed,
+        }
+    }
+
+    /// `/query  ↵ search · esc cancel`
+    pub fn line(&self) -> String {
+        let lead = if self.backward { '?' } else { '/' };
+        format!("{lead}{}  ↵ search · esc cancel", self.buf)
+    }
 }
 
 #[derive(Debug)]
@@ -47,44 +93,24 @@ pub enum Took {
 
 impl Find {
     pub fn open(&mut self, backward: bool) {
-        self.prompt = Some(Prompt {
-            buf: String::new(),
-            backward,
-        });
-    }
-
-    pub fn prompting(&self) -> bool {
-        self.prompt.is_some()
+        self.prompt = Some(Prompt::new(backward));
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Took {
         let Some(prompt) = self.prompt.as_mut() else {
             return Took::Ignored;
         };
-        match key.code {
-            KeyCode::Esc => {
+        let backward = prompt.backward;
+        match prompt.key(key) {
+            Typing::Changed => Took::Consumed,
+            Typing::Cancelled => {
                 self.prompt = None;
                 Took::Consumed
             }
-            KeyCode::Enter => {
-                let prompt = self.prompt.take().expect("a prompt");
-                match prompt.buf.is_empty() {
-                    true => Took::Consumed,
-                    false => Took::Search {
-                        query: prompt.buf,
-                        backward: prompt.backward,
-                    },
-                }
+            Typing::Run(query) => {
+                self.prompt = None;
+                Took::Search { query, backward }
             }
-            KeyCode::Backspace => {
-                prompt.buf.pop();
-                Took::Consumed
-            }
-            KeyCode::Char(c) => {
-                prompt.buf.push(c);
-                Took::Consumed
-            }
-            _ => Took::Consumed,
         }
     }
 
@@ -133,8 +159,7 @@ impl Find {
     /// The one line this surface shows: the prompt while typing, the standing result after.
     pub fn line(&self, pane: Option<&str>) -> Option<String> {
         if let Some(prompt) = &self.prompt {
-            let lead = if prompt.backward { '?' } else { '/' };
-            return Some(format!("{lead}{}  ↵ search · esc cancel", prompt.buf));
+            return Some(prompt.line());
         }
         let result = self.result.as_ref().filter(|r| Some(r.pane.as_str()) == pane)?;
         if result.matches.is_empty() {

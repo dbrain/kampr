@@ -6,7 +6,7 @@ sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
     data class Paragraph(val text: String) : MdBlock
     data class Fence(val lang: String?, val code: String) : MdBlock
-    data class Quote(val blocks: List<MdBlock>) : MdBlock
+    data class Quote(val blocks: List<MdBlock>, val text: String) : MdBlock
     data class Table(
         val header: List<String>,
         val rows: List<List<String>>,

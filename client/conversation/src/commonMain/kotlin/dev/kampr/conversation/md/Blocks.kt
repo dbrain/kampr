@@ -67,7 +67,8 @@ private class Reader(private val lines: List<String>, private val breaks: Breaks
             body += trimmed.removePrefix(">").removePrefix(" ")
             at++
         }
-        return MdBlock.Quote(Reader(body, breaks).blocks())
+        val quoted = body.dropLastWhile { it.isBlank() }
+        return MdBlock.Quote(Reader(body, breaks).blocks(), quoted.joinToString("\n"))
     }
 
     private fun isTable(): Boolean {
