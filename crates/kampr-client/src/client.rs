@@ -640,7 +640,18 @@ impl Inner {
         let Some(pane) = message["pane"].as_str() else {
             return;
         };
-        let matches = serde_json::from_value(message["matches"].clone()).unwrap_or_default();
+        // **One at a time, and a hit that will not parse is dropped rather than taking the answer
+        // down with it.** All-or-nothing would turn one unreadable match into "nothing in this
+        // transcript" standing beside a total of forty-one, which is a lie in the one shape this
+        // project has paid for before: a plausible-looking success.
+        let matches: Vec<kampr_core::wire::ConvoMatch> = message["matches"]
+            .as_array()
+            .map(|hits| {
+                hits.iter()
+                    .filter_map(|hit| serde_json::from_value(hit.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
         self.emit(Event::ConvoFound {
             pane: pane.to_string(),
             query: message["query"].as_str().unwrap_or_default().to_string(),

@@ -2226,3 +2226,27 @@ fn a_kind_this_build_has_never_heard_of_is_printed_as_the_word_it_was_given() {
     assert!(screen.contains("notebook"), "{screen}");
     assert!(screen.contains("rerun the cells"), "{screen}");
 }
+
+/// The shape this project has paid for before: an answer that arrives, cannot be read, and is
+/// reported as a success. All-or-nothing decoding turned one unreadable hit into `nothing in this
+/// transcript` standing beside a total of forty-one.
+#[tokio::test]
+async fn a_hit_that_will_not_parse_is_dropped_rather_than_taking_the_answer_down_with_it() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let (mut app, conn) = searching(&mut fake, &client, true).await;
+    let mut events = client.events();
+    conn.send(json!({
+        "t": "convo.find", "pane": PANE, "query": "scrollbar", "total": 41,
+        "matches": [
+            { "turn": "t_1", "role": "assistant", "from_end": 2, "hits": 1 },
+            { "turn": "t_1", "role": "assistant", "from_end": 2, "hits": 1,
+              "text": "…the scrollbar column is the one it keeps back…" }
+        ]
+    }));
+    pump(&mut app, &mut events, |e| matches!(e, Event::ConvoFound { .. })).await;
+
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("1 of 41 (first 1)"), "{screen}");
+    assert!(screen.contains("the scrollbar column"), "{screen}");
+}
