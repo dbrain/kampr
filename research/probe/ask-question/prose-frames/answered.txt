@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.269
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/kampr/research/probe/ask-question/prose-work · /rc
+
+
+❯ Do these four things in order and nothing else. One: write me two full sentences of prose about why integration
+  tests are worth their cost. Two: run the shell command echo kampr-probe-prose with the Bash tool. Three: write me
+  one more full sentence of prose saying what that command printed. Four: use the AskUserQuestion tool to ask me which
+  suite to run, with the options unit and integration. Do not write any files.
+
+● Integration tests are worth their cost because they exercise the seams between components — the wiring, the
+  serialization, the process boundaries — where the defects that actually reach users tend to live, and no amount of
+  unit coverage on either side of a seam proves the seam itself holds. They also stay honest as the implementation
+  churns underneath them: a unit test pinned to an internal function has to be rewritten every time that function
+  moves, while an integration test that drives the real thing end to end keeps asserting the behaviour anyone cares
+  about.
+
+  Ran 1 shell command
+
+● The command printed the single line kampr-probe-prose, with no other output and no error.
+
+● User answered Claude's questions:
+  ⎿  · Which suite should I run? → unit
+
+● All four steps are done. You picked unit — say the word if you want me to actually run it.
+
+✻ Crunched for 9s · done 10:51 am
+
+
+
+
+
+
+
+                                                                                                     ● high · /effort
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents

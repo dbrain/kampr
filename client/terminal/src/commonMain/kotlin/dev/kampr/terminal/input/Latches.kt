@@ -38,14 +38,23 @@ class Latches {
 
     // Tap arms the next keystroke, tap again locks it, tap again clears — long-press jumps
     // straight to locked, which is what a run of ctrl chords wants.
-    fun tap(latch: Latch) = set(
-        latch,
-        when (this[latch]) {
-            LatchState.Off -> LatchState.Armed
-            LatchState.Armed -> LatchState.Locked
-            LatchState.Locked -> LatchState.Off
-        },
-    )
+    //
+    // **Except `fn`, which is a layer and not a prefix.** It has no armed state to be in:
+    // [`consume`] leaves it standing where it clears the other three, and the row reads nothing
+    // but `active()` — so `Armed` and `Locked` draw the same cap over the same layer, and the
+    // third state cost a press moving between two nothing can tell apart. The operator: *"when I
+    // press fn to get out of fn I need to press fn twice"*.
+    fun tap(latch: Latch) = when (latch) {
+        Latch.Fn -> lock(latch)
+        else -> set(
+            latch,
+            when (this[latch]) {
+                LatchState.Off -> LatchState.Armed
+                LatchState.Armed -> LatchState.Locked
+                LatchState.Locked -> LatchState.Off
+            },
+        )
+    }
 
     fun lock(latch: Latch) = set(
         latch,

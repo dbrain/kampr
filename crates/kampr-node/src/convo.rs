@@ -350,10 +350,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         let now = pane_of(&herd, &global, &identity, &local);
         let status = status_of(&herd, &global);
         let working = status == AgentStatus::Working;
-        // A pane waiting on the operator is not a pane that has stopped. The transcript is frozen
-        // for as long as it waits (#42), so its screen is the only account of the message it is
-        // asking about — and withdrawing the preview there took that message off the conversation
-        // at the one moment the operator needed it (#410).
+        // A pane waiting on the operator is not a pane that has stopped. Its screen may be the
+        // only account of the message it is asking about: a harness that writes nothing down
+        // until the request is answered leaves nothing else (#42 — and #539 for the Claude that
+        // no longer waits, which does not make the rule safe to drop, only quieter). Withdrawing
+        // the preview there took that message off the conversation at the one moment the operator
+        // needed it (#410).
         let asking = status == AgentStatus::Blocked;
         let live_now = working || asking;
         // A turn that ends without the status moving is covered by the transcript catching up,

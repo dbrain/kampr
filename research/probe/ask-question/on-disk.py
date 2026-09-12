@@ -32,7 +32,10 @@ ASK = ("Use the AskUserQuestion tool right now to ask me which indentation I pre
        "options Tabs, Two spaces and Four spaces. Ask nothing else, use no other tool, and do "
        "not write any files.")
 
-PERMISSION = "Run the shell command `echo kampr-probe-permission` with the Bash tool. Nothing else."
+# `touch`, which is [#42](#)'s own command, and not `echo`: 2.1.269 approves a read-only shell
+# command itself even in manual mode, so an `echo` run raised no prompt at all and the probe
+# measured nothing twice before the frame said why.
+PERMISSION = "Run the shell command `touch kampr-probe-permission.txt` with the Bash tool. Nothing else."
 
 # The other half of the shape: a question that takes several answers at once. Rendering one as if
 # it took a single answer is worse than not rendering it, because a digit *toggles* rather than
@@ -196,7 +199,11 @@ def main():
         run("multi", MULTI, "claude --dangerously-skip-permissions",
             ["Enter to select", "1. "], "1")
     if which in ("permission", "both"):
-        run("permission", PERMISSION, "claude", ["Do you want to", "1. Yes"], "1")
+        # `--permission-mode default` explicitly: a `claude` with no flag inherits whatever mode
+        # the project was left in, and a run that inherited auto-accept ran the command and raised
+        # no prompt at all — a probe that measures nothing and says so only in its frame.
+        run("permission", PERMISSION, "claude --permission-mode default",
+            ["Do you want to", "1. Yes"], "1")
 
 
 if __name__ == "__main__":

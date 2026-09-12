@@ -15,6 +15,10 @@ data class KeyCap(
     // arrows: every other cap on the row spends its long press on something already — an
     // alternate, a latch, a lock — and a repeat cannot share a gesture with any of them.
     val repeats: Boolean = false,
+    // Columns, not slots. A cap wider than one paints across the gap between the columns it
+    // merges, which is why that gap is each cap's own inset rather than the row's arrangement
+    // (`PaneKeyRow`).
+    val span: Int = 1,
 )
 
 private fun text(label: String, send: String = label, alternate: KeyCap? = null) =
@@ -49,6 +53,12 @@ private val escape = text("esc", Esc.ESCAPE)
 private val ctrl = latch("ctrl", Latch.Ctrl)
 private val alt = latch("alt", Latch.Alt)
 private val shift = latch("shift", Latch.Shift)
+
+// **Two columns**, and they are the ones it already stood in: the slot beside shift held a blank,
+// there to keep the navigation group in line with the row above, and the operator read it as the
+// hole it looks like — *"can we make the shift button two cols wide instead of having a blank
+// space"*. The line is the separator's to hold now (`PaneKeyRow`, `KeyRowColumnsTest`).
+private val wideShift = shift.copy(span = 2)
 private val fnKey = latch("fn", Latch.Fn)
 private val tab = text("tab", Esc.TAB, alternate = csi("tab", Esc.BACKTAB))
 
@@ -113,7 +123,7 @@ object KeyLayouts {
     // shift and to nothing, and landscape's row of eight symbols went with them.
     val portrait: List<KeyRowSpec> = listOf(
         listOf(escape, ctrl, alt, tab, null) + navTop,
-        listOf(shift, blank, fnKey, keyboard, null) + navBottom,
+        listOf(wideShift, fnKey, keyboard, null) + navBottom,
     )
 
     // **Twelve caps, and the modifiers they are pressed with.** The operator: *"we have a `fn`
@@ -129,15 +139,23 @@ object KeyLayouts {
     // for at all, and it is what nobody found.
     //
     // F1 to F6 stay in the slots they were in, so a thumb that learned them keeps them, and `fn`
-    // and `kbd` keep theirs.
+    // keeps its.
+    //
+    // **`shift` takes the slot `kbd` had**, on the operator's own reading: *"there's also no way
+    // to toggle shift with fn keys up? maybe replace kbd with shift in FN mode?"*. Every other
+    // slot on this layer is a key nothing else draws — the twelve function keys, the inverted T,
+    // the way back — and a third modifier cannot be squeezed into a row without narrowing a cap
+    // past what a thumb can hit. `kbd` is the one cap here that is reachable from somewhere else:
+    // one press of `fn` puts the layer away, and arming `ctrl` or `alt` on this layer asks for
+    // the keyboard itself.
     val portraitFn: List<KeyRowSpec> = listOf(
         listOf(fn(1), fn(2), fn(3), fn(4), null) + navTop,
-        listOf(fn(5), fn(6), fnKey, keyboard, null) + navBottom,
+        listOf(fn(5), fn(6), fnKey, shift, null) + navBottom,
         listOf(fn(7), fn(8), fn(9), fn(10), null, fn(11), fn(12), ctrl, alt),
     )
 
     val landscape: List<KeyRowSpec> = listOf(
-        listOf(escape, ctrl, alt, tab, shift, blank, fnKey, keyboard, null) + navTop,
+        listOf(escape, ctrl, alt, tab, wideShift, fnKey, keyboard, null) + navTop,
         List(8) { blank } + listOf(null) + navBottom,
     )
 
@@ -146,7 +164,7 @@ object KeyLayouts {
     // one — and `esc` and the back-tab that used to sit in these two
     // slots are on the layer below, which is where the keys this layer is not about belong.
     val landscapeFn: List<KeyRowSpec> = listOf(
-        listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fnKey, keyboard, null) + navTop,
+        listOf(fn(1), fn(2), fn(3), fn(4), fn(5), fn(6), fnKey, shift, null) + navTop,
         listOf(
             fn(7), fn(8), fn(9), fn(10), fn(11), fn(12), ctrl, alt,
             null,

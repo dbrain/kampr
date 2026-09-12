@@ -450,12 +450,18 @@ is read-optimised, phone-shaped, and scrolls through the whole session rather th
 Adapters are keyed on Herdr's own `agent` string, and registered only if their root directory exists,
 so a pane can never claim a conversation the node cannot serve.
 
-Two probes shaped this more than any argument. **Claude does not write a pending tool request to its
-transcript before you approve it** — a session held at a permission prompt left the JSONL frozen for
+Two probes shaped this more than any argument. **Claude did not write a pending tool request to its
+transcript before you approved it** — a session held at a permission prompt left the JSONL frozen for
 4 m 20 s and then jumped, carrying both the request and its result together (#42). **Codex does**
-(#43). Since Claude is the harness targeted first and it will not tell us the question until it has
-been answered, `pending` is sourced from `pane.read visible` and the wire says `source: "screen"`.
-The shape is identical either way and **clients must not care which**.
+(#43). So `pending` is sourced from `pane.read visible` and the wire says `source: "screen"`. The
+shape is identical either way and **clients must not care which**.
+
+Claude 2.1.269 no longer waits (#539): the request is on disk within a tick of the dialog appearing,
+unanswered, and the prose above it as each block ends. That does not move the source — nothing reads
+the call's input back, the screen carries what a client needs to draw (#421), and no other harness
+has been measured writing a pending request down at all. What it does change is the *conversation*:
+the message a pane is asking about now arrives as a record on the follow tick, and the live preview
+covers only the gap before it lands.
 
 The node decides whether a submit key follows an answer, per harness. Probe #72 confirmed live that
 Claude acts on the bare digit for both its trust prompt and a real `Bash` permission dialog —

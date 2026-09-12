@@ -41,6 +41,9 @@ import dev.kampr.terminal.PaneSession
 // — the last row of caps sat flush on Gboard's first, with nothing between them.
 fun keyRowPadding(compact: Boolean): Dp = if (compact) 6.dp else 10.dp
 
+// What separates one cap from the next, carried half each by the two of them.
+private fun capGap(compact: Boolean): Dp = if (compact) 5.dp else 6.dp
+
 @Composable
 fun PaneKeyRow(
     session: PaneSession,
@@ -64,6 +67,7 @@ fun PaneKeyRow(
     // is why this row does *not* pay on the pane screen, and why paying anyway put 46 dp of dead
     // strip between the last key and a navigation bar.
     val safe = LocalSafeArea.current
+    val gap = capGap(compact)
 
     Column(
         modifier
@@ -71,18 +75,22 @@ fun PaneKeyRow(
             .edgeTop()
             .group()
             .absolutePadding(
-                left = 8.dp + safe.left,
+                // Half a gap of it belongs to the outermost caps, which carry their own (`Cap`).
+                left = 8.dp - gap / 2 + safe.left,
                 top = keyRowPadding(compact),
-                right = 8.dp + safe.right,
+                right = 8.dp - gap / 2 + safe.right,
                 bottom = keyRowPadding(compact) + safe.bottom,
             ),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
+        verticalArrangement = Arrangement.spacedBy(gap),
     ) {
         for (row in rows) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 6.dp),
-            ) {
+            // **The gap between caps is each cap's own inset rather than the row's arrangement.**
+            // An arrangement puts its gap *between items*, and a cap spanning two columns is one
+            // item — so it came up a gap short of the two columns it is standing in, and every cap
+            // behind it in the row sat a gap to the left of the cap above it. Half a gap either
+            // side of every cap draws the same row for caps one column wide and the right one for
+            // a cap that is wider.
+            Row(Modifier.fillMaxWidth()) {
                 for (cap in row) {
                     when {
                         cap == null -> Spacer(Modifier.width(if (compact) 14.dp else 10.dp))
@@ -134,7 +142,8 @@ private fun RowScope.Cap(
     val alternate = cap.alternate?.let { spokenKey(it.label) }
     Box(
         Modifier
-            .weight(1f)
+            .weight(cap.span.toFloat())
+            .padding(horizontal = capGap(compact) / 2)
             .background(background, shape)
             .edge(tokens.card, shape)
             // The caps drive themselves through `gestureAction` and a raw tap detector rather

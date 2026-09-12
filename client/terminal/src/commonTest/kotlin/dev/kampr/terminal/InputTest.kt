@@ -11,6 +11,8 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.KeyLayouts
 import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
+import dev.kampr.terminal.input.LatchState
+import dev.kampr.terminal.input.active
 import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.input.ScrollKeys
@@ -226,9 +228,38 @@ class InputTest {
             val bottom = rows[1]
             val up = top.indexOfFirst { it?.label == "↑" }
             val down = bottom.indexOfFirst { it?.label == "↓" }
-            assertEquals(up, down, "up must sit directly above down")
+            // The column and not the slot: a cap that spans two columns is one entry in the row
+            // and two of what a thumb sees, so counting entries stopped being the same question.
+            assertEquals(columnOf(top, up), columnOf(bottom, down), "up must sit directly above down")
             assertEquals("←", bottom[down - 1]?.label)
             assertEquals("→", bottom[down + 1]?.label)
+        }
+    }
+
+    // The operator: *"can we make the shift button two cols wide instead of having a blank
+    // space"*. The blank beside shift was there to hold the navigation group's columns in line
+    // with the row above, which is a job the separator can do instead — `KeyRowColumnsTest`
+    // measures that it does.
+    @Test
+    fun shiftIsTwoColumnsWideRatherThanACapBesideAGap() {
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portrait, "landscape" to KeyLayouts.landscape)) {
+            val row = rows.first { row -> row.any { it?.latch == Latch.Shift } }
+            val modifiers = row.takeWhile { it != null }.filterNotNull()
+            assertEquals(2, modifiers.first { it.latch == Latch.Shift }.span, "$name draws shift one column wide")
+            assertTrue(
+                modifiers.none { it.kind == CapKind.Blank },
+                "$name still spends a slot of the modifier group on a blank",
+            )
+        }
+    }
+
+    // Every layer draws the same number of columns, which is what lets a thumb keep a key across
+    // one. A cap spanning two is two of them.
+    @Test
+    fun everyRowOfEveryLayoutIsTheSameNumberOfColumnsWide() {
+        for ((name, rows) in namedLayouts()) {
+            val widths = rows.map { row -> row.filterNotNull().sumOf { it.span } }
+            assertEquals(1, widths.distinct().size, "$name draws rows of different widths: $widths")
         }
     }
 
@@ -240,6 +271,37 @@ class InputTest {
     }
 
     // Per layout rather than across both of them. The union passed while a phone in portrait could
+    // The operator: *"when I press fn to get out of fn I need to press fn twice"*.
+    //
+    // **`fn` is a layer and not a prefix.** It has no armed state to be in: `consume` deliberately
+    // leaves it standing where it clears the other three, and the row reads nothing but
+    // `active()` — so `Armed` and `Locked` draw the same cap over the same layer, and the
+    // three-state cycle spent a whole press moving between two states nothing can tell apart. The
+    // way out of a layer is the press that turned it on.
+    @Test
+    fun oneMorePressOfFnLeavesTheLayerItTurnedOn() {
+        val latches = Latches()
+        latches.tap(Latch.Fn)
+        assertTrue(latches.fn.active(), "the first press did not turn the layer on")
+        latches.tap(Latch.Fn)
+        assertFalse(latches.fn.active(), "the layer took two presses to leave")
+    }
+
+    // And the other three keep the cycle, which is what a prefix wants: one key, a run of them,
+    // off again.
+    @Test
+    fun aPrefixStillArmsThenLocksThenClears() {
+        for (latch in listOf(Latch.Ctrl, Latch.Alt, Latch.Shift)) {
+            val latches = Latches()
+            latches.tap(latch)
+            assertEquals(LatchState.Armed, latches[latch], "$latch did not arm")
+            latches.tap(latch)
+            assertEquals(LatchState.Locked, latches[latch], "$latch did not lock")
+            latches.tap(latch)
+            assertEquals(LatchState.Off, latches[latch], "$latch did not clear")
+        }
+    }
+
     // The operator, on 0.1.66: *"we have a `fn` button but it only gives me F1-F6"*.
     //
     // **A key behind a long press is a key nobody has.** F7 to F12 were on the layer, as the
@@ -266,34 +328,48 @@ class InputTest {
     // the switch — arming alt and then turning the layer on has always worked — but that is a
     // sequence nobody can see from a row with no `alt` on it, and every other layer here is judged
     // by what it draws rather than by what it will accept.
+    //
+    // Shift is the third of them, and it was the one missing: *"there's also no way to toggle
+    // shift with fn keys up?"*. It takes the slot `kbd` had, on the operator's own reading
+    // (*"maybe replace kbd with shift in FN mode?"*) — see `everyLayoutThatIsNotALayerReachesTheKeyboardToggle`.
     @Test
     fun theFnLayerKeepsTheModifiersAChordIsBuiltFrom() {
         for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
             val latches = rows.flatten().filterNotNull().mapNotNull { it.latch }
-            for (modifier in listOf(Latch.Ctrl, Latch.Alt)) {
+            for (modifier in listOf(Latch.Ctrl, Latch.Alt, Latch.Shift)) {
                 assertTrue(modifier in latches, "the $name Fn layer has no $modifier to chord with")
             }
         }
     }
 
     // And the chord itself, built where the operator would build it: both presses on the layer,
-    // one modified key out.
+    // one modified key out. Each of the three, because drawing a modifier on a layer and having it
+    // reach the key beside it are two different claims.
     @Test
-    fun altAndAFunctionKeyPressedOnTheFnLayerAreOneChord() {
+    fun aModifierAndAFunctionKeyPressedOnTheFnLayerAreOneChord() {
         for ((name, rows) in listOf("portrait" to KeyLayouts.portraitFn, "landscape" to KeyLayouts.landscapeFn)) {
-            // One set of latches, the way the pane builds them: the row arms them and the sink
-            // reads them, and a test that gave each its own would prove nothing about a chord.
-            val recorder = Recorder()
-            val session = PaneSession("n/w1:p1")
-            val keys = InputSink("n/w1:p1", recorder, session.latches)
-            val caps = rows.flatten().filterNotNull()
-            capPress(caps.first { it.latch == Latch.Alt }, session, keys)
-            capPress(caps.first { it.label == "F4" }, session, keys)
-            assertEquals(
-                listOf(Esc.modified(Esc.function(4), ctrl = false, alt = true, shift = false)),
-                recorder.text,
-                "$name: alt and F4 did not leave the row as one chord",
-            )
+            for (latch in listOf(Latch.Ctrl, Latch.Alt, Latch.Shift)) {
+                // One set of latches, the way the pane builds them: the row arms them and the sink
+                // reads them, and a test that gave each its own would prove nothing about a chord.
+                val recorder = Recorder()
+                val session = PaneSession("n/w1:p1")
+                val keys = InputSink("n/w1:p1", recorder, session.latches)
+                val caps = rows.flatten().filterNotNull()
+                capPress(caps.first { it.latch == latch }, session, keys)
+                capPress(caps.first { it.label == "F4" }, session, keys)
+                assertEquals(
+                    listOf(
+                        Esc.modified(
+                            Esc.function(4),
+                            ctrl = latch == Latch.Ctrl,
+                            alt = latch == Latch.Alt,
+                            shift = latch == Latch.Shift,
+                        ),
+                    ),
+                    recorder.text,
+                    "$name: $latch and F4 did not leave the row as one chord",
+                )
+            }
         }
     }
 
@@ -349,11 +425,16 @@ class InputTest {
         }
     }
 
-    // The keyboard toggle is the other cap a layer must not swallow: with fn on and no `kbd`,
-    // the soft keyboard cannot be brought back without leaving the layer first.
+    // The keyboard toggle stands on the layouts that are not a layer. It used to stand on all
+    // four, on the reading that with fn on and no `kbd` the soft keyboard could not be brought
+    // back without leaving the layer first — which was written while leaving the layer took two
+    // presses in a place that looked like one. It takes one now
+    // (`oneMorePressOfFnLeavesTheLayerItTurnedOn`), the layer has no slot that is not spoken for,
+    // and a chord needs shift more than a layer of function keys needs the keyboard beside it:
+    // `ctrl` and `alt` on the fn layer ask for the keyboard themselves when they are armed.
     @Test
-    fun everyLayoutCanReachTheKeyboardToggle() {
-        for ((name, rows) in namedLayouts()) {
+    fun everyLayoutThatIsNotALayerReachesTheKeyboardToggle() {
+        for ((name, rows) in listOf("portrait" to KeyLayouts.portrait, "landscape" to KeyLayouts.landscape)) {
             assertTrue(
                 rows.flatten().filterNotNull().any { it.kind == CapKind.Keyboard },
                 "$name has no keyboard key",
@@ -369,10 +450,17 @@ private fun namedLayouts() = listOf(
     "landscape fn" to KeyLayouts.landscapeFn,
 )
 
+// Which column a slot starts in, counting what the caps before it span rather than how many of
+// them there are.
+private fun columnOf(row: List<dev.kampr.terminal.input.KeyCap?>, slot: Int): Int =
+    row.take(slot).filterNotNull().sumOf { it.span }
+
+// Row and column, because a cap two columns wide is one slot and two of what a thumb sees: the
+// `fn` cap is in the same *place* on both portrait layouts and in a different slot of the list.
 private fun fnSlot(rows: List<List<dev.kampr.terminal.input.KeyCap?>>): Pair<Int, Int> {
     for ((r, row) in rows.withIndex()) {
         val at = row.indexOfFirst { it?.latch == Latch.Fn }
-        if (at >= 0) return r to at
+        if (at >= 0) return r to columnOf(row, at)
     }
     return -1 to -1
 }

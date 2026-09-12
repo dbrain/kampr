@@ -217,8 +217,11 @@ impl Watch {
     /// `asking` is whether the pane is waiting on the operator, and it changes what a *static*
     /// block means. On a working pane an unchanging block is a notice that never became a message
     /// and is not worth publishing. On a pane that is asking, the harness has stopped writing on
-    /// purpose — the message is finished, it is still on the screen above the question, and the
-    /// record that would replace it is not coming until the question is answered (#42, #410).
+    /// purpose — the message is finished and still on the screen above the question, and *when*
+    /// the record that replaces it lands is the harness's business: Claude 2.1.269 writes a text
+    /// block as that block ends, before the dialog is ever answered (#539), and every version
+    /// before it wrote nothing at all until the answer (#42). The preview covers the gap either
+    /// way, and takes itself off the moment a record turns up carrying the same words (#410).
     pub fn observe(&mut self, preview: Option<Turn>, asking: bool) -> Change {
         let Some(turn) = preview else {
             return self.stop();

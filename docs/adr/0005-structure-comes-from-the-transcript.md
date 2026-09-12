@@ -44,6 +44,15 @@ for **4 m 20 s**. Nineteen seconds after answering, it jumped to 20 469 bytes ca
 `tool_use` and its `tool_result`. So for the harness Kampr targets first, the transcript cannot be
 the source of the question.
 
+**Superseded on Claude 2.1.269** (#539): the same reading finds the permission request on disk
+**0.0 s** after the prompt appears and unanswered, and an `AskUserQuestion`'s `tool_use` **1.5 s**
+before its answer — a text block is written as *that block* ends rather than as its message does.
+The decision below does not turn on it. The question is still read off `pane.read visible`, because
+nothing reads the call's input back and no other harness has been measured writing one down; what
+changed is that the transcript is no longer *unable* to answer, only unused for it. The half that
+did move is the conversation, which now has the message a pane is asking about as a record rather
+than only as a preview scraped off the screen.
+
 **Codex is the opposite** (#43): the `custom_tool_call` was present 6.2 s in with the prompt still on
 screen and the output absent, so an unmatched tool call is Codex's pending signal.
 

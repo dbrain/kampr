@@ -2019,8 +2019,9 @@ async fn pane_preferences_are_stored_per_device() {
 
 /// The `pending` path end to end.
 ///
-/// Claude publishes nothing about a pending request until after it is answered (probe #42), so the
-/// question is read off the screen and `source` says `"screen"`. This drives that with herdr's own
+/// The question itself is read off the screen and `source` says `"screen"` — the transcript
+/// carries the call on the current Claude (#539) but nothing here reads its input back, and no
+/// other harness has been measured writing one down at all (#42). This drives that with herdr's own
 /// `pane.report_agent`: a real pane, a real blocked agent status, a real prompt on the screen.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
@@ -2065,7 +2066,7 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     assert_eq!(pending["pane"], pane.as_str());
     assert_eq!(
         pending["source"], "screen",
-        "probe #42: the transcript is not the source"
+        "the question is read off the screen, whatever the transcript carries (#42, #539)"
     );
     assert_eq!(pending["question"], "Do you want to make this edit?");
     let options = pending["options"].as_array().unwrap();
@@ -5966,8 +5967,9 @@ async fn a_pane_shows_the_session_its_own_process_is_on_and_moves_when_it_restar
 ///
 /// **One `AskUserQuestion` call can carry several questions, and answering one does not unblock
 /// the pane** — the harness draws the next one in its place and goes on waiting. Nothing about the
-/// pane changes: no status edge, no provider revision, no new transcript record ([#42](#) — the
-/// request is not written down until it has been answered). So the only thing that could notice
+/// pane changes: no status edge, no provider revision, and no new *turn* — the second question
+/// is drawn inside a call the transcript already carries (#539), where once it carried nothing at
+/// all ([#42](#)). So the only thing that could notice
 /// was a re-read of the screen, and a single-answer dialog stopped being re-read the moment it was
 /// first published. The strip on the phone stayed on question one for as long as the operator
 /// cared to look at it, and the presses it offered answered whatever was actually on screen.
@@ -8626,8 +8628,9 @@ async fn until_conversation_ids(socket: &mut Socket, pane: &str, seconds: u64) -
 
 /// **A pane that is asking the operator something must not blank the message it is asking about.**
 ///
-/// Claude publishes nothing about a pending request until after it is answered (probe #42), so
-/// while a pane is blocked the transcript is frozen and the screen is the only source there is.
+/// A harness that writes nothing down until the request is answered (#42) leaves the screen as
+/// the only source there is while a pane is blocked. The Claude installed here no longer waits
+/// (#539); the rule below does not turn on which of the two it is.
 /// The pump withdrew the live preview the moment the pane stopped `working` — so an agent that
 /// wrote a message and then asked about it made that message *disappear* from the conversation,
 /// while the terminal beside it went on showing both. The operator is then being asked to approve
@@ -8739,6 +8742,104 @@ async fn a_pane_opened_while_it_is_already_asking_still_says_what_it_is_asking_a
         Some("I am about to remove the old migration file, which cannot be undone."),
         "the conversation opened on a question with no message above it",
     );
+}
+
+/// **The message a pane is asking about is in the transcript now, and the conversation has to
+/// carry it from there.**
+///
+/// [#42](#) and [#421](#) both measured a frozen transcript — nothing about an unanswered request
+/// on disk — and the two tests above exist because of it. [#539](#) measures the other thing on
+/// Claude 2.1.269: a message's text block is written as it finishes, in the same record stream as
+/// the `tool_use` that raises the dialog and a second and a half before the answer. So the
+/// account of what the operator is being asked about is now the *record*, arriving on the
+/// ordinary follow tick — and a pane that has gone `blocked` must not stop it. The operator:
+/// *"when Claude asks me a question the conversation pane seems to miss all of the prose/chatter
+/// leading up to it"*.
+///
+/// The record is appended **after** the pane is already blocked, which is the order that tells
+/// the two apart: a pump that drains only while its pane works would still pass on a record that
+/// landed first.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_prose_a_question_is_asked_about_reaches_the_conversation_off_the_transcript() {
+    let (h, mut socket, pane, local, home) = an_agent_pane_with_a_transcript("prosq").await;
+
+    repaint_harness_screen(
+        &h,
+        &mut socket,
+        &pane,
+        "\u{25cf} The width inference lands on seventy-four columns.\n\n         \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n \u{2610} Indentation\n\n         Which indentation do you prefer?\n\n\u{276f} 1. Tabs\n  2. Two spaces\n",
+        "Which indentation do you prefer?",
+    )
+    .await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "blocked" }),
+        )
+        .await;
+    until_herd(&h, &pane, "blocked").await;
+
+    let said = "The width inference lands on seventy-four columns, and the pane's own rect is \
+                where it comes from.";
+    append_record(
+        &only_transcript(home.path()),
+        json!({
+            "type": "assistant", "uuid": "a-asked-about", "cwd": "/tmp",
+            "timestamp": time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "message": { "content": [{ "type": "text", "text": said }] }
+        }),
+    );
+
+    assert!(
+        recorded_turn(&mut socket, &pane, 30, said).await,
+        "the pane asked a question and the conversation never took the message it was asking about",
+    );
+}
+
+/// The one transcript `an_agent_pane_with_a_transcript` left under the temporary home.
+fn only_transcript(home: &Path) -> PathBuf {
+    let project = home.join(".claude/projects/-tmp");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&project)
+        .expect("project directory")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "expected one transcript under {}",
+        project.display()
+    );
+    found.pop().unwrap()
+}
+
+fn append_record(transcript: &Path, record: serde_json::Value) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().append(true).open(transcript).unwrap();
+    writeln!(file, "{record}").unwrap();
+}
+
+/// Whether a turn carrying `wanted` ever reached this socket, by either route the conversation
+/// travels: the page a watch opens with, and the tail that follows it.
+async fn recorded_turn(socket: &mut Socket, pane: &str, seconds: u64, wanted: &str) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if message["pane"] != pane || !matches!(message["t"].as_str(), Some("convo" | "convo.turn")) {
+            continue;
+        }
+        for turn in message["turns"].as_array().into_iter().flatten() {
+            for block in turn["blocks"].as_array().into_iter().flatten() {
+                if block["text"].as_str().is_some_and(|t| t.contains(wanted)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// A watched agent pane with a transcript open on it, which is where both of the above start.

@@ -72,6 +72,39 @@ fn agy_upto(records: usize) -> Box<dyn Journal> {
     upto_path(&agy(), &common::agy_transcript(), records)
 }
 
+/// **A real `AskUserQuestion` dialog with the message it is about standing above it.** No screen
+/// here had one: #413's and #421's captures were raised by a prompt that forbade the harness to
+/// say anything first, so the dialog stood alone and the walk up from the composer was never
+/// asked to climb past one. It has to. The dialog's own option rows open with the **prompt**
+/// marker, its header and its question sit in column zero, and its rules are neither blank nor
+/// indented — every one of them a boundary the walk has to read as the harness's own chrome. A
+/// walk that stops on any of them takes the message the operator is being asked about off the
+/// conversation, which is [#410](#). Captured by `research/probe/ask-question/prose-above.py`
+/// ([#539](#)).
+#[test]
+fn the_message_above_a_real_question_dialog_is_read_off_the_screen() {
+    let text = screen("claude-asking");
+    let reader = claude().screen().expect("claude reads its own screen");
+    let block = reader(&lines(&text)).expect("no preview at all above a real question dialog");
+
+    assert!(
+        block.text.starts_with("The command printed the single line"),
+        "the walk did not reach the message's own marker: {:?}",
+        block.text,
+    );
+    assert!(
+        !block.clipped,
+        "the message's header is on screen, so nothing was clipped"
+    );
+    for chrome in ["Which suite should I run?", "1. unit", "Suite", "Enter to select"] {
+        assert!(
+            !block.text.contains(chrome),
+            "the preview carried the dialog's own {chrome:?}: {:?}",
+            block.text,
+        );
+    }
+}
+
 fn md(turn: &Turn) -> &str {
     match turn.blocks.first() {
         Some(Block::Md { text, .. }) => text,
