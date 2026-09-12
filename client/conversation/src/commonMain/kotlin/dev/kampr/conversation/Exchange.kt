@@ -28,6 +28,16 @@ fun replyGist(reply: Reply): String =
         ?.let(::turnGist)
         ?: reply.turns.firstOrNull()?.let(::turnGist).orEmpty()
 
+// A reply as a reader would paste it: the message it ended on, as the markdown it was written in.
+// The prose before it is the agent's working, and so are the calls after it — an agent that answers
+// and then runs one last check still ended on the answer.
+fun lastMessage(reply: Reply): String = reply.turns
+    .asReversed()
+    .map { turn -> turn.blocks.filterIsInstance<Block.Md>().filter { it.att == null && it.text.isNotBlank() } }
+    .firstOrNull { it.isNotEmpty() }
+    ?.joinToString("\n\n") { it.text.trim() }
+    .orEmpty()
+
 // Every adapter writes one tool call per record and carries that through as one turn, so a run of
 // calls is a run of *turns* — grouping inside a turn would never fire on a real transcript. A turn
 // that does hold several at once, from a harness that batches them, joins the same run and is

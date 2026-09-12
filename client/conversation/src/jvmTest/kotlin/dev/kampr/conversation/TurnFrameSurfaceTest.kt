@@ -74,10 +74,13 @@ class TurnFrameSurfaceTest {
         val ask = onNodeWithText(ASKED, substring = true).fetchSemanticsNode().boundsInRoot
         val head = onNodeWithContentDescription("Put away the reply of", substring = true)
             .fetchSemanticsNode().boundsInRoot
+        val copy = onNodeWithContentDescription("Copy the last message of the reply of", substring = true)
+            .fetchSemanticsNode().boundsInRoot
         val step = onNodeWithText(ANSWERED, substring = true).fetchSemanticsNode().boundsInRoot
         assertEquals(ask.left, head.left, "an ask and a reply head start at different columns")
         assertEquals(head.left, step.left, "a step is indented out of the box its head draws")
-        assertEquals(ask.right, head.right, "an ask and a reply head end at different columns")
+        assertEquals(head.right, copy.left, "a reply head leaves a gap before its copy control")
+        assertEquals(ask.right, copy.right, "an ask and a reply head end at different columns")
     }
 
     // The trap this walked into twice: `accent` and `working` are the *same colour* in Phosphor and

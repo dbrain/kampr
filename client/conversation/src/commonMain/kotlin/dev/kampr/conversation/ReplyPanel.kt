@@ -3,7 +3,6 @@ package dev.kampr.conversation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -50,32 +49,36 @@ fun ReplyHead(
     val skin = speakerSkin(Speaker.Agent, agent)
     val stamp = replySpan(reply.at, reply.until, now)
     val held = replyLabel(agent, stamp, reply, collapsed)
+    val last = lastMessage(reply)
     BlockFrame(skin, edge, modifier) {
         DisableSelection {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .touchable(LANDSCAPE_TOUCH)
-                    .action(
-                        if (collapsed) "Show the reply of $held" else "Put away the reply of $held",
-                        onToggle,
-                        selected = !collapsed,
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                LabelText(skin.label, tokens.type.metaSmall, skin.rail)
-                if (stamp != null) KText(stamp, tokens.type.micro, tokens.color.mute)
-                if (collapsed) {
-                    KText(replyGist(reply), tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
-                } else {
-                    KText(replyTally(reply), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .touchable(LANDSCAPE_TOUCH)
+                        .action(
+                            if (collapsed) "Show the reply of $held" else "Put away the reply of $held",
+                            onToggle,
+                            selected = !collapsed,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LabelText(skin.label, tokens.type.metaSmall, skin.rail)
+                    if (stamp != null) KText(stamp, tokens.type.micro, tokens.color.mute)
+                    if (collapsed) {
+                        KText(replyGist(reply), tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
+                    } else {
+                        KText(replyTally(reply), tokens.type.meta, tokens.color.mute, Modifier.weight(1f))
+                    }
+                    IconGlyph(
+                        if (collapsed) ConversationIcons.chevronDown else ConversationIcons.chevronUp,
+                        12.dp,
+                        tokens.color.mute,
+                    )
                 }
-                IconGlyph(
-                    if (collapsed) ConversationIcons.chevronDown else ConversationIcons.chevronUp,
-                    12.dp,
-                    tokens.color.mute,
-                )
+                if (last.isNotEmpty()) CopyGlyph(last, "last message of the reply of $held")
             }
         }
     }

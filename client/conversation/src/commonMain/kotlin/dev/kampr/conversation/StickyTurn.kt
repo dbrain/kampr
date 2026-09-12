@@ -2,6 +2,7 @@ package dev.kampr.conversation
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -71,7 +72,16 @@ fun PinnedBlockBar(
         is TranscriptRow.Head -> {
             val stamp = replySpan(row.reply.at, row.reply.until, now)
             val skin = speakerSkin(Speaker.Agent, agent)
-            PinnedBar(modifier, onCollapse, "Put away the reply you are inside, ${replyLabel(agent, stamp, row.reply, false)}") {
+            val held = replyLabel(agent, stamp, row.reply, false)
+            val last = lastMessage(row.reply)
+            PinnedBar(
+                modifier,
+                onCollapse,
+                "Put away the reply you are inside, $held",
+                trailing = last.takeIf { it.isNotEmpty() }?.let { text ->
+                    { CopyGlyph(text, "last message of the reply you are inside, $held") }
+                },
+            ) {
                 LabelText(skin.label, tokens.type.metaSmall, skin.rail)
                 KText(replyGist(row.reply), tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
                 KText(replyTally(row.reply), tokens.type.micro, tokens.color.mute)
@@ -97,6 +107,7 @@ private fun PinnedBar(
     modifier: Modifier,
     onCollapse: (() -> Unit)?,
     label: String,
+    trailing: (@Composable () -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -105,17 +116,24 @@ private fun PinnedBar(
             modifier
                 .fillMaxWidth()
                 .background(tokens.color.bar)
-                .edgeBottom()
-                .then(
-                    if (onCollapse == null) Modifier
-                    else Modifier.touchable(LANDSCAPE_TOUCH).action(label, onCollapse),
-                )
-                .padding(horizontal = 16.dp, vertical = 7.dp),
+                .edgeBottom(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            content()
-            if (onCollapse != null) IconGlyph(ConversationIcons.chevronUp, 12.dp, tokens.color.mute)
+            Row(
+                Modifier
+                    .weight(1f)
+                    .then(
+                        if (onCollapse == null) Modifier
+                        else Modifier.touchable(LANDSCAPE_TOUCH).action(label, onCollapse),
+                    )
+                    .padding(start = 16.dp, end = if (trailing == null) 16.dp else 4.dp, top = 7.dp, bottom = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                content()
+                if (onCollapse != null) IconGlyph(ConversationIcons.chevronUp, 12.dp, tokens.color.mute)
+            }
+            if (trailing != null) Box(Modifier.padding(end = 4.dp)) { trailing() }
         }
     }
 }
