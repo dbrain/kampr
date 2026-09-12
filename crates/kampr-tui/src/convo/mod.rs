@@ -631,10 +631,10 @@ impl Convo {
     /// The next page to ask for while an aim is still standing, or `None` when there is nothing
     /// left to walk — the turn landed, or the transcript ran out before it did.
     pub fn walking(&self, pane: &str) -> Option<String> {
-        let held = match self.launched.get(pane) {
-            Some(reading) => &reading.held,
-            None => self.panes.get(pane)?,
-        };
+        // The pane's own transcript, because `convo.load` is the only verb this walk has and a
+        // launched conversation is paged by another one. Nothing aims past what a launched
+        // conversation holds: the search inside one is over the turns that are here.
+        let held = self.panes.get(pane)?;
         let want = held.aiming.as_deref()?;
         if held.at(want).is_some() {
             return None;

@@ -854,7 +854,11 @@ impl App {
             return;
         };
         self.router.enter(Mode::Results);
-        if self.client.state().caps().convo_find && self.client.convo_find(&pane, query) {
+        // **Only about the pane's own conversation.** There is no verb that searches a launched
+        // one, and an answer about the pane would name turns the transcript on screen does not
+        // hold and never will — a walk that cannot end. What is on screen is searched here.
+        let whole = self.convo.reading(&pane).is_none() && self.client.state().caps().convo_find;
+        if whole && self.client.convo_find(&pane, query) {
             self.search.asking(&pane, query);
             return;
         }

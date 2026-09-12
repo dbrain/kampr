@@ -2129,3 +2129,48 @@ async fn a_harness_with_no_measured_clear_is_not_offered_the_takeover() {
     let screen = painted(&mut app, 90, 20);
     assert!(screen.contains("nobody has measured"), "{screen}");
 }
+
+/// **The node's transcript search is about the pane's conversation**, and there is no verb that
+/// searches a launched one. A hit it answered with would name a turn the transcript on screen does
+/// not hold and never will, so the reader would be aiming at a walk that cannot end.
+#[tokio::test]
+async fn a_search_inside_a_launched_conversation_stays_inside_it() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let (mut app, mut conn) = searching(&mut fake, &client, true).await;
+    app.convo.absorb(&revision(
+        PANE,
+        json!([turn(
+            "t_4",
+            "assistant",
+            None,
+            sub("h1", "explore", "find the call sites")
+        )]),
+    ));
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT));
+    let _ = conn.sent("convo.sub").await;
+    app.absorb(&launched_page(
+        PANE,
+        "h1",
+        json!([turn(
+            "s_1",
+            "assistant",
+            None,
+            md("nine call sites and a scrollbar")
+        )]),
+    ));
+    let _ = painted(&mut app, 90, 20);
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    typed(&mut app, "scrollbar");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let screen = painted(&mut app, 90, 20);
+    assert!(screen.contains("so far"), "{screen}");
+    assert!(
+        conn.heard().await.iter().all(|frame| frame["t"] != "convo.find"),
+        "the node has no verb for this transcript and is not asked about another one"
+    );
+}
