@@ -25,7 +25,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde::Deserialize;
 use serde_json::Value;
-use stamps::when;
+use stamps::{running_for, when};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -206,6 +206,13 @@ impl Turn {
     }
 }
 
+/// One piece of outstanding work, in the words the harness used for it.
+#[derive(Debug, Clone)]
+struct Launched {
+    what: String,
+    since: Option<String>,
+}
+
 pub(super) enum Piece {
     Line(Line<'static>),
     /// The rule above a code block, carrying the block's **own** text. A copy takes this rather
@@ -282,6 +289,9 @@ struct Transcript {
     /// What the harness has queued, held apart from the turns because it is not a record: it is
     /// republished whole whenever it moves, so it is replaced rather than merged.
     queued: Vec<Turn>,
+    /// What it has launched and has not been told is over. Same republished-whole rule, and the
+    /// instant each one started rather than a duration, because the stopwatch runs here.
+    running: Vec<Launched>,
     laid: Option<Laid>,
 }
 
@@ -526,6 +536,31 @@ impl Convo {
                             text: prompt.text.clone(),
                             att: None,
                         }],
+                    })
+                    .collect();
+                // `kind` is an open string and the node only ever sends a word it measured, so an
+                // unknown one is printed rather than mapped to a default.
+                held.running = facets
+                    .running
+                    .iter()
+                    .map(|run| {
+                        let who = match run.kind.trim() {
+                            "" => run
+                                .name
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|n| !n.is_empty())
+                                .unwrap_or("task"),
+                            kind => kind,
+                        };
+                        let what = match run.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                            Some(title) => format!("{who} · {title}"),
+                            None => who.to_string(),
+                        };
+                        Launched {
+                            what,
+                            since: run.since.clone(),
+                        }
                     })
                     .collect();
                 held.touch();
@@ -829,6 +864,10 @@ impl Convo {
             strip.lines.insert(0, waiting(line, theme, area.width));
             strip.chip_row += 1;
         }
+        if !held.running.is_empty() {
+            strip.lines.insert(0, outstanding(&held.running, theme));
+            strip.chip_row += 1;
+        }
         let rows = (strip.lines.len() as u16).min(area.height);
         let mut body = Rect {
             height: area.height - rows,
@@ -883,6 +922,30 @@ fn reading_head(head: &str, theme: &Theme) -> Line<'static> {
         ),
         Span::styled("  esc to come back".to_string(), Style::default().fg(theme.mute)),
     ])
+}
+
+/// **`working` is not this.** A pane says `working` while anything at all is outstanding, so a
+/// shell left running an hour ago makes a session that is doing nothing look busy. This is the
+/// line that tells the two apart, and it is a departure from steady state rather than a fact that
+/// is always true — it is here only while something is.
+fn outstanding(running: &[Launched], theme: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!("  ◐ {} running", running.len()),
+        Style::default().fg(theme.working).add_modifier(Modifier::BOLD),
+    )];
+    for run in running {
+        let age = run
+            .since
+            .as_deref()
+            .and_then(running_for)
+            .map(|age| format!(" · {age}"))
+            .unwrap_or_default();
+        spans.push(Span::styled(
+            format!("   {}{age}", run.what),
+            Style::default().fg(theme.text),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn decode(turns: &[Value]) -> Vec<Turn> {

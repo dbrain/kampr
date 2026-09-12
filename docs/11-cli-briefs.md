@@ -443,6 +443,13 @@ is writing.
   takes is the block's **own** text, not the rows that were painted — those are clipped at the
   pane's width — and without the newline a fence ends with, because a command copied with its
   return on it is a command the paste runs.
+- **The `running` facet, which the CLI decoded and drew nothing for.** `working` is not this: a
+  pane says `working` while *anything* is outstanding, so a shell somebody left running an hour ago
+  makes a session that is doing nothing look busy, and the status alone cannot tell the two apart.
+  The strip carries what the harness launched and has not been told is over, with the stopwatch run
+  here off the instant the node sent rather than a duration it would have to keep re-sending.
+  `kind` is an open string and the word is printed rather than mapped, so a harness that grows a
+  third kind reads as itself with no client release.
 - **`prefix shift+c` — the line left at the desk.** `input` appends to whatever is half-typed at
   the pane's own keyboard, so a reply sent from here submits as one run-on line. The strip has
   always said so and there was no way to act on it. The words move into the reply box **before**

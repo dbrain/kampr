@@ -24,6 +24,26 @@ pub fn when(at: &str) -> Option<String> {
     })
 }
 
+/// A stopwatch rather than a stamp: how long something has been going, which is what an instant
+/// is carried for instead of a duration — the node does not have to send a frame a second.
+///
+/// **A stamp naming no zone gets none.** Its only honest reading is elapsed-from-local, and a
+/// launch is a thing whose age is the whole point, so it says nothing rather than something that
+/// is out by the machine's offset.
+pub fn running_for(at: &str) -> Option<String> {
+    let (civil, zone) = split_zone(at)?;
+    let (year, month, day, hour, minute, second) = civil;
+    let zone = zone?;
+    let stamp =
+        days_from_civil(year, month, day) * 86_400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+    let seconds = now().saturating_sub(stamp - zone as i64 * 60).max(0);
+    Some(match seconds {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+    })
+}
+
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];

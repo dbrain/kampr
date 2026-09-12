@@ -2174,3 +2174,55 @@ async fn a_search_inside_a_launched_conversation_stays_inside_it() {
         "the node has no verb for this transcript and is not asked about another one"
     );
 }
+
+// ---- what the harness has launched and not been told is over ----------------------------------
+
+fn facets_running(pane: &str, running: Value) -> Event {
+    Event::ConvoFacets {
+        pane: pane.to_string(),
+        facets: serde_json::from_value(json!({ "running": running })).expect("facets"),
+    }
+}
+
+/// **`working` is not this.** A pane reports `working` while anything at all is outstanding, so a
+/// shell somebody left running an hour ago makes an idle session look busy — and the status alone
+/// cannot tell the two apart. The phone has drawn this since the harness plane landed; the CLI
+/// decoded the facet and drew nothing.
+#[test]
+fn what_the_harness_launched_and_has_not_been_told_is_over_is_on_the_strip() {
+    let mut convo = one_turn(md("working on it"));
+    convo.absorb(&facets_running(
+        PANE,
+        json!([
+            { "call": "c1", "kind": "agent", "name": "Agent", "title": "find the call sites",
+              "since": "2026-08-20T09:00:00Z" },
+            { "call": "c2", "kind": "shell", "name": "Bash", "title": "npm test",
+              "since": "2026-08-20T09:01:00Z" }
+        ]),
+    ));
+    let shown = screen(&mut convo, 80, 14);
+    assert!(shown.contains("2 running"), "{shown}");
+    assert!(shown.contains("find the call sites"), "{shown}");
+    assert!(shown.contains("npm test"), "{shown}");
+
+    // Republished whole whenever it moves, so an empty list is how the line comes down — there is
+    // no ending event for one of these any more than there is for a prompt.
+    convo.absorb(&facets_running(PANE, json!([])));
+    let after = screen(&mut convo, 80, 14);
+    assert!(!after.contains("running"), "{after}");
+}
+
+/// `kind` is an open string, so a word this build has never heard of is printed rather than
+/// mapped to a default: the node only sends one it measured, and a harness that grows a third
+/// kind must read as itself here without a client release.
+#[test]
+fn a_kind_this_build_has_never_heard_of_is_printed_as_the_word_it_was_given() {
+    let mut convo = one_turn(md("working on it"));
+    convo.absorb(&facets_running(
+        PANE,
+        json!([{ "call": "c1", "kind": "notebook", "title": "rerun the cells" }]),
+    ));
+    let screen = screen(&mut convo, 80, 14);
+    assert!(screen.contains("notebook"), "{screen}");
+    assert!(screen.contains("rerun the cells"), "{screen}");
+}
