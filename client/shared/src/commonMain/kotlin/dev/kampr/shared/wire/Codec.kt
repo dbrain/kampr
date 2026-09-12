@@ -72,6 +72,12 @@ object Wire {
                 total = obj.int("total") ?: 0,
                 current = obj.int("current"),
             )
+            "convo.find" -> ServerMsg.ConvoFound(
+                pane = obj.str("pane") ?: return null,
+                query = obj.str("query") ?: "",
+                matches = obj.decodeList<ConvoMatch>("matches"),
+                total = obj.int("total") ?: 0,
+            )
             "scrollback" -> ServerMsg.Scrollback(
                 pane = obj.str("pane") ?: return null,
                 fromTop = obj.int("from_top") ?: 0,
@@ -172,6 +178,9 @@ object Wire {
             put("t", "find"); put("pane", msg.pane); put("query", msg.query)
             put("backward", msg.backward)
             msg.from?.let { put("from", it) }
+        }
+        is ClientMsg.ConvoFind -> buildJsonObject {
+            put("t", "convo.find"); put("pane", msg.pane); put("query", msg.query)
         }
         is ClientMsg.ConvoSub -> buildJsonObject {
             put("t", "convo.sub"); put("pane", msg.pane); put("id", msg.id)

@@ -37,6 +37,13 @@ val TOOL_RUN_TURNS: List<Turn> = listOf(
     bashTurn("r-8", "cargo test -p kampr-node", "running", null),
 )
 
-// What the view does with a query, in the order it does it: rows first, and the hits are indices
-// into those rows rather than into the turns behind them.
-fun hitRows(turns: List<Turn>, query: String): List<Int> = searchHits(transcriptRows(turns, query), query)
+// What the view does with a query, in the order it does it: rows first, then a result per matching
+// turn — and the row a reader is aimed at is the row that turn is in. A result names the turn
+// rather than the row because the node's half of the same search names turns this client may not
+// hold yet.
+fun hitRows(turns: List<Turn>, query: String): List<Int> {
+    val rows = transcriptRows(turns, query)
+    return resultsOf(null, rows, query).map { hit ->
+        rows.indexOfFirst { row -> row.turns.any { it.id == hit.turn } }
+    }
+}

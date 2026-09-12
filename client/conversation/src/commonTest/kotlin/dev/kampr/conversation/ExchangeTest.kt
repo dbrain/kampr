@@ -106,7 +106,7 @@ class ExchangeTest {
     @Test
     fun aReplyHeadIsNotAMatchOfItsOwn() {
         val rows = transcriptRows(EXCHANGE, "clippy")
-        val hits = searchHits(rows, "clippy")
+        val hits = hitRows(EXCHANGE, "clippy")
         assertEquals(1, hits.size, "the head and the step both answered for one match")
         assertTrue(rows[hits.single()] is TranscriptRow.One)
     }

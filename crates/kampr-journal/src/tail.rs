@@ -6,6 +6,7 @@ use crate::attach::{MAX_RECORD_BYTES, Origin};
 use crate::error::JournalError;
 use crate::live::{self, ScreenReader};
 use crate::model::{Block, Page, Role, Turn};
+use crate::search::{ConvoFound, search_turns};
 use crate::store::TurnStore;
 
 pub trait TranscriptParser: Send {
@@ -22,6 +23,9 @@ pub trait Journal: Send {
     /// Turns added or revised since the last call. Empty when the transcript has not grown.
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError>;
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page;
+    /// Every turn in the transcript that holds `query`, counted in full and listed up to `cap`.
+    /// The client's own search is over the turns it holds; this is over the transcript.
+    fn search(&self, query: &str, cap: usize) -> ConvoFound;
     fn path(&self) -> &Path;
     /// Every turn id this journal has produced. What a client is holding for this pane is a
     /// subset of it, which is what lets a conversation be taken off the screen when the pane
@@ -227,6 +231,10 @@ impl Journal for FileJournal {
             more: start > 0,
             turns: slice,
         }
+    }
+
+    fn search(&self, query: &str, cap: usize) -> ConvoFound {
+        search_turns(self.parser.store().turns(), query, cap)
     }
 
     fn path(&self) -> &Path {

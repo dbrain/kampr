@@ -76,7 +76,9 @@ import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.talks
 import kotlin.io.encoding.Base64
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 // Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
 // on a long answer opened at the start of that answer — which read as "somewhere above the
@@ -84,6 +86,16 @@ import kotlinx.coroutines.launch
 // newest message was the whole screen. An offset past the end of any item is measured against the
 // end of the list, which is the only thing that means "the bottom" here.
 private const val END_OF_THE_ITEM = Int.MAX_VALUE
+
+// How long the typing has to stop before the node is asked. Short enough that the count arrives
+// while the reader is still looking at the word they typed.
+private const val ASK_AFTER_MS = 260L
+
+// Pages one press may spend walking backwards to a hit, and how long any one of them is waited
+// for. Forty turns a page, so this reaches about a thousand turns back — past the deepest
+// transcript measured on the operator's own machine (1053 turns) and still a bounded walk.
+private const val MOST_PAGES_TO_REACH = 26
+private const val PAGE_WITHIN_MS = 6_000L
 
 @Composable
 fun ConversationView(
@@ -121,7 +133,13 @@ fun ConversationView(
     val turns = remember(pane.revision) { pane.turns.filter { it.isVisible() } + queuedTurns(pane.facets) }
     var query by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
-    var focus by remember { mutableStateOf(0) }
+    // Which match the search is standing on, held as the **turn** rather than as an index: a page
+    // of older turns arriving puts matches above the reader, and an index would quietly become a
+    // different hit under them.
+    var standingOn by remember { mutableStateOf<String?>(null) }
+    // The matches on their own, instead of the transcript. Left when the search is closed, because
+    // a list of hits for a query nobody is looking for any more is not a view of anything.
+    var listing by remember { mutableStateOf(false) }
     val expanded = remember { mutableStateListOf<String>() }
     val toggle: (String) -> Unit = { key -> if (key in expanded) expanded.remove(key) else expanded.add(key) }
     // Per pane, and dropped with it: what bounds how many decoded images this client is holding
@@ -169,7 +187,24 @@ fun ConversationView(
     // far above the fold, which is the one place a progress line is no use.
     val shown = if (tail == null) rows else rows + TranscriptRow.Working(tail)
     val stamps = remember(shown, now) { stepStamps(shown, now) }
-    val hits = remember(rows, query) { searchHits(rows, query) }
+    // **The search is the node's where the node can answer it.** This client holds the page the
+    // conversation opened on and whatever the reader has paged back to, so its own count is short
+    // by however much of the session nobody has asked for — and it cannot know by how much. The
+    // node holds the whole folded transcript; `convo.find` is that question, and it is offered
+    // only where the greeting promised an answer.
+    //
+    // Matched on the query as well as the pane, so what is on screen is never a count from a
+    // search the reader has since typed past.
+    val whole = pane.convoFound?.takeIf { it.pane == pane.id && it.query == query && query.length >= 2 }
+    val results = remember(whole, rows, query) { resultsOf(whole, rows, query) }
+    // **The search starts on the match nearest the end the reader is standing at, which is the
+    // newest.** A transcript is read from its end, so the first thing a search should show is the
+    // last time the word was said — starting at the oldest match means a walk backwards through
+    // the whole session before the reader has asked for anything.
+    LaunchedEffect(results) {
+        if (results.none { it.turn == standingOn }) standingOn = results.lastOrNull()?.turn
+    }
+    val focus = results.indexOfFirst { it.turn == standingOn }
     // **`more` is this client's memory and `has_conversation` is the node's answer, and the offer
     // needs both.** The cursor and `more` a page was read under outlive the transcript they came
     // from: an agent quit and started again in the same terminal names no session until it writes
@@ -191,11 +226,16 @@ fun ConversationView(
     // clipboard with no file on it never gets here, so pasting words into the reply box is
     // untouched.
     PastedFiles(!io.readOnly) { picked -> handover.value = handoverOf(pane, io, picked) }
-    val stillness = LocalReduceMotion.current
-    LaunchedEffect(hits, focus) {
-        val target = hits.getOrNull(focus) ?: return@LaunchedEffect
-        if (stillness) listState.scrollToItem(target + leading)
-        else listState.animateScrollToItem(target + leading)
+
+    // Asked as the reader types rather than on a submit key, because the answer is what the
+    // counter says and a counter that waits for Enter is a counter that is wrong while it waits.
+    // Debounced because the node's walk is not free — 6-9 ms on a long session and 28 ms for a
+    // query that is not in it, with the pane's conversation lock held (#541) — and because a frame
+    // per keystroke is still a frame per keystroke on a phone link.
+    LaunchedEffect(pane.id, query, io.searchesTranscript) {
+        if (!io.searchesTranscript || query.length < 2) return@LaunchedEffect
+        delay(ASK_AFTER_MS)
+        io.send(ClientMsg.ConvoFind(pane.id, query))
     }
 
     // Paging backwards is the whole point of the opaque cursor: ask once per cursor, and let the
@@ -228,6 +268,58 @@ fun ConversationView(
                     else -> following
                 }
             }
+    }
+
+    // **A hit is a turn id, not a row.** The node's matches name turns this client may not hold,
+    // and a row index would mean nothing until it did — so the aim is resolved against whatever
+    // rows exist now, and becomes reachable the moment the page holding it arrives.
+    val standing = results.getOrNull(focus)
+    val aimAt = remember(rows, standing) {
+        standing?.turn?.let { id -> rows.indexOfFirst { row -> row.turns.any { it.id == id } } }?.takeIf { it >= 0 }
+    }
+    // Aiming at a match is the reader leaving that end on purpose, and the aim has to say so
+    // itself: a programmatic aim is not a scroll anything reports, so the transcript went on
+    // following its own end and the next thing the node wrote took the match back off the screen
+    // — as did the keyboard's arrival, before the reader had seen the first hit at all. What that
+    // reads as is a search whose arrows do nothing (#540).
+    val stillness = LocalReduceMotion.current
+    LaunchedEffect(aimAt) {
+        val target = aimAt ?: return@LaunchedEffect
+        following = false
+        if (stillness) listState.scrollToItem(target + leading)
+        else listState.animateScrollToItem(target + leading)
+    }
+
+    // The walk to a hit older than anything this client holds: the same `convo.load` paging the
+    // reader does by scrolling to the top, done for them. Bounded three ways — the node saying
+    // there is nothing older, a page that never arrives, and a ceiling on how many pages one press
+    // may cost — because an unbounded loop here is a client that pages a whole session on a typo.
+    //
+    // It reads `pane` rather than the composed `rows`, which is a snapshot of the composition that
+    // launched this: the turns list is the live one, and it is the only thing that can say whether
+    // the page has landed yet.
+    var reaching by remember(pane.id) { mutableStateOf(false) }
+    LaunchedEffect(standing?.turn) {
+        val id = standing?.turn ?: return@LaunchedEffect
+        if (pane.turns.any { it.id == id }) return@LaunchedEffect
+        reaching = true
+        try {
+            var pages = 0
+            while (pane.turns.none { it.id == id } && pane.convoMore && pages < MOST_PAGES_TO_REACH) {
+                pages++
+                val cursor = pane.convoCursor ?: break
+                // Kept in step with the scroll-driven paging beside this, which asks once per
+                // cursor: two asks for the same page are one wasted frame each way.
+                asked = cursor
+                val before = pane.revision
+                io.send(ClientMsg.ConvoLoad(pane.id, cursor))
+                withTimeoutOrNull(PAGE_WITHIN_MS) {
+                    snapshotFlow { pane.revision }.first { it != before }
+                } ?: break
+            }
+        } finally {
+            reaching = false
+        }
     }
 
     // The transcript follows its own end, and it is aimed at that end again whenever the end can
@@ -368,11 +460,27 @@ fun ConversationView(
                     count = turns.size,
                     searching = searching,
                     query = query,
-                    hits = hits.size,
-                    focus = focus,
-                    onQuery = { query = it; focus = 0 },
-                    onSearching = { searching = it; if (!it) query = "" },
-                    onStep = { step -> if (hits.isNotEmpty()) focus = (focus + step + hits.size) % hits.size },
+                    hits = results.size,
+                    // Every matching turn the node found, which is not what it listed: the list is
+                    // capped so one keystroke cannot become a frame of hundreds. Absent where this
+                    // client did the searching, because then there is no wider number to know.
+                    total = whole?.total,
+                    // The one frame between a result set arriving and the effect above standing on
+                    // its newest match has nothing to be on, and a bar that reads "0/2" for it is
+                    // a worse lie than one that reads "1/2".
+                    focus = focus.coerceAtLeast(0),
+                    older = whole == null && pageable,
+                    reaching = reaching,
+                    listing = listing,
+                    onQuery = { query = it; standingOn = null },
+                    onSearching = { searching = it; if (!it) { query = ""; listing = false } },
+                    onStep = { step ->
+                        if (results.isNotEmpty()) {
+                            val from = if (focus >= 0) focus else results.lastIndex
+                            standingOn = results[(from + step + results.size) % results.size].turn
+                        }
+                    },
+                    onListing = { listing = it },
                     agent = info?.agent,
                     adrift = !following && rows.isNotEmpty(),
                     onEnd = { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
@@ -384,6 +492,22 @@ fun ConversationView(
             // list only holds the items it has composed, so a drag reaches as far as the reader has
             // scrolled and no further — the alternative is laying an unbounded transcript out at once.
             }, transcript = {
+            // The matches instead of the transcript, while the reader asked for that. Outside the
+            // selection container and outside the list below it: it is a list of controls, and a
+            // drag across it is a scroll rather than a copy.
+            if (listing && results.isNotEmpty()) {
+                SearchResults(
+                    results = results,
+                    focus = focus,
+                    query = query,
+                    agent = info?.agent,
+                    now = now,
+                    whole = whole != null,
+                    found = whole?.total,
+                    onPick = { at -> standingOn = results[at].turn; listing = false },
+                )
+                return@ConversationColumn
+            }
         SelectionContainer(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
                     if (turns.isEmpty()) {
@@ -620,10 +744,26 @@ private fun TranscriptBar(
     searching: Boolean,
     query: String,
     hits: Int,
+    // Every matching turn on the machine that holds the transcript, where the node answered. It is
+    // not `hits`: that is the list, and the list is capped.
+    total: Int?,
     focus: Int,
+    // Whether there are older turns the node has not handed over yet, because the search is over
+    // the turns this client holds and nothing else: a conversation opens on a page of forty and
+    // pages backwards only as the reader reaches the top. A count that did not say so is the
+    // shape of defect this project has paid the most for — an answer that looks complete and
+    // covers half the question — and it is the sibling surface's rule too (`FindSheet` says both
+    // what it found and what it is showing of it).
+    older: Boolean,
+    // Paging backwards to reach a hit this device does not hold. Said in the bar because the aim
+    // is not instant and a press that looks like it did nothing is the thing this whole surface
+    // was reported for.
+    reaching: Boolean,
+    listing: Boolean,
     onQuery: (String) -> Unit,
     onSearching: (Boolean) -> Unit,
     onStep: (Int) -> Unit,
+    onListing: (Boolean) -> Unit,
     agent: String?,
     adrift: Boolean,
     onEnd: () -> Unit,
@@ -666,7 +806,17 @@ private fun TranscriptBar(
             return@Row
         }
         SearchField(query, onQuery, Modifier.weight(1f))
-        val tally = if (query.length < 2) "type to search" else if (hits == 0) "no matches" else "${focus + 1}/$hits"
+        // Three numbers and never more than two of them at once: where the reader is, how many
+        // there are, and — only when the list is capped — how many the node found in all.
+        val capped = total?.takeIf { it > hits }
+        val loaded = if (older) " so far" else ""
+        val tally = when {
+            query.length < 2 -> "type to search"
+            hits == 0 -> if (older) "none so far" else "no matches"
+            reaching -> "${focus + 1}/$hits…"
+            capped != null -> "${focus + 1}/$hits of $capped"
+            else -> "${focus + 1}/$hits$loaded"
+        }
         KText(
             tally,
             tokens.type.meta,
@@ -674,11 +824,25 @@ private fun TranscriptBar(
             Modifier.announce(
                 when {
                     query.length < 2 -> "Type to search"
-                    hits == 0 -> "No matches"
-                    else -> "Match ${focus + 1} of $hits"
+                    hits == 0 -> if (older) "No matches in the turns loaded so far" else "No matches"
+                    reaching -> "Match ${focus + 1} of $hits, loading the turns it is in"
+                    capped != null -> "Match ${focus + 1} of $hits listed, $capped in the transcript"
+                    else -> "Match ${focus + 1} of $hits" +
+                        if (older) " in the turns loaded so far" else ""
                 },
             ),
         )
+        // Offered only while there is a list to show, and it is the affordance the stepping
+        // arrows cannot be: forty turns of prose between two hits is forty turns of scrolling to
+        // compare them.
+        if (hits > 0) {
+            GlyphTarget(
+                if (listing) ConversationIcons.speech else ConversationIcons.file,
+                if (listing) "Back to the transcript" else "List the matches",
+                if (listing) tokens.color.accent else tokens.color.dim,
+                { onListing(!listing) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+            )
+        }
         GlyphTarget(
             ConversationIcons.up, "Previous match", tokens.color.dim,
             { onStep(-1) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,

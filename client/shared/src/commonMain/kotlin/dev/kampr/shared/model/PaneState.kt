@@ -305,6 +305,13 @@ class PaneState(val id: String, val styles: StyleTable) {
     // exists to answer.
     var draft by mutableStateOf("")
 
+    // The node's answer to the last transcript search on this pane. On the pane rather than on the
+    // store, because it is read where the transcript is: a result set naming turn ids belongs to
+    // one transcript, and handing it to another pane's view would aim at turns it has never heard
+    // of. Dropped when the transcript is replaced, for exactly that reason.
+    var convoFound by mutableStateOf<ServerMsg.ConvoFound?>(null)
+        internal set
+
     var convoCursor by mutableStateOf<String?>(null)
         private set
     var convoMore by mutableStateOf(false)

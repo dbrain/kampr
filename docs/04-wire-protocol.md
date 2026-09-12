@@ -46,7 +46,8 @@ hostname would buy (findings §3.7).
   "build": "0.1.21", "role": "full",          // "full" | "readonly"
   "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
             "mesh": true,     // this node accepts peer links; see "The mesh"
-            "find": true },   // this node answers `find`; absent means it does not — see below
+            "find": true,     // this node answers `find`; absent means it does not — see below
+            "convo.find": true },  // and the transcript search beside it, promised separately
   "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
                                      // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
@@ -1151,6 +1152,8 @@ the same path but is **not** an error and does not close anything — it arrives
 // Search this pane's WHOLE scrollback. `backward` defaults to true, the way `/` does in a pager;
 // `from` is a starting point in rows from the live row and defaults to the bottom.
 { "t": "find", "pane": "01J.../w3:p2", "query": "panic", "backward": true, "from": 0 }
+// Search this pane's WHOLE transcript — the same question one model up, answered in turns.
+{ "t": "convo.find", "pane": "01J.../w3:p2", "query": "the width inference" }
 // Per-pane, per-device preferences — zoom level, view choice, render mode. The node stores them
 // against the device, so they follow you between browsers on the same enrolled device.
 { "t": "prefs", "pane": "01J.../w3:p2", "prefs": { "zoom": 1.6, "view": "terminal" } }
@@ -1236,6 +1239,54 @@ only when `hello.caps.find` is true, and hides it otherwise, which is the same r
 button follows. **Across the mesh the hub asks the same question of the peer**, from that peer's own
 `hello`, exactly as it does for `att.fetch`: a `find` aimed at a pane on a node too old to answer is
 refused `unsupported` at the hub rather than relayed into silence.
+
+### `convo.find` — the whole transcript, not the page the reader opened on
+
+```jsonc
+{ "t": "convo.find", "pane": "01J.../w3:p2", "query": "scrollbar", "total": 41,
+  "matches": [
+    { "turn": "a-98", "role": "assistant", "at": "2026-09-12T02:14:08Z", "from_end": 2,
+      "hits": 1, "text": "…the scrollbar column is the one it keeps back…" }
+  ] }
+```
+
+**This is `find` one model up.** `find` searches the scrollback herdr retains and answers in rows
+from the live row; this searches the transcript the harness wrote and answers in **turns**. Both
+exist because they are different histories: a pane's scrollback is what was drawn on it, and its
+transcript is what the agent recorded, which outlives any number of `clear`s.
+
+**Why it is a node question at all.** A conversation opens on a page of forty turns and pages
+backwards only as the reader reaches the top (`convo.load`), so a client searching what it holds is
+searching the newest page — and it cannot know by how much its count is short. The node holds the
+whole folded transcript, and searching all of it costs **6–9 ms, and 28 ms for a query that is not
+in it** on a 28 MiB, 2459-turn session — measured, because the first cut of it cost 380 ms with the
+pane's conversation lock held (probe #541).
+
+**`turn` is the coordinate, and it is the one a client can act on.** It either holds that turn
+already, or it pages backwards with `convo.load` until it does — the same walk the reader makes by
+scrolling, which keeps what the client holds contiguous. `from_end` is how many turns back the hit
+is, so that walk is bounded and a hit can say how old it is before anybody holds it.
+
+**`total` is every matching turn; `matches` is a capped list, newest first.** A turn is one result
+however many times it says the word, and `hits` says how many. Newest first because that is the end
+the reader is standing at and the direction paging goes.
+
+**`text` is the line the first match is on**, clipped around the match rather than shipped whole —
+a tool's output is one `text` field and can be thousands of columns. It is what makes a hit deeper
+than the client's own window worth listing: it can be read where it cannot yet be scrolled to.
+
+**What is searched is what a client draws.** A card's own header rather than the marker it replaced,
+a tool's label rather than its output, a launched conversation's type and title rather than its
+turns — those belong to another transcript and are not on this screen to be found. A hit the count
+promises and the screen cannot show is the same defect as a count that is quietly short.
+
+**It owes an answer, so it is gated like `find`.** `hello.caps["convo.find"]` is the node saying it
+has the verb; a client without that promise keeps its own search over the turns it holds and says
+so (it reads `1/7 so far` rather than `1/7`). A pane with no transcript open is answered
+`not_found` rather than left silent, because silence is the one thing a client cannot tell from a
+search still in flight. Across the mesh the hub asks the peer's own `hello` the same question and
+refuses `unsupported` rather than relaying into silence — and it asks it *separately* from `find`,
+because a peer can be new enough for one and predate the other.
 
 ### The fleet book
 

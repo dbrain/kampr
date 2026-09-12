@@ -299,6 +299,13 @@ impl Peers {
         self.link_for(id).is_some_and(|link| link.serves_find())
     }
 
+    /// The same question for the transcript search, asked separately: a peer can be new enough to
+    /// answer `find` and predate `convo.find`, and one promise standing in for the other is a
+    /// client left waiting for a frame that is never coming.
+    pub fn can_convo_find(&self, id: &str) -> bool {
+        self.link_for(id).is_some_and(|link| link.serves_convo_find())
+    }
+
     /// Pulls one attachment off a peer, a chunk at a time.
     ///
     /// `ceiling` is the caller's own decoded-bytes limit, enforced *before* anything is pulled —
@@ -514,24 +521,15 @@ impl Peers {
             "grid.reset" => link.grid_reset(&message),
             "grid.patch" => link.grid_patch(&message),
             "scrollback" => link.scrollback(&message),
-            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" | "find" => {
-                link.passthrough(&message)
-            }
+            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" | "find"
+            | "convo.find" => link.passthrough(&message),
             "error" => link.error(&message),
             "managed" => link.managed(message),
             "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),
             // The one thing in `hello` the handshake did not already establish: whether this
             // peer's build answers `att.fetch`. A hub that guessed would advertise an attachment
             // button an older peer cannot serve, which is the bug this whole path exists to fix.
-            "hello" => {
-                let mut state = link.state.lock().unwrap();
-                state.attachments = message["caps"]["attachments"].as_bool().unwrap_or(false);
-                // The same question again for the one verb that owes an answer. A hub that
-                // relayed a `find` to a peer with no verb for it would leave the client waiting
-                // for a frame the peer will never send — and a herd routinely runs mixed builds,
-                // which is the whole reason this field exists for attachments too.
-                state.find = message["caps"]["find"].as_bool().unwrap_or(false);
-            }
+            "hello" => link.absorb_hello(&message),
             // A fresh round trip is a change to the herd like any other: it is what a client
             // renders to say how far away a node is.
             "pong" => {
@@ -666,6 +664,7 @@ struct LinkState {
     pings: HashMap<u64, Instant>,
     attachments: bool,
     find: bool,
+    convo_find: bool,
 }
 
 impl LinkState {
@@ -781,8 +780,26 @@ impl PeerLink {
         self.state.lock().unwrap().attachments
     }
 
+    /// The one thing in a peer's `hello` the handshake did not already establish: which of the
+    /// verbs that owe an answer this peer's build has. A hub that guessed would relay one into
+    /// silence and leave the client waiting for a frame nobody is going to send — and a herd
+    /// routinely runs mixed builds, which is the whole reason these fields exist.
+    ///
+    /// Read one by one rather than as a set, because they arrived one at a time: a peer can be new
+    /// enough to answer `find` and predate `convo.find` entirely.
+    fn absorb_hello(&self, message: &Value) {
+        let mut state = self.state.lock().unwrap();
+        state.attachments = message["caps"]["attachments"].as_bool().unwrap_or(false);
+        state.find = message["caps"]["find"].as_bool().unwrap_or(false);
+        state.convo_find = message["caps"]["convo.find"].as_bool().unwrap_or(false);
+    }
+
     fn serves_find(&self) -> bool {
         self.state.lock().unwrap().find
+    }
+
+    fn serves_convo_find(&self) -> bool {
+        self.state.lock().unwrap().convo_find
     }
 
     async fn fetch_attachment(
@@ -1372,6 +1389,33 @@ mod tests {
         assert!(
             link.manages.lock().unwrap().is_empty(),
             "a manage op that was never sent is still waiting for an answer",
+        );
+    }
+
+    /// Every verb that owes an answer is promised separately, because they arrived separately: the
+    /// herd here runs four machines that update when their operator gets round to them, and a hub
+    /// that read one promise for the other would relay a `convo.find` into silence.
+    #[tokio::test]
+    async fn a_peer_promises_each_answering_verb_on_its_own() {
+        let (requests, _rx) = mpsc::channel(1);
+        let link = link(requests);
+        assert!(
+            !link.serves_find(),
+            "a link says nothing until a hello has been read"
+        );
+        assert!(!link.serves_convo_find());
+
+        link.absorb_hello(&json!({ "t": "hello", "caps": { "find": true } }));
+        assert!(link.serves_find(), "the peer said it answers find");
+        assert!(
+            !link.serves_convo_find(),
+            "a build with `find` and no `convo.find` must not be credited with both",
+        );
+
+        link.absorb_hello(&json!({ "t": "hello", "caps": { "find": true, "convo.find": true } }));
+        assert!(
+            link.serves_convo_find(),
+            "the peer said it searches transcripts too"
         );
     }
 

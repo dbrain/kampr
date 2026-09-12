@@ -94,7 +94,12 @@ const CONCURRENT_TRANSFERS: usize = 4;
 /// reader who opened one asked for all of it.
 const SUB_PAGE: usize = 200;
 
-const CLIENT_VERBS: [&str; 11] = [
+/// Matching turns listed by one `convo.find`. The count beside them is every one there is, so this
+/// bounds the frame rather than the answer — fifty is a list a reader scrolls, and a hit past it is
+/// reached by a narrower query rather than by a longer frame.
+const CONVO_MATCHES: usize = 50;
+
+const CLIENT_VERBS: [&str; 12] = [
     "watch",
     "unwatch",
     "answer.submit",
@@ -103,6 +108,7 @@ const CLIENT_VERBS: [&str; 11] = [
     "answer",
     "convo.load",
     "convo.sub",
+    "convo.find",
     "find",
     "resync",
     "ping",
@@ -699,6 +705,7 @@ impl Session {
                 backward,
                 from,
             } => self.find(&pane, &query, backward, from).await,
+            ClientMsg::ConvoFind { pane, query } => self.convo_find(&pane, &query),
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
@@ -978,6 +985,69 @@ impl Session {
                 .wire
                 .error(ErrorCode::HerdrUnavailable, &e.to_string(), Some(pane)),
         };
+    }
+
+    /// Search the pane's whole transcript, on the machine the harness wrote it on.
+    ///
+    /// Relayed for a peer's pane exactly as `find` is, and gated on the same kind of promise: the
+    /// transcript lives where the pane does, and a hub holds only the window it relayed.
+    fn convo_find(&self, pane: &str, query: &str) {
+        if self.node.resolve(pane).is_none() {
+            if !self.node.peers.can_convo_find(pane) {
+                self.wire.error(
+                    ErrorCode::Unsupported,
+                    "that machine's node is older than this one and cannot search a transcript",
+                    Some(pane),
+                );
+                return;
+            }
+            self.relay_to_peer(pane, json!({ "t": "convo.find", "pane": pane, "query": query }));
+            return;
+        }
+        // The same `confirmed` gate `convo.load` takes, and for the same reason: the handle a
+        // re-watch inherits is the previous pump's parse, so a search run across that window would
+        // answer about the transcript the pane was on rather than the one it is on now (#233).
+        let found = self
+            .panes
+            .get(pane)
+            .filter(|handle| handle.warm.lock().unwrap().confirmed)
+            .and_then(|handle| {
+                let guard = handle.convo.lock().unwrap();
+                guard.as_ref().map(|open| open.search(query, CONVO_MATCHES))
+            });
+        match found {
+            Some(found) => {
+                self.wire.send(&ServerMsg::ConvoFind {
+                    pane: pane.into(),
+                    query: query.into(),
+                    matches: found
+                        .hits
+                        .into_iter()
+                        .map(|hit| kampr_core::wire::ConvoMatch {
+                            turn: hit.turn,
+                            role: match hit.role {
+                                kampr_journal::Role::User => "user".into(),
+                                kampr_journal::Role::Assistant => "assistant".into(),
+                            },
+                            at: hit.at,
+                            from_end: hit.from_end,
+                            hits: hit.hits,
+                            text: hit.text,
+                        })
+                        .collect(),
+                    total: found.total,
+                });
+            }
+            // Said rather than left silent, because this verb owes an answer: a pane with no
+            // transcript open is the one case a client cannot tell from a search still in flight.
+            None => {
+                self.wire.error(
+                    ErrorCode::NotFound,
+                    "no conversation open for this pane",
+                    Some(pane),
+                );
+            }
+        }
     }
 
     fn convo_load(&self, pane: &str, before: Option<&str>) {
@@ -1897,6 +1967,10 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // newer than the node it dials is the ordinary case, not the exotic one. So the affordance is
     // gated on this rather than on the client's own build.
     value["caps"]["find"] = json!(true);
+    // The same promise for the transcript search, and a separate one: a node can be new enough to
+    // answer `find` and too old to have heard of this, and a client that read one for the other
+    // would offer a count it never gets. See [`ClientMsg::ConvoFind`].
+    value["caps"]["convo.find"] = json!(true);
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
     // and the point of that route is that bytes never share a queue with terminal frames.

@@ -17,6 +17,7 @@ pub mod presence;
 pub mod process;
 pub mod root;
 pub(crate) mod scan;
+pub mod search;
 mod store;
 pub mod sub;
 mod summary;
@@ -41,6 +42,7 @@ pub use model::{Attachment, Block, CodeRole, Page, Role, ToolState, Turn, TurnKi
 pub use omp::OmpAdapter;
 pub use process::{Harness, PaneProcess, Started};
 pub use root::TranscriptRoot;
+pub use search::{ConvoFound, ConvoHit, search_turns};
 pub use sub::SubRef;
 pub use summary::marker_of;
 pub use tail::{FileJournal, Journal, TranscriptParser};

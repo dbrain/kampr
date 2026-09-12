@@ -60,6 +60,21 @@ data class FindMatch(
     val text: String = "",
 )
 
+// One turn of the transcript that holds what a `convo.find` was looking for. `turn` is the
+// coordinate and the whole point: this client either holds that turn or pages backwards with
+// `convo.load` until it does, which is the walk the reader makes by scrolling. `fromEnd` bounds
+// that walk and says how far back the hit is before anybody holds it; `text` is the line it
+// matched, clipped around the match, so a hit deeper than this client's window can still be read.
+@Serializable
+data class ConvoMatch(
+    val turn: String,
+    val role: String = "assistant",
+    val at: String? = null,
+    @SerialName("from_end") val fromEnd: Int = 0,
+    val hits: Int = 1,
+    val text: String = "",
+)
+
 @Serializable
 data class Caps(
     val push: Boolean = false,
@@ -71,6 +86,10 @@ data class Caps(
     // frame that never comes. A phone updates on its own schedule and is routinely newer than the
     // node it dials.
     val find: Boolean = false,
+    // The transcript search, promised separately from the scrollback one: a node can be new enough
+    // to answer `find` and predate this, and reading one for the other is a count that never
+    // arrives. Absent means this client searches the turns it holds and says that is what it did.
+    @SerialName("convo.find") val convoFind: Boolean = false,
 )
 
 // What the client may offer is decided here, never by inspecting the URL: an affordance that
@@ -431,6 +450,17 @@ sealed interface ServerMsg {
         val current: Int?,
     ) : ServerMsg
 
+    // What a `convo.find` matched over the pane's whole transcript, which is not what this client
+    // holds: a conversation opens on a page of forty and pages backwards as the reader reaches the
+    // top. `total` is every matching turn the node found and `matches` is a capped list of them,
+    // newest first — the end the reader stands at and the direction paging goes.
+    data class ConvoFound(
+        val pane: String,
+        val query: String,
+        val matches: List<ConvoMatch>,
+        val total: Int,
+    ) : ServerMsg
+
     data class Scrollback(
         val pane: String,
         val fromTop: Int,
@@ -599,6 +629,11 @@ sealed interface ClientMsg {
         val backward: Boolean = true,
         val from: Int? = null,
     ) : ClientMsg
+
+    // Search the pane's whole transcript, on the machine the harness wrote it on. The same
+    // question `find` asks of the scrollback, one model up and answered in turns. Offered only
+    // where `caps.convoFind` says a frame is coming back.
+    data class ConvoFind(val pane: String, val query: String) : ClientMsg
 
     // A page of a conversation this pane's agent launched. `id` is opaque and is only ever handed
     // back: it is minted by the node that served the turn and proved against that pane's own

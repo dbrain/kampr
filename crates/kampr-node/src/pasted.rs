@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use kampr_journal::attach::{FileRef, Source};
-use kampr_journal::{Attachment, Block, Journal, JournalError, Page, Role, Turn};
+use kampr_journal::{Attachment, Block, ConvoFound, Journal, JournalError, Page, Role, Turn};
 
 /// Extensions the attachment route will serve inline, which is the node's own short list
 /// (`attach::kind_of`). Anything else is a file to be downloaded, and saying so is what keeps a
@@ -53,6 +53,12 @@ impl Journal for Shown {
             cursor: page.cursor,
             more: page.more,
         }
+    }
+
+    // Undressed on purpose: what dressing adds is a picture in place of a marker, and the name
+    // it searches by is the attachment's own either way.
+    fn search(&self, query: &str, cap: usize) -> ConvoFound {
+        self.inner.search(query, cap)
     }
 
     fn path(&self) -> &Path {

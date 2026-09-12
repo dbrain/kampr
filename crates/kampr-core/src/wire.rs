@@ -78,6 +78,25 @@ fn is_first_era(era: &u32) -> bool {
 
 /// One hit, positioned the way a client can use it.
 ///
+/// One turn of a transcript that holds what a `convo.find` was looking for.
+///
+/// `turn` is the id a client aims at: it either holds that turn already or pages backwards until it
+/// does, which is the same `convo.load` walk the reader makes by scrolling. `from_end` is how far
+/// back that is, so the walk is bounded and the hit can say how old it is before anybody holds it;
+/// `text` is the line the first match is on, so a hit deeper than the client's window can be read
+/// where it cannot yet be scrolled to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConvoMatch {
+    pub turn: String,
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    pub from_end: u32,
+    /// Occurrences inside this turn. A turn is one result however many times it says the word.
+    pub hits: u32,
+    pub text: String,
+}
+
 /// `from_bottom` is the row's distance from the live row, which is what makes this portable between
 /// herdr's scrollback and a client's ring without either having to know the other's indexing. A
 /// match that spans a wrap ends on a different row, so `end_from_bottom` is carried rather than
@@ -501,6 +520,17 @@ pub enum ServerMsg {
         /// Which of `matches` the search landed on, or `None` when nothing matched.
         current: Option<u32>,
     },
+    /// What a `convo.find` matched, over the pane's whole transcript.
+    ///
+    /// `total` is every matching **turn**; `matches` is a capped list of them, newest first —
+    /// the end the reader is standing at and the direction `convo.load` pages in.
+    #[serde(rename = "convo.find")]
+    ConvoFind {
+        pane: String,
+        query: String,
+        matches: Vec<ConvoMatch>,
+        total: u32,
+    },
     #[serde(rename = "grid.reset")]
     GridReset {
         pane: String,
@@ -780,6 +810,18 @@ pub enum ClientMsg {
         #[serde(default)]
         before: Option<String>,
     },
+    /// Search this pane's **whole transcript**, not the turns a client happens to hold.
+    ///
+    /// The sibling of `find`, one model up: `find` searches the scrollback herdr holds and answers
+    /// in rows, this searches the transcript the harness wrote and answers in turns. A client's own
+    /// search can only cover the page it opened on and whatever it has paged back to, so its count
+    /// is short by however much of the session it has not asked for — this is the count that means
+    /// what it says, and every hit names a turn the client can page to.
+    ///
+    /// Gated on `hello.caps["convo.find"]` for the same reason `find` is: it owes an answer, and a
+    /// client newer than its node is the ordinary case on phones that update on their own.
+    #[serde(rename = "convo.find")]
+    ConvoFind { pane: String, query: String },
     /// Search this pane's **whole** scrollback, not the rows a client happens to hold.
     ///
     /// A verb of its own rather than a field on `watch`, because it is a question with an answer

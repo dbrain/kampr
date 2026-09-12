@@ -198,6 +198,7 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun prefs(paneId: String) = state.store.prefsFor(paneId)
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
+    override val searchesTranscript: Boolean get() = state.store.hello.value?.caps?.convoFind == true
     override fun show(view: PaneView) = state.setPaneView(view)
     override suspend fun claimMatch(paneId: String, cols: Int, rows: Int) =
         state.claimMatch(paneId, cols, rows)

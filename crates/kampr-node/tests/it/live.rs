@@ -4153,6 +4153,16 @@ async fn a_shell_pane_has_no_conversation_to_page() {
     send(&mut socket, json!({ "t": "convo.load", "pane": pane })).await;
     let refusal = until_pane(&mut socket, "error", &pane, 15).await;
     assert_eq!(refusal["code"], "not_found", "{refusal}");
+
+    // The transcript search owes an answer, so it says the same thing rather than nothing: silence
+    // is the one reply a client cannot tell from a search still in flight.
+    send(
+        &mut socket,
+        json!({ "t": "convo.find", "pane": pane, "query": "anything" }),
+    )
+    .await;
+    let refused = until_pane(&mut socket, "error", &pane, 15).await;
+    assert_eq!(refused["code"], "not_found", "{refused}");
 }
 
 /// One `managed` ack, matched by op: the node serves every session on the machine, so an ack for
@@ -10100,3 +10110,124 @@ if read -t 0; then printf 'early:' > "$3"; fi
 printf '\033[2J\033[H\342\224\200\342\224\200\342\224\200\r\n\342\235\257\302\240\r\n\342\224\200\342\224\200\342\224\200\033[2;3H'
 exec cat >> "$3"
 "#;
+
+/// **The transcript search reaches the whole session, not the page the client opened on.**
+///
+/// The sibling of `find_reaches_the_whole_scrollback_and_not_just_the_rows_the_node_holds`, one
+/// model up. A conversation opens on a page of forty and pages backwards only as the reader reaches
+/// the top, so a client searching what it holds is searching the newest page — its count is short
+/// by however much of the session nobody has asked for yet, and it has no way to know by how much.
+///
+/// So the marker is written **twice, far apart**: once inside the opening page and once sixty turns
+/// above it. The assertion is about depth rather than about matching anything — a search of what
+/// the client was handed finds the near one and cannot see the far one at all.
+///
+/// The mutation that must fail: search the page instead of the store, and `from_end` never exceeds
+/// the page size.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transcript_search_reaches_turns_the_client_was_never_handed() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("convofind", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let running = fixture.start(&h._session, &local).await;
+    let session = "33333333-3333-4333-8333-333333333333";
+    fixture.announce(running, session);
+    // Deep enough that the opening page cannot hold the older marker: `convo::PAGE` is forty.
+    let marker = format!("kamprconvofind{}", std::process::id());
+    let mut out = String::new();
+    for i in 1..=100 {
+        let at = (time::OffsetDateTime::now_utc() + time::Duration::seconds(-600 + i as i64))
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        let said = match i {
+            5 => format!("the deep one: {marker} was said here"),
+            98 => format!("the shallow one: {marker} again"),
+            _ => format!("ordinary turn {i}"),
+        };
+        let record = json!({
+            "type": "assistant", "uuid": format!("{session}-{i}"), "cwd": fixture.cwd, "timestamp": at,
+            "message": { "content": [ { "type": "text", "text": said } ] },
+        });
+        out.push_str(&format!("{record}\n"));
+    }
+    std::fs::write(fixture.project.join(format!("{session}.jsonl")), out).unwrap();
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let hello = until(&mut socket, "hello", 10).await;
+    assert_eq!(
+        hello["caps"]["convo.find"],
+        json!(true),
+        "a search that owes an answer has to be promised in the greeting: {hello}",
+    );
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let held: Vec<String> = opening["turns"]
+        .as_array()
+        .expect("turns")
+        .iter()
+        .filter_map(|t| t["id"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        opening["more"],
+        json!(true),
+        "there is history above the page: {opening}"
+    );
+    assert!(
+        !held.iter().any(|id| id.ends_with("-5")),
+        "the opening page already holds the deep turn, so this proves nothing: {held:?}",
+    );
+
+    send(
+        &mut socket,
+        json!({ "t": "convo.find", "pane": pane, "query": marker }),
+    )
+    .await;
+    let found = until_pane(&mut socket, "convo.find", &pane, 25).await;
+    assert_eq!(
+        found["total"],
+        json!(2),
+        "both markers are in the transcript: {found}"
+    );
+    let matches = found["matches"].as_array().expect("matches").clone();
+    let depths: Vec<u64> = matches.iter().filter_map(|m| m["from_end"].as_u64()).collect();
+    assert!(
+        depths.iter().any(|&d| d > held.len() as u64),
+        "the search never reached past the page the client holds: {depths:?} over {} turns held",
+        held.len(),
+    );
+    // Newest first, which is the end the reader stands at and the direction `convo.load` pages in.
+    assert_eq!(
+        matches.first().and_then(|m| m["turn"].as_str()),
+        Some(format!("{session}-98").as_str()),
+        "{matches:?}",
+    );
+    let deep = matches
+        .iter()
+        .find(|m| m["turn"].as_str() == Some(format!("{session}-5").as_str()))
+        .expect("the deep turn is one of the matches");
+    assert_eq!(deep["from_end"], json!(95), "{deep}");
+    assert_eq!(
+        deep["text"].as_str(),
+        Some(format!("the deep one: {marker} was said here").as_str()),
+        "a hit carries the line it matched, so it can be read where it cannot be scrolled to: {deep}",
+    );
+    assert_eq!(deep["role"], json!("assistant"), "{deep}");
+}

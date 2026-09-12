@@ -43,6 +43,12 @@ interface PaneIo {
 
     val readOnly: Boolean get() = false
 
+    // Whether the node behind this pane answers `convo.find`. A verb that owes an answer cannot be
+    // offered on a promise the client made itself: a node too old to have it leaves the count
+    // waiting for a frame that is never coming. Without it the conversation searches the turns it
+    // holds and says that is what it did — which is what every build before this one did silently.
+    val searchesTranscript: Boolean get() = false
+
     // A surface may need to hand the pane over to the other one — a harness with no journal
     // adapter has no conversation to show, and offers the terminal instead of an error.
     fun show(view: PaneView) = Unit

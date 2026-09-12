@@ -272,7 +272,12 @@ class KamprStore {
                 if (msg.sub != null) {
                     pane.applySubConvo(msg)
                 } else {
-                    if (msg.fresh) pane.turns.clear()
+                    // A fresh page is a different transcript, and the search that named turns in
+                    // the last one cannot aim at anything in this one.
+                    if (msg.fresh) {
+                        pane.turns.clear()
+                        pane.convoFound = null
+                    }
                     pane.applyConvo(msg)
                 }
             }
@@ -292,6 +297,9 @@ class KamprStore {
                 }
             }
             is ServerMsg.Found -> _found.value = msg
+            // Read without creating, like a refusal: an answer about a pane nobody has open is
+            // not news about any transcript on screen.
+            is ServerMsg.ConvoFound -> paneStates[msg.pane]?.convoFound = msg
             is ServerMsg.Managed -> {
                 _managed.value = msg
                 _acks.tryEmit(msg)

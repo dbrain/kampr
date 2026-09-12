@@ -102,7 +102,7 @@ class ToolRunTest {
     @Test
     fun everyMatchIsARowOfItsOwn() {
         val rows = transcriptRows(TOOL_RUN_TURNS, "cargo test")
-        val hits = searchHits(rows, "cargo test")
+        val hits = hitRows(TOOL_RUN_TURNS, "cargo test")
         assertEquals(listOf(4, 6, 8), hits)
         assertTrue(hits.all { rows[it] is TranscriptRow.One })
     }
