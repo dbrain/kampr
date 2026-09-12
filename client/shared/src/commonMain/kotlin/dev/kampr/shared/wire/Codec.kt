@@ -115,6 +115,7 @@ object Wire {
                 op = obj.str("op").orEmpty(),
                 ok = obj.bool("ok") ?: false,
                 id = obj.str("id"),
+                rid = obj.str("rid"),
                 code = obj.str("code"),
                 message = obj.str("message"),
                 layout = obj["layout"] as? JsonObject,
@@ -189,6 +190,7 @@ object Wire {
         is ClientMsg.Manage -> buildJsonObject {
             put("t", "manage"); put("op", msg.request.op)
             msg.request.fields().forEach { (k, v) -> put(k, v) }
+            msg.rid?.let { put("rid", it) }
         }
         ClientMsg.RequestCaps -> buildJsonObject { put("t", "caps") }
     }

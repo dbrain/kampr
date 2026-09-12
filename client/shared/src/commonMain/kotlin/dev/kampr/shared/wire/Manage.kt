@@ -75,7 +75,11 @@ sealed interface ManageOp {
         val rows: Int? = null,
         val mode: SizeMode = SizeMode.Once,
     ) : ManageOp {
-        override val op: String get() = "pane.size"
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "pane.size"
+        }
     }
 
     // A null label clears a pane's; a tab or a workspace refuses it with bad_request.

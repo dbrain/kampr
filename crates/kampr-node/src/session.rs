@@ -1486,8 +1486,17 @@ impl Session {
         // but a terminal view turning matching off is answering for its own claim, and a viewer
         // that has already been displaced by a newer one must not take the newer one's hold down
         // with it on the way past.
+        //
+        // **A caller that named a lease has already answered that question**, and the answer is
+        // about a hold this session may no longer be the one standing on. A hub sends one for
+        // every lease it replaces, which is every re-claim of a pane a browser is already
+        // holding — a window dragged, a banner closing — and re-scoping it to the lease that
+        // *replaced* it let go of the hold thirty milliseconds after it was taken, left the pane
+        // back at the geometry it was found at, and left the client believing it still held the
+        // view's size and therefore never asking again.
         if op.op == "pane.size"
             && op.mode.as_deref() == Some("release")
+            && op.lease.is_none()
             && let Some(token) = op
                 .at
                 .as_deref()
@@ -1692,11 +1701,20 @@ impl Session {
             }
             // A `release` this session's own lease answered for. Dropping it here rather than
             // before the op is what lets the ack say `was_held: true` honestly.
-            _ if op.mode.as_deref() == Some("release") => {
+            //
+            // **Only the lease the release named.** Forgetting one is letting go of it — that is
+            // what `MatchLease`'s `Drop` is for — so forgetting a *newer* lease because a release
+            // for the one it superseded went past is the same defect as honouring that release
+            // would have been, one step further along.
+            _ if op.mode.as_deref() == Some("release") && self.named_our_lease(&at, op) => {
                 self.matched.remove(&at);
             }
             _ => {}
         }
+    }
+
+    fn named_our_lease(&self, at: &str, op: &ManageOp) -> bool {
+        op.lease == self.matched.get(at).map(MatchLease::token)
     }
 
     fn note_peer_match(&mut self, target: &str, op: &ManageOp, reply: &Value) {
@@ -1716,7 +1734,7 @@ impl Session {
                     },
                 );
             }
-            None if op.mode.as_deref() == Some("release") => {
+            None if op.mode.as_deref() == Some("release") && self.named_our_lease(&at, op) => {
                 self.matched.remove(&at);
             }
             None => {}

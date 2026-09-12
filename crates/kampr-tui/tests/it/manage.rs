@@ -14,6 +14,7 @@ use kampr_client::{Client, Event, Policy, Session, Via};
 use kampr_core::Backoff;
 use kampr_tui::app::{App, Options};
 use kampr_tui::image::Images;
+use kampr_tui::render::fit::{Chrome, Display, Need};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
@@ -1173,6 +1174,14 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
     assert_eq!(claimed["mode"], "match");
     assert_eq!((&claimed["cols"], &claimed["rows"]), (&json!(120), &json!(40)));
 
+    // And the pane is held when the node says it is. Everything below this line is a sentence
+    // about a hold, and a claim is an op that can be refused.
+    conn.send(
+        json!({ "t": "managed", "rid": claimed["rid"], "op": "pane.size", "ok": true,
+                      "cols": 120, "rows": 40, "held": true, "matched": true, "lease": 1 }),
+    );
+    tokio::time::sleep(HUSH).await;
+
     // Said on the screen while it is happening, not only inside a menu somebody has to open. The
     // desk at the other machine is rendering wrong for as long as this stands (#298).
     let screen = painted(&mut app, 110, 24);
@@ -1181,6 +1190,8 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
         "the pane is being held and nothing on the screen says so:\n{screen}"
     );
 
+    // The draw loop's own next pass, which is what carries the answer to the menu.
+    app.match_view(Some(at), 120, 40);
     shifted(&mut app, 'n');
     ch(&mut app, 'r');
     let menu = painted(&mut app, 110, 24);
@@ -1198,6 +1209,154 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
     tokio::time::sleep(HUSH).await;
     app.match_view(Some(at), 120, 40);
     conn.sent_nothing().await;
+}
+
+/// **A claim is an op, and an op can be refused.**
+///
+/// herdr allows one controller on a pane at a time and refuses the second outright (#21), so a
+/// window asking for a pane something else is holding gets a refusal — and this client wrote the
+/// claim down as a hold before the answer arrived. [`matching_step`] then declined to ask again,
+/// because the only thing that would make it ask is a size it believed it already had: the strip
+/// said the pane was held at the window's size, the pane was whatever the desk had left it at, and
+/// nothing recovered it but the operator resizing by hand. The wasm desktop had the same defect
+/// written the same way, and it is what the operator saw on 0.1.80.
+///
+/// The mutation that must fail: set `matching` when the claim is *sent* rather than when it is
+/// answered, and the second claim never goes.
+#[tokio::test]
+async fn a_claim_the_node_refused_is_asked_again_rather_than_remembered_as_a_hold() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+    app.match_view(Some(at), 120, 40);
+    let claimed = conn.op().await;
+    assert_eq!(claimed["mode"], "match", "{claimed}");
+
+    conn.send(
+        json!({ "t": "managed", "rid": claimed["rid"], "op": "pane.size", "ok": false,
+                      "code": "herdr", "message": "pane already has an attached client" }),
+    );
+    tokio::time::sleep(HUSH).await;
+
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        !screen.contains("holding"),
+        "a refused claim was reported as a hold:\n{screen}"
+    );
+
+    // And the window asks again, because the pane is still the wrong size and the view has not
+    // moved. This is the whole recovery: there is no re-measuring loop against what the node says
+    // about the pane, and ADR 0013 point 2 is why there must not be one.
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    let again = conn.op().await;
+    assert_eq!(
+        again["mode"], "match",
+        "the window never asked again for a size it never got: {again}",
+    );
+    assert_eq!((&again["cols"], &again["rows"]), (&json!(120), &json!(40)));
+}
+
+/// **The ladder does not climb into the gap a claim leaves.**
+///
+/// Rung 2 asks the *terminal* to grow to the pane, and a matched pane is already the size of the
+/// terminal — so the two are the same argument from both ends and running both is the ping-pong
+/// ADR 0013 exists to have thought about. The claim is answered a round trip after it is sent, and
+/// a window that reads that gap as "holding nothing" climbs the ladder inside it.
+///
+/// The mutation that must fail: gate the ladder on the hold alone, and the resize request goes.
+#[tokio::test]
+async fn the_ladder_does_not_ask_the_terminal_to_grow_while_a_claim_is_out() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    let claimed = conn.op().await;
+    assert_eq!(claimed["mode"], "match", "{claimed}");
+
+    // Nothing has answered it yet, which is the whole of the window being tested.
+    let mut display = Screen {
+        cells: (80, 24),
+        asked: Vec::new(),
+    };
+    app.fit(
+        &mut display,
+        Need { cols: 171, rows: 40 },
+        Chrome { cols: 32, rows: 5 },
+    );
+    assert!(
+        display.asked.is_empty(),
+        "the window asked the terminal to grow to a pane it was in the middle of claiming: {:?}",
+        display.asked,
+    );
+}
+
+/// A terminal that reports its size and records what it was asked to become.
+struct Screen {
+    cells: (u16, u16),
+    asked: Vec<(u16, u16)>,
+}
+
+impl Display for Screen {
+    fn cells(&mut self) -> Option<(u16, u16)> {
+        Some(self.cells)
+    }
+    fn host(&mut self) -> Option<String> {
+        Some("fake 1.0".into())
+    }
+    fn largest(&mut self) -> Option<(u16, u16)> {
+        Some((300, 80))
+    }
+    fn request(&mut self, cols: u16, rows: u16) {
+        self.asked.push((cols, rows));
+    }
+    fn settle(&mut self, _was: (u16, u16)) -> Option<(u16, u16)> {
+        None
+    }
+}
+
+/// **And it gives up rather than asking for ever.** A pane that keeps refusing is one something
+/// else is holding, and a claim every quarter second is a hot loop against herdr rather than a
+/// recovery. The window stops asking about that pane at that size until one of them moves.
+#[tokio::test]
+async fn a_claim_refused_over_and_over_stops_being_asked_for() {
+    let mut fake = Fake::start().await;
+    let (_client, _events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    for _ in 0..3 {
+        app.match_view(Some(at), 120, 40);
+        tokio::time::sleep(HUSH).await;
+        app.match_view(Some(at), 120, 40);
+        let claimed = conn.op().await;
+        assert_eq!(claimed["mode"], "match", "{claimed}");
+        conn.send(
+            json!({ "t": "managed", "rid": claimed["rid"], "op": "pane.size", "ok": false,
+                          "code": "herdr", "message": "pane already has an attached client" }),
+        );
+        tokio::time::sleep(HUSH).await;
+        let _ = painted(&mut app, 110, 24);
+    }
+
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+
+    // A window the operator dragged is a different question, and it is asked.
+    app.match_view(Some(at), 140, 44);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 140, 44);
+    let moved = conn.op().await;
+    assert_eq!(moved["mode"], "match", "{moved}");
+    assert_eq!((&moved["cols"], &moved["rows"]), (&json!(140), &json!(44)));
 }
 
 /// **A socket dying is how a matched hold ends** (ADR 0013 point 1): the node lets the lease go and

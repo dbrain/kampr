@@ -1553,8 +1553,12 @@ Kampr's own — a pty the node forked, with no desk attached (see rule 3 in `AGE
 without `tab_id` a client cannot address `tab.rename`, `tab.close` or `tab.focus` at all.
 
 A `manage` message may carry an opaque **`rid`**, and the node echoes it verbatim on the
-`managed` ack. It is additive and optional: a browser with one op in flight has no use for it, and
-a hub relaying several clients' ops down one link does. A node that receives no `rid` sends none.
+`managed` ack. It is additive and optional, and it is the only thing on an ack that names the *ask*:
+`id` names what an op created, so an op that creates nothing — a resize, a release — acks with
+nothing tying it to the thing that sent it. A hub relaying several clients' ops down one link needs
+it, and so does any client that must know whether *its* op was the one refused: both clients send
+one with every `match` claim, because a claim taken for granted is a hold that was never taken
+(ADR 0013). A node that receives no `rid` sends none.
 
 A refused op is acknowledged too: `{"t":"managed","op":…,"ok":false,"code":…,"message":…}`, followed
 by the ordinary `error` frame. A client waiting on an ack must therefore watch `ok`, not just arrival.

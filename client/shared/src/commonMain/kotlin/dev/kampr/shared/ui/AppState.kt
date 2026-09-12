@@ -155,7 +155,7 @@ class AppState(
     // ownership on this side of it.
     private val matches = MatchHolds(scope) { connection.send(it) }
 
-    fun claimMatch(paneId: String, cols: Int, rows: Int) = matches.claim(paneId, cols, rows)
+    suspend fun claimMatch(paneId: String, cols: Int, rows: Int) = matches.claim(paneId, cols, rows)
 
     fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
 
@@ -663,6 +663,8 @@ class AppState(
         scope.launch {
             store.status.collect { if (it !is ConnectionStatus.Live) matches.disconnected() }
         }
+        // A claim is believed when the node answers it and not before — see `MatchHolds`.
+        scope.launch { store.acks.collect(matches::acked) }
         scope.launch { store.prefs.collect { adoptRememberedView() } }
         scope.launch {
             store.herd.collect {

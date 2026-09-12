@@ -3289,6 +3289,123 @@ async fn the_newest_viewer_wins_the_pane_and_the_last_one_out_puts_the_pane_itse
     );
 }
 
+/// **A release that names a lease answers for that lease and no other.**
+///
+/// The operator, on 0.1.80, on the wasm desktop through the hub: *"panes sometimes don't resize to
+/// fill the wasm desktop cols/rows. in chrome it had some popup in the content area making a banner
+/// at the top. i closed it the pane redrew and made claude some tiny little box ... didn't seem to
+/// recover until i manually set the size"*.
+///
+/// A banner closing is a view three rows taller, which is a *re-claim* of a pane this session is
+/// already holding. ADR 0013 point 2 says the displaced hold's release "lands on nothing rather
+/// than taking the newer viewer's hold down with it", and a hub relaying for a browser sends
+/// exactly that: replacing its lease for a pane drops the old one, and dropping one sends a
+/// release naming it by token. The token was being thrown away on arrival and replaced with
+/// whatever this session held *now* — so the release meant for the hold that had just been
+/// superseded let go of the hold that had just replaced it, thirty milliseconds after it was
+/// taken. The pane went back to the geometry it was found at, the client went on believing it
+/// held the pane at the view's size and therefore never asked again, and nothing recovered it but
+/// the panel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_naming_a_superseded_lease_leaves_the_hold_that_replaced_it_standing() {
+    let h = harness!("matchagain");
+    let token = h.token(Role::Full).await;
+    let mut viewer = h.connect(&token).await;
+    until(&mut viewer, "hello", 10).await;
+    until(&mut viewer, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut viewer, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut viewer, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut viewer, &pane, &local).await;
+    paint_screen(&mut viewer, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let with_banner = (found_rows + 3).max(30);
+    let first = ok(
+        &mut viewer,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "rid": "match-1",
+                "cols": found_cols + 24, "rows": with_banner, "mode": "match" }),
+        30,
+    )
+    .await;
+    // The token the ack is answered with, and the only thing tying an answer to the ask that
+    // earned it: an ack names what an op *created* and a resize creates nothing, so a client
+    // holding a claim in flight has this or it has a guess. `MatchHolds` is the client half.
+    assert_eq!(
+        first["rid"],
+        json!("match-1"),
+        "a claim was acked with no token: {first}"
+    );
+    let displaced = first["lease"]
+        .as_u64()
+        .expect("the first claim named no lease: {first}");
+    assert!(
+        rows_settle_at(&h._session, &local, with_banner, 20).await,
+        "the first match never landed"
+    );
+
+    // The banner goes away: the same view, three rows taller, claiming the same pane again.
+    let banner_gone = with_banner + 3;
+    let second = ok(
+        &mut viewer,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "rid": "match-2",
+                "cols": found_cols + 24, "rows": banner_gone, "mode": "match" }),
+        30,
+    )
+    .await;
+    assert_eq!(second["rid"], json!("match-2"), "{second}");
+    assert_ne!(
+        second["lease"].as_u64(),
+        Some(displaced),
+        "a re-claim answered with the lease it superseded: {second}",
+    );
+    assert!(
+        rows_settle_at(&h._session, &local, banner_gone, 20).await,
+        "the re-claim never landed"
+    );
+
+    // And now the release for the hold that re-claim displaced, which is what a hub sends the
+    // moment it replaces its own lease for a pane.
+    let stale = ok(
+        &mut viewer,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "mode": "release", "lease": displaced }),
+        30,
+    )
+    .await;
+    assert_eq!(
+        stale["was_held"],
+        json!(false),
+        "a release naming a superseded lease reported letting go of a live hold: {stale}",
+    );
+    assert!(
+        rows_stay_at(&h._session, &local, banner_gone, 20).await,
+        "a release for the hold a re-claim displaced took the new hold down with it; the pane is \
+         {} rows and the view is {banner_gone}",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    // And a refusal is answered by token too. A client that only reads the acks it can attribute
+    // treats one it cannot as a claim that landed, which is the belief this whole test is about.
+    send(
+        &mut viewer,
+        json!({ "t": "manage", "op": "pane.size", "at": "01JNOSUCHNODE000000000000/w9:p9", "rid": "match-3",
+                "cols": 100, "rows": 40, "mode": "match" }),
+    )
+    .await;
+    let refused = managed(&mut viewer, "pane.size", 30).await;
+    assert_eq!(refused["ok"], json!(false), "{refused}");
+    assert_eq!(
+        refused["rid"],
+        json!("match-3"),
+        "a refusal was acked with no token: {refused}"
+    );
+}
+
 /// Waits for a pane to arrive at `want` rows. The release is a controller exiting and then a
 /// second claim-and-release putting the size back, so it is seconds rather than instant.
 async fn rows_settle_at(session: &Session, pane: &str, want: u16, seconds: u64) -> bool {

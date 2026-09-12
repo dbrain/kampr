@@ -1604,6 +1604,83 @@ async fn watch_relayed(client: &mut Socket, peer: &mut Scripted, pane: &str) {
     until(client, "grid.reset", 10).await;
 }
 
+/// **A hub lets go of the lease it replaced, and names it.**
+///
+/// Every re-claim of a pane a browser is already holding — a window dragged, a banner closing —
+/// replaces the hub's lease for that pane, and dropping one sends a release down the link. ADR 0013
+/// point 2 says that release "lands on nothing rather than taking the newer viewer's hold down with
+/// it", and the only thing that can make that true is the token: a release that named nothing, or
+/// named the lease that *replaced* the one it is about, lets go of the hold the re-claim has just
+/// taken. That is what the operator saw on 0.1.80 — the pane back at its own geometry thirty
+/// milliseconds after being claimed, and a client that went on believing it held it.
+///
+/// The peer's half of the same rule is
+/// `a_release_naming_a_superseded_lease_leaves_the_hold_that_replaced_it_standing`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_that_reclaims_a_pane_releases_the_lease_it_displaced_and_not_the_new_one() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JLEASE", "laptop").await;
+    let pane = "01JLEASE/w1:p1";
+    peer.advertise(&[("01JLEASE", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+
+    let first = claim_through(&mut client, &mut peer, pane, 120, 40, 7).await;
+    assert_eq!(
+        first["lease"],
+        json!(7),
+        "the hub kept the peer's lease off the ack: {first}"
+    );
+
+    // The banner closes: the same view, four rows taller, on the pane it is already holding.
+    let second = claim_through(&mut client, &mut peer, pane, 120, 44, 8).await;
+    assert_eq!(second["lease"], json!(8), "{second}");
+
+    let released = peer.next_but_ping().await;
+    assert_eq!(released["t"], "manage", "{released}");
+    assert_eq!(released["mode"], "release", "{released}");
+    assert_eq!(
+        released["lease"],
+        json!(7),
+        "a hub let go of the lease that replaced the one it was dropping, which is the hold the \
+         operator is looking through: {released}",
+    );
+
+    hub.stop();
+}
+
+/// One `match` claim through the hub, answered by the scripted peer with `lease`, and the ack the
+/// client is handed back.
+async fn claim_through(
+    client: &mut Socket,
+    peer: &mut Scripted,
+    pane: &str,
+    cols: u16,
+    rows: u16,
+    lease: u64,
+) -> Value {
+    send(
+        client,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": cols, "rows": rows, "mode": "match" }),
+    )
+    .await;
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["op"], "pane.size", "{asked}");
+    assert_eq!(asked["mode"], "match", "{asked}");
+    peer.say(json!({
+        "t": "managed", "rid": asked["rid"], "op": "pane.size", "ok": true,
+        "pane_id": pane.split_once('/').unwrap().1, "cols": cols, "rows": rows,
+        "held": true, "matched": true, "lease": lease,
+    }))
+    .await;
+    until(client, "managed", 10).await
+}
+
 /// The mesh twin of #252, and a *scheduler race* rather than a certainty: `JoinHandle::abort` is
 /// not synchronous, so the aborted pump still holds the pane when its replacement watches — and
 /// tokio's LIFO slot normally polls that replacement first. One pane therefore survives a resync.

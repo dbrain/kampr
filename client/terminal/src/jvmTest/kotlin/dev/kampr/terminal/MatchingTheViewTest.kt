@@ -68,7 +68,12 @@ private class MatchIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
 // The same recorder, watching the two calls a session owns rather than the wire underneath them.
 // A view that goes on sending the ops itself cannot be given a linger, and the pane switch that
 // bounced (ADR 0013, `MatchHolds`) is exactly a view ending and another starting.
-private class SessionIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
+private class SessionIo(
+    private val stored: PanePrefs = PanePrefs(),
+    // Whether the node takes the pane. A claim is `pane.size` and it can be refused — herdr allows
+    // one controller at a time and refuses the second outright (#21).
+    private val takes: Boolean = true,
+) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     val claims = mutableListOf<Triple<String, Int, Int>>()
     val releases = mutableListOf<Pair<String, Boolean>>()
@@ -79,9 +84,9 @@ private class SessionIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
 
     override fun prefs(paneId: String) = stored
 
-    override fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
         claims += Triple(paneId, cols, rows)
-        return true
+        return takes
     }
 
     override fun releaseMatch(paneId: String, linger: Boolean) {
@@ -233,6 +238,29 @@ class MatchingTheViewTest {
             "the pane was never claimed again after the socket came back, so a desk-sized window " +
                 "shows a pane at its own geometry while the strip says it is held: ${io.claims}",
         )
+    }
+
+    // **A claim the node refused is asked again**, because the view that asked is still open and
+    // still the size it was. Nothing else would ask: the claim's keys are the pane and the view's
+    // own geometry, and a refusal moves neither — so the operator sat looking at a pane the desk's
+    // size under a window that believed it had already been given its own, until they resized it
+    // by hand (0.1.80). What must *not* do the asking is a loop against what the node reports
+    // about the pane; ADR 0013 point 2 is why.
+    //
+    // The mutation that must fail: take `claimMatch`'s answer for granted, and the second ask
+    // never goes.
+    @Test
+    fun aClaimTheNodeRefusedIsAskedAgainRatherThanTakenForAHold() = runComposeUiTest {
+        val io = SessionIo(takes = false)
+        terminal(grid(cols = 94), io, DESK)
+        quiet(3_500)
+
+        assertTrue(
+            io.claims.size > 1,
+            "a refused claim was never asked again, so the pane stays whatever the desk left it " +
+                "at while the view says it is held: ${io.claims}",
+        )
+        assertEquals(io.claims.first(), io.claims.last(), "it asked for something else: ${io.claims}")
     }
 
     @Test

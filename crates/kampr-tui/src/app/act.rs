@@ -1,7 +1,7 @@
 //! What a bind does. The keymap is herdr's, the router is [`crate::input`], and this is the far
 //! end of both: one arm per [`Action`], plus the surfaces a key reaches before the pane does.
 
-use super::{App, Screen, View, navigable, open_url};
+use super::{Acked, App, Claim, Screen, View, navigable, open_url};
 use crate::input::Outcome;
 use crate::keymap::{Action, Dir, Mode};
 use crate::manage::{MATCH_MIN_COLS, MATCH_MIN_ROWS, Progress};
@@ -16,6 +16,12 @@ use std::time::Duration;
 
 /// How long the window has to hold still before its size is asked for.
 const MATCH_SETTLE: Duration = Duration::from_millis(250);
+
+/// How many times a refused claim is asked again before the window stops asking about that pane at
+/// that size. A refusal is something else holding the pane (#21) or a link that dropped under the
+/// op, which is seconds; asking for ever is a hot loop, and asking once gives up on a controller
+/// that was a moment from letting go.
+const MATCH_TRIES: u8 = 3;
 
 impl App {
     pub fn key(&mut self, key: KeyEvent) {
@@ -229,6 +235,10 @@ impl App {
                     if self.matching.as_ref().is_some_and(|(p, _, _)| p == at) {
                         self.matching = None;
                     }
+                    if self.asking.as_ref().is_some_and(|(p, _, _)| p == at) {
+                        self.asking = None;
+                    }
+                    self.declined = None;
                     self.settling = None;
                 }
                 Some("match") => {
@@ -273,8 +283,18 @@ impl App {
                     .is_some_and(|entry| entry.fleet.is_none())
         });
         let target = want.map(|pane| (pane.to_string(), cols, rows));
-        if self.matching != target
-            && let Some((held, _, _)) = self.matching.take()
+        if self
+            .declined
+            .as_ref()
+            .is_some_and(|(claim, _)| Some(claim) != target.as_ref())
+        {
+            self.declined = None;
+        }
+        // What this window is holding or has asked to hold, which are the same answer to "is this
+        // target already spoken for" and never both at once.
+        let standing = self.matching.as_ref().or(self.asking.as_ref()).cloned();
+        if standing != target
+            && let Some((held, _, _)) = self.matching.take().or_else(|| self.asking.take())
         {
             self.send_manage(json!({ "op": "pane.size", "at": held, "mode": "release" }));
         }
@@ -282,7 +302,14 @@ impl App {
             self.settling = None;
             return;
         };
-        if self.matching.as_ref() == Some(&target) {
+        // An ask already out, or one the node has refused often enough to stop asking about, is
+        // not asked again by the next redraw.
+        if standing.as_ref() == Some(&target)
+            || self
+                .declined
+                .as_ref()
+                .is_some_and(|(claim, tries)| *claim == target && *tries >= MATCH_TRIES)
+        {
             return;
         }
         // The window has to hold still first. A drag arrives as a run of `Resize` events and every
@@ -299,14 +326,20 @@ impl App {
                 return;
             }
         }
-        let (pane, cols, rows) = self.settling.take().expect("a settled size").0;
-        self.matching = Some((pane.clone(), cols, rows));
-        self.send_manage(json!({
-            "op": "pane.size", "at": pane, "cols": cols, "rows": rows, "mode": "match"
-        }));
+        let claim = self.settling.take().expect("a settled size").0;
+        let (pane, cols, rows) = claim.clone();
+        self.asking = Some(claim.clone());
+        self.send_manage_claiming(
+            json!({ "op": "pane.size", "at": pane, "cols": cols, "rows": rows, "mode": "match" }),
+            Some(claim),
+        );
     }
 
     fn send_manage(&mut self, op: serde_json::Value) {
+        self.send_manage_claiming(op, None);
+    }
+
+    fn send_manage_claiming(&mut self, op: serde_json::Value, claim: Option<Claim>) {
         let client = self.client.clone();
         let acked = self.acked.clone();
         let name = op["op"].as_str().unwrap_or_default().to_string();
@@ -327,20 +360,48 @@ impl App {
                     ..Managed::default()
                 },
             };
-            let _ = acked.send(ack);
+            let _ = acked.send(Acked { ack, claim });
         });
     }
 
     /// #241 sanctions this: a session ack is a promise the host already agrees, and the kinds and
     /// sessions a menu draws come from `caps` alone — so an op that changed them asks again.
     pub(super) fn settle_manage(&mut self) {
-        while let Ok(ack) = self.acks.try_recv() {
+        while let Ok(Acked { ack, claim }) = self.acks.try_recv() {
             let refresh = ack.ok && ack.op.starts_with("session.");
+            // **And it stops there.** The manage panel reports ops the operator typed; the
+            // standing hold is not one, and putting its ack on the panel's strip covered the
+            // sentence that says the pane is being held with a notice about an op nobody asked
+            // for, for eight seconds, on every window resize.
+            if let Some(claim) = claim {
+                self.claim_answered(claim, ack.ok);
+                continue;
+            }
             self.manage.observe(&Event::Managed(ack));
             if refresh {
                 self.client.request_caps();
             }
         }
+    }
+
+    /// A pane is held when the node says it is. A refusal is a contended controller rather than a
+    /// wrong size — herdr refuses the second one outright (#21) — so it is asked again a few times
+    /// and then left to the next thing that moves the window or the pane.
+    fn claim_answered(&mut self, claim: Claim, ok: bool) {
+        if self.asking.as_ref() != Some(&claim) {
+            return;
+        }
+        self.asking = None;
+        if ok {
+            self.declined = None;
+            self.matching = Some(claim);
+            return;
+        }
+        let tries = match &self.declined {
+            Some((declined, tries)) if *declined == claim => tries + 1,
+            _ => 1,
+        };
+        self.declined = Some((claim, tries));
     }
 
     fn act(&mut self, action: Action) {

@@ -509,6 +509,11 @@ sealed interface ServerMsg {
         val op: String,
         val ok: Boolean,
         val id: String?,
+        // The correlation token the op was sent with, echoed verbatim. Absent unless the caller
+        // asked for one: `id` names what an op *created*, so an op that creates nothing acked
+        // with nothing tying it to the ask, and a claim in flight could not be told from anybody
+        // else's answer.
+        val rid: String? = null,
         val code: String? = null,
         val message: String? = null,
         val layout: JsonObject? = null,
@@ -612,7 +617,10 @@ sealed interface ClientMsg {
 
     data class Ping(val n: Int) : ClientMsg
 
-    data class Manage(val request: ManageOp) : ClientMsg
+    // `rid` is echoed on the ack that answers this op and on nothing else. A surface with one op
+    // in flight has no use for it; one that has to know whether *its* ask was the one refused
+    // does, because an ack names what the op created and a resize creates nothing.
+    data class Manage(val request: ManageOp, val rid: String? = null) : ClientMsg
 
     // Without this `caps.agent_kinds` and `caps.sessions` are dead on both ends: the node only
     // answers a `caps` it was asked for.

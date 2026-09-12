@@ -102,6 +102,16 @@ pub enum Screen {
     Fleet,
 }
 
+/// A pane, and the grid a window is asking to hold it at.
+pub(super) type Claim = (String, u16, u16);
+
+/// A `manage` ack and, when the op was a match claim, the claim it answers. Nothing else on the
+/// ack says so: `id` names what an op created and a resize creates nothing.
+pub(super) struct Acked {
+    pub ack: Managed,
+    pub claim: Option<Claim>,
+}
+
 pub struct App {
     pub(super) client: Arc<Client>,
     pub options: Options,
@@ -143,7 +153,19 @@ pub struct App {
     offered: Option<String>,
     watching: HashSet<String>,
     /// The pane this client is holding at its own window's size, and the size it asked for.
-    matching: Option<(String, u16, u16)>,
+    ///
+    /// Set when the node *answers*, never when the ask goes out. A claim is `pane.size` and it can
+    /// be refused — herdr allows one controller at a time and refuses the second outright (#21) —
+    /// and a refusal remembered as a hold is a window that will never ask again, because the only
+    /// thing that would make it ask is the size it believes it already got.
+    matching: Option<Claim>,
+    /// The claim this window has out and has not been answered about, so that a redraw a
+    /// millisecond later does not ask a second time.
+    asking: Option<Claim>,
+    /// A claim the node refused [`MATCH_TRIES`] times. Kept until the window or the pane moves,
+    /// because a claim that is being refused is a pane something else is holding, and asking every
+    /// [`MATCH_SETTLE`] for ever is a hot loop against herdr rather than a recovery.
+    declined: Option<(Claim, u8)>,
     /// What the window most recently measured, and when it settled there. A drag is hundreds of
     /// sizes and each claim is a `herdr terminal session control` child, so the size has to hold
     /// still before it is asked for.
@@ -156,8 +178,8 @@ pub struct App {
     wipe: bool,
     /// Every `manage` ack, carried back from the task that awaited it. A successful op produces
     /// no frame the surface can otherwise see, so its notice would age out instead of resolving.
-    acked: UnboundedSender<Managed>,
-    acks: UnboundedReceiver<Managed>,
+    acked: UnboundedSender<Acked>,
+    acks: UnboundedReceiver<Acked>,
     keybinds: bool,
     help_top: usize,
     quit: bool,
@@ -197,6 +219,8 @@ impl App {
             offered: None,
             watching: HashSet::new(),
             matching: None,
+            asking: None,
+            declined: None,
             settling: None,
             unmatched: HashSet::new(),
             wipe: false,
@@ -244,6 +268,8 @@ impl App {
                 // the pane at its own geometry, with the strip saying it was held and the menu
                 // offering to stop a hold nobody had.
                 self.matching = None;
+                self.asking = None;
+                self.declined = None;
                 self.settling = None;
                 self.note(reason.clone());
                 self.convo.absorb(event);
@@ -583,10 +609,12 @@ impl App {
             return;
         }
         self.fitted = Some((need, size));
-        // **Not while this window is holding the pane at its own size.** The ladder's second rung
-        // asks the terminal to grow to the pane; a matched pane is already the size of the
-        // terminal, so the two would take turns for ever (ADR 0013).
-        let ask = self.options.resize && self.matching.is_none();
+        // **Not while this window is holding the pane at its own size, nor while it is waiting to
+        // hear whether it got it.** The ladder's second rung asks the terminal to grow to the
+        // pane; a matched pane is already the size of the terminal, so the two would take turns
+        // for ever (ADR 0013). A claim is answered a round trip after it is sent, and a window
+        // that treated that gap as "not holding anything" would climb the ladder inside it.
+        let ask = self.options.resize && self.matching.is_none() && self.asking.is_none();
         let rung = fit::climb(display, need, chrome, ask);
         // **Said when it happens, not for ever after.** The ladder climbs once per pane geometry
         // and terminal size, and its report is a long sentence about why a pane is being cropped —

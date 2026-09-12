@@ -9,8 +9,11 @@ import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Security
 import dev.kampr.shared.wire.ServerMsg
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 sealed interface ConnectionStatus {
@@ -23,6 +26,10 @@ sealed interface ConnectionStatus {
     // the same news: one comes back on its own and one never will until somebody pairs again.
     data class Refused(val reason: String) : ConnectionStatus
 }
+
+// Enough that a burst of acks — a pane switch is a release and a claim, and a herd of panes can
+// answer at once — reaches a collector that is a frame behind rather than being dropped.
+private const val ACK_BACKLOG = 32
 
 class KamprStore {
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
@@ -63,6 +70,13 @@ class KamprStore {
 
     private val _managed = MutableStateFlow<ServerMsg.Managed?>(null)
     val managed: StateFlow<ServerMsg.Managed?> = _managed.asStateFlow()
+
+    // The same acks, in order and without conflation. A state slot answers "what is the sheet in
+    // front of the operator waiting for"; a claim that has to know whether the node took its pane
+    // needs every answer, and two acks landing in one frame — a release and the claim behind it —
+    // leave a slot holding only the second.
+    private val _acks = MutableSharedFlow<ServerMsg.Managed>(extraBufferCapacity = ACK_BACKLOG)
+    val acks: SharedFlow<ServerMsg.Managed> = _acks.asSharedFlow()
 
     private val paneStates = mutableStateMapOf<String, PaneState>()
     val styles = StyleTable()
@@ -278,7 +292,10 @@ class KamprStore {
                 }
             }
             is ServerMsg.Found -> _found.value = msg
-            is ServerMsg.Managed -> _managed.value = msg
+            is ServerMsg.Managed -> {
+                _managed.value = msg
+                _acks.tryEmit(msg)
+            }
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
             is ServerMsg.Pong -> Unit
         }

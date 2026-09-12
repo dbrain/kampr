@@ -157,6 +157,22 @@ answer to *"a geometry change they did not ask for and cannot find the switch fo
   (`lease`), and three new optional ack fields (`matched`, `found_cols`, `found_rows`). An older
   node answers `bad_request` to an unknown mode; an older client never sends one and ignores fields
   it does not know.
+- **A pane is held when the node says it is, and a claim carries an `rid` so that its answer can be
+  told from anybody else's.** A claim is `pane.size` and `pane.size` can be refused — a controller
+  herdr will not give up ([#21](../03-probe-log.md)), a peer link that dropped under the op, a pane
+  that stopped existing — and a refusal recorded as a hold is a viewer that will never ask again,
+  because the only thing that would make it ask is a view size it believes it already has. So a
+  refusal is forgotten rather than remembered, asked again a few times seconds apart, and then left
+  to the next thing that moves the view. What must *not* answer it is a re-measuring loop against
+  what the node reports about the pane: point 2 above is the reason, and it is the loop this design
+  exists without.
+- **A release that names a lease answers for that lease and nothing else, at the node that receives
+  it as well as the one that sent it.** Point 2's scoping is only worth the field if the far side
+  honours it: a hub sends one for every lease it replaces, which is every re-claim of a pane a
+  browser is already holding, and re-scoping it on arrival to the lease that *replaced* it let go of
+  a hold thirty milliseconds after it was taken. The pane went back to the geometry it was found at
+  and the client went on reporting it held at the view's size — the operator's *"made claude some
+  tiny little box ... didn't seem to recover until i manually set the size"*, on 0.1.80.
 - **A held pane costs a `herdr terminal session control` child for as long as the view is open**,
   and while it is held the desk at that machine renders wrong without being told
   ([#18](../03-probe-log.md), [#298](../03-probe-log.md)). That is the cost the operator is buying,

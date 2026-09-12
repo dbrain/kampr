@@ -174,6 +174,19 @@ private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
 // also absorbs.
 private const val MATCH_SETTLE_MS = 250L
 
+// What a refused claim gets: a handful of asks, seconds apart, and then silence until the view
+// moves again.
+//
+// A refusal is a contended pane rather than a wrong one — herdr allows one controller at a time
+// and refuses the second outright (#21), and a peer link can drop under an op — so the thing being
+// waited for is a controller letting go, which is seconds. Bounded, because a pane that will not
+// be claimed must not be asked for ever, and unnecessary on the way back: every geometry change,
+// every reconnect and every return to the pane asks again anyway. This is only what covers a view
+// that is *not* about to change, which is exactly the one whose operator sits looking at a pane
+// the size of a postage stamp.
+private const val MATCH_RETRY_MS = 2_000L
+private const val MATCH_TRIES = 3
+
 // Holds the pane at this view's geometry for as long as this view is open, and lets go when it is
 // not — a switch to the conversation, a pane closed, a window that stopped being desk-sized, the
 // switch turned off. ADR 0013.
@@ -207,7 +220,11 @@ private fun MatchTheView(
         }
         if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
-        claimed = io.claimMatch(paneId, cols, rows)
+        repeat(MATCH_TRIES) { attempt ->
+            if (attempt > 0) delay(MATCH_RETRY_MS)
+            claimed = io.claimMatch(paneId, cols, rows)
+            if (claimed) return@LaunchedEffect
+        }
     }
     // The status strip is what stops this being a shape change nobody was told about: it says the
     // pane is being held while it is, whether the operator ticked the switch or their screen size

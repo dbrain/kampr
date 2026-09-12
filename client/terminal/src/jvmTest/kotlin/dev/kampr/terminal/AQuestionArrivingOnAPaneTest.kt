@@ -42,7 +42,7 @@ private class Claims : PaneIo {
 
     override fun send(msg: ClientMsg) = Unit
     override fun prefs(paneId: String) = PanePrefs()
-    override fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
         this.cols = cols
         this.rows = rows
         claims++
