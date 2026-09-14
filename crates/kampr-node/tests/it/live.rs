@@ -5726,7 +5726,7 @@ async fn herdr_has_scraped(session: &Session, pane: &str) {
     // Generous on purpose. herdr publishes its own detection about four seconds after the process
     // appears (#405) and on its own clock, and a loaded full-suite run is where the extra minutes
     // are spent: this failed once with `agent_status: unknown` and passed alone. A deadline is not
-    // the assertion here — the scrape still has to happen — and the sibling caller below waits the
+    // the assertion here — the scrape still has to happen — and the sibling caller above waits the
     // same four minutes for the same event, so the two stay in step.
     herdr_pane(session, pane, 240, "scraped an agent out of", |p| {
         p["agent"] == "claude" && p["agent_status"] == "idle"
