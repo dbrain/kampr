@@ -345,9 +345,30 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut desk = ComposerFeed::default();
     let mut composer: Option<ComposerReader> = None;
     let mut queued: Option<kampr_journal::QueuedReader> = None;
+    let mut screen_status: Option<kampr_journal::StatusReader> = None;
+    let mut screen_seen: Option<&'static str> = None;
 
     loop {
         let now = pane_of(&herd, &global, &identity, &local);
+        // A harness whose only handle on its session is the environment its tools carry (pi)
+        // names it only while a tool is running; between tools the marker reads nothing, and
+        // re-resolving by directory would latch onto whoever ran last in it. Keep the session the
+        // pane was last seen on, for as long as the pane is the same, until the marker names a
+        // different one.
+        let now = if now.identity.announced.is_none()
+            && journals.sticky(now.agent.as_deref())
+            && !matches!(now.identity.harness, Harness::Absent)
+            && let Some(h) = handle.as_ref()
+            && h.agent == now.agent
+            && h.cwd == now.cwd
+            && h.identity.announced.is_some()
+        {
+            let mut now = now;
+            now.identity.announced = h.identity.announced.clone();
+            now
+        } else {
+            now
+        };
         let status = status_of(&herd, &global);
         let working = status == AgentStatus::Working;
         // A pane waiting on the operator is not a pane that has stopped. Its screen may be the
@@ -357,7 +378,11 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // the preview there took that message off the conversation at the one moment the operator
         // needed it (#410).
         let asking = status == AgentStatus::Blocked;
-        let live_now = working || asking;
+        // A harness whose screen is the only state signal is working when its screen says so, and
+        // the screen says it between the ticks that read it. The read runs on the live poll below
+        // and nowhere else, so this is what makes that poll run for a pane herdr never sees move.
+        let screen_working = screen_seen == Some("busy");
+        let live_now = working || asking || screen_working;
         // A turn that ends without the status moving is covered by the transcript catching up,
         // but a turn the operator interrupts leaves its half-written text on the screen forever —
         // so leaving `working` withdraws whatever is showing.
@@ -411,6 +436,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             misses = 0;
             composer = journals.composer(now.agent.as_deref());
             queued = journals.queued(now.agent.as_deref());
+            screen_status = journals.status(now.agent.as_deref());
+            screen_seen = None;
         }
 
         // **An inherited transcript is only this pane's if the pane still resolves to it** — and
@@ -551,7 +578,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 // nothing.
                 if let Some(path) = opened.clone()
                     && let Some(moved) =
-                        refold(&warm, &path, describe(&local), waiting(&panes, &local, queued)).await
+                        refold(&warm, &path, describe(&local), waiting(&panes, &local, queued), screen_seen).await
                     && !wire.send(&ServerMsg::ConvoFacets { pane: global.clone(), facets: moved })
                 {
                     return;
@@ -576,10 +603,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // A preview is the one thing on this socket that can be dropped without loss: the
             // record behind it is still coming, and a client that is already behind does not want
             // a fifth revision of a message it has not drawn yet.
-            _ = live_poll.tick(), if live_now && opened.is_some() && !wire.outbox().congested() => {
+            _ = live_poll.tick(), if opened.is_some() && !wire.outbox().congested() && (live_now || screen_status.is_some()) => {
                 let change = match panes.screen(&local) {
                     Some(screen) => {
                         let borrowed: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+                        if let Some(reader) = screen_status {
+                            screen_seen = reader(&borrowed);
+                        }
                         let seen = journal.lock().unwrap().as_ref().and_then(|j| j.preview(&borrowed));
                         live.observe(seen, asking)
                     }
@@ -692,8 +722,9 @@ async fn publish_facets(
     };
     // No queue is read here: `publish_facets` runs where the pane's grid is not in hand, and the
     // facets tick fills one in within its own period. An opening that guessed `[]` would tell a
-    // client the queue is empty a moment before saying it is not.
-    let opening = match refold(warm, transcript, marker, None).await {
+    // client the queue is empty a moment before saying it is not. The status is the same: a
+    // screen read the grid is not in hand cannot make, and the first live tick sets it.
+    let opening = match refold(warm, transcript, marker, None, None).await {
         Some(moved) => moved,
         None if cold => Facets::default(),
         None => warm
@@ -973,11 +1004,12 @@ async fn refold(
     transcript: &Path,
     marker: Option<SessionMarker>,
     queued: Option<Vec<kampr_journal::Queued>>,
+    status: Option<&'static str>,
 ) -> Option<Facets> {
     let mut held = warm.lock().unwrap().facets.take()?;
     let transcript = transcript.to_path_buf();
     let (held, moved) = tokio::task::spawn_blocking(move || {
-        let moved = held.moved_with(&transcript, marker.as_ref(), queued);
+        let moved = held.moved_with(&transcript, marker.as_ref(), queued, status);
         (held, moved)
     })
     .await

@@ -7,7 +7,7 @@ use crate::attach::{Fetched, Origin};
 use crate::composer::{ComposerReader, ListeningReader};
 use crate::error::JournalError;
 use crate::facet::{FacetFeed, FacetFold, Facets};
-use crate::live::ScreenReader;
+use crate::live::{ScreenReader, StatusReader};
 use crate::marker::SessionMarker;
 use crate::process::{Harness, PaneProcess};
 use crate::root::TranscriptRoot;
@@ -152,6 +152,23 @@ pub trait JournalAdapter: Send + Sync {
         None
     }
 
+    /// Reads the run state this harness paints on its screen, for the harnesses whose screen is
+    /// the only state signal they have.
+    fn status(&self) -> Option<StatusReader> {
+        None
+    }
+
+    /// Whether the session this pane is on must be remembered between the ticks that name it,
+    /// for the harnesses whose only handle on it is gone the moment the naming process is.
+    ///
+    /// Such a harness names its session only while a tool is running; between tools the marker
+    /// reads nothing, and re-resolving by directory would latch onto whoever ran last in it.
+    /// The default is a harness whose marker is a standing map from process to session, which
+    /// answers on every tick and so has nothing to remember.
+    fn sticky(&self) -> bool {
+        false
+    }
+
     /// The `index`th attachment of one already-read record, decoded. The default is a harness
     /// whose transcripts have never been measured to carry one.
     fn attachment(&self, _record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -251,6 +268,17 @@ impl Registry {
     /// screen only.
     pub fn queued(&self, pane_agent: Option<&str>) -> Option<crate::facet::QueuedReader> {
         self.adapters.get(pane_agent?)?.queued()
+    }
+
+    /// How to read the run state a pane running `pane_agent` paints on its screen, for the
+    /// harnesses whose screen is the only state signal they have.
+    pub fn status(&self, pane_agent: Option<&str>) -> Option<StatusReader> {
+        self.adapters.get(pane_agent?)?.status()
+    }
+
+    /// Whether a pane running `pane_agent` must keep its session between the ticks that name it.
+    pub fn sticky(&self, pane_agent: Option<&str>) -> bool {
+        pane_agent.is_some_and(|agent| self.adapters.get(agent).is_some_and(|a| a.sticky()))
     }
 
     /// The conversation a `sub` handle names, proved to be one the pane asking may see.

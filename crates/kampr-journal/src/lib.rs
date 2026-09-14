@@ -36,7 +36,7 @@ pub use error::JournalError;
 pub use facet::{
     Compaction, FacetFeed, FacetFold, Facets, Mode, Queued, QueuedReader, Timing, Title, TitleSource, Titles,
 };
-pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, Watch, retired};
+pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, StatusReader, Watch, retired};
 pub use marker::SessionMarker;
 pub use model::{Attachment, Block, CodeRole, Page, Role, ToolState, Turn, TurnKind};
 pub use omp::OmpAdapter;

@@ -41,8 +41,24 @@ impl Session {
         let name = format!("kampr-it-{tag}-{}-{seq}", std::process::id());
         assert_ne!(name, "default");
         let socket = herdr_home().join("sessions").join(&name).join("herdr.sock");
-        std::process::Command::new("herdr")
-            .args(["server", "--session", &name])
+        // A suite run from inside a pi inherits its PI_* environment, and a herdr started with
+        // it stamps that session onto every pane it spawns — a pane that was never on that session
+        // then names it in its own environment. The server starts clean, the way the operator's
+        // does.
+        let mut command = std::process::Command::new("herdr");
+        command.args(["server", "--session", &name]);
+        for key in [
+            "PI_SESSION_ID",
+            "PI_SESSION_FILE",
+            "PI_SUBAGENT_PARENT_SESSION",
+            "PI_PROVIDER",
+            "PI_MODEL",
+            "PI_REASONING_LEVEL",
+            "PI_CODING_AGENT",
+        ] {
+            command.env_remove(key);
+        }
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -5708,11 +5724,11 @@ async fn herdr_says(session: &Session, pane: &str, want: &str) {
 /// before herdr saw the process is the fallback for a pane with no agent, not this pane's.
 async fn herdr_has_scraped(session: &Session, pane: &str) {
     // Generous on purpose. herdr publishes its own detection about four seconds after the process
-    // appears (#405) and on its own clock, and thirty seconds is inside what a loaded runner can
-    // spend getting there: this failed once in a full-suite run with `agent_status: unknown` and
-    // passed three times alone. A deadline is not the assertion here — the scrape still has to
-    // happen — and the sibling caller above already waits four minutes for the same event.
-    herdr_pane(session, pane, 180, "scraped an agent out of", |p| {
+    // appears (#405) and on its own clock, and a loaded full-suite run is where the extra minutes
+    // are spent: this failed once with `agent_status: unknown` and passed alone. A deadline is not
+    // the assertion here — the scrape still has to happen — and the sibling caller below waits the
+    // same four minutes for the same event, so the two stay in step.
+    herdr_pane(session, pane, 240, "scraped an agent out of", |p| {
         p["agent"] == "claude" && p["agent_status"] == "idle"
     })
     .await;
@@ -10230,4 +10246,108 @@ async fn a_transcript_search_reaches_turns_the_client_was_never_handed() {
         "a hit carries the line it matched, so it can be read where it cannot be scrolled to: {deep}",
     );
     assert_eq!(deep["role"], json!("assistant"), "{deep}");
+}
+/// A pi pane serves the session its processes name in their environment, not the most recent
+/// session in the pane's directory — the latch the operator reported, and the reason the marker
+/// walks the pipeline's environments before it touches the disk.
+///
+/// The pane's `pi` is a fake: a `sleep` renamed to `pi`, carrying `PI_SESSION_FILE` in its
+/// environment the way every command a real pi runs does. The session file is real, and the decoy
+/// beside it is *newer* — so a resolution by directory alone lands on the decoy, and only the
+/// environment walk names the pane's own session.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pi_pane_serves_the_session_its_environment_names() {
+    let home = tempfile::tempdir().expect("an isolated journal home");
+    // The pi adapter registers only where its root exists, and the node reads it once on start —
+    // so the directory must be there before the harness brings the node up.
+    std::fs::create_dir_all(home.path().join(".pi/agent/sessions")).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("pi-env", move |config| {
+        config.journals.home = home_path;
+    });
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    until_pane(&mut socket, "grid.reset", &pane, 15).await;
+
+    // The pane's directory, which is where a resolution by directory alone would look.
+    let bucket = home.path().join(".pi/agent/sessions/--tmp--");
+    std::fs::create_dir_all(&bucket).unwrap();
+    // The session the pane is on, and a decoy in the same bucket that is newer — the one a
+    // directory walk would pick.
+    let write_session = |id: &str, stamp: &str, word: &str| {
+        let path = bucket.join(format!("{stamp}_{id}.jsonl"));
+        let header = json!({
+            "type": "session", "version": 3, "id": id, "timestamp": format!("{stamp}Z"), "cwd": "/tmp",
+        });
+        let message = json!({
+            "type": "message", "id": "m", "parentId": null, "timestamp": format!("{stamp}Z"),
+            "message": { "role": "user", "content": [{ "type": "text", "text": word }] },
+        });
+        std::fs::write(&path, format!("{header}\n{message}\n")).unwrap();
+        path
+    };
+    let own = write_session("pane-session", "2020-01-01T00-00-00-000Z", "pane-codeword-qzx");
+    let _decoy = write_session("decoy-session", "2026-01-01T00-00-00-000Z", "decoy-codeword-vwp");
+
+    // The fake pi: a `sleep` renamed to `pi`, so herdr reports it by that name.
+    let fake_pi = home.path().join("pi");
+    std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &fake_pi).unwrap();
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!("PI_SESSION_FILE={} {} 600\n", own.display(), fake_pi.display()),
+            }),
+        )
+        .await;
+    // Wait for herdr to report the pi process, so the sweep has something to walk.
+    let mut info = Value::Null;
+    for _ in 0..100 {
+        info = h
+            ._session
+            .call("pane.process_info", json!({ "pane_id": local }))
+            .await;
+        if info["process_info"]["foreground_processes"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["name"] == "pi"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        info["process_info"]["foreground_processes"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["name"] == "pi")),
+        "herdr never reported the fake pi process: {info}"
+    );
+
+    // The conversation is the pane's own session: it carries the pane's codeword, not the decoy's.
+    let mut saw_own = false;
+    let mut saw_decoy = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline && !saw_own {
+        let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
+            continue;
+        };
+        if message["t"] == "convo" {
+            let text = serde_json::to_string(&message).expect("a json message");
+            saw_own |= text.contains("pane-codeword-qzx");
+            saw_decoy |= text.contains("decoy-codeword-vwp");
+        }
+    }
+    assert!(saw_own, "the conversation never carried the pane's own session");
+    assert!(
+        !saw_decoy,
+        "the conversation carried the decoy: the pane was resolved by directory, not by environment"
+    );
 }

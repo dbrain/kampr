@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
 use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{NodeEntry, PaneEntry};
-use kampr_journal::{FacetFold, Harness, Registry as Journals, SessionMarker, Titles};
+use kampr_journal::{FacetFold, Harness, Registry as Journals, SessionMarker, SessionRef, Titles};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
@@ -468,6 +468,13 @@ struct Conversations {
     seen: Mutex<HashMap<ConversationKey, Resolved>>,
     /// Whether the last round left an agent pane whose transcript has not appeared yet.
     waiting: std::sync::atomic::AtomicBool,
+    /// The session each pane was last seen naming, keyed by global pane id. A harness whose only
+    /// handle on its session is the environment its tools carry (pi) names it only while a tool is
+    /// running; between tools the marker reads nothing, and re-resolving by directory would latch
+    /// onto whoever ran last in it. This is the herd model's half of the stickiness the pump
+    /// applies, kept so the panel's title and `has_conversation` cannot name a different session
+    /// than the one the pump is serving.
+    sticky: Mutex<HashMap<String, Sticky>>,
 }
 
 /// What a resolution can be cached against: a pane whose harness, directory *and* session are
@@ -480,6 +487,14 @@ type ConversationKey = (String, String, String);
 struct Resolved {
     path: Option<PathBuf>,
     at: Instant,
+}
+/// The session a pane was last seen naming, with the pane's agent and directory so a stickiness
+/// that outlived a harness restart or a `cd` is recognised as stale and dropped.
+#[derive(Clone)]
+struct Sticky {
+    agent: String,
+    cwd: String,
+    announced: SessionRef,
 }
 
 impl Conversations {
@@ -495,10 +510,38 @@ impl Conversations {
         if !journals.serves(info.agent.as_deref()) {
             return None;
         }
-        let announced = crate::convo::identity(journals, &session.provider, &info.pane_id).announced;
-        let key = (
+        let mut announced = crate::convo::identity(journals, &session.provider, &info.pane_id).announced;
+        // The herd model's half of the stickiness the pump applies: a harness that names its
+        // session only from the environment its tools carry (pi) reads nothing between tools, and
+        // re-resolving by directory would latch onto whoever ran last in it. Keep the session the
+        // pane was last seen on, for as long as the pane is the same, until the marker names a
+        // different one.
+        let pane_key = format!("{}/{}", session.node_id, info.pane_id);
+        let (agent, cwd) = (
             info.agent.clone().unwrap_or_default(),
             info.cwd.clone().unwrap_or_default(),
+        );
+        if announced.is_some() {
+            self.sticky.lock().unwrap().insert(
+                pane_key,
+                Sticky {
+                    agent: agent.clone(),
+                    cwd: cwd.clone(),
+                    announced: announced.clone().unwrap(),
+                },
+            );
+        } else if journals.sticky(info.agent.as_deref()) && !matches!(info.agent_harness, Harness::Absent) {
+            let last = self.sticky.lock().unwrap().get(&pane_key).cloned();
+            if let Some(last) = last
+                && last.agent == agent
+                && last.cwd == cwd
+            {
+                announced = Some(last.announced);
+            }
+        }
+        let key = (
+            agent,
+            cwd,
             match announced.as_ref() {
                 Some(a) => a.value.clone(),
                 // A harness that is absent and one nothing could look for resolve differently, so
@@ -535,11 +578,15 @@ impl Conversations {
     }
 
     /// Working directories churn and a node runs for weeks.
-    fn keep(&self, live: &HashSet<ConversationKey>) {
+    fn keep(&self, live: &HashSet<ConversationKey>, live_panes: &HashSet<String>) {
         let mut seen = self.seen.lock().unwrap();
         seen.retain(|key, _| live.contains(key));
         let waiting = seen.values().any(|r| r.path.is_none());
         self.waiting.store(waiting, std::sync::atomic::Ordering::Relaxed);
+        self.sticky
+            .lock()
+            .unwrap()
+            .retain(|pane, _| live_panes.contains(pane));
     }
 
     fn pending(&self) -> bool {
@@ -610,6 +657,7 @@ async fn build_model(
     let mut nodes = Vec::new();
     let mut panes = Vec::new();
     let mut live = HashSet::new();
+    let mut live_panes = HashSet::new();
     let mut titled = HashSet::new();
     for session in sessions.all() {
         let health = session.provider.health();
@@ -642,6 +690,7 @@ async fn build_model(
         // offline and leaves the last-known panes standing rather than emptying the herd under a
         // client that is about to get them all back.
         for info in session.registry.list_panes().await.unwrap_or_default() {
+            live_panes.insert(format!("{}/{}", session.node_id, info.pane_id));
             let transcript = conversations.resolves(journals, &session, &info, &mut live);
             let has_conversation = transcript.is_some();
             let watchers = session.registry.watcher_count(&info.pane_id);
@@ -680,7 +729,7 @@ async fn build_model(
             panes.push(entry);
         }
     }
-    conversations.keep(&live);
+    conversations.keep(&live, &live_panes);
     names.keep(&titled);
     HerdModel { nodes, panes }
 }

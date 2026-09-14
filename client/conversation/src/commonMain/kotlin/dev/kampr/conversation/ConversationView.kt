@@ -164,7 +164,10 @@ fun ConversationView(
             now = clock()
         }
     }
-    val working = info != null && statusOf(info) == AgentStatus.Working
+    // The herd's word where the harness publishes one, and the screen's word where it does not:
+    // a harness with no detection manifest says `idle` through a whole working turn, and the
+    // node reads the state its screen paints into the facet instead.
+    val working = (info != null && statusOf(info) == AgentStatus.Working) || pane.facets.status == "busy"
     val newest = (rows.lastOrNull { it is TranscriptRow.Head } as? TranscriptRow.Head)?.reply
     val tail = newest?.takeIf { working || it.live }
     // What a reader is looking at, when it is not the conversation as it stands. The grid beside

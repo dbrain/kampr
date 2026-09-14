@@ -151,6 +151,14 @@ impl Turn {
         }
     }
 
+    /// The tool card at `at`, when that is what sits there, without taking the turn.
+    pub fn tool_block(&self, at: usize) -> Option<&Block> {
+        match self.blocks.get(at) {
+            block @ Some(Block::Tool { .. }) => block,
+            _ => None,
+        }
+    }
+
     /// The tool card at `at`, when that is what sits there.
     ///
     /// **A turn can hold several.** Claude emits parallel `tool_use` blocks in one assistant

@@ -14,7 +14,7 @@ use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
 use crate::facet::{FacetFold, Facets, Queued};
-use crate::live::{LiveBlock, ScreenReader};
+use crate::live::{LiveBlock, ScreenReader, StatusReader};
 use crate::marker::SessionMarker;
 use crate::model::{Attachment, Block, CodeRole, Role, ToolState, Turn, TurnKind};
 use crate::output;
@@ -47,10 +47,14 @@ pub const HOME: &str = ".omp/agent";
 /// The harness omp forked, under a home of its own.
 ///
 /// **It shares the record grammar and the session path and almost nothing else** ([#490](#)).
-/// `pi` 0.73.1 appends with `appendFileSync` and holds no descriptor, writes no breadcrumbs, has
-/// no `task` tool and so no subagents, writes no title slot, and puts no run state in its terminal
-/// title — so this adapter serves a `pi` pane its conversation, resolved by working directory,
-/// and every handle above that answers nothing rather than answering wrongly.
+/// `pi` 0.73.1 appends with `appendFileSync` and holds no descriptor, writes no breadcrumbs and
+/// puts no run state in its terminal title — so none of omp's handles above the working
+/// directory apply to it, and the two it does have are its own. Its shell tool puts the session
+/// file it is on into the environment of every command it runs, and the subagents extension puts
+/// the root session's id into the root process itself, where every descendant inherits it without
+/// overwriting ([#542](#), [#543](#)) — which is what [`Self::named`] reads. On the screen, a turn
+/// in flight is the TUI's spinner in the composer's top border, and nothing else paints it
+/// ([#544](#), [#545](#), [#546](#)).
 pub const PI_AGENT: &str = "pi";
 pub const PI_HOME: &str = ".pi/agent";
 
@@ -205,6 +209,84 @@ impl OmpAdapter {
         }
         self.crumb(process)
     }
+
+    /// What the kernel still holds of a process's environment, for the two variables pi's own
+    /// code puts there.
+    ///
+    /// `/proc/<pid>/environ` is the environment as the kernel keeps it, and it moves with the
+    /// process: a variable the running process sets appears in it, and the whole answer is gone
+    /// when the process is. Neither can stale the way a file on disk can, which is the property
+    /// the held descriptor has and nothing pi writes down does ([#542](#)).
+    fn session_env(pid: u32) -> Option<(Option<String>, Option<String>)> {
+        let env = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+        let mut file = None;
+        let mut parent = None;
+        for entry in env.split(|b| *b == 0) {
+            let Ok(text) = std::str::from_utf8(entry) else {
+                continue;
+            };
+            let Some((key, value)) = text.split_once('=') else {
+                continue;
+            };
+            match key {
+                "PI_SESSION_FILE" => file = Some(value.to_string()),
+                "PI_SUBAGENT_PARENT_SESSION" => parent = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        Some((file, parent))
+    }
+
+    /// The session the pane's processes name in their own environment, and the process that
+    /// named it.
+    ///
+    /// **The pipeline, not the name.** The pane's own pi carries the root session's id once the
+    /// subagents extension has run, its tool children carry the session file, and a subagent's
+    /// children carry both — the file that is the subagent's own and the id that is the pane's.
+    /// A process is therefore asked in pipeline order, and the answer it gives is taken by kind
+    /// rather than by which process gave it: the id a child names for its parent is the pane's
+    /// session whatever the child is on, and a session file a child names for itself is the
+    /// pane's session unless the child is a subagent's, in which case it names the parent's id
+    /// too and the id is what is taken ([#543](#)).
+    fn environment<'a>(&self, pipeline: &'a [PaneProcess]) -> Option<(Found, &'a PaneProcess)> {
+        let sessions = self.sessions();
+        let mut parent: Option<(String, &PaneProcess)> = None;
+        for process in pipeline {
+            let Some((file, parent_id)) = Self::session_env(process.pid) else {
+                continue;
+            };
+            if let Some(id) = parent_id {
+                if parent.is_none() {
+                    parent = Some((id, process));
+                }
+                continue;
+            }
+            let Some(file) = file else {
+                continue;
+            };
+            let path = PathBuf::from(file.as_str());
+            if is_session_file(&sessions, &path) {
+                return Some((
+                    Found {
+                        session: session_id(&path)?,
+                        cwd: declared_cwd(&path),
+                        transcript: self.root.contain(&file).ok(),
+                    },
+                    process,
+                ));
+            }
+        }
+        let (id, process) = parent?;
+        let path = self.find_by_id(&id).ok()?;
+        Some((
+            Found {
+                session: id,
+                cwd: declared_cwd(&path),
+                transcript: Some(path),
+            },
+            process,
+        ))
+    }
 }
 
 impl JournalAdapter for OmpAdapter {
@@ -237,7 +319,30 @@ impl JournalAdapter for OmpAdapter {
     /// Both handles are the pane's *own* process, so a pipeline is walked rather than searched:
     /// the first pid in it that is writing an omp session, or that opened one on this tty, is the
     /// harness. A pane herdr can only describe as `bash` is identified exactly by either.
+    ///
+    /// For pi the handle is the environment its processes carry, and the walk is the same shape:
+    /// the first answer in pipeline order is the pane's session, and a hit skips the held and
+    /// crumb walks pi never pays ([#542](#), [#543](#)).
     fn marker(&self, pipeline: &[PaneProcess]) -> Option<SessionMarker> {
+        if self.agent == PI_AGENT {
+            let (found, process) = self.environment(pipeline)?;
+            return Some(SessionMarker {
+                agent: self.agent.clone(),
+                pid: process.pid,
+                session: found.session,
+                cwd: found.cwd,
+                name: None,
+                name_source: None,
+                // Nothing pi writes to disk says what it is doing, and its terminal title carries
+                // no run state either ([#490](#)): the session file grows only when a message
+                // completes, so a tail cannot tell a model that is thinking from one that is
+                // blocked on a person. What the screen says is read where the screen is —
+                // `pi_status`.
+                status: None,
+                transcript: found.transcript,
+                started: process.started,
+            });
+        }
         pipeline.iter().find_map(|process| {
             let found = self.found(process)?;
             Some(SessionMarker {
@@ -317,7 +422,7 @@ impl JournalAdapter for OmpAdapter {
     }
 
     fn screen(&self) -> Option<ScreenReader> {
-        Some(live)
+        Some(if self.agent == PI_AGENT { pi_live } else { live })
     }
 
     fn composer(&self) -> Option<ComposerReader> {
@@ -325,7 +430,15 @@ impl JournalAdapter for OmpAdapter {
     }
 
     fn queued(&self) -> Option<crate::facet::QueuedReader> {
-        Some(queued)
+        Some(if self.agent == PI_AGENT { pi_queued } else { queued })
+    }
+
+    fn status(&self) -> Option<StatusReader> {
+        (self.agent == PI_AGENT).then_some(pi_status)
+    }
+
+    fn sticky(&self) -> bool {
+        self.agent == PI_AGENT
     }
 
     fn attachment(&self, record: &str, index: u32) -> Result<Fetched, JournalError> {
@@ -533,8 +646,125 @@ pub fn title_status(title: &str) -> Option<&'static str> {
     }
 }
 
-/// The ten frames `title-generator.ts` cycles a working title through, at 80 ms.
+/// The ten frames `title-generator.ts` cycles a working title through, at 80 ms. The same ten
+/// frames, on the same 80 ms cadence, are the TUI's loader and what pi's composer border spins
+/// through while a turn is in flight ([#544](#)).
 const SPINNER: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
+/// A row the editor draws for its borders: a run of `─` opening in column zero, at least 12 of
+/// them. Conversation, prompts and cards all sit one column in, so nothing else on a pi screen
+/// opens there — which is what lets the reader find the footer without knowing where it starts.
+fn border_row(line: &str) -> bool {
+    line.starts_with('─') && line.chars().filter(|c| *c == '─').count() >= 12
+}
+
+/// Whether a row carries one of the loader's frames.
+fn has_frame(line: &str) -> bool {
+    line.chars().any(|c| SPINNER.contains(c))
+}
+
+/// What pi's screen says the session is doing, for the pane the screen belongs to.
+///
+/// **The screen is the only state signal pi has.** herdr carries no detection manifest for it,
+/// so a pane reports `idle` through a whole working turn — the defect omp had before its title
+/// ([#485](#)) — and pi, unlike omp, puts no run state in its terminal title either ([#490](#)).
+/// What it does paint is the loader: its ten braille frames in the composer's top border while a
+/// turn is in flight, and in the status line above the border while a retry or a compaction runs.
+/// Idle, the border is a plain run of dashes and no frame is on the screen. Measured live on pi
+/// 0.73.1 in both states: `── ⠹ Working ──…` working, `────…` idle ([#544](#), [#545](#)).
+///
+/// **The read is deliberately vocabulary, not layout.** A border row is a run of `─` opening in
+/// column zero, and the state is a frame wherever it sits between the two borders. A border
+/// glyph or a footer rearrangement the read does not recognise answers `None`, which is the
+/// reader having nothing to say — and the pane degrades to the status herdr gives it rather than
+/// to a guess. A frame the model's own text paints in the footer region answers busy for the
+/// frames it lasts, and the next read takes the answer back.
+pub fn pi_status(screen: &[&str]) -> Option<&'static str> {
+    let bottom = screen.iter().rposition(|line| border_row(line))?;
+    let top = screen[..bottom].iter().rposition(|line| border_row(line))?;
+    let footer = &screen[top.saturating_sub(2)..=bottom];
+    if footer.iter().any(|line| has_frame(line)) {
+        Some("busy")
+    } else {
+        Some("idle")
+    }
+}
+
+/// The message pi is painting, lifted off the top of the footer.
+///
+/// **pi marks nothing.** Like omp, its assistant text is plain prose one column in, wrapped to
+/// the same column, with a blank row between blocks and no glyph on the message itself — so the
+/// read walks up from the composer's top border and stops at the first blank row, the same walk
+/// omp's takes from its composer row ([#496](#)).
+///
+/// The rows between the conversation and the border are pi's own and are skipped rather than
+/// read: the queue it draws there ([`pi_queued`]) and the status line a retry or a compaction
+/// puts there, the latter carrying a spinner frame and so refused as message text.
+///
+/// `clipped` is always true, for the same reason omp's is: with no marker opening a message there
+/// is nothing on the screen that says a block starts where the walk stopped, so the redundancy
+/// check has to be `contains` rather than `starts_with`.
+pub fn pi_live(screen: &[&str]) -> Option<LiveBlock> {
+    let bottom = screen.iter().rposition(|line| border_row(line))?;
+    let top = screen[..bottom].iter().rposition(|line| border_row(line))?;
+    let mut body: Vec<&str> = Vec::new();
+    for line in screen[..top].iter().rev() {
+        if has_frame(line) {
+            continue;
+        }
+        if line.starts_with(" Steering: ") || line.starts_with(" Follow-up: ") || line.starts_with(" ↳") {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if body.is_empty() {
+                continue;
+            }
+            break;
+        }
+        match line.strip_prefix(' ').filter(|rest| !rest.starts_with(' ')) {
+            Some(text) => body.push(text.trim_end()),
+            None => break,
+        }
+    }
+    let text = body
+        .iter()
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    (!text.is_empty()).then_some(LiveBlock { text, clipped: true })
+}
+
+/// The prompts the operator has sent that pi has not started on yet.
+///
+/// **The screen is the only account of one**, for the reason omp's is ([#489](#)): a queued
+/// prompt is not written to the transcript until it is delivered. What pi draws is a `Steering: `
+/// row per prompt it will take mid-turn, a `Follow-up: ` row per one it will take after the turn
+/// ends, and a hint row under the last — all one column in, truncated to the row rather than
+/// wrapped. A prompt too long for a row is cut, so what is published is what the operator can
+/// see rather than a sentence reassembled out of rows pi never drew ([#546](#)).
+pub fn pi_queued(screen: &[&str]) -> Vec<Queued> {
+    let Some(hint) = screen.iter().rposition(|line| line.starts_with(" ↳")) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for line in screen[..hint].iter().rev() {
+        let Some(text) = line
+            .strip_prefix(" Steering: ")
+            .or_else(|| line.strip_prefix(" Follow-up: "))
+        else {
+            break;
+        };
+        found.push(Queued {
+            text: text.trim_end().to_string(),
+            at: None,
+        });
+    }
+    found.reverse();
+    found
+}
 
 /// A session file rather than one of the transcripts it launched: `sessions/<bucket>/<file>.jsonl`
 /// exactly, where a subagent's is `sessions/<bucket>/<session>/<name>.jsonl`.
@@ -877,11 +1107,25 @@ impl OmpParser {
             return;
         };
         // A detached spawn answers its own call with `Spawned agent `x``, and that acknowledgement
-        // is the only place omp publishes the name it generated for an unnamed one.
-        let launched: Vec<Block> = record::spawned(text)
-            .iter()
-            .filter_map(|name| self.mint(name, None, None))
-            .collect();
+        // is the only place omp publishes the name it generated for an unnamed one. The name is
+        // minted from a `task` result only: any other tool result can carry the same sentence as
+        // quoted text, and a card minted from a quote is a card for an agent that was never
+        // spawned. The tool is read before the turn is taken, because minting wants the parser
+        // and the revise wants the store.
+        let task = self
+            .store
+            .position(&target)
+            .and_then(|at| self.store.turns().get(at))
+            .and_then(|turn| turn.tool_block(card))
+            .is_some_and(|block| matches!(block, Block::Tool { name, .. } if name.as_str() == TASK));
+        let launched: Vec<Block> = if task {
+            record::spawned(text)
+                .iter()
+                .filter_map(|name| self.mint(name, None, None))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let Some(turn) = self.store.revise(&target) else {
             return;
         };
@@ -1096,6 +1340,225 @@ mod tests {
                 Path::new("/tmp/claude-1000/-home-dbrain-dev-kampr/22464faf/scratchpad/probe/project")
             ),
             "-tmp-claude-1000--home-dbrain-dev-kampr-22464faf-scratchpad-probe-project"
+        );
+    }
+    const BORDER: &str = "────────────────────────────────────────────────────────────";
+
+    /// A pi screen the way the measured one reads: the conversation one column in, a blank row,
+    /// the queue when there is one, the composer's two borders, and the path and stats under
+    /// them.
+    fn pi_screen(conversation: &[&str], working: bool, queued: &[&str]) -> Vec<String> {
+        let mut screen: Vec<String> = Vec::new();
+        for line in conversation {
+            screen.push(line.to_string());
+        }
+        screen.push(String::new());
+        for prompt in queued {
+            screen.push(format!(" Steering: {prompt}"));
+        }
+        if !queued.is_empty() {
+            screen.push(" ↳ Alt+Up to edit all queued messages".to_string());
+        }
+        if working {
+            screen.push(format!(
+                "── ⠹ Working {}",
+                BORDER.chars().skip(2).collect::<String>()
+            ));
+        } else {
+            screen.push(BORDER.to_string());
+        }
+        screen.push(String::new());
+        screen.push(BORDER.to_string());
+        screen.push("/tmp".to_string());
+        screen.push("↑15k ↓464 8.0%/201k (auto)".to_string());
+        screen
+    }
+
+    fn rows(screen: &[String]) -> Vec<&str> {
+        screen.iter().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn the_frame_between_the_borders_is_pi_s_running_state() {
+        let busy = pi_screen(&[" the lighthouse remains a promise"], true, &[]);
+        assert_eq!(pi_status(&rows(&busy)), Some("busy"));
+        let idle = pi_screen(&[" the lighthouse remains a promise"], false, &[]);
+        assert_eq!(pi_status(&rows(&idle)), Some("idle"));
+        // A retry or a compaction spins above the border rather than in it.
+        let mut compacting = pi_screen(&[" the lighthouse remains a promise"], false, &[]);
+        compacting.insert(
+            compacting.len() - 5,
+            " ⠹ Compacting the conversation…".to_string(),
+        );
+        assert_eq!(pi_status(&rows(&compacting)), Some("busy"));
+        // A screen with no footer for the reader to find is nothing to read, not idle.
+        assert_eq!(pi_status(&["$ ", " some shell output"]), None);
+    }
+
+    #[test]
+    fn the_block_above_the_footer_is_the_message_being_painted() {
+        let screen = pi_screen(
+            &[" the lighthouse remains a", " promise to the sailor"],
+            true,
+            &[],
+        );
+        let block = pi_live(&rows(&screen)).expect("a block");
+        assert_eq!(block.text, "the lighthouse remains a\npromise to the sailor");
+        assert!(block.clipped);
+        // The queue's own rows are status, not message text.
+        let queued = pi_screen(
+            &[" 1. Blue whale"],
+            true,
+            &["THIRD PROMPT: and the color of the sky."],
+        );
+        let block = pi_live(&rows(&queued)).expect("a block");
+        assert_eq!(block.text, "1. Blue whale");
+        assert!(pi_live(&["$ ", " some shell output"]).is_none());
+    }
+
+    #[test]
+    fn the_prompts_above_the_hint_are_the_queue() {
+        let screen = pi_screen(
+            &[" 1. Blue whale"],
+            true,
+            &["THIRD PROMPT: and the color of the sky."],
+        );
+        let queued = pi_queued(&rows(&screen));
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].text, "THIRD PROMPT: and the color of the sky.");
+        let none = pi_screen(&[" 1. Blue whale"], true, &[]);
+        assert!(pi_queued(&rows(&none)).is_empty());
+    }
+
+    /// The pid is visible to procfs at the fork, but the kernel commits the new `envp` only when
+    /// the exec completes, and an `environ` read in between succeeds with zero bytes — 198 of 200
+    /// immediate reads in the measurement, none five milliseconds on. Production scans processes
+    /// that have been running, so it never meets the window; a test that spawns and reads at once
+    /// does, and waits it out the way a scan tick would.
+    fn environ_settled(pid: u32) -> (Option<String>, Option<String>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some((file, parent)) = OmpAdapter::session_env(pid)
+                && (file.is_some() || parent.is_some())
+            {
+                return (file, parent);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child's environ never settled"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn the_variables_a_process_carries_are_the_ones_the_kernel_keeps_of_it() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .env_remove("PI_SESSION_FILE")
+            .env_remove("PI_SUBAGENT_PARENT_SESSION")
+            .env("PI_SESSION_FILE", "/tmp/kampr-env-test/session.jsonl")
+            .env("PI_SUBAGENT_PARENT_SESSION", "the-root-id")
+            .spawn()
+            .expect("sleep");
+        let (file, parent) = environ_settled(child.id());
+        assert_eq!(file.as_deref(), Some("/tmp/kampr-env-test/session.jsonl"));
+        assert_eq!(parent.as_deref(), Some("the-root-id"));
+        child.kill().expect("kill");
+        child.wait().expect("wait");
+    }
+
+    #[test]
+    fn a_pane_is_the_session_its_processes_name_in_their_environment() {
+        let scratch = Scratch::new("env");
+        let adapter = scratch.adapter();
+        let session = scratch.session("2026-01-01T00-00-00Z_env.jsonl");
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .env_remove("PI_SESSION_FILE")
+            .env_remove("PI_SUBAGENT_PARENT_SESSION")
+            .env("PI_SESSION_FILE", session.to_str().expect("utf8"))
+            .spawn()
+            .expect("sleep");
+        let process = PaneProcess {
+            pid: child.id(),
+            ..PaneProcess::default()
+        };
+        let pipeline = [process];
+        // The pipeline answers once the exec has committed its environment.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let (found, who) = loop {
+            if let Some(answer) = adapter.environment(&pipeline) {
+                break answer;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the environment never named the session"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        assert_eq!(who.pid, child.id());
+        assert_eq!(found.session, "env");
+        assert_eq!(
+            found.transcript.as_deref(),
+            Some(session.canonicalize().expect("canonical").as_path())
+        );
+        child.kill().expect("kill");
+        child.wait().expect("wait");
+    }
+
+    const USER_LINE: &str = r#"{"type":"message","id":"u1","parentId":null,"timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"show me the log"}],"timestamp":1}}"#;
+    const QUOTED_RESULT: &str = r#"{"type":"message","id":"t1","parentId":"a1","timestamp":"2026-01-01T00:00:03Z","message":{"role":"toolResult","toolCallId":"c1","content":[{"type":"text","text":"the log says: Spawned agent `FakeAgent` (job `FakeAgent`)"}],"isError":false,"details":{}}}"#;
+    const TASK_RESULT: &str = r#"{"type":"message","id":"t1","parentId":"a1","timestamp":"2026-01-01T00:00:03Z","message":{"role":"toolResult","toolCallId":"c1","content":[{"type":"text","text":"Spawned agent `RealAgent` (job `RealAgent`). Its result auto-delivers on yield."}],"isError":false,"details":{}}}"#;
+
+    fn a_call(tool: &str) -> String {
+        format!(
+            r#"{{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-01-01T00:00:02Z","message":{{"role":"assistant","content":[{{"type":"toolCall","id":"c1","name":"{tool}","arguments":{{"command":"cat log"}}}}],"timestamp":2,"stopReason":"toolUse"}}}}"#
+        )
+    }
+
+    fn parser_with_filed(scratch: &Scratch, session: &Path) -> OmpParser {
+        OmpParser {
+            filed: Some(Filed {
+                agent: "omp".into(),
+                root: TranscriptRoot::new(&scratch.0).expect("root"),
+                transcript: session.to_path_buf(),
+            }),
+            ..OmpParser::default()
+        }
+    }
+
+    #[test]
+    fn a_spawn_quoted_in_a_result_other_than_task_mints_no_card() {
+        let scratch = Scratch::new("quoted");
+        let session = scratch.session("2026-01-01T00-00-00Z_quoted.jsonl");
+        let mut parser = parser_with_filed(&scratch, &session);
+        parser.push_line(USER_LINE, 0);
+        parser.push_line(&a_call("bash"), 100);
+        parser.push_line(QUOTED_RESULT, 200);
+        let turns = parser.store_mut().drain_changed();
+        assert!(
+            turns
+                .iter()
+                .all(|t| t.blocks.iter().all(|b| !matches!(b, Block::Sub { .. }))),
+            "a quote is not a spawn: {turns:?}"
+        );
+    }
+
+    #[test]
+    fn a_spawn_named_by_its_task_result_still_mints_its_card() {
+        let scratch = Scratch::new("task");
+        let session = scratch.session("2026-01-01T00-00-00Z_task.jsonl");
+        let mut parser = parser_with_filed(&scratch, &session);
+        parser.push_line(USER_LINE, 0);
+        parser.push_line(&a_call("task"), 100);
+        parser.push_line(TASK_RESULT, 200);
+        let turns = parser.store_mut().drain_changed();
+        assert!(
+            turns
+                .iter()
+                .any(|t| t.blocks.iter().any(|b| matches!(b, Block::Sub { .. }))),
+            "the task's own acknowledgement still mints: {turns:?}"
         );
     }
 }

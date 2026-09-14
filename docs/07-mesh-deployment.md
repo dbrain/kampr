@@ -297,7 +297,28 @@ so for browsers, and the same reasoning applies here.
 
 - **TLS terminates at the proxy.** The proxy → node hop is plaintext HTTP. That is fine when they
   share a host and loopback; it is not fine across a network. If the proxy is elsewhere, give the
-  node its own certificate (`[server.tls]`) and point the proxy at `https://`.
+  node its own certificate (`[server.tls]`) and point the proxy at `https://` — **or carry the
+  loopback hop inside an ssh tunnel**, which keeps both ends on `127.0.0.1` and needs no second
+  certificate. A reverse forward started *from the node* is the arrangement that survives the proxy
+  rebooting:
+
+  ```ini
+  [Service]
+  ExecStart=/usr/bin/ssh -N -R 127.0.0.1:8790:127.0.0.1:8790 \
+      -o BatchMode=yes -o ExitOnForwardFailure=yes \
+      -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+      -o StrictHostKeyChecking=yes you@proxy-host
+  Restart=always
+  RestartSec=10
+  ```
+
+  `ExitOnForwardFailure` is what makes the retry honest: without it ssh stays connected having
+  silently failed to bind the remote port, and the proxy 502s at a tunnel that looks up. `--bind
+  127.0.0.1` and `trust_proxy = true` stay exactly as §1 describes, because the far end of the
+  tunnel *is* loopback on the node's host. Note that `kampr doctor`'s `tls` check will say "only a
+  proxy on this machine can reach it", which is true of the tunnel's mouth rather than of the
+  proxy — and its `origin` check covers the whole chain, tunnel included, because it fetches
+  `{origin}/api/node` and that request goes out to the proxy and back.
 - **Mesh authentication is not encryption.** The ed25519 handshake proves *who*, and TLS provides
   *secrecy*. On a link where you do not trust the transport, do not rely on the handshake to hide
   anything.

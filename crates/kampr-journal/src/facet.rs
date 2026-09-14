@@ -27,6 +27,11 @@ pub struct Facets {
     pub compactions: Vec<Compaction>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub running: Vec<Running>,
+    /// The run state the pane's screen shows, for the harnesses whose screen is the only state
+    /// signal they have. `busy` and `idle` in the herd's own words, and absent for every other
+    /// harness, whose status the node gets from somewhere else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// A piece of work the harness launched and has not been told is over — a subagent, or a command
@@ -219,7 +224,7 @@ impl FacetFeed {
     /// call answers `None` for a harness with nothing to say, which is the same message as the
     /// `{}` it would otherwise have sent.
     pub fn moved(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Option<Facets> {
-        self.moved_with(transcript, marker, None)
+        self.moved_with(transcript, marker, None, None)
     }
 
     /// The same, with a queue read off the pane's screen rather than out of the transcript.
@@ -234,11 +239,13 @@ impl FacetFeed {
         transcript: &Path,
         marker: Option<&SessionMarker>,
         queued: Option<Vec<Queued>>,
+        status: Option<&str>,
     ) -> Option<Facets> {
         let mut next = self.fold.facets(transcript, marker);
         if let Some(queued) = queued {
             next.queued = queued;
         }
+        next.status = status.map(str::to_string);
         if next == self.last {
             return None;
         }

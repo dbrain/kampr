@@ -351,6 +351,9 @@ data class Turn(
 data class Facets(
     val queued: List<Queued> = emptyList(),
     val running: List<Running> = emptyList(),
+    // The run state the pane's screen shows, for the harnesses whose screen is the only state
+    // signal they have. Absent for every other harness, whose status the node gets from the herd.
+    val status: String? = null,
 )
 
 // A piece of work the harness launched and has not been told is over: a subagent, or a command it

@@ -24,6 +24,14 @@ pub struct LiveBlock {
 /// visible grid and nothing carries over.
 pub type ScreenReader = fn(&[&str]) -> Option<LiveBlock>;
 
+/// Reads the run state a harness paints on its screen, for the harnesses whose screen is the
+/// only state signal they have. A bare fn for the same reason [`ScreenReader`] is one.
+///
+/// The words are the herd's own, so the answer can be folded into a pane's status without a
+/// translation: `busy` is a turn in flight, `idle` is the screen saying none is, and `None` is
+/// a screen the reader cannot read as either.
+pub type StatusReader = fn(&[&str]) -> Option<&'static str>;
+
 /// How a harness lays its screen out. Both harnesses probed so far agree on the shape — a marker
 /// glyph in column zero opens a block and its wrapped remainder is indented — and disagree only
 /// on the glyphs and on which head lines are the harness talking about itself.
