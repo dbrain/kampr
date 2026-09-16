@@ -161,6 +161,23 @@ class TerminalViewState {
         following = true
     }
 
+    // The one-shot half of the same bargain, for the request the band cannot answer: the answer
+    // to what the operator typed can sit *below* the caret (a selector whose search line takes
+    // the caret and whose options sit under it), and a band that keeps the caret on screen lets
+    // the surface rest where those options are off the bottom of the screen. Armed by a send,
+    // spent by the surface landing on the floor, and spent again the moment the floor rises back
+    // over the surface, so a request whose answer closed is owed nothing further.
+    var reanchor by mutableStateOf(false)
+        private set
+
+    fun reanchor() {
+        reanchor = true
+    }
+
+    fun clearReanchor() {
+        reanchor = false
+    }
+
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
     // scrollY is measured from that bottom — so standing still means moving with it. A reader
     // pinned to the bottom is pinned deliberately and must not be carried off it.

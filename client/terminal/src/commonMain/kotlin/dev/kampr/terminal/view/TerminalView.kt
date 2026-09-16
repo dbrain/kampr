@@ -569,7 +569,23 @@ fun TerminalView(
         // off, so it is the one surface the band does not govern.
         LaunchedEffect(band, review.active, view.following) {
             if (review.active) return@LaunchedEffect
-            if (view.following) view.scrollY = view.scrollY.coerceIn(band.floor, band.ceiling)
+            if (view.following) {
+                // A byte the operator sent is a request to be shown what it opened, and the
+                // answer to that request can be *below* the caret: pi's /model and /thinking
+                // replace the composer with a selector whose search line takes the caret and
+                // whose options sit under it, measured on the desk at
+                // research/probe/pi-selector.py. The band, which keeps the caret on screen,
+                // lets the surface rest where the options are off the bottom of the screen, and
+                // the operator read it as the bottom of the screen locked to the text entry
+                // line. A send therefore re-arms the floor once: the surface goes back to it
+                // when it has dropped, and nowhere else. A pane that repaints by itself sends
+                // nothing, and a surface that is already on the floor is not moved.
+                if (view.reanchor && view.scrollY > band.floor) {
+                    view.scrollY = band.floor
+                    view.clearReanchor()
+                }
+                view.scrollY = view.scrollY.coerceIn(band.floor, band.ceiling)
+            }
         }
 
         // Every byte this client sends the pane, and the two things that owe it an answer. The
@@ -580,6 +596,7 @@ fun TerminalView(
         LaunchedEffect(sink, session) {
             snapshotFlow { sink.sends }.drop(1).collect {
                 view.followAgain()
+                view.reanchor()
                 if (session.handover is Handover.Sent) session.handover = Handover.Idle
             }
         }
