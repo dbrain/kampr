@@ -65,6 +65,9 @@ impl Fold {
         };
         match record {
             Record::Title(slot) | Record::TitleChange(slot) => self.retitle(slot.title, slot.source),
+            // pi's `session_info` carries no source: the name is one the session set for itself,
+            // which is what `generated` means — the operator typed it, not the model.
+            Record::SessionInfo { name } => self.retitle(Some(name), None),
             Record::Session(header) => self.retitle(header.title, header.title_source),
             Record::ModeChange(change) => self.mode.mode = change.mode.or(self.mode.mode.take()),
             Record::Compaction(compacted) => self.accumulated.compactions.push(Compaction {

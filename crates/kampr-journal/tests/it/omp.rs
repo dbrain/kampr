@@ -517,3 +517,38 @@ fn a_rewind_retires_the_turns_it_took_back() {
         md_texts(&after)
     );
 }
+
+/// **The only title a pi session has is the one `setSessionName` appends as a `session_info`
+/// record** — the header pi writes has no title slot ([#547](#)), and the omp adapter's shared
+/// record grammar had no arm for it, so a pane named on the desk read `None` here and the pane
+/// name fell through to the workspace and the directory.
+#[test]
+fn the_name_a_pi_session_set_for_itself_is_published() {
+    let scratch = scratch_dir("pi-title");
+    let path = scratch.join("2026-07-21T17-31-13-789Z_019f3371-8a4e-7e61-b7a8-6f3163768412.jsonl");
+    let header = r#"{"type":"session","id":"019f3371-8a4e-7e61-b7a8-6f3163768412","timestamp":"2026-07-21T17:31:13.789Z","cwd":"/tmp/pi-title-test"}"#;
+    let messages = [
+        r#"{"type":"message","id":"019f847f-0000-7000-8000-000000000001","parentId":null,"timestamp":"2026-07-21T17:31:30.000Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}]}}"#,
+        r#"{"type":"message","id":"019f847f-0000-7000-8000-000000000002","parentId":"019f847f-0000-7000-8000-000000000001","timestamp":"2026-07-21T17:31:35.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi"}]}}"#,
+    ];
+    let mut fold = adapter().fold().expect("a fold");
+    std::fs::write(&path, format!("{header}\n{}\n", messages.join("\n"))).expect("write");
+    assert_eq!(fold.facets(&path, None).title, None, "nothing has named it yet");
+
+    // The rename lands while the fold is already open, which is the shape a watched pane has.
+    std::fs::write(
+        &path,
+        format!(
+            "{header}\n{}\n{}\n",
+            messages.join("\n"),
+            r#"{"type":"session_info","id":"d939788e","parentId":"8db683fb","timestamp":"2026-09-16T13:35:18.560Z","name":"A pi session with a name"}"#
+        ),
+    )
+    .expect("write");
+    let title = fold
+        .facets(&path, None)
+        .title
+        .expect("the name the session set for itself");
+    assert_eq!(title.text, "A pi session with a name");
+    assert_eq!(title.source, kampr_journal::TitleSource::Generated);
+}

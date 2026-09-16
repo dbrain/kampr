@@ -16,6 +16,14 @@ pub enum Record {
     /// and it is the only one a fold reading appended bytes ever sees.
     TitleChange(Slot),
     Session(Header),
+    /// The name pi's `setSessionName` (the `/name` command and anything an extension calls)
+    /// appends to the file, and the only title a pi session has: the header pi writes has no title
+    /// slot ([#547](#)), and omp never writes one — its titles come from the slot on line 1 and
+    /// `title_change`. The record carries an id and a parent like a message does, but it is not a
+    /// message: it names the file, not a turn, so the conversation tree grows without it.
+    SessionInfo {
+        name: String,
+    },
     Message(Entry),
     CustomMessage(Notice),
     Compaction(Compacted),
