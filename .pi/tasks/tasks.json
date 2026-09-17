@@ -5,17 +5,17 @@
     {
       "id": "1",
       "title": "pi pane: stop the cwd latch-on in Registry::locate",
-      "status": "failed",
+      "status": "in_progress",
       "agent": "worker",
       "deps": [],
       "subtasks": [],
-      "runId": null,
+      "runId": "f2076975-8241-442c-bca2-5f5d45c147da",
       "worktree": false,
       "review": true,
       "reviewPending": false,
       "budget": null,
       "outcomeRef": "1.md#outcome",
-      "updatedAt": 1789636945985
+      "updatedAt": 1789636958919
     },
     {
       "id": "2",
