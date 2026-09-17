@@ -144,6 +144,19 @@ the build, so a broken signature or a lost asset is visible without a second com
 The AAB comes free from AGP and is verified the same way, but kobup distributes APKs — the AAB is
 only useful if Kampr ever goes to a store.
 
+The signed APK also goes on the tag's GitHub release, as `kampr-v<version>-android.apk`. The
+release workflow builds and signs the node binaries, but it cannot build the APK: the release
+signing key lives on the release machine, not in CI, so the APK is built here (`make
+android-release`) and uploaded by hand after the tag's publish job has created the release:
+
+```bash
+gh release upload v<version> \
+  client/androidApp/build/outputs/apk/release/androidApp-release.apk \
+  --name kampr-v<version>-android.apk
+```
+
+Every release since the first carries it; a release without the APK is an incomplete release.
+
 ### Tests
 
 `client/androidApp/src/androidTest` holds the device-side tests. One opens every `composeResources`
