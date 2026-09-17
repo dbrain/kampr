@@ -345,7 +345,9 @@ impl Registry {
     /// 3. The working directory, bounded by when that process started — never the directory
     ///    alone, because every run in a directory leaves a transcript and the newest of them
     ///    belongs to whoever ran last, not to this pane. Skipped entirely where the host has
-    ///    looked into the pane and found no harness at all.
+    ///    looked into the pane and found no harness at all, and for a sticky harness, whose
+    ///    process names nothing between tools and whose directory is then somebody else's
+    ///    (#542).
     pub fn locate(
         &self,
         pane_agent: Option<&str>,
@@ -374,7 +376,9 @@ impl Registry {
                 Err(_) => {}
             }
         }
-        if !harness.may_search() {
+        // A sticky harness names its session only while a tool is running; between tools the
+        // directory holds only somebody else's, so the cwd handle is refused (#542).
+        if !harness.may_search() || adapter.sticky() {
             return Ok(None);
         }
         let since = process.and_then(|p| p.started.at());

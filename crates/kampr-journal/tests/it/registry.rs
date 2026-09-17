@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use crate::common::*;
-use kampr_journal::{ClaudeAdapter, CodexAdapter, Harness, Registry, SessionRef, TranscriptRoot};
-use std::path::Path;
+use kampr_journal::{
+    ClaudeAdapter, CodexAdapter, Harness, OmpAdapter, PaneProcess, Registry, SessionRef, TranscriptRoot,
+};
+use std::path::{Path, PathBuf};
 
 fn registry() -> Registry {
     let mut registry = Registry::new();
@@ -245,4 +247,107 @@ fn a_harness_that_publishes_no_marker_claims_none_of_a_panes_processes() {
         registry().marker(&pipeline).is_none(),
         "this test's own pid is on no harness session"
     );
+}
+
+const FOREIGN_SESSION: &str = "9f1c0b2e-0000-4000-8000-0000000000f0";
+const OWN_SESSION: &str = "9f1c0b2e-0000-4000-8000-0000000000f1";
+
+/// A sessions root holding one transcript that declares `cwd`, stamped at the moment of the call
+/// so it reads as actively being written after this test's process started.
+fn lively_cwd(tag: &str, session: &str) -> (ScratchDir, PathBuf, PathBuf) {
+    let dir = scratch_dir(tag);
+    let cwd = dir.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let root = dir.join("root");
+    let bucket = root.join("sessions").join("--lively--");
+    std::fs::create_dir_all(&bucket).unwrap();
+    let transcript = bucket.join(format!("1750000000000_{session}.jsonl"));
+    let now = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": session,
+        "timestamp": now,
+        "cwd": cwd.to_string_lossy(),
+    });
+    std::fs::write(&transcript, format!("{header}\n")).unwrap();
+    (dir, cwd, transcript)
+}
+
+fn pi_registry(root: &Path) -> Registry {
+    let mut registry = Registry::new();
+    registry.register(Arc::new(OmpAdapter::named(
+        kampr_journal::omp::PI_AGENT,
+        TranscriptRoot::new(root).unwrap(),
+    )));
+    registry
+}
+
+/// pi names its session only from the environment its tools carry (#542), so a fresh pi pane
+/// names nothing at all while a neighbour in the same directory is mid-conversation — and the
+/// directory must not answer for it.
+#[test]
+fn a_fresh_pi_pane_serves_nothing_while_a_neighbour_is_lively_in_its_cwd() {
+    let process = PaneProcess::look_up(std::process::id());
+    let (dir, cwd, _transcript) = lively_cwd("fresh-pi", FOREIGN_SESSION);
+    let registry = pi_registry(&dir.join("root"));
+    assert!(
+        registry
+            .locate(Some("pi"), None, Some(&cwd), &Harness::Running(process))
+            .unwrap()
+            .is_none(),
+        "the directory holds only the neighbour's transcript"
+    );
+}
+
+/// The environment handle is what reaches `locate` for a pi pane: the session the pane's own
+/// processes name, announced. It must win over a lively cwd, and keeping the cwd out of a pi
+/// pane's answer must not take it with it.
+#[test]
+fn a_pi_pane_serves_the_session_its_processes_name_despite_a_lively_cwd() {
+    let process = PaneProcess::look_up(std::process::id());
+    let (dir, cwd, _foreign) = lively_cwd("own-pi", FOREIGN_SESSION);
+    let root = dir.join("root");
+    let own = root
+        .join("sessions")
+        .join("--own--")
+        .join(format!("1750000000000_{OWN_SESSION}.jsonl"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    let now = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": OWN_SESSION,
+        "timestamp": now,
+        "cwd": "/home/u/elsewhere",
+    });
+    std::fs::write(&own, format!("{header}\n")).unwrap();
+
+    let registry = pi_registry(&root);
+    let session = SessionRef::id("pi", OWN_SESSION);
+    let found = registry
+        .locate(Some("pi"), Some(&session), Some(&cwd), &Harness::Running(process))
+        .unwrap()
+        .expect("the pane's own session resolves");
+    assert_eq!(found, own);
+}
+
+/// The cwd handle stays for the harnesses whose process names its session on every tick: omp is
+/// not sticky, and a lively cwd is exactly what it resolves from.
+#[test]
+fn a_non_sticky_pane_still_resolves_from_a_lively_cwd() {
+    let process = PaneProcess::look_up(std::process::id());
+    let (dir, cwd, foreign) = lively_cwd("non-sticky", FOREIGN_SESSION);
+    let root = dir.join("root");
+    let mut registry = Registry::new();
+    registry.register(Arc::new(OmpAdapter::new(TranscriptRoot::new(&root).unwrap())));
+    let found = registry
+        .locate(Some("omp"), None, Some(&cwd), &Harness::Running(process))
+        .unwrap()
+        .expect("omp is not sticky, so the cwd answers");
+    assert_eq!(found, foreign);
 }
