@@ -1,0 +1,34 @@
+{
+  "goal": "Fix two TUI defects: pi panes latching onto a neighbour's session conversation/title, and scrollback not locking while the user scrolls up",
+  "nextId": 3,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "pi pane: stop the cwd latch-on in Registry::locate",
+      "status": "pending",
+      "agent": "worker",
+      "deps": [],
+      "subtasks": [],
+      "runId": null,
+      "worktree": false,
+      "review": true,
+      "budget": null,
+      "outcomeRef": null,
+      "updatedAt": 1789634901621
+    },
+    {
+      "id": "2",
+      "title": "terminal view: pin the viewport while scrolled up",
+      "status": "pending",
+      "agent": "worker",
+      "deps": [],
+      "subtasks": [],
+      "runId": null,
+      "worktree": false,
+      "review": true,
+      "budget": null,
+      "outcomeRef": null,
+      "updatedAt": 1789634901621
+    }
+  ]
+}
