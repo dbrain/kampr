@@ -1003,3 +1003,141 @@ async fn the_fit_ladders_explanation_is_raised_when_it_climbs_and_does_not_camp_
         quiet.lines().next_back().unwrap_or_default()
     );
 }
+
+/// A ring of `rows` history lines, each naming its own index, above the pane's live grid.
+fn history(pane: &str, rows: u16) -> Value {
+    json!({
+        "t": "scrollback", "pane": pane,
+        "rows": (0..rows).map(|r| json!({ "row": r, "runs": [{ "s": 0, "x": format!("hist{r}") }] }))
+            .collect::<Vec<_>>(),
+        "from_top": 0, "total_rows": rows, "complete": true, "capped": false, "era": 0
+    })
+}
+
+/// The runtime's own loop: every frame the node says goes to the app, and the loop stops at the
+/// one it was waiting for.
+async fn absorb_until(
+    app: &mut App,
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    want: impl Fn(&Event) -> bool,
+) {
+    for _ in 0..64 {
+        let event = tokio::time::timeout(BEAT, events.recv())
+            .await
+            .expect("no event arrived")
+            .expect("the event stream ended");
+        app.absorb(&event);
+        if want(&event) {
+            return;
+        }
+    }
+    panic!("the event never arrived");
+}
+
+#[tokio::test]
+async fn a_pane_that_grows_while_scrolled_up_keeps_the_row_under_the_eye_fixed() {
+    // Scrolling up into scrollback and holding, the window below the viewport used to keep
+    // streaming: the surface grew, and a scroll measured from the tail moved with it, so the
+    // anchored row drifted as the tail advanced.
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    conn.send(numbered("01JNODE/w1:p1", 10));
+    absorb_until(&mut app, &mut events, |e| matches!(e, Event::Grid { .. })).await;
+    conn.send(history("01JNODE/w1:p1", 20));
+    absorb_until(&mut app, &mut events, |e| matches!(e, Event::Scrollback { .. })).await;
+
+    // At the tail, the pane's last row sits on the bottom row of the pane.
+    let tail = painted(&mut app, 60, 12);
+    assert!(
+        tail.lines().nth(11).is_some_and(|l| l.starts_with("row9")),
+        "{tail}"
+    );
+
+    // One page up: the anchored rows are the ones the window sits on. The bottom row is the
+    // borrowed status line while a scroll is held, so the anchor is read from the window itself.
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    let held = painted(&mut app, 60, 12);
+    assert!(
+        held.lines().nth(1).is_some_and(|l| l.starts_with("hist10")),
+        "{held}"
+    );
+    assert!(
+        held.lines().nth(10).is_some_and(|l| l.starts_with("hist19")),
+        "{held}"
+    );
+
+    // Four more rows land at the tail. The window must not move.
+    conn.send(numbered("01JNODE/w1:p1", 14));
+    absorb_until(&mut app, &mut events, |e| matches!(e, Event::Grid { .. })).await;
+    let grown = painted(&mut app, 60, 12);
+    assert!(
+        grown.lines().nth(1).is_some_and(|l| l.starts_with("hist10")),
+        "the anchored row drifted as the tail advanced:\n{grown}"
+    );
+    assert!(
+        grown.lines().nth(10).is_some_and(|l| l.starts_with("hist19")),
+        "the window below the viewport kept streaming:\n{grown}"
+    );
+
+    // Scrolling down pages the rest of the surface, and the tail is reachable.
+    for _ in 0..2 {
+        app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    }
+    let down = painted(&mut app, 60, 12);
+    assert!(
+        down.lines().nth(11).is_some_and(|l| l.starts_with("row13")),
+        "the tail is where the window ends:\n{down}"
+    );
+
+    // At the tail, following resumes: a pane that grows puts its new last row on the bottom.
+    conn.send(numbered("01JNODE/w1:p1", 18));
+    absorb_until(&mut app, &mut events, |e| matches!(e, Event::Grid { .. })).await;
+    let following = painted(&mut app, 60, 12);
+    assert!(
+        following.lines().nth(11).is_some_and(|l| l.starts_with("row17")),
+        "the tail is back where the pane's last row is:\n{following}"
+    );
+}
+
+#[tokio::test]
+async fn a_fresh_pane_that_grows_keeps_following_the_tail() {
+    // The pin is for a scroll that is held; a pane nobody scrolled never leaves the tail.
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    conn.send(numbered("01JNODE/w1:p1", 10));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let tail = painted(&mut app, 60, 12);
+    assert!(
+        tail.lines().nth(11).is_some_and(|l| l.starts_with("row9")),
+        "{tail}"
+    );
+
+    conn.send(numbered("01JNODE/w1:p1", 14));
+    until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+    let grown = painted(&mut app, 60, 12);
+    assert!(
+        grown.lines().nth(11).is_some_and(|l| l.starts_with("row13")),
+        "the unscrolled pane follows the tail:\n{grown}"
+    );
+}

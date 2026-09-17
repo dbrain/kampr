@@ -420,11 +420,21 @@ impl App {
             rows: geometry.1,
         };
         let ring = self.rings.get(pane).map(Vec::as_slice).unwrap_or_default();
+        let history = ring.len().min(u16::MAX as usize) as u16;
+        let total = history.saturating_add(need.rows);
+        let mut scroll = self.scrolls.get(pane).copied().unwrap_or_default();
+        if scroll > 0 {
+            let prev = self.totals.get(pane).copied().unwrap_or(total);
+            if total > prev {
+                scroll = scroll.saturating_add(total - prev);
+            }
+        }
+        self.totals.insert(pane.to_string(), total);
         let placement = fit::place(
             inner,
             need,
-            ring.len().min(u16::MAX as usize) as u16,
-            self.scrolls.get(pane).copied().unwrap_or_default(),
+            history,
+            scroll,
             self.pans.get(pane).copied().unwrap_or_default(),
         );
         self.pans.insert(pane.to_string(), placement.pan);

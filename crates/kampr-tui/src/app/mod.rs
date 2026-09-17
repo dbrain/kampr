@@ -129,6 +129,10 @@ pub struct App {
     last: Option<String>,
     pans: HashMap<String, fit::Pan>,
     scrolls: HashMap<String, u16>,
+    /// The surface height (ring + live grid) as each pane last drew. A scroll held above the
+    /// tail is an anchor on a row, and the anchor outlives the surface only if the growth of the
+    /// tail is added to the scroll, because a scroll measured from the tail moves with it.
+    totals: HashMap<String, u16>,
     /// The ring, decoded once per `scrollback` message rather than once per frame. Text shaping
     /// is the whole cost of a frame and an allocation per frame in the draw path is a
     /// regression however much cleaner it reads.
@@ -206,6 +210,7 @@ impl App {
             last: None,
             pans: HashMap::new(),
             scrolls: HashMap::new(),
+            totals: HashMap::new(),
             rings: HashMap::new(),
             views: HashMap::new(),
             sidebar_open: true,
