@@ -20,17 +20,17 @@
     {
       "id": "2",
       "title": "terminal view: pin the viewport while scrolled up",
-      "status": "in_progress",
+      "status": "failed",
       "agent": "worker",
       "deps": [],
       "subtasks": [],
-      "runId": "c9d8322b-8a12-407c-ba37-814ea1a720dc",
+      "runId": null,
       "worktree": false,
       "review": true,
       "reviewPending": false,
       "budget": null,
-      "outcomeRef": null,
-      "updatedAt": 1789634907621
+      "outcomeRef": "2.md#outcome",
+      "updatedAt": 1789636707671
     }
   ]
 }
