@@ -7,6 +7,7 @@ use crate::attach::{Fetched, Origin};
 use crate::composer::{ComposerReader, ListeningReader};
 use crate::error::JournalError;
 use crate::facet::{FacetFeed, FacetFold, Facets};
+use crate::ledger::Ledger;
 use crate::live::{ScreenReader, StatusReader};
 use crate::marker::SessionMarker;
 use crate::process::{Harness, PaneProcess};
@@ -186,14 +187,32 @@ pub trait JournalAdapter: Send + Sync {
     }
 }
 
-#[derive(Default)]
 pub struct Registry {
     adapters: HashMap<String, Arc<dyn JournalAdapter>>,
+    ledger: Arc<Ledger>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            adapters: HashMap::new(),
+            ledger: Ledger::ephemeral(),
+        }
+    }
 }
 
 impl Registry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The persistent pane→session record a node loads from its state directory; without it the
+    /// registry keeps its records in memory only, which is what a test wants.
+    pub fn with_ledger(ledger: Arc<Ledger>) -> Self {
+        Self {
+            ledger,
+            ..Self::default()
+        }
     }
 
     pub fn register(&mut self, adapter: Arc<dyn JournalAdapter>) {
@@ -313,6 +332,7 @@ impl Registry {
     /// adapter for the harness, or nothing on disk that any handle resolves to.
     pub fn open(
         &self,
+        pane: &str,
         pane_agent: Option<&str>,
         session: Option<&SessionRef>,
         cwd: Option<&Path>,
@@ -321,7 +341,7 @@ impl Registry {
         let Some(adapter) = pane_agent.and_then(|agent| self.adapters.get(agent)) else {
             return Ok(None);
         };
-        let Some(path) = self.locate(pane_agent, session, cwd, harness)? else {
+        let Some(path) = self.locate(pane, pane_agent, session, cwd, harness)? else {
             return Ok(None);
         };
         Ok(Some(adapter.open_path(path)))
@@ -331,18 +351,25 @@ impl Registry {
     /// `has_conversation` is answered from: the file either resolves or it does not, and nothing
     /// short of looking can tell the difference.
     ///
-    /// Three handles, strongest first, and **nothing** when none of them lands:
+    /// Four handles, strongest first, and **nothing** when none of them lands:
     ///
-    /// 1. The session the pane announced, when it agrees with the pane's own harness. Herdr keeps
-    ///    reporting the last session a pane announced (probe #38), so one whose `agent` disagrees
-    ///    is stale and is dropped rather than followed.
+    /// 1. The session the pane announced, when it agrees with the pane's own harness. Herdr
+    ///    never populates `agent_session` for a detected harness today (probe #75), and a
+    ///    report a node makes of its own is not surfaced either (probe #548), so this rung
+    ///    exists for a herdr that does — and one whose `agent` disagrees is stale and is
+    ///    dropped rather than followed.
     /// 2. The pane's harness **process**, which is what actually identifies a session. Exact
     ///    where the harness publishes the map, and it is the handle that moves the view when an
     ///    agent is quit and a fresh one started in the same pane. A harness that names
     ///    *this pane's* session but has written no transcript yet ends the ladder here
     ///    with nothing: an empty conversation is the answer, and the directory holds only
     ///    somebody else's (#311, #260).
-    /// 3. The working directory, bounded by when that process started — never the directory
+    /// 3. The node's own record of what the pane was last seen on, for a sticky harness whose
+    ///    process names nothing between tools. Guarded by the harness process it was seen with:
+    ///    a changed pid or start is a different agent in the same pane, and the record of the
+    ///    run before it is somebody else's. It is what an idle pane lands on after a node
+    ///    restart, and it is never the directory guessing (#542, #548).
+    /// 4. The working directory, bounded by when that process started — never the directory
     ///    alone, because every run in a directory leaves a transcript and the newest of them
     ///    belongs to whoever ran last, not to this pane. Skipped entirely where the host has
     ///    looked into the pane and found no harness at all, and for a sticky harness, whose
@@ -350,6 +377,7 @@ impl Registry {
     ///    (#542).
     pub fn locate(
         &self,
+        pane: &str,
         pane_agent: Option<&str>,
         session: Option<&SessionRef>,
         cwd: Option<&Path>,
@@ -362,12 +390,16 @@ impl Registry {
             .filter(|s| Some(s.agent.as_str()) == pane_agent)
             .and_then(|s| adapter.locate(s).ok());
         if let Some(path) = announced {
+            self.record_sticky(adapter, pane, pane_agent, cwd, &path, harness);
             return Ok(Some(path));
         }
         let process = harness.process();
         if let Some(p) = process {
             match adapter.locate_by_process(p) {
-                Ok(path) => return Ok(Some(path)),
+                Ok(path) => {
+                    self.record_sticky(adapter, pane, pane_agent, cwd, &path, harness);
+                    return Ok(Some(path));
+                }
                 // The harness named *this pane's* session and it has written nothing yet
                 // (#311). The directory cannot hold a better answer than the one already
                 // in hand, and the newest transcript in it is somebody else's (#260), so
@@ -377,8 +409,17 @@ impl Registry {
             }
         }
         // A sticky harness names its session only while a tool is running; between tools the
-        // directory holds only somebody else's, so the cwd handle is refused (#542).
+        // directory holds only somebody else's, so the cwd handle is refused (#542). What the
+        // pane was last seen on is the node's own record, guarded by the process it was seen
+        // with (#548).
         if !harness.may_search() || adapter.sticky() {
+            if adapter.sticky()
+                && let Some(agent) = pane_agent
+                && let Some(cwd) = cwd
+                && let Some(cwd) = cwd.to_str()
+            {
+                return Ok(self.ledger.lookup(pane, agent, cwd, process));
+            }
             return Ok(None);
         }
         let since = process.and_then(|p| p.started.at());
@@ -386,6 +427,27 @@ impl Registry {
             Some(Ok(path)) => Ok(Some(path)),
             Some(Err(JournalError::NotFound(_))) | None => Ok(None),
             Some(Err(e)) => Err(e),
+        }
+    }
+
+    /// The pane was seen on a session: what the record keeps is the sticky half, where the
+    /// record is the only handle that outlives the tool run that made it.
+    fn record_sticky(
+        &self,
+        adapter: &Arc<dyn JournalAdapter>,
+        pane: &str,
+        agent: Option<&str>,
+        cwd: Option<&Path>,
+        path: &Path,
+        harness: &Harness,
+    ) {
+        if adapter.sticky()
+            && let Some(agent) = agent
+            && let Some(cwd) = cwd
+            && let Some(cwd) = cwd.to_str()
+            && let Some(process) = harness.process()
+        {
+            self.ledger.record(pane, agent, cwd, path, process);
         }
     }
 }

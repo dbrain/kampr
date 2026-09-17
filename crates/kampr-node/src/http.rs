@@ -685,6 +685,7 @@ pub(crate) fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBu
     let identity = crate::convo::identity(&journals, &session.provider, &local);
     journals
         .locate(
+            pane,
             entry.agent.as_deref(),
             identity.announced.as_ref(),
             entry.cwd.as_deref().map(std::path::Path::new),

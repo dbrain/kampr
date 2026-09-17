@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::common::*;
 use kampr_journal::{
-    ClaudeAdapter, CodexAdapter, Harness, OmpAdapter, PaneProcess, Registry, SessionRef, TranscriptRoot,
+    ClaudeAdapter, CodexAdapter, Harness, Ledger, OmpAdapter, PaneProcess, Registry, SessionRef,
+    TranscriptRoot,
 };
 use std::path::{Path, PathBuf};
 
@@ -22,7 +23,7 @@ fn a_shell_pane_has_no_conversation() {
     assert!(!registry().serves(None));
     assert!(
         registry()
-            .locate(None, None, None, &Harness::Unknown)
+            .locate("n/w1:p1", None, None, None, &Harness::Unknown)
             .unwrap()
             .is_none()
     );
@@ -34,7 +35,7 @@ fn a_harness_with_no_adapter_has_no_conversation() {
     assert!(!registry().serves(Some("gemini")));
     assert!(
         registry()
-            .open(Some("gemini"), Some(&session), None, &Harness::Unknown)
+            .open("n/w1:p1", Some("gemini"), Some(&session), None, &Harness::Unknown)
             .unwrap()
             .is_none()
     );
@@ -54,6 +55,7 @@ fn a_pane_conversation_can_never_outrun_the_node_capability() {
     assert!(
         empty
             .locate(
+                "n/w1:p1",
                 Some("claude"),
                 None,
                 Some(Path::new("/home/u/demo")),
@@ -74,6 +76,7 @@ fn a_harness_with_no_transcript_on_disk_resolves_to_nothing() {
     assert!(
         registry
             .locate(
+                "n/w1:p1",
                 Some("claude"),
                 None,
                 Some(Path::new("/home/u/never-used")),
@@ -86,6 +89,7 @@ fn a_harness_with_no_transcript_on_disk_resolves_to_nothing() {
     assert!(
         registry
             .locate(
+                "n/w1:p1",
                 Some("claude"),
                 None,
                 Some(Path::new("/home/u/demo")),
@@ -106,12 +110,13 @@ fn a_stale_session_announcement_falls_back_to_the_working_directory() {
     let registry = registry();
     assert!(
         registry
-            .open(Some("claude"), Some(&stale), None, &Harness::Unknown)
+            .open("n/w1:p1", Some("claude"), Some(&stale), None, &Harness::Unknown)
             .unwrap()
             .is_none()
     );
     let mut journal = registry
         .open(
+            "n/w1:p1",
             Some("claude"),
             Some(&stale),
             Some(Path::new("/home/u/demo")),
@@ -130,14 +135,14 @@ fn a_matching_session_opens_its_transcript() {
     assert!(registry.serves(Some("claude")));
 
     let mut journal = registry
-        .open(Some("claude"), Some(&session), None, &Harness::Unknown)
+        .open("n/w1:p1", Some("claude"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("adapter selected");
     assert_eq!(drain(journal.as_mut()).len(), 5);
 
     let session = SessionRef::id("codex", CODEX_SESSION);
     let mut journal = registry
-        .open(Some("codex"), Some(&session), None, &Harness::Unknown)
+        .open("n/w1:p1", Some("codex"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("adapter selected");
     assert_eq!(drain(journal.as_mut()).len(), 5);
@@ -152,7 +157,7 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
     let demo = Path::new("/home/u/demo");
 
     let mut claude = registry
-        .open(Some("claude"), None, Some(demo), &Harness::Unknown)
+        .open("n/w1:p1", Some("claude"), None, Some(demo), &Harness::Unknown)
         .unwrap()
         .expect("claude resolves from cwd");
     assert!(claude.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));
@@ -160,7 +165,7 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
 
     // Two codex rollouts declare this cwd; the newest wins.
     let mut codex = registry
-        .open(Some("codex"), None, Some(demo), &Harness::Unknown)
+        .open("n/w1:p1", Some("codex"), None, Some(demo), &Harness::Unknown)
         .unwrap()
         .expect("codex resolves from cwd");
     assert!(codex.path().to_string_lossy().contains("2026/08/20"));
@@ -169,6 +174,7 @@ fn a_pane_with_no_session_announcement_resolves_from_its_cwd() {
     assert!(
         registry
             .open(
+                "n/w1:p1",
                 Some("claude"),
                 None,
                 Some(Path::new("/home/u/nowhere")),
@@ -188,10 +194,10 @@ fn a_home_registers_every_harness_it_has_a_root_for() {
     std::fs::create_dir(home.join(".gemini")).unwrap();
     std::os::unix::fs::symlink(agy_root(), home.join(".gemini/antigravity-cli")).unwrap();
 
-    let registry = kampr_journal::registry_from_home(&home);
+    let registry = kampr_journal::registry_from_home(&home, Ledger::ephemeral());
     let session = SessionRef::id("claude", CLAUDE_SESSION);
     let journal = registry
-        .open(Some("claude"), Some(&session), None, &Harness::Unknown)
+        .open("n/w1:p1", Some("claude"), Some(&session), None, &Harness::Unknown)
         .unwrap()
         .expect("claude adapter registered from home");
     assert!(journal.path().ends_with(format!("{CLAUDE_SESSION}.jsonl")));
@@ -199,6 +205,7 @@ fn a_home_registers_every_harness_it_has_a_root_for() {
 
     let agy = registry
         .open(
+            "n/w1:p1",
             Some("agy"),
             Some(&SessionRef::id("agy", AGY_SESSION)),
             None,
@@ -216,13 +223,17 @@ fn a_home_registers_every_harness_it_has_a_root_for() {
 fn a_gemini_home_with_no_antigravity_directory_registers_nothing() {
     let home = scratch_dir("gemini-only");
     std::fs::create_dir(home.join(".gemini")).unwrap();
-    assert!(kampr_journal::registry_from_home(&home).get("agy").is_none());
+    assert!(
+        kampr_journal::registry_from_home(&home, Ledger::ephemeral())
+            .get("agy")
+            .is_none()
+    );
 }
 
 #[test]
 fn a_home_with_no_harness_registers_nothing() {
     let home = scratch_dir("bare-home");
-    let registry = kampr_journal::registry_from_home(&home);
+    let registry = kampr_journal::registry_from_home(&home, Ledger::ephemeral());
     assert!(registry.get("claude").is_none());
     assert!(registry.get("codex").is_none());
     assert!(registry.get("agy").is_none());
@@ -295,7 +306,13 @@ fn a_fresh_pi_pane_serves_nothing_while_a_neighbour_is_lively_in_its_cwd() {
     let registry = pi_registry(&dir.join("root"));
     assert!(
         registry
-            .locate(Some("pi"), None, Some(&cwd), &Harness::Running(process))
+            .locate(
+                "n/w1:p1",
+                Some("pi"),
+                None,
+                Some(&cwd),
+                &Harness::Running(process)
+            )
             .unwrap()
             .is_none(),
         "the directory holds only the neighbour's transcript"
@@ -330,7 +347,13 @@ fn a_pi_pane_serves_the_session_its_processes_name_despite_a_lively_cwd() {
     let registry = pi_registry(&root);
     let session = SessionRef::id("pi", OWN_SESSION);
     let found = registry
-        .locate(Some("pi"), Some(&session), Some(&cwd), &Harness::Running(process))
+        .locate(
+            "n/w1:p1",
+            Some("pi"),
+            Some(&session),
+            Some(&cwd),
+            &Harness::Running(process),
+        )
         .unwrap()
         .expect("the pane's own session resolves");
     assert_eq!(found, own);
@@ -346,8 +369,138 @@ fn a_non_sticky_pane_still_resolves_from_a_lively_cwd() {
     let mut registry = Registry::new();
     registry.register(Arc::new(OmpAdapter::new(TranscriptRoot::new(&root).unwrap())));
     let found = registry
-        .locate(Some("omp"), None, Some(&cwd), &Harness::Running(process))
+        .locate(
+            "n/w1:p1",
+            Some("omp"),
+            None,
+            Some(&cwd),
+            &Harness::Running(process),
+        )
         .unwrap()
         .expect("omp is not sticky, so the cwd answers");
     assert_eq!(found, foreign);
+}
+
+/// A node restart loses the in-memory record, not the file: an idle pi pane lands on the session
+/// it was last seen on, and the directory — which the record beats — is not what decides.
+#[test]
+fn an_idle_pi_pane_after_a_node_restart_stays_on_its_last_seen_session() {
+    let (dir, cwd, _foreign) = lively_cwd("restart-pi", FOREIGN_SESSION);
+    let root = dir.join("root");
+    let own = root
+        .join("sessions")
+        .join("--own--")
+        .join(format!("1750000000000_{OWN_SESSION}.jsonl"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": OWN_SESSION,
+        "timestamp": "2025-06-15T00:00:00Z",
+        "cwd": cwd.to_string_lossy(),
+    });
+    std::fs::write(&own, format!("{header}\n")).unwrap();
+    let ledger = dir.join("sessions.json");
+    Ledger::load(&ledger).record(
+        "n/w1:p1",
+        "pi",
+        &cwd.to_string_lossy(),
+        &own,
+        &PaneProcess::look_up(std::process::id()),
+    );
+    let mut registry = Registry::with_ledger(Ledger::load(&ledger));
+    registry.register(Arc::new(OmpAdapter::named(
+        kampr_journal::omp::PI_AGENT,
+        TranscriptRoot::new(&root).unwrap(),
+    )));
+    let found = registry
+        .locate("n/w1:p1", Some("pi"), None, Some(&cwd), &Harness::Unknown)
+        .unwrap()
+        .expect("the record of the last run is the pane's own");
+    assert_eq!(found, own);
+}
+
+/// The record is what keeps a restarted idle pi pane off the neighbour's transcript: the
+/// directory is lively, the record is old, and the record wins.
+#[test]
+fn a_restarted_idle_pi_pane_stays_off_the_neighbours_lively_cwd() {
+    let (dir, cwd, foreign) = lively_cwd("restart-pi-lively", FOREIGN_SESSION);
+    let root = dir.join("root");
+    let own = root
+        .join("sessions")
+        .join("--own--")
+        .join(format!("1750000000000_{OWN_SESSION}.jsonl"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": OWN_SESSION,
+        "timestamp": "2025-06-15T00:00:00Z",
+        "cwd": cwd.to_string_lossy(),
+    });
+    std::fs::write(&own, format!("{header}\n")).unwrap();
+    let ledger = dir.join("sessions.json");
+    Ledger::load(&ledger).record(
+        "n/w1:p1",
+        "pi",
+        &cwd.to_string_lossy(),
+        &own,
+        &PaneProcess::look_up(std::process::id()),
+    );
+    let mut registry = Registry::with_ledger(Ledger::load(&ledger));
+    registry.register(Arc::new(OmpAdapter::named(
+        kampr_journal::omp::PI_AGENT,
+        TranscriptRoot::new(&root).unwrap(),
+    )));
+    let found = registry
+        .locate("n/w1:p1", Some("pi"), None, Some(&cwd), &Harness::Unknown)
+        .unwrap()
+        .expect("the record answers before the directory does");
+    assert_eq!(found, own, "not the neighbour's lively transcript");
+    assert_ne!(found, foreign);
+}
+
+/// A fresh agent in the same pane is a new process, and the record of the run before it is
+/// somebody else's: the guard that kept the record honest must keep refusing it.
+#[test]
+fn a_pi_pane_with_a_new_process_after_a_restart_ignores_the_record() {
+    let (dir, cwd, _foreign) = lively_cwd("restart-pi-new", FOREIGN_SESSION);
+    let root = dir.join("root");
+    let own = root
+        .join("sessions")
+        .join("--own--")
+        .join(format!("1750000000000_{OWN_SESSION}.jsonl"));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    let header = serde_json::json!({
+        "type": "session",
+        "version": 3,
+        "id": OWN_SESSION,
+        "timestamp": "2025-06-15T00:00:00Z",
+        "cwd": cwd.to_string_lossy(),
+    });
+    std::fs::write(&own, format!("{header}\n")).unwrap();
+    let ledger = dir.join("sessions.json");
+    let recorded = PaneProcess {
+        pid: 4242,
+        ..Default::default()
+    };
+    Ledger::load(&ledger).record("n/w1:p1", "pi", &cwd.to_string_lossy(), &own, &recorded);
+    let mut registry = Registry::with_ledger(Ledger::load(&ledger));
+    registry.register(Arc::new(OmpAdapter::named(
+        kampr_journal::omp::PI_AGENT,
+        TranscriptRoot::new(&root).unwrap(),
+    )));
+    assert!(
+        registry
+            .locate(
+                "n/w1:p1",
+                Some("pi"),
+                None,
+                Some(&cwd),
+                &Harness::Running(PaneProcess::look_up(std::process::id()))
+            )
+            .unwrap()
+            .is_none(),
+        "a changed process is a new agent, and the record is the old one's"
+    );
 }

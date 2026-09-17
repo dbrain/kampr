@@ -93,7 +93,7 @@ fn live_process() -> PaneProcess {
 
 fn located(home: &Path, harness: &Harness) -> Option<String> {
     registry(home)
-        .locate(Some("claude"), None, Some(Path::new(CWD)), harness)
+        .locate("n/w1:p1", Some("claude"), None, Some(Path::new(CWD)), harness)
         .unwrap()
         .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
 }
@@ -285,6 +285,7 @@ fn an_announced_session_is_believed_over_the_process_that_contradicts_it() {
 
     let path = registry(&home)
         .locate(
+            "n/w1:p1",
             Some("claude"),
             Some(&announced),
             Some(Path::new(CWD)),
@@ -305,6 +306,7 @@ fn a_process_is_not_a_conversation_on_its_own() {
         assert!(
             registry
                 .locate(
+                    "n/w1:p1",
                     agent,
                     None,
                     Some(Path::new(CWD)),
@@ -390,6 +392,7 @@ fn a_transcript_whose_first_message_is_too_big_to_see_past_is_still_this_directo
     assert_eq!(
         registry(&home)
             .locate(
+                "n/w1:p1",
                 Some("claude"),
                 None,
                 Some(Path::new("/tmp/kident/nowhere")),

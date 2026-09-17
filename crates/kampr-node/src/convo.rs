@@ -255,6 +255,8 @@ fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>, relayed: boo
 pub struct Handle {
     agent: Option<String>,
     cwd: Option<String>,
+    /// The pane this handle is for: the key of the node's own record of what it was last seen on.
+    pane: String,
     identity: Identity,
 }
 
@@ -822,7 +824,12 @@ fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str, look: &Look, lo
         true => look(local),
         false => Identity::default(),
     };
-    Handle { agent, cwd, identity }
+    Handle {
+        agent,
+        cwd,
+        pane: global.to_string(),
+        identity,
+    }
 }
 
 /// Which transcript this pane resolves to *now*, without opening it.
@@ -833,6 +840,7 @@ fn pane_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str, look: &Look, lo
 fn located(journals: &Journals, handle: &Handle) -> Option<PathBuf> {
     journals
         .locate(
+            &handle.pane,
             handle.agent.as_deref(),
             handle.identity.announced.as_ref(),
             handle.cwd.as_deref().map(Path::new),
@@ -845,6 +853,7 @@ fn located(journals: &Journals, handle: &Handle) -> Option<PathBuf> {
 fn resolve(journals: &Journals, state_dir: &Path, handle: &Handle) -> Option<Box<dyn Journal>> {
     let opened = journals
         .open(
+            &handle.pane,
             handle.agent.as_deref(),
             handle.identity.announced.as_ref(),
             handle.cwd.as_deref().map(Path::new),

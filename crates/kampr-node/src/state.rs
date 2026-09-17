@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
 use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{NodeEntry, PaneEntry};
-use kampr_journal::{FacetFold, Harness, Registry as Journals, SessionMarker, SessionRef, Titles};
+use kampr_journal::{FacetFold, Harness, Ledger, Registry as Journals, SessionMarker, SessionRef, Titles};
 use kampr_mesh::{Peers, PeersConfig};
 use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
@@ -95,7 +95,9 @@ impl Node {
         let (herd, _) = watch::channel(Arc::new(HerdModel::default()));
         let (book, _) = watch::channel(0u64);
         let home = config.journal_home();
-        let (journals, _) = watch::channel(Arc::new(kampr_journal::registry_from_home(&home)));
+        let ledger = Ledger::load(state_dir.join("sessions.json"));
+        let (journals, _) =
+            watch::channel(Arc::new(kampr_journal::registry_from_home(&home, ledger.clone())));
         let (available, mut tasks) = crate::update::start(&config, state_dir);
         tasks.extend([
             tokio::spawn(refresh_herd(
@@ -103,6 +105,7 @@ impl Node {
                 peers.clone(),
                 herd.clone(),
                 journals.clone(),
+                ledger,
                 home,
                 available,
             )),
@@ -316,6 +319,7 @@ async fn refresh_herd(
     peers: Arc<Peers>,
     herd: watch::Sender<Arc<HerdModel>>,
     journals: watch::Sender<Arc<Journals>>,
+    ledger: Arc<Ledger>,
     home: PathBuf,
     mut update: watch::Receiver<Option<String>>,
 ) {
@@ -373,7 +377,7 @@ async fn refresh_herd(
             _ = tokio::time::sleep(sweep) => {}
         }
         // A harness installed after the node started should not need a restart to be seen.
-        journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home)));
+        journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home, ledger.clone())));
     }
 }
 
@@ -523,7 +527,7 @@ impl Conversations {
         );
         if announced.is_some() {
             self.sticky.lock().unwrap().insert(
-                pane_key,
+                pane_key.clone(),
                 Sticky {
                     agent: agent.clone(),
                     cwd: cwd.clone(),
@@ -561,6 +565,7 @@ impl Conversations {
         }
         let path = journals
             .locate(
+                &pane_key,
                 info.agent.as_deref(),
                 announced.as_ref(),
                 info.cwd.as_deref().map(Path::new),
@@ -1004,7 +1009,7 @@ mod tests {
         std::fs::create_dir_all(&project).expect("a project");
         let transcript = project.join("3c9e7a10-0000-4000-8000-0000000000f3.jsonl");
         std::fs::write(&transcript, "{\"type\":\"user\",\"uuid\":\"u1\"}\n").expect("a transcript");
-        let journals = kampr_journal::registry_from_home(home.path());
+        let journals = kampr_journal::registry_from_home(home.path(), Ledger::ephemeral());
 
         assert_eq!(
             Names::default().title(
@@ -1046,7 +1051,7 @@ mod tests {
             "{\"type\":\"ai-title\",\"aiTitle\":\"the width inference rewrite\"}\n",
         )
         .expect("a transcript");
-        let journals = kampr_journal::registry_from_home(home.path());
+        let journals = kampr_journal::registry_from_home(home.path(), Ledger::ephemeral());
 
         let names = Names::default();
         let mut live = HashSet::new();

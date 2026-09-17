@@ -8,6 +8,7 @@ pub(crate) mod discover;
 pub mod envelope;
 pub mod error;
 pub mod facet;
+pub mod ledger;
 pub mod live;
 pub mod marker;
 pub mod model;
@@ -36,6 +37,7 @@ pub use error::JournalError;
 pub use facet::{
     Compaction, FacetFeed, FacetFold, Facets, Mode, Queued, QueuedReader, Timing, Title, TitleSource, Titles,
 };
+pub use ledger::Ledger;
 pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, StatusReader, Watch, retired};
 pub use marker::SessionMarker;
 pub use model::{Attachment, Block, CodeRole, Page, Role, ToolState, Turn, TurnKind};
@@ -73,8 +75,8 @@ pub fn title_status(agent: Option<&str>, title: Option<&str>) -> Option<&'static
 
 /// Registers whichever harnesses have a transcript root on this machine. A missing root is not
 /// an error: a node with no Codex installed simply serves no Codex conversations.
-pub fn registry_from_home(home: &Path) -> Registry {
-    let mut registry = Registry::new();
+pub fn registry_from_home(home: &Path, ledger: Arc<Ledger>) -> Registry {
+    let mut registry = Registry::with_ledger(ledger);
     if let Ok(root) = TranscriptRoot::new(home.join(".claude")) {
         registry.register(Arc::new(ClaudeAdapter::new(root)));
     }
