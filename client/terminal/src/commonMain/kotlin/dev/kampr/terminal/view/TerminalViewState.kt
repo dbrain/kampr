@@ -156,9 +156,14 @@ class TerminalViewState {
     // Typing is a request to be shown what you typed, and it is the only way back to the live edge
     // from a viewport a hand has taken: a drag no longer lands on the floor by being clamped there,
     // so nothing else can put a reader back on it exactly. Every byte this client sends the pane
-    // arms it, which is the same bargain the horizontal axis makes in `chaseCursor`.
+    // arms it, which is the same bargain the horizontal axis makes in `chaseCursor` — and the same
+    // bargain on the axis the hand took. A line that runs off the right edge while typing is the
+    // request itself, and a `pannedAway` that survived the last manual scroll is what kept the
+    // surface from answering it: the caret takes the axis back by arriving on screen, and a caret
+    // off screen never does, so a keystroke is what has to say the hand is done owning it.
     fun followAgain() {
         following = true
+        pannedAway = false
     }
 
     // The one-shot half of the same bargain, for the request the band cannot answer: the answer
@@ -253,6 +258,12 @@ class TerminalViewState {
         panX = panX.coerceIn(minPanX, 0f)
         if (wanted == null) pannedAway = false else if (!pannedAway) panX = wanted
     }
+
+    // The desk's double-click, and the two things it has to remember between the two presses:
+    // when the last one landed and where. A second press inside the window and the slop of the
+    // first is the double, and the word under it is what a double-click selects.
+    var lastClickUptime = 0L
+    var lastClickPos: Offset? = null
 
     // Pan and scroll are distances across the surface, not across the viewport, so a change of
     // cell size has to carry them or the viewport lands on a different row than the one being read.

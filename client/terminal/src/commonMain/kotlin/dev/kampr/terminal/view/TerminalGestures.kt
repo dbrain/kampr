@@ -15,8 +15,10 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import dev.kampr.shared.model.CellBuffer
 import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.render.GridPoint
 import dev.kampr.terminal.render.Selection
 import kotlin.math.abs
 
@@ -29,6 +31,7 @@ internal suspend fun PointerInputScope.terminalGestures(
     presets: ZoomPresets,
     paint: PaintRect,
     probe: GridProbe,
+    cells: CellBuffer,
     toPane: PaneScroll? = null,
     onTap: (Offset) -> Unit,
 ) {
@@ -44,15 +47,18 @@ internal suspend fun PointerInputScope.terminalGestures(
         view.velocityY = 0f
 
         if (down.type == PointerType.Mouse) {
-            mouseGesture(down, session, probe, braking, onTap)
+            mouseGesture(down, session, probe, cells, braking, onTap)
             return@awaitEachGesture
         }
 
         val press = awaitStillPress(down)
         val held = press.held
         if (held != null) {
+            // A long press selects the word under the finger, not the single cell it landed on:
+            // the cell is a drag's unit and the word is what a press means to take.
             val anchor = probe.cellAt(held.position)
-            view.selection = Selection(anchor, anchor, view.blockSelect)
+            val (start, end) = wordAt(cells, anchor)
+            view.selection = Selection(GridPoint(anchor.row, start), GridPoint(anchor.row, end), view.blockSelect)
             view.aimOff()
             var event: PointerEvent
             do {
@@ -167,6 +173,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
     down: PointerInputChange,
     session: PaneSession,
     probe: GridProbe,
+    cells: CellBuffer,
     braking: Boolean,
     onTap: (Offset) -> Unit,
 ) {
@@ -185,6 +192,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
                     view.selection = Selection(anchor, anchor, view.blockSelect)
                     view.aimOff()
                     selecting = true
+                    view.lastClickUptime = 0L
                 }
             }
             if (selecting) {
@@ -193,6 +201,44 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
             }
         }
     } while (event.changes.any { it.pressed })
-    if (!selecting && !braking) onTap(down.position)
+    if (!selecting && !braking) click(view, probe, cells, down.position, down.uptimeMillis, onTap)
     session.reclaimKeyboard()
 }
+
+// A press that never travelled is a click, and a click is the tap that puts a selection away and
+// asks for the keyboard — unless it is the second of a double, in which case the word under it is
+// what the press means to take. The window and the slop are the platform's own: a double is a
+// double at whatever speed the desk runs, and a second press a cell away is a new tap, not a
+// double of the first.
+private fun AwaitPointerEventScope.click(
+    view: TerminalViewState,
+    probe: GridProbe,
+    cells: CellBuffer,
+    position: Offset,
+    now: Long,
+    onTap: (Offset) -> Unit,
+) {
+    val last = view.lastClickPos
+    val withinSlop = last != null && {
+        val dx = last.x - position.x
+        val dy = last.y - position.y
+        dx * dx + dy * dy < CLICK_SLOP_SQ
+    }()
+    val isDouble = view.lastClickUptime != 0L &&
+        now - view.lastClickUptime < DOUBLE_CLICK_MS &&
+        withinSlop
+    if (isDouble) {
+        val cell = probe.cellAt(position)
+        val (start, end) = wordAt(cells, cell)
+        view.selection = Selection(GridPoint(cell.row, start), GridPoint(cell.row, end), view.blockSelect)
+        view.aimOff()
+        view.lastClickUptime = 0L
+    } else {
+        view.lastClickUptime = now
+        view.lastClickPos = position
+        onTap(position)
+    }
+}
+
+private const val DOUBLE_CLICK_MS = 300L
+private const val CLICK_SLOP_SQ = 100f

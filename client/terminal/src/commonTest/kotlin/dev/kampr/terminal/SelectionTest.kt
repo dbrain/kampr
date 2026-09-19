@@ -12,6 +12,7 @@ import dev.kampr.terminal.render.Selection
 import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.TargetKind
 import dev.kampr.terminal.render.detectTarget
+import dev.kampr.terminal.view.wordAt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -175,5 +176,29 @@ class SelectionTest {
         assertEquals(0, logical.linkAt(0, 5))
         assertEquals("https://herdr.dev", pane.links.getOrNull(logical.linkAt(0, 5)))
         assertEquals(-1, logical.linkAt(0, 1))
+    }
+
+    // A double-click (desk) and a long-press (touch) select the word under the pointer, and the
+    // span is a run of printable glyphs bounded by whitespace. A gap is its own span, which is
+    // what makes the gesture predictable when the press lands between words.
+    @Test
+    fun wordAtFindsTheRunOfPrintableGlyphsUnderACell() {
+        val pane = paneOf(20, "hello world foo")
+        val cells = pane.cells
+        assertEquals(0 to 4, wordAt(cells, GridPoint(0, 2)))
+        assertEquals(6 to 10, wordAt(cells, GridPoint(0, 8)))
+        assertEquals(12 to 14, wordAt(cells, GridPoint(0, 13)))
+        assertEquals(5 to 5, wordAt(cells, GridPoint(0, 5)))
+    }
+
+    @Test
+    fun wordAtReadsAWideGlyphAsItsLeadAndStopsAtWhitespace() {
+        val pane = wideRow(12, Run(0, "ab"), Run(0, "\u65e5\u672c", w = 2), Run(0, " cd"))
+        val cells = pane.cells
+        // "ab\u65e5\u672c" is one word at cols 0-5 (no whitespace between the two), "cd" is 7-8.
+        assertEquals(0 to 5, wordAt(cells, GridPoint(0, 1)))
+        // A press on the tail of the wide glyph reads as its lead, inside the same word.
+        assertEquals(0 to 5, wordAt(cells, GridPoint(0, 4)))
+        assertEquals(7 to 8, wordAt(cells, GridPoint(0, 8)))
     }
 }

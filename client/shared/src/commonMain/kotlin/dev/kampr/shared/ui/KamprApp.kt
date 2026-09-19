@@ -344,6 +344,7 @@ internal fun AppScaffold(
                             onResync = { state.connection.send(ClientMsg.Resync) },
                             collapsed = state.sidebarCollapsed,
                             onCollapsed = state::collapseSidebar,
+                            scroll = state.herdScroll,
                         )
                         ScreenBody(
                             Modifier.weight(1f).fillMaxSize(),
@@ -461,6 +462,7 @@ internal fun AppScaffold(
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
                             herd, connectionStatus, now, localRtt, triage, state::openPane, null,
                             onResync = { state.connection.send(ClientMsg.Resync) },
+                            scroll = state.herdScroll,
                         )
                     }
                 }
@@ -520,6 +522,7 @@ internal fun AppScaffold(
                             state::openPane,
                             if (readOnly) null else { paneId: String -> answer(paneId, "1") },
                             onResync = { state.connection.send(ClientMsg.Resync) },
+                            scroll = state.herdScroll,
                         )
                     }
                 }

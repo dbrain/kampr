@@ -72,9 +72,13 @@ fun SelectionLayer(
     Handle(startX, startY, accent, "Selection start handle", onAnchor)
     Handle(endX, endY - cellHeight, accent, "Selection end handle", onHead)
 
+    // The pill sits below the selection, not above it: above is where the text the operator is
+    // reading lives, and a three-button pill over it is the selection covering itself. Below is
+    // the end of the record, and `atPixels` holds the pill inside the box when the selection is
+    // low enough that there is no below.
     Row(
         Modifier
-            .atPixels(startX, startY - 46f)
+            .atPixels(startX, endY + 8f)
             .background(tokens.color.raise, RoundedCornerShape(tokens.radii.md))
             .edge(tokens.card, RoundedCornerShape(tokens.radii.md)),
         horizontalArrangement = Arrangement.spacedBy(2.dp),

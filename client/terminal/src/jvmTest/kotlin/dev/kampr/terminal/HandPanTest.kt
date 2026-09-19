@@ -127,4 +127,39 @@ class HandPanTest {
                 "followed it to ${session.view.panX}",
         )
     }
+
+    // The report: typing a long line in pi, the surface does not follow the caret to the right,
+    // and once the operator has scrolled to see the end of it, every further keystroke that runs
+    // the caret off the edge is not followed either — the manual scroll owns the axis for good.
+    // A keystroke is what hands it back: `followAgain` clears `pannedAway`, so the next frame that
+    // moves the caret off the edge answers the request.
+    @Test
+    fun aKeystrokeReArmsTheHorizontalFollowAfterAManualScroll() = runComposeUiTest {
+        val pane = wideShell()
+        val session = PaneSession(PANE)
+        phoneTerminal(pane, session)
+        assertTrue(session.view.minPanX < -1f, "the grid has to overflow, or nothing is tested")
+        val cell = session.grid.cellWidth
+
+        // A partial pan: the hand takes the axis, but not all the way to the left, so a follow
+        // that answers a later keystroke has room to move the surface further.
+        session.view.scrollBy(-20f * cell, 0f)
+        waitForIdle()
+        val reached = session.view.panX
+        assertTrue(reached < -1f, "the drag went nowhere: panX is $reached")
+
+        // The hand owns the axis: a caret that runs off the edge is not chased.
+        pane.caretTo(150)
+        waitForIdle()
+        assertTrue(session.view.panX == reached, "a panned axis chased a caret off screen")
+
+        // A keystroke re-arms it, and the caret that runs off the edge is followed again.
+        session.view.followAgain()
+        pane.caretTo(180)
+        waitForIdle()
+        assertTrue(
+            session.view.panX < reached,
+            "a keystroke re-armed the follow and the surface did not answer it: ${session.view.panX}",
+        )
+    }
 }

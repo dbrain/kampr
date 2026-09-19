@@ -1,5 +1,6 @@
 package dev.kampr.shared.ui
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -179,6 +180,12 @@ class AppState(
     // has never paired would otherwise land on a herd that stays empty forever.
     var screen: Screen by mutableStateOf(if (endpoint?.token == null) Screen.Setup else Screen.Herd)
         private set
+
+    // The herd list's scroll, owned here rather than by the list that comes and goes with the
+    // screen: opening a pane swaps the branch out and a `rememberScrollState` would reset to the
+    // top on the way back, which is the report. The state outlives the pane because this object
+    // does, and the list reads it on the way in.
+    val herdScroll = ScrollState(0)
 
     var sheet: Sheet? by mutableStateOf(null)
         private set

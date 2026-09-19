@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +45,7 @@ fun HerdPortrait(
     onOpenPane: (String) -> Unit,
     onApprove: ((String) -> Unit)?,
     onResync: () -> Unit = {},
+    scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -80,7 +82,7 @@ fun HerdPortrait(
                     HerdEmpty(connection, compact = false)
                 }
             } else {
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Column(Modifier.weight(1f).verticalScroll(scroll)) {
                     groups.forEachIndexed { index, group ->
                         NodeHeader(
                             group.node,
@@ -117,6 +119,7 @@ fun HerdLandscape(
     onOpenPane: (String) -> Unit,
     onApprove: ((String) -> Unit)?,
     onResync: () -> Unit = {},
+    scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -159,7 +162,7 @@ fun HerdLandscape(
                     val plan = columnPlan(maxWidth - 20.dp, COLUMN_GAP, wanted = groups.size)
                     val columns = groups.balancedColumns(plan.count)
                     Row(
-                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+                        Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(COLUMN_GAP, Alignment.CenterHorizontally),
                     ) {
                         for (column in columns) {
@@ -218,6 +221,7 @@ fun HerdSidebar(
     onResync: () -> Unit = {},
     collapsed: Boolean = false,
     onCollapsed: (Boolean) -> Unit = {},
+    scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -295,7 +299,7 @@ fun HerdSidebar(
                     HerdEmpty(connection, compact = true)
                 }
             } else {
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Column(Modifier.weight(1f).verticalScroll(scroll)) {
                     groups.forEachIndexed { index, group ->
                         NodeHeader(
                             group.node,
