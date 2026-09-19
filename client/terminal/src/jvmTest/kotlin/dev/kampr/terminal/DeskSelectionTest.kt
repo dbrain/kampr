@@ -3,10 +3,13 @@ package dev.kampr.terminal
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -100,5 +103,34 @@ class DeskSelectionTest {
         }
         waitForIdle()
         assertNull(session.view.selection, "a finger drag selected instead of panning")
+    }
+
+    // The handles used to be 22 dp blobs over the cells they mark, and the end one hid the last
+    // glyphs of the selection. The dot is 10 dp now and its near edge is on the cell's edge, so
+    // it flanks the selection; the 22 dp box around it is the drag target and stays as big as it
+    // was.
+    @Test
+    fun theHandlesFlankTheSelectionRatherThanSittingOnItsGlyphs() = runComposeUiTest {
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(Phone.shell(), session)
+        dragTheMouse(fromX = 60f, toX = 300f)
+
+        val selection = assertNotNull(session.view.selection, "the drag selected nothing")
+        val grid = session.grid
+        val startX = with(density) { (grid.originX + selection.start.col * grid.cellWidth).toDp() }
+        val endX = with(density) { (grid.originX + (selection.end.col + 1) * grid.cellWidth).toDp() }
+
+        val startHandle = onNodeWithContentDescription("Selection start handle").getUnclippedBoundsInRoot()
+        val endHandle = onNodeWithContentDescription("Selection end handle").getUnclippedBoundsInRoot()
+
+        val startCentre = (startHandle.left + startHandle.right) / 2
+        val endCentre = (endHandle.left + endHandle.right) / 2
+
+        assertTrue(abs(startCentre.value - (startX - 5.dp).value) <= 1f,
+            "the start dot is not centred on the start cell's left edge: $startCentre vs $startX")
+        assertTrue(abs(endCentre.value - (endX + 5.dp).value) <= 1f,
+            "the end dot is not centred on the end cell's right edge: $endCentre vs $endX")
+        assertTrue(abs((startHandle.right - startHandle.left).value - 22f) <= 1f, "the drag target shrank with the dot")
+        assertTrue(abs((endHandle.right - endHandle.left).value - 22f) <= 1f, "the drag target shrank with the dot")
     }
 }

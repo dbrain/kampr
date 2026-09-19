@@ -1,12 +1,14 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -25,6 +27,7 @@ import dev.kampr.terminal.render.Selection
 import kotlin.math.roundToInt
 
 private val HANDLE = 22.dp
+private val DOT = 10.dp
 
 private const val MARGIN = 4f
 
@@ -69,8 +72,10 @@ fun SelectionLayer(
     val endX = originX + (end.col + 1) * cellWidth
     val endY = originY + (end.row + 1) * cellHeight
 
-    Handle(startX, startY, accent, "Selection start handle", onAnchor)
-    Handle(endX, endY - cellHeight, accent, "Selection end handle", onHead)
+    // The handles flank the selection: the dot's near edge is on the cell's edge, so the glyphs
+    // they mark stay readable. The box around the dot is the drag target and keeps its 22 dp.
+    Handle(startX - 5f, startY + cellHeight / 2f, accent, tokens.color.onAccent, "Selection start handle", onAnchor)
+    Handle(endX + 5f, endY - cellHeight / 2f, accent, tokens.color.onAccent, "Selection end handle", onHead)
 
     // The pill sits below the selection, not above it: above is where the text the operator is
     // reading lives, and a three-button pill over it is the selection covering itself. Below is
@@ -123,21 +128,35 @@ fun SelectionLayer(
 }
 
 @Composable
-private fun Handle(x: Float, y: Float, accent: Color, label: String, onDrag: (Offset) -> Unit) {
+private fun Handle(
+    cx: Float,
+    cy: Float,
+    accent: Color,
+    outline: Color,
+    label: String,
+    onDrag: (Offset) -> Unit,
+) {
     Box(
         Modifier
-            .atPixels(x - 22f, y - 6f)
+            .atPixels(cx - 11f, cy - 11f)
             .named(label)
             .size(HANDLE)
-            .background(accent, RoundedCornerShape(HANDLE))
-            .pointerInput(x, y) {
-                var at = Offset(x, y)
+            .pointerInput(cx, cy) {
+                var at = Offset(cx, cy)
                 detectDragGestures(
-                    onDragStart = { at = Offset(x, y) },
+                    onDragStart = { at = Offset(cx, cy) },
                 ) { _, delta ->
                     at += delta
                     onDrag(at)
                 }
             },
-    )
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(DOT)
+                .background(accent, CircleShape)
+                .border(1.5.dp, outline, CircleShape),
+        )
+    }
 }
