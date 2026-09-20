@@ -15,11 +15,11 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
-import dev.kampr.shared.model.CellBuffer
 import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.render.GridPoint
 import dev.kampr.terminal.render.Selection
+import dev.kampr.terminal.render.SurfaceRows
 import kotlin.math.abs
 
 // One finger pans and flings straight into the committed origin, because pan needs no re-shaping.
@@ -31,7 +31,7 @@ internal suspend fun PointerInputScope.terminalGestures(
     presets: ZoomPresets,
     paint: PaintRect,
     probe: GridProbe,
-    cells: CellBuffer,
+    rows: SurfaceRows,
     toPane: PaneScroll? = null,
     onTap: (Offset) -> Unit,
 ) {
@@ -47,7 +47,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         view.velocityY = 0f
 
         if (down.type == PointerType.Mouse) {
-            mouseGesture(down, session, probe, cells, braking, onTap)
+            mouseGesture(down, session, probe, rows, braking, onTap)
             return@awaitEachGesture
         }
 
@@ -57,7 +57,7 @@ internal suspend fun PointerInputScope.terminalGestures(
             // A long press selects the word under the finger, not the single cell it landed on:
             // the cell is a drag's unit and the word is what a press means to take.
             val anchor = probe.cellAt(held.position)
-            val (start, end) = wordAt(cells, anchor)
+            val (start, end) = wordAt(rows, anchor)
             view.selection = Selection(GridPoint(anchor.row, start), GridPoint(anchor.row, end), view.blockSelect)
             view.aimOff()
             var event: PointerEvent
@@ -173,7 +173,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
     down: PointerInputChange,
     session: PaneSession,
     probe: GridProbe,
-    cells: CellBuffer,
+    rows: SurfaceRows,
     braking: Boolean,
     onTap: (Offset) -> Unit,
 ) {
@@ -201,7 +201,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
             }
         }
     } while (event.changes.any { it.pressed })
-    if (!selecting && !braking) click(view, probe, cells, down.position, down.uptimeMillis, onTap)
+    if (!selecting && !braking) click(view, probe, rows, down.position, down.uptimeMillis, onTap)
     session.reclaimKeyboard()
 }
 
@@ -213,7 +213,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
 private fun AwaitPointerEventScope.click(
     view: TerminalViewState,
     probe: GridProbe,
-    cells: CellBuffer,
+    rows: SurfaceRows,
     position: Offset,
     now: Long,
     onTap: (Offset) -> Unit,
@@ -229,7 +229,7 @@ private fun AwaitPointerEventScope.click(
         withinSlop
     if (isDouble) {
         val cell = probe.cellAt(position)
-        val (start, end) = wordAt(cells, cell)
+        val (start, end) = wordAt(rows, cell)
         view.selection = Selection(GridPoint(cell.row, start), GridPoint(cell.row, end), view.blockSelect)
         view.aimOff()
         view.lastClickUptime = 0L

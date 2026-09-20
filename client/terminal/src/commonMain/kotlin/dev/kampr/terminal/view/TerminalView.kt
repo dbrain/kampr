@@ -137,10 +137,6 @@ internal const val CARET_SETTLE_MS = 200L
 // being read is the row sitting behind the controls that read it.
 private const val REVIEW_BAR_DP = 52f
 
-// The floor the IME cap leaves the grid to stand on: a handful of rows, so a keyboard that would
-// otherwise eat the whole content rectangle still leaves the prompt and its options a place to be.
-private const val MIN_CONTENT_DP = 90f
-
 // The wash over the cells a click hit, and the rule under them. Light enough that the glyphs it
 // covers are still read through it, which a `selectionWash` sized for an unread block is not.
 private const val TARGET_WASH = 0.22f
@@ -353,20 +349,7 @@ fun TerminalView(
         // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
         // from its own size is what would leave blank rows under the last line.
         val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
-        // The keyboard is chrome the grid must stand off: a selector that opens under the prompt
-        // line takes the caret and keeps its options below it, and a surface that does not grow
-        // its bottom inset for the IME leaves those options behind the keyboard. `safe.ime` is
-        // zero on a desk and on a hardware keyboard, so this costs nothing where there is no
-        // soft keyboard to stand off.
-        //
-        // The inset is capped, not added raw: on a phone the IME is already eating the view's
-        // height, so a full `safe.ime` on top of the header and the key row can exceed the view
-        // and collapse the content rectangle to a line. The cap leaves the grid a floor of rows
-        // to stand on; the follow then parks the caret and the options in what is left.
-        val keyRow = max(session.keyRowHeight, with(density) { safe.bottom.toPx() })
-        val imeCap = with(density) { maxHeight.toPx() } - with(density) { chromeTop.toPx() } -
-            keyRow - with(density) { MIN_CONTENT_DP.dp.toPx() }
-        val chromeBottom = keyRow + min(with(density) { safe.ime.toPx() }, imeCap.coerceAtLeast(0f))
+        val chromeBottom = max(session.keyRowHeight, with(density) { safe.bottom.toPx() })
         // The strip measures itself. It carries the review bar when review is on, a pill sized by
         // the touch rule and text sized by the type scale, and every one of those moves it.
         val strip = if (session.indicatorHeight > 0f) {
@@ -584,7 +567,16 @@ fun TerminalView(
         //
         // Review positions the viewport from the row being read and reaches rows the band holds
         // off, so it is the one surface the band does not govern.
-        LaunchedEffect(band, review.active, view.following) {
+        // The keyboard is the one screen shift the operator does not ask for by typing: it takes
+        // the content rectangle's bottom up, and a surface that keeps the caret on screen by
+        // letting it rest at the bottom of what is left leaves the options under the caret behind
+        // the keys. Re-arming the floor is the same answer a send gives — the caret stands at the
+        // top of what is left and the options read in the rows under it.
+        LaunchedEffect(safe.ime) {
+            if (safe.ime > 0.dp) view.reanchor()
+        }
+
+        LaunchedEffect(band, review.active, view.following, view.reanchor) {
             if (review.active) return@LaunchedEffect
             if (view.following) {
                 // A byte the operator sent is a request to be shown what it opened, and the
@@ -891,7 +883,7 @@ fun TerminalView(
                         Modifier
                     } else {
                         Modifier.pointerInput(pane.id, scrollToPane != null) {
-                            terminalGestures(session, presets, paint, probe, pane.cells, scrollToPane, ::tapped)
+                            terminalGestures(session, presets, paint, probe, rows, scrollToPane, ::tapped)
                         }
                     },
                 ),

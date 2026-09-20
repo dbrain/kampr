@@ -47,6 +47,23 @@ private fun wideRow(cols: Int, vararg runs: Run): PaneState {
     return pane
 }
 
+private fun PaneState.history(
+    fromTop: Int,
+    lines: List<String>,
+    totalRows: Int = lines.size,
+    complete: Boolean = true,
+    capped: Boolean = false,
+) = applyScrollback(
+    ServerMsg.Scrollback(
+        pane = "n/w1:p1",
+        fromTop = fromTop,
+        rows = lines.mapIndexed { index, text -> RowDiff(fromTop + index, listOf(Run(0, text))) },
+        totalRows = totalRows,
+        complete = complete,
+        capped = capped,
+    ),
+)
+
 class SelectionTest {
     // Probe #210: a wide glyph spans two columns, so a column is no longer a string index. Copy,
     // and the offset a tap resolves to, both have to be told apart from each other.
@@ -184,21 +201,33 @@ class SelectionTest {
     @Test
     fun wordAtFindsTheRunOfPrintableGlyphsUnderACell() {
         val pane = paneOf(20, "hello world foo")
-        val cells = pane.cells
-        assertEquals(0 to 4, wordAt(cells, GridPoint(0, 2)))
-        assertEquals(6 to 10, wordAt(cells, GridPoint(0, 8)))
-        assertEquals(12 to 14, wordAt(cells, GridPoint(0, 13)))
-        assertEquals(5 to 5, wordAt(cells, GridPoint(0, 5)))
+        val rows = SurfaceRows(pane)
+        assertEquals(0 to 4, wordAt(rows, GridPoint(0, 2)))
+        assertEquals(6 to 10, wordAt(rows, GridPoint(0, 8)))
+        assertEquals(12 to 14, wordAt(rows, GridPoint(0, 13)))
+        assertEquals(5 to 5, wordAt(rows, GridPoint(0, 5)))
     }
 
     @Test
     fun wordAtReadsAWideGlyphAsItsLeadAndStopsAtWhitespace() {
         val pane = wideRow(12, Run(0, "ab"), Run(0, "\u65e5\u672c", w = 2), Run(0, " cd"))
-        val cells = pane.cells
+        val rows = SurfaceRows(pane)
         // "ab\u65e5\u672c" is one word at cols 0-5 (no whitespace between the two), "cd" is 7-8.
-        assertEquals(0 to 5, wordAt(cells, GridPoint(0, 1)))
+        assertEquals(0 to 5, wordAt(rows, GridPoint(0, 1)))
         // A press on the tail of the wide glyph reads as its lead, inside the same word.
-        assertEquals(0 to 5, wordAt(cells, GridPoint(0, 4)))
-        assertEquals(7 to 8, wordAt(cells, GridPoint(0, 8)))
+        assertEquals(0 to 5, wordAt(rows, GridPoint(0, 4)))
+        assertEquals(7 to 8, wordAt(rows, GridPoint(0, 8)))
+    }
+
+    // The probe's row runs history plus live, but the live buffer only holds the live rows, so a
+    // press on a history row above the grid's reach used to index the buffer past its end and
+    // take the app down. The word is read through the surface, which decodes both halves.
+    @Test
+    fun wordAtReadsAHistoryRowWithoutReadingTheLiveBufferPastItsEnd() {
+        val pane = paneOf(20, "live one", "live two", "live three")
+        pane.history(0, (0 until 10).map { "alpha beta gamma" })
+        val rows = SurfaceRows(pane)
+        // Surface row 5 is a history row, five above the three-row live grid.
+        assertEquals(0 to 4, wordAt(rows, GridPoint(5, 2)))
     }
 }

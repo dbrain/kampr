@@ -2,9 +2,9 @@ package dev.kampr.terminal.view
 
 import androidx.compose.ui.geometry.Offset
 import dev.kampr.shared.model.BLANK
-import dev.kampr.shared.model.CellBuffer
 import dev.kampr.shared.model.TAIL
 import dev.kampr.terminal.render.GridPoint
+import dev.kampr.terminal.render.SurfaceRows
 import kotlin.math.floor
 
 // Pointer positions have to become cells against the geometry of the frame the finger is on, and
@@ -30,15 +30,19 @@ class GridProbe {
 // nothing printable in it is its own span — a double-click on a gap selects the gap, which is
 // what a text editor does and what makes the gesture predictable. The span is what a double-click
 // (desk) and a long-press (touch) select, so the two surfaces answer the same press the same way.
-fun wordAt(cells: CellBuffer, point: GridPoint): Pair<Int, Int> {
+fun wordAt(rows: SurfaceRows, point: GridPoint): Pair<Int, Int> {
     val row = point.row
+    val cols = rows.cols
+    val glyphs = IntArray(cols)
+    val styles = IntArray(cols)
+    if (!rows.into(row, glyphs, styles)) return point.col to point.col
     var col = point.col
-    if (cells.codePointAt(col, row) == TAIL && col > 0) col -= 1
+    if (glyphs[col] == TAIL && col > 0) col -= 1
     fun isWord(c: Int): Boolean = c != BLANK && !c.toChar().isWhitespace()
-    if (!isWord(cells.codePointAt(col, row))) return col to col
+    if (!isWord(glyphs[col])) return col to col
     var start = col
-    while (start > 0 && isWord(cells.codePointAt(start - 1, row))) start--
+    while (start > 0 && isWord(glyphs[start - 1])) start--
     var end = col
-    while (end < cells.cols - 1 && isWord(cells.codePointAt(end + 1, row))) end++
+    while (end < cols - 1 && isWord(glyphs[end + 1])) end++
     return start to end
 }
