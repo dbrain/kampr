@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -136,18 +137,31 @@ private fun Handle(
     label: String,
     onDrag: (Offset) -> Unit,
 ) {
+    // The key must not be the handle's position: a drag moves the selection, the selection moves
+    // the handle, and a changed key tears the pointer input down mid-gesture — on a phone, where
+    // the recomposition lands between the finger's events, the drag dies after one cell.
+    val centre = rememberUpdatedState(Offset(cx, cy))
     Box(
         Modifier
             .atPixels(cx - 11f, cy - 11f)
             .named(label)
             .size(HANDLE)
-            .pointerInput(cx, cy) {
-                var at = Offset(cx, cy)
+            .pointerInput(Unit) {
+                var at: Offset? = null
                 detectDragGestures(
-                    onDragStart = { at = Offset(cx, cy) },
-                ) { _, delta ->
-                    at += delta
-                    onDrag(at)
+                    onDragStart = {},
+                ) { change, delta ->
+                    // The first event starts at the finger's own position, read back into the
+                    // grid's space through the box's placement; the rest accumulate.
+                    val from = at
+                    val now = if (from == null) {
+                        change.position + (centre.value - Offset(11f, 11f))
+                    } else {
+                        from + delta
+                    }
+                    at = now
+                    onDrag(now)
+                    change.consume()
                 }
             },
         contentAlignment = androidx.compose.ui.Alignment.Center,
