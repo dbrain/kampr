@@ -15,10 +15,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
-pub const BUILD: &str = match option_env!("KAMPR_BUILD") {
-    Some(b) => b,
-    None => env!("CARGO_PKG_VERSION"),
-};
+// The manifest is the single source. The env override that used to sit here (`KAMPR_BUILD`) is
+// gone: `option_env!` is not part of cargo's fingerprint, so with a warm build cache it silently
+// shipped the previous release's binary — v0.1.90-v0.1.92 all shipped 0.1.89. A manifest bump is
+// fingerprinted, and `release.yml` refuses a binary that does not name its own tag.
+pub const BUILD: &str = env!("CARGO_PKG_VERSION");
 
 /// How long the herd model may go un-rebuilt when nothing has told it to.
 ///

@@ -192,9 +192,13 @@ binary reports the previous version tells every node in the herd, permanently, t
 release behind, and taking the update does not clear it. The workspace version is set to `0.1.1`
 here so `build` and the published tag agree again.
 
-The durable fix is either this line, bumped with the tag, or `KAMPR_BUILD` exported from the
-release workflow — `crates/kampr-node/src/state.rs` already prefers `KAMPR_BUILD` over
-`CARGO_PKG_VERSION`, so setting it in `release.yml` would make the tag the single source.
+The durable fix is this line, bumped with the tag. There was a second source — `KAMPR_BUILD`
+exported from the release workflow, preferred over `CARGO_PKG_VERSION` in
+`crates/kampr-node/src/state.rs` — and it rotted in the way env-var machinery does: `option_env!`
+is not part of cargo's fingerprint, so a release that changed nothing in `crates/` shipped the
+previous release's binary from a warm build cache, and v0.1.90-v0.1.92 all shipped 0.1.89 while
+every job passed. The override is gone; the manifest is the single source, and `release.yml`
+refuses a binary that does not name its own tag.
 
 ## Updating an installed node
 

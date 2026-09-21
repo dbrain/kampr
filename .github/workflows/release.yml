@@ -86,12 +86,11 @@ jobs:
         run: |
           builder=cargo
           if [ "${{ matrix.cross }}" = "true" ]; then builder=cross; fi
-          # The tag is the authority, not the manifest. v0.1.1 shipped reporting 0.1.0 because the
-          # workspace version had to be bumped by hand and was not — and with release discovery on,
-          # a binary that misnames itself tells every node in the herd it is permanently behind and
-          # does not stop saying so after updating. A release cannot disagree with its own tag now.
-          KAMPR_BUILD="${{ github.ref_name }}"
-          export KAMPR_BUILD="${KAMPR_BUILD#v}"
+          # The manifest is the authority: [workspace.package] version is bumped to the tag in the
+          # release commit, and the install jobs below refuse a binary that reports anything else.
+          # The KAMPR_BUILD env override that used to do this is gone — option_env! is not part of
+          # cargo's fingerprint, so with a warm cache it silently shipped the previous release's
+          # binary (v0.1.90-v0.1.92 all shipped 0.1.89). A manifest bump is fingerprinted.
           "$builder" build --release --locked -p kampr-cli \
             --features vendored-tls --target ${{ matrix.target }}
       - name: package
@@ -152,7 +151,9 @@ jobs:
           grep -q "signature verified: skipped — this release publishes no signature" out.txt
       - name: it runs
         run: |
-          "$HOME/.local/bin/kampr" --version
+          # The binary must name the tag it ships under. This is the check v0.1.90-v0.1.92 did not
+          # have: they installed, ran, and passed while reporting 0.1.89.
+          [ "$($HOME/.local/bin/kampr --version)" = "kampr ${GITHUB_REF_NAME#v}" ]
           "$HOME/.local/bin/kampr" --help > /dev/null
       - name: a tampered checksum is refused
         run: |
@@ -252,7 +253,9 @@ jobs:
             | sh | tee out.txt
           grep -q "checksum verified: yes" out.txt
           grep -q "signature verified: yes" out.txt
-          "$HOME/.local/bin/kampr" --version
+          # The published release must name its own tag — the check that caught nothing in
+          # v0.1.90-v0.1.92, where the installed binary reported 0.1.89 and the job passed.
+          [ "$($HOME/.local/bin/kampr --version)" = "kampr ${GITHUB_REF_NAME#v}" ]
 
       # The branch nearly every operator takes, on the real published release. cosign is on no
       # distribution by default, and until this job hid it the whole matrix installed with a
