@@ -11,13 +11,14 @@ use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
 use kampr_core::registry::PaneHold;
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
+use kampr_journal::ListeningReader;
 use kampr_mesh::peers::PeerHold;
 use kampr_mesh::{Incoming, Outgoing, Peers};
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -236,6 +237,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
         held: HashMap::new(),
         matched: HashMap::new(),
         sending: HashMap::new(),
+        boot_holds: HashMap::new(),
         unreadable: 0,
     };
     // **Subscribed before the herd is read, and the read is the subscription's own.** `greet`
@@ -495,6 +497,9 @@ struct Session {
     /// send. See [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
     matched: HashMap<String, MatchLease>,
     sending: HashMap<u64, Sending>,
+    /// The pane's boot episode, by global id: the inputs it is holding and the task flushing
+    /// them. Dropped with the session, which is what aborts the task.
+    boot_holds: HashMap<String, BootHoldEntry>,
     unreadable: u32,
 }
 
@@ -503,6 +508,28 @@ struct Session {
 struct Sending {
     credit: mpsc::Sender<u32>,
     _task: crate::mesh::AbortOnDrop,
+}
+
+/// One boot episode: the inputs parked while a pane's harness draws its composer, and the task
+/// that flushes them in order.
+///
+/// Parked rather than held inline because the hold is the #535 protection and the socket this
+/// input came in on must keep being read while it runs. The session loop that used to own the
+/// wait went deaf for the whole of it: the hub's keepalives, the close, and the rest of the
+/// typing all queued behind it, and the hub answered the silence by dropping the node from the
+/// herd. The episode's deadline starts at its first input, so a burst pays one hold, not one per
+/// keystroke.
+struct BootHold {
+    inputs: Mutex<VecDeque<Input>>,
+    notify: Notify,
+    listening: ListeningReader,
+    deadline: tokio::time::Instant,
+}
+
+/// The map entry: the episode and the task that flushes it, which dies with the session.
+struct BootHoldEntry {
+    hold: Arc<BootHold>,
+    _drain: crate::mesh::AbortOnDrop,
 }
 
 impl Session {
@@ -1253,11 +1280,80 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
-        self.until_listening(&session.registry, &local, pane).await;
-        if let Err(e) = session.registry.write(&local, input).await {
-            self.wire
-                .error(offline_code(&session), &e.to_string(), Some(pane));
+        match self.boot_hold_reader(pane) {
+            Some(listening) => self.park_input(pane, local, &session, input, listening),
+            // The episode is already holding this pane's input: park behind it, so a keystroke
+            // that arrives after the pane stopped being booted — the harness quit, the shell is
+            // the foreground now — cannot pass the text it is holding and the carriage return
+            // that follows it.
+            None if self.boot_holds.contains_key(pane) => {
+                let entry = self.boot_holds.get(pane).expect("checked above");
+                entry.hold.inputs.lock().unwrap().push_back(input);
+                entry.hold.notify.notify_one();
+            }
+            None => {
+                if let Err(e) = session.registry.write(&local, input).await {
+                    self.wire
+                        .error(offline_code(&session), &e.to_string(), Some(pane));
+                }
+            }
         }
+    }
+
+    /// The listening reader of a pane that is measured booting, or `None` for a pane whose input
+    /// goes straight to the herdr socket: a harness measured booting, no transcript yet, and that
+    /// harness still the pane's foreground job. A label outlives the harness it names, and a shell
+    /// left behind by a `claude` that quit before its first prompt would otherwise hold every
+    /// keystroke typed into it for the whole ceiling.
+    fn boot_hold_reader(&self, pane: &str) -> Option<ListeningReader> {
+        self.node.herd().pane(pane).and_then(|entry| {
+            let booting = !entry.has_conversation && entry.cmd.is_some() && entry.cmd == entry.agent;
+            booting
+                .then(|| self.node.journals().listening(entry.agent.as_deref()))
+                .flatten()
+        })
+    }
+
+    /// Parks the input in the pane's boot episode. The episode's task flushes it, in order, when
+    /// the composer appears — or the episode's deadline passes — while this socket keeps being
+    /// read for the whole of the wait: pings, closes and the rest of the typing no longer queue
+    /// behind the hold.
+    fn park_input(
+        &mut self,
+        pane: &str,
+        local: String,
+        session: &Arc<crate::sessions::SessionNode>,
+        input: Input,
+        listening: ListeningReader,
+    ) {
+        let hold = match self.boot_holds.get(pane) {
+            Some(entry) => entry.hold.clone(),
+            None => {
+                let hold = Arc::new(BootHold {
+                    inputs: Mutex::new(VecDeque::new()),
+                    notify: Notify::new(),
+                    listening,
+                    deadline: tokio::time::Instant::now() + BOOT_HOLD,
+                });
+                let task = tokio::spawn(Self::drain_boot_hold(
+                    pane.to_string(),
+                    local,
+                    session.clone(),
+                    self.wire.clone(),
+                    hold.clone(),
+                ));
+                self.boot_holds.insert(
+                    pane.to_string(),
+                    BootHoldEntry {
+                        hold: hold.clone(),
+                        _drain: crate::mesh::AbortOnDrop(task.abort_handle()),
+                    },
+                );
+                hold
+            }
+        };
+        hold.inputs.lock().unwrap().push_back(input);
+        hold.notify.notify_one();
     }
 
     /// **A reply written to a harness that has not drawn its composer does not submit** (#535): on
@@ -1266,33 +1362,46 @@ impl Session {
     /// the moment herdr names it, up to four seconds before Claude draws its box, so a first reply
     /// typed quickly was exactly this.
     ///
-    /// Held inline rather than queued, because the socket is read in order behind this await — the
-    /// text and the carriage return that follows it as its own message cannot pass each other. And
-    /// held only where all three hold: a harness measured booting, no transcript yet, and that
-    /// harness still the pane's foreground job. A label outlives the harness it names, and a shell
-    /// left behind by a `claude` that quit before its first prompt would otherwise hold every
-    /// keystroke typed into it for the whole ceiling. A pane nobody is streaming has no screen to
-    /// read and is not held.
-    async fn until_listening(&self, registry: &PaneRegistry, local: &str, pane: &str) {
-        let Some(listening) = self.node.herd().pane(pane).and_then(|entry| {
-            let booting = !entry.has_conversation && entry.cmd.is_some() && entry.cmd == entry.agent;
-            booting
-                .then(|| self.node.journals().listening(entry.agent.as_deref()))
-                .flatten()
-        }) else {
-            return;
-        };
-        let deadline = tokio::time::Instant::now() + BOOT_HOLD;
-        while let Some(screen) = registry.screen(local) {
-            let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
-            if listening(&rows, screen.caret) {
-                return;
+    /// The episode's task, flushed one input at a time from the pane's screen: the same read the
+    /// session loop used to make inline, off the loop. A pane nobody is streaming has no screen to
+    /// read and its inputs go straight through, as they always did. The deadline is the episode's
+    /// rather than the keystroke's: a burst into a pane whose composer never appears — a trust
+    /// dialog, a config screen, not a boot — flushes in one hold rather than one per keystroke.
+    async fn drain_boot_hold(
+        pane: String,
+        local: String,
+        session: Arc<crate::sessions::SessionNode>,
+        wire: Arc<Wire>,
+        hold: Arc<BootHold>,
+    ) {
+        let mut warned = false;
+        loop {
+            let input = loop {
+                if let Some(next) = hold.inputs.lock().unwrap().pop_front() {
+                    break next;
+                }
+                hold.notify.notified().await;
+            };
+            let mut look = tokio::time::interval(BOOT_LOOK);
+            let written = loop {
+                if tokio::time::Instant::now() >= hold.deadline {
+                    if !warned {
+                        warn!(pane = %pane, "the harness never drew its composer; the input goes anyway");
+                        warned = true;
+                    }
+                    break session.registry.write(&local, input).await;
+                }
+                if let Some(screen) = session.registry.screen(&local) {
+                    let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+                    if (hold.listening)(&rows, screen.caret) {
+                        break session.registry.write(&local, input).await;
+                    }
+                }
+                look.tick().await;
+            };
+            if let Err(e) = written {
+                wire.error(offline_code(&session), &e.to_string(), Some(&pane));
             }
-            if tokio::time::Instant::now() >= deadline {
-                warn!(pane = %pane, "the harness never drew its composer; the input goes anyway");
-                return;
-            }
-            tokio::time::sleep(BOOT_LOOK).await;
         }
     }
 

@@ -10351,3 +10351,272 @@ async fn a_pi_pane_serves_the_session_its_environment_names() {
         "the conversation carried the decoy: the pane was resolved by directory, not by environment"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Input into a pane whose harness is still booting.
+// ---------------------------------------------------------------------------
+
+/// A `claude` compiled for the tests: a boot screen until the ready file appears, then the
+/// composer the node's listening reader recognises, and every byte it is sent appended to the
+/// log file — the ground truth a test asserts arrival and order against.
+fn fake_claude(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let src = dir.join("fake_claude.rs");
+    std::fs::write(&src, include_str!("fake_claude.rs")).expect("the fake claude source");
+    let bin = dir.join("claude");
+    let built = std::process::Command::new("rustc")
+        .args(["--edition", "2021", "-o"])
+        .arg(&bin)
+        .arg(&src)
+        .status()
+        .expect("rustc");
+    assert!(built.success(), "the fake claude did not compile");
+    (bin, dir.join("ready"), dir.join("input.log"))
+}
+
+/// Until the herd classifies the pane as booting: the harness in the foreground, no transcript.
+async fn until_booting(h: &Harness, pane: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        let herd = h.node.herd();
+        let Some(entry) = herd.pane(pane) else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        if entry.agent.as_deref() == Some("claude")
+            && entry.cmd.as_deref() == Some("claude")
+            && !entry.has_conversation
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let model = serde_json::to_value(h.node.herd().pane(pane)).unwrap_or(Value::Null);
+    panic!("the pane never classified as booting: {model}");
+}
+
+async fn until_file_contains(path: &Path, needle: &str, seconds: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if std::fs::read_to_string(path).is_ok_and(|t| t.contains(needle)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let got = std::fs::read_to_string(path).unwrap_or_default();
+    panic!("the pane never received {needle:?}; it received {got:?}");
+}
+
+/// The stall the operator reported: a keystroke into a pane whose harness is still booting used
+/// to hold the session's loop for eight seconds (#535's protection, held inline), and the socket
+/// was read by nothing for the whole of it — the hub's keepalives went unanswered, the node
+/// dropped out of the herd mid-sentence, and the typing behind the hold never caught up. The
+/// protection stays: nothing is written before the composer is drawn. What changes is that the
+/// wait no longer owns the session — the socket keeps being read while the input waits.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_booting_pane_keeps_the_session_answering_while_input_waits() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    let (bin, ready, log) = fake_claude(dir.path());
+    // The journal root the node reads for the claude adapter: the test's own home, and the
+    // directory it registers on.
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("bootpong", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "FAKE_CLAUDE_READY={} FAKE_CLAUDE_LOG={} {} \n",
+                    ready.display(),
+                    log.display(),
+                    bin.display()
+                ),
+            }),
+        )
+        .await;
+    until_booting(&h, &pane).await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 10).await;
+
+    // The keystroke in the boot, and a ping while it is held: the session must answer the ping.
+    // The old code answered when the hold ended — eight seconds after the keystroke.
+    // A newline: the pane's line discipline delivers input line by line.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "hello\n" }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    send(&mut socket, json!({ "t": "ping", "n": 1 })).await;
+    tokio::time::timeout(Duration::from_secs(4), async {
+        until(&mut socket, "pong", 5).await
+    })
+    .await
+    .expect("the session stopped answering while one keystroke was held");
+
+    // The composer appears, and the held input is owed to the pane.
+    std::fs::write(&ready, "").expect("the ready file");
+    until_file_contains(&log, "hello", 10).await;
+}
+
+/// The never-catches-up half of the same stall: a burst of keystrokes into a pane whose composer
+/// never appears — a trust dialog, not a boot. Each keystroke used to buy its own eight seconds,
+/// held one behind the other, so thirty keystrokes were four minutes of silence. The burst now
+/// flushes in one hold, in order.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_burst_into_a_pane_that_never_draws_its_composer_catches_up() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    let (bin, _ready, log) = fake_claude(dir.path());
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("bootburst", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "FAKE_CLAUDE_READY={} FAKE_CLAUDE_LOG={} {} \n",
+                    dir.path().join("never").display(),
+                    log.display(),
+                    bin.display()
+                ),
+            }),
+        )
+        .await;
+    until_booting(&h, &pane).await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 10).await;
+
+    for i in 0..30u32 {
+        send(
+            &mut socket,
+            json!({ "t": "input", "pane": pane, "text": format!("{}\n", i % 10) }),
+        )
+        .await;
+    }
+    // Every one of them, in order, within one hold — not thirty.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let got = std::fs::read_to_string(&log).unwrap_or_default();
+        if got.lines().map(str::trim).collect::<String>() == "012345678901234567890123456789" {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the burst never caught up; the pane received {got:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// The order the old inline hold defended: the text and the carriage return that follows it as
+/// its own message cannot pass each other. The park path keeps that for the life of the episode
+/// — a keystroke that arrives after the pane has stopped being booted (the harness quit, the
+/// shell is the foreground now) still parks behind what the episode is holding, so the first
+/// line it echoes lands above the second.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keystroke_after_the_harness_quits_still_keeps_its_order() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    let (bin, ready, _log) = fake_claude(dir.path());
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("bootorder", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "FAKE_CLAUDE_READY={} FAKE_CLAUDE_LOG={} FAKE_CLAUDE_QUIT_ON_READY=1 {} \n",
+                    ready.display(),
+                    dir.path().join("input.log").display(),
+                    bin.display()
+                ),
+            }),
+        )
+        .await;
+    until_booting(&h, &pane).await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 10).await;
+
+    // The first line, typed in the boot: parked.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "echo FIRST\n" }),
+    )
+    .await;
+    // The harness quits without drawing its composer; the shell takes the foreground.
+    std::fs::write(&ready, "").expect("the ready file");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while tokio::time::Instant::now() < deadline {
+        let herd = h.node.herd();
+        let Some(entry) = herd.pane(&pane) else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        if entry.cmd.as_deref() != Some("claude") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // The second line, typed after the pane stopped being booted: it must not pass the first.
+    send(
+        &mut socket,
+        json!({ "t": "input", "pane": pane, "text": "echo SECOND\n" }),
+    )
+    .await;
+
+    // Both lines on the screen, the first above the second.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let (mut first, mut second) = (None, None);
+    while tokio::time::Instant::now() < deadline {
+        let Some((session, local)) = h.node.resolve(&pane) else {
+            panic!("the pane resolved to nothing");
+        };
+        if let Some(screen) = session.registry.screen(&local) {
+            first = screen.rows.iter().position(|r| r.trim() == "FIRST");
+            second = screen.rows.iter().position(|r| r.trim() == "SECOND");
+            if first.is_some() && second.is_some() {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        first.is_some() && second.is_some(),
+        "the shell never ran both echoes; FIRST at {first:?}, SECOND at {second:?}"
+    );
+    assert!(
+        first.unwrap() < second.unwrap(),
+        "the keystroke after the quit passed the one before it: FIRST at {first:?}, SECOND at {second:?}"
+    );
+}
