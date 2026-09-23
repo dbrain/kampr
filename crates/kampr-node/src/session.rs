@@ -49,9 +49,11 @@ const PENDING_ATTEMPTS: u32 = 12;
 /// How long input waits for a harness to start reading its keys, and how often it looks.
 ///
 /// Claude 2.1.268 drew its composer 0.8-4.5 s after it was started, and a reply sent the frame
-/// after the box appeared submitted every time (#535). The ceiling bounds what a harness that
-/// never draws one costs — a trust dialog, a layout nobody measured — because the socket's later
-/// messages wait behind this, and a client gives up on a socket that has told it nothing for 25 s.
+/// after the box appeared submitted every time (#535). The ceiling bounds what a harness that never
+/// starts reading costs: a layout nobody measured, or a screen this build parses as neither a
+/// composer nor a question. It bounds the wait and not the socket — inputs are parked off the
+/// session loop — but a keystroke held for the whole of it reads as a keyboard that died (#549),
+/// so the readings that end it early are the load-bearing half of this, not the number.
 const BOOT_HOLD: Duration = Duration::from_secs(8);
 const BOOT_LOOK: Duration = Duration::from_millis(50);
 
@@ -523,6 +525,9 @@ struct BootHold {
     inputs: Mutex<VecDeque<Input>>,
     notify: Notify,
     listening: ListeningReader,
+    /// Which harness this is, because a dialog is read per harness: omp asks with a cursor and
+    /// publishes a numbered list of its own that is not a question (#489).
+    agent: Option<String>,
     deadline: tokio::time::Instant,
 }
 
@@ -1281,7 +1286,7 @@ impl Session {
         };
         self.audit("input", Some(pane), Some(detail));
         match self.boot_hold_reader(pane) {
-            Some(listening) => self.park_input(pane, local, &session, input, listening),
+            Some((listening, agent)) => self.park_input(pane, local, &session, input, listening, agent),
             // The episode is already holding this pane's input: park behind it, so a keystroke
             // that arrives after the pane stopped being booted — the harness quit, the shell is
             // the foreground now — cannot pass the text it is holding and the carriage return
@@ -1305,18 +1310,23 @@ impl Session {
     /// harness still the pane's foreground job. A label outlives the harness it names, and a shell
     /// left behind by a `claude` that quit before its first prompt would otherwise hold every
     /// keystroke typed into it for the whole ceiling.
-    fn boot_hold_reader(&self, pane: &str) -> Option<ListeningReader> {
+    fn boot_hold_reader(&self, pane: &str) -> Option<(ListeningReader, Option<String>)> {
         self.node.herd().pane(pane).and_then(|entry| {
             let booting = !entry.has_conversation && entry.cmd.is_some() && entry.cmd == entry.agent;
             booting
-                .then(|| self.node.journals().listening(entry.agent.as_deref()))
+                .then(|| {
+                    self.node
+                        .journals()
+                        .listening(entry.agent.as_deref())
+                        .map(|listening| (listening, entry.agent.clone()))
+                })
                 .flatten()
         })
     }
 
-    /// Parks the input in the pane's boot episode. The episode's task flushes it, in order, when
-    /// the composer appears — or the episode's deadline passes — while this socket keeps being
-    /// read for the whole of the wait: pings, closes and the rest of the typing no longer queue
+    /// Parks the input in the pane's boot episode. The episode's task flushes it, in order, when the
+    /// harness starts reading its keys — or the episode's deadline passes — while this socket keeps
+    /// being read for the whole of the wait: pings, closes and the rest of the typing no longer queue
     /// behind the hold.
     fn park_input(
         &mut self,
@@ -1325,6 +1335,7 @@ impl Session {
         session: &Arc<crate::sessions::SessionNode>,
         input: Input,
         listening: ListeningReader,
+        agent: Option<String>,
     ) {
         let hold = match self.boot_holds.get(pane) {
             Some(entry) => entry.hold.clone(),
@@ -1333,6 +1344,7 @@ impl Session {
                     inputs: Mutex::new(VecDeque::new()),
                     notify: Notify::new(),
                     listening,
+                    agent,
                     deadline: tokio::time::Instant::now() + BOOT_HOLD,
                 });
                 let task = tokio::spawn(Self::drain_boot_hold(
@@ -1363,10 +1375,9 @@ impl Session {
     /// typed quickly was exactly this.
     ///
     /// The episode's task, flushed one input at a time from the pane's screen: the same read the
-    /// session loop used to make inline, off the loop. A pane nobody is streaming has no screen to
-    /// read and its inputs go straight through, as they always did. The deadline is the episode's
-    /// rather than the keystroke's: a burst into a pane whose composer never appears — a trust
-    /// dialog, a config screen, not a boot — flushes in one hold rather than one per keystroke.
+    /// session loop used to make inline, off the loop. The deadline is the episode's rather than the
+    /// keystroke's, so a burst into a harness that really is not reading yet flushes in one hold
+    /// rather than one per keystroke.
     async fn drain_boot_hold(
         pane: String,
         local: String,
@@ -1386,22 +1397,46 @@ impl Session {
             let written = loop {
                 if tokio::time::Instant::now() >= hold.deadline {
                     if !warned {
-                        warn!(pane = %pane, "the harness never drew its composer; the input goes anyway");
+                        warn!(pane = %pane, "the harness never started reading its keys; the input goes anyway");
                         warned = true;
                     }
                     break session.registry.write(&local, input).await;
                 }
-                if let Some(screen) = session.registry.screen(&local) {
-                    let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
-                    if (hold.listening)(&rows, screen.caret) {
-                        break session.registry.write(&local, input).await;
-                    }
+                if Self::reading(&session, &local, &hold).await {
+                    break session.registry.write(&local, input).await;
                 }
                 look.tick().await;
             };
             if let Err(e) = written {
                 wire.error(offline_code(&session), &e.to_string(), Some(&pane));
             }
+        }
+    }
+
+    /// Whether this harness is reading its keys **right now**, which is the only thing the hold is
+    /// for — and a screen asking a question is a harness reading its keys.
+    ///
+    /// Two readings answer it. The composer, off the grid this node is already painting, is #535's
+    /// measurement. The dialog is the same screen read the other way: `pending` publishes its
+    /// question and options to the client that is offering to answer them, so a keystroke held
+    /// behind that is a keystroke held against a harness demonstrably waiting for it — measured as
+    /// 8.0 s on the first press and 21 ms on the ones after, once per client socket, which is what
+    /// an operator reports as a keyboard that dies when Claude asks anything (#549).
+    ///
+    /// A pane nobody is streaming has no grid here, and that is not an absence of a composer: the
+    /// dialog is asked of herdr instead, the same read `answer` makes at the moment of a press.
+    async fn reading(session: &crate::sessions::SessionNode, local: &str, hold: &BootHold) -> bool {
+        match session.registry.screen(local) {
+            Some(screen) => {
+                let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+                if (hold.listening)(&rows, screen.caret) {
+                    return true;
+                }
+                pending::detect_for(hold.agent.as_deref(), &screen.rows.join("\n")).is_some()
+            }
+            None => pending::read(&session.herdr, local, hold.agent.as_deref())
+                .await
+                .is_some(),
         }
     }
 

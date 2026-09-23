@@ -10620,3 +10620,139 @@ async fn a_keystroke_after_the_harness_quits_still_keeps_its_order() {
         "the keystroke after the quit passed the one before it: FIRST at {first:?}, SECOND at {second:?}"
     );
 }
+
+/// The trust prompt, captured verbatim from a real `claude` 2.1.237 through `pane.read visible
+/// strip_ansi` — the same capture `pending.rs` keeps as a fixture, and the screen that makes an
+/// operator say the keyboard is broken. Leading spaces are the capture's: `pane.read` keeps the
+/// pane's own left padding, and the option rows are read with it.
+const TRUST_PROMPT: &str = concat!(
+    " Accessing workspace:\n",
+    "\n",
+    " /home/dbrain\n",
+    "\n",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a\n",
+    " well-known open source project, or work from your team). If not, take a moment to review\n",
+    " what's in this folder first.\n",
+    "\n",
+    " Claude Code'll be able to read, edit, and execute files here.\n",
+    "\n",
+    " Security guide\n",
+    "\n",
+    " \u{276f} 1. Yes, I trust this folder\n",
+    "   2. No, exit\n",
+    "\n",
+    " Enter to confirm \u{b7} Esc to cancel\n",
+);
+
+/// A `claude` already sitting at the trust prompt: it draws the capture and never draws anything
+/// else, which is the state a boot hold has no answer for — the harness is reading its keys, it is
+/// just not reading a composer.
+async fn until_booted_at_trust_prompt(h: &Harness, dir: &Path, pane: &str) -> (PathBuf, PathBuf) {
+    let (bin, _ready, log) = fake_claude(dir);
+    let screen = dir.join("trust.txt");
+    std::fs::write(&screen, TRUST_PROMPT).expect("the trust prompt");
+    let local = pane.split_once('/').unwrap().1;
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "FAKE_CLAUDE_SCREEN={} FAKE_CLAUDE_READY={} FAKE_CLAUDE_LOG={} {} \n",
+                    screen.display(),
+                    dir.join("never").display(),
+                    log.display(),
+                    bin.display()
+                ),
+            }),
+        )
+        .await;
+    until_booting(h, pane).await;
+    (bin, log)
+}
+
+/// `seconds` is a measurement rather than a tolerance: the hold this test rules out is eight full
+/// seconds, and the same keystroke on a pane whose dialog the node cannot see costs ~20 ms.
+async fn keystroke_arrives_within(
+    socket: &mut Socket,
+    pane: &str,
+    text: &str,
+    log: &Path,
+    seconds: u64,
+) -> Duration {
+    let before = std::fs::read_to_string(log).unwrap_or_default();
+    let at = tokio::time::Instant::now();
+    send(socket, json!({ "t": "input", "pane": pane, "text": text })).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    while tokio::time::Instant::now() < deadline {
+        if std::fs::read_to_string(log).unwrap_or_default().len() > before.len() {
+            return at.elapsed();
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let got = std::fs::read_to_string(log).unwrap_or_default();
+    panic!("the keystroke never reached the pane inside {seconds}s; it holds {got:?}");
+}
+
+/// **A dialog is a harness reading its keys.** The boot hold (#535) waits for a composer because a
+/// reply written before one is drawn does not submit. A pane sitting at a dialog is the opposite
+/// case, and the node knows it is: `pending` publishes the question and its options, read off the
+/// very screen the hold is polling. Holding the answer to that question for the whole ceiling is
+/// what an operator reports as a keyboard that dies the moment Claude asks anything — and it is
+/// once per client socket, so a tab return or a second phone re-arms it while the dialog is up.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keystroke_into_a_dialog_the_node_has_already_read_is_not_held() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("dialogkey", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let (_bin, log) = until_booted_at_trust_prompt(&h, dir.path(), &pane).await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 10).await;
+
+    // The node has published the question, so the hold's own predicate is in evidence on the wire
+    // before anything is typed: there is a dialog, and the client is offering to answer it.
+    let pending = until(&mut socket, "pending", 20).await;
+    assert_eq!(
+        pending["question"].as_str().unwrap_or(""),
+        "Quick safety check: Is this a project you created or one you trust?"
+    );
+
+    let took = keystroke_arrives_within(&mut socket, &pane, "1\r", &log, 3).await;
+    assert!(
+        took < Duration::from_secs(3),
+        "a keystroke into an open dialog was held for {took:?}"
+    );
+}
+
+/// The same dialog with nobody streaming its grid — the phone answering from the conversation view,
+/// the view the notification opens. There is no local screen to poll here, so the hold has to ask
+/// herdr rather than assume that a pane with no viewer is a pane with no composer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_keystroke_into_a_dialog_reaches_a_pane_nobody_is_streaming() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("dialogunwatched", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let (_bin, log) = until_booted_at_trust_prompt(&h, dir.path(), &pane).await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    // Deliberately no `watch`: this is the socket that never asked for a grid.
+    let took = keystroke_arrives_within(&mut socket, &pane, "1\r", &log, 3).await;
+    assert!(
+        took < Duration::from_secs(3),
+        "a keystroke into an open dialog on an unwatched pane was held for {took:?}"
+    );
+}

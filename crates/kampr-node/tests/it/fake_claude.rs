@@ -28,6 +28,16 @@ fn main() {
         }
     });
 
+    // A screen the operator's real harness draws — the trust prompt, verbatim — for the tests that
+    // need the thing itself rather than a stand-in for it.
+    if let Ok(screen) = std::env::var("FAKE_CLAUDE_SCREEN") {
+        let text = fs::read_to_string(&screen).expect("the screen to draw");
+        print!("\x1b[2J\x1b[H{text}");
+        io_flush();
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
     // The boot screen: nothing a listening reader would accept, the caret parked below the text.
     print!("\x1b[2J\x1b[Hbooting\u{2026}\n");
     io_flush();
