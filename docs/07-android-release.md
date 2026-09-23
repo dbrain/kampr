@@ -149,11 +149,19 @@ release workflow builds and signs the node binaries, but it cannot build the APK
 signing key lives on the release machine, not in CI, so the APK is built here (`make
 android-release`) and uploaded by hand after the tag's publish job has created the release:
 
+`gh release upload` names an asset after the file it is given and takes no `--name`, so the file is
+named first:
+
 ```bash
-gh release upload v<version> \
-  client/androidApp/build/outputs/apk/release/androidApp-release.apk \
-  --name kampr-v<version>-android.apk
+cp client/androidApp/build/outputs/apk/release/androidApp-release.apk /tmp/kampr-v<version>-android.apk
+gh release upload v<version> /tmp/kampr-v<version>-android.apk
+gh release view v<version> --json assets --jq '[.assets[].name]'   # the apk has to be in the list
 ```
+
+Upload it before `make android-publish`, which rebuilds the APK at the version the helper bumps to
+next: what reaches GitHub is then the build cut at the tag, and what reaches kobup is one
+`versionCode` further on with the same code in it. Uploading afterwards instead makes the two
+channels byte-identical at the cost of an asset named `v<version>` whose manifest says otherwise.
 
 Every release since the first carries it; a release without the APK is an incomplete release.
 
