@@ -465,7 +465,8 @@ covers only the gap before it lands.
 
 The node decides whether a submit key follows an answer, per harness. Probe #72 confirmed live that
 Claude acts on the bare digit for both its trust prompt and a real `Bash` permission dialog —
-including the one whose footer reads "Enter to confirm".
+including the one whose footer reads "Enter to confirm". From 2.1.282 the trust prompt draws no
+digits and ignores one (#550); it is answered like omp's dialogs, with arrows and Enter.
 
 [ADR 0005](./docs/adr/0005-structure-comes-from-the-transcript.md).
 

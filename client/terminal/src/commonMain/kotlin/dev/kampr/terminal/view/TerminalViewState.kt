@@ -151,6 +151,31 @@ class TerminalViewState {
     // reader who has taken the viewport keeps what they took.
     fun placeOnFloor(floor: Float) {
         if (following) scrollY = floor
+        restedFloor = floor
+    }
+
+    // The floor the surface was last held against, which is what says whether a follower is *on*
+    // it — `band` has already moved by the time anybody asks.
+    private var restedFloor = 0f
+
+    // **A follower on the floor rides it, both ways.** The band pushes a surface up whenever the
+    // floor rises past it, so a floor that dropped and left the surface where it was is a ratchet:
+    // Claude drawing its session bottom-anchored after the trust prompt, or growing its footer, or
+    // pi opening a list under its composer, each took the bottom of the screen away and nothing but
+    // leaving the pane gave it back — the operator's *"the pane seems to lose the bottom of the
+    // claude screen"*. Both readings the floor is made of are settled before it moves
+    // (`TerminalView`), so a sweep or a blank-and-rewrite still moves nothing.
+    //
+    // A send re-arms the same move from *anywhere* in the band, once, because the answer to a byte
+    // can sit below a caret the surface was resting above (#547).
+    fun rest(band: CaretBand) {
+        val onTheFloor = abs(scrollY - restedFloor) <= FOLLOW_SLACK
+        if ((onTheFloor || reanchor) && scrollY > band.floor) {
+            scrollY = band.floor
+            reanchor = false
+        }
+        scrollY = scrollY.coerceIn(band.floor, band.ceiling)
+        restedFloor = band.floor
     }
 
     // Typing is a request to be shown what you typed, and it is the only way back to the live edge
@@ -179,9 +204,6 @@ class TerminalViewState {
         reanchor = true
     }
 
-    fun clearReanchor() {
-        reanchor = false
-    }
 
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
     // scrollY is measured from that bottom — so standing still means moving with it. A reader

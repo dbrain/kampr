@@ -143,26 +143,32 @@ class ContentBelowTheCaretTest {
         }
     }
 
-    // The pane repainting the same shape on its own — no byte sent — owes the operator nothing:
-    // the surface rests where it rested, which is the whole of the sweep rule in this shape.
+    // The same list opened with no byte from this client — typed at the desk, or answered from
+    // another device. A surface resting on the floor stays on it as the floor drops, send or no
+    // send: holding it where it was is the ratchet that lost the bottom of Claude's screen after
+    // its trust prompt (ClaudeStartingInANewDirectoryTest).
     @Test
-    fun aListThePaneOpensOnItsOwnDoesNotMoveTheSurface() {
+    fun aListThePaneOpensOnItsOwnIsFollowedByASurfaceOnTheFloor() {
         runComposeUiTest {
             val total = 200
             val io = Recording()
             val pane = idle(caretRow = 170, total = total)
             val session = terminal(pane, io, "/model\r")
-            val resting = session.view.scrollY
-            assertTrue(resting > 0f, "the surface had to rest above the end of the grid first")
+            assertEquals(
+                session.view.band.floor,
+                session.view.scrollY,
+                "the surface had to be resting on the floor first",
+            )
+            assertTrue(session.view.scrollY > 0f, "and the floor had to be above the end of the grid")
 
             selector(pane, searchRow = 171, firstOption = 174, lastRow = total - 1)
             waitForIdle()
 
             assertEquals(
-                resting,
+                0f,
                 session.view.scrollY,
-                "a pane that repaints by itself sends nothing, and the surface moved " +
-                    "$resting -> ${session.view.scrollY} for no operator's ask",
+                "the options the pane drew below the search line are out of reach: the surface " +
+                    "is at ${session.view.scrollY} of ${session.view.maxScroll}",
             )
         }
     }

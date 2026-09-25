@@ -134,8 +134,11 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
   two apart, and a client that ignores it offers a press that looks like an answer and is not.
   **omp draws no digits at all** (#487): its dialogs are a `❯` on one row, moved with the arrows
   and committed with Enter, so the node turns the key a client pressed into that many moves —
-  counted from a screen read taken at the moment of the press. `pending::cursor_dialogs` is the
-  per-harness list, and a harness not on it is read for numbers only.
+  counted from a screen read taken at the moment of the press. **Claude's trust prompt lost its
+  digits in 2.1.282** (#550), and a dialog the node cannot read is a harness held as booting for
+  8 s a keystroke — so Claude is read for numbers and then for a cursor, and answered with
+  whichever the screen shows. `pending::cursor_dialogs` is the per-harness list, and a harness not
+  on it is read for numbers only.
 - **`pi` is not `omp`.** They share a record grammar and a session path; the held descriptor, the
   tty breadcrumb, the subagents, the title slot and the run state in the title are all oh-my-pi's
   own (#490). One adapter serves both, and every handle above the working directory answers

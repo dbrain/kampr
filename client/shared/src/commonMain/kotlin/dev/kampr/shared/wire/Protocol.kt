@@ -605,7 +605,9 @@ sealed interface ClientMsg {
 
     data class Unwatch(val pane: String) : ClientMsg
 
-    data class InputText(val pane: String, val text: String) : ClientMsg
+    // `typed` is input from the grid, typed by someone looking at where it lands, and the node
+    // never holds it for a harness still booting; a reply leaves it off and is held (#535).
+    data class InputText(val pane: String, val text: String, val typed: Boolean = false) : ClientMsg
 
     data class InputB64(val pane: String, val b64: String) : ClientMsg
 

@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalTokens
@@ -115,6 +116,7 @@ internal fun ComposeUiTest.phoneTerminal(
     height: Dp = 914.dp,
     io: PaneIo = HushIo,
     keyboard: SoftwareKeyboardController? = null,
+    clipboard: String? = null,
 ): MutableState<SafeArea> {
     val bars = mutableStateOf(Phone.BARS)
     setContent {
@@ -122,6 +124,7 @@ internal fun ComposeUiTest.phoneTerminal(
             LocalSoftwareKeyboardController provides (keyboard ?: LocalSoftwareKeyboardController.current),
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides io,
+            LocalClipboardText provides (clipboard?.let { { it } } ?: LocalClipboardText.current),
             LocalSafeArea provides bars.value,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
             // `KamprApp` provides this once above every screen, so a pane composed without it is a

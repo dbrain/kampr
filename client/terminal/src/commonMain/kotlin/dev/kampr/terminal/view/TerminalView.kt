@@ -133,6 +133,12 @@ private const val SPEECH_SETTLE_MS = 450L
 // back inside one repaint interval.
 internal const val CARET_SETTLE_MS = 200L
 
+// The harnesses measured to hide the caret for their whole run and still park it where the next
+// character goes, so a hidden caret there is the text being typed rather than #499's `top`.
+// Measured on pi 0.86.1 (#552); omp shares pi's records, not its terminal,
+// and nobody has typed into one to look.
+private val TYPES_BEHIND_A_HIDDEN_CARET = setOf("pi")
+
 // The review strip is chrome like any other: without insetting for it the row the reader is
 // being read is the row sitting behind the controls that read it.
 private const val REVIEW_BAR_DP = 52f
@@ -556,8 +562,9 @@ fun TerminalView(
             placedCell = metrics.height
             view.placeOnFloor(band.floor)
         }
-        // A reader who is following stays exactly where they are for as long as the caret is on
-        // screen, and is moved the least the band allows when it is not.
+        // A reader who is following and on the floor stays on it (`rest`); one resting higher in
+        // the band stays exactly where they are for as long as the caret is on screen, and is
+        // moved the least the band allows when it is not.
         //
         // A reader who has parked is not moved at all. The floor used to be held under them as
         // well — `max(scrollY, floor)` — and that is the other half of the report: the bottom of a
@@ -578,23 +585,7 @@ fun TerminalView(
 
         LaunchedEffect(band, review.active, view.following, view.reanchor) {
             if (review.active) return@LaunchedEffect
-            if (view.following) {
-                // A byte the operator sent is a request to be shown what it opened, and the
-                // answer to that request can be *below* the caret: pi's /model and /thinking
-                // replace the composer with a selector whose search line takes the caret and
-                // whose options sit under it, measured on the desk at
-                // research/probe/pi-selector.py. The band, which keeps the caret on screen,
-                // lets the surface rest where the options are off the bottom of the screen, and
-                // the operator read it as the bottom of the screen locked to the text entry
-                // line. A send therefore re-arms the floor once: the surface goes back to it
-                // when it has dropped, and nowhere else. A pane that repaints by itself sends
-                // nothing, and a surface that is already on the floor is not moved.
-                if (view.reanchor && view.scrollY > band.floor) {
-                    view.scrollY = band.floor
-                    view.clearReanchor()
-                }
-                view.scrollY = view.scrollY.coerceIn(band.floor, band.ceiling)
-            }
+            if (view.following) view.rest(band)
         }
 
         // Every byte this client sends the pane, and the two things that owe it an answer. The
@@ -646,8 +637,11 @@ fun TerminalView(
         // the right on a pane nobody had panned — the operator's *"it scrolled right a bunch
         // opening top … I couldn't see anything without scrolling left again"*. The axis is left
         // exactly where it is rather than handed back, because a hand that panned still owns it.
+        // pi is the exception: it hides the caret for its whole run and types behind it (#552).
         LaunchedEffect(pane.cursor, view.followCursor, view.following) {
-            if (!pane.cursor.visible) return@LaunchedEffect
+            if (!pane.cursor.visible && io.info(pane.id)?.agent !in TYPES_BEHIND_A_HIDDEN_CARET) {
+                return@LaunchedEffect
+            }
             if (view.followCursor && view.following && !view.pinching) {
                 view.chaseCursor(
                     followCursorPan(
@@ -743,7 +737,7 @@ fun TerminalView(
             if (!paneTakesClicks(info?.agent, info?.cmd)) return
             if (rows.historyRows > 0 || cell.row < 0 || cell.row >= rows.liveRows) return
             for (report in clickReports(cell.col, cell.row)) {
-                io.send(ClientMsg.InputText(pane.id, report))
+                io.send(ClientMsg.InputText(pane.id, report, typed = true))
             }
         }
 
@@ -817,7 +811,7 @@ fun TerminalView(
                 io.readOnly || keptScroll -> null
                 else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
                     PaneScroll(keys, session.scrollTrace, scope) { report ->
-                        io.send(ClientMsg.InputText(pane.id, report))
+                        io.send(ClientMsg.InputText(pane.id, report, typed = true))
                     }
                 }
             }

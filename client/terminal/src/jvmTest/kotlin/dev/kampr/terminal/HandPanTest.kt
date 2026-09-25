@@ -4,6 +4,10 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
@@ -31,6 +35,12 @@ private fun wideShell(): PaneState {
         ),
     )
     return pane
+}
+
+private class Harnessed(val agent: String?) : PaneIo {
+    override fun send(msg: ClientMsg) = Unit
+    override fun prefs(paneId: String) = PanePrefs()
+    override fun info(paneId: String) = PaneInfo(id = paneId, nodeId = "node", agent = agent)
 }
 
 private fun PaneState.caretTo(col: Int, visible: Boolean = true) = applyPatch(
@@ -126,6 +136,30 @@ class HandPanTest {
             "a full-screen program parked a caret nobody can see at column 150 and the surface " +
                 "followed it to ${session.view.panX}",
         )
+    }
+
+    // **pi hides its caret for its whole run and parks it where the next character goes** —
+    // measured typing a line longer than the pane (research/probe/pi-typing.py): `?25l` and never
+    // `?25h`, the caret at column 20, 40, 60, 80 behind the text, where Claude shows its own. So the
+    // hidden-caret rule above, which is right for `top`, left every character typed into pi
+    // wherever the surface happened to be. The harness is what tells the two apart: typing `top`
+    // is a keystroke too, so "hidden, but moved after a send" does not.
+    @Test
+    fun a_hidden_caret_is_followed_on_a_harness_that_types_behind_it() = runComposeUiTest {
+        for ((agent, follows) in listOf("pi" to true, null to false)) {
+            val pane = wideShell()
+            val session = PaneSession(PANE)
+            phoneTerminal(pane, session, io = Harnessed(agent))
+            assertTrue(session.view.minPanX < -1f, "the grid has to overflow, or nothing is tested")
+
+            pane.caretTo(150, visible = false)
+            waitForIdle()
+
+            assertTrue(
+                (session.view.panX < -1f) == follows,
+                "agent $agent: a hidden caret at column 150 left the surface at ${session.view.panX}",
+            )
+        }
     }
 
     // The report: typing a long line in pi, the surface does not follow the caret to the right,

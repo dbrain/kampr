@@ -53,7 +53,9 @@ const PENDING_ATTEMPTS: u32 = 12;
 /// starts reading costs: a layout nobody measured, or a screen this build parses as neither a
 /// composer nor a question. It bounds the wait and not the socket — inputs are parked off the
 /// session loop — but a keystroke held for the whole of it reads as a keyboard that died (#549),
-/// so the readings that end it early are the load-bearing half of this, not the number.
+/// so the readings that end it early are the load-bearing half of this, not the number. Input a
+/// client marks `typed` — keys pressed at the grid, where the operator can see what they land on —
+/// never starts one.
 const BOOT_HOLD: Duration = Duration::from_secs(8);
 const BOOT_LOOK: Duration = Duration::from_millis(50);
 
@@ -726,7 +728,8 @@ impl Session {
                 text,
                 b64,
                 keys,
-            } => self.input(&pane, text, b64, keys).await,
+                typed,
+            } => self.input(&pane, text, b64, keys, typed).await,
             ClientMsg::Paste { pane, b64, name } => self.paste(&pane, &b64, name.as_deref()).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
             ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
@@ -1228,6 +1231,7 @@ impl Session {
         text: Option<String>,
         b64: Option<String>,
         keys: Option<Vec<String>>,
+        typed: bool,
     ) {
         if !self.may_write("input", Some(pane)) {
             return;
@@ -1236,7 +1240,10 @@ impl Session {
             self.audit("input", Some(pane), Some(json!({ "peer": true })));
             self.relay_to_peer(
                 pane,
-                json!({ "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys }),
+                json!({
+                    "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys,
+                    "typed": typed,
+                }),
             );
             return;
         };
@@ -1285,7 +1292,8 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
-        match self.boot_hold_reader(pane) {
+        let reader = (!typed).then(|| self.boot_hold_reader(pane)).flatten();
+        match reader {
             Some((listening, agent)) => self.park_input(pane, local, &session, input, listening, agent),
             // The episode is already holding this pane's input: park behind it, so a keystroke
             // that arrives after the pane stopped being booted — the harness quit, the shell is
@@ -1492,7 +1500,7 @@ impl Session {
             Some(pane),
             Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
         );
-        self.input(pane, Some(crate::paste::typed(&path)), None, None)
+        self.input(pane, Some(crate::paste::typed(&path)), None, None, false)
             .await;
     }
 
@@ -1520,7 +1528,7 @@ impl Session {
         let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
         self.audit("answer", Some(pane), Some(json!({ "key": key })));
         let keystrokes = match pending::cursor_dialogs(agent.as_deref()) {
-            true => match self.moves_to(&session.herdr, &local, key).await {
+            true => match self.moves_to(&session.herdr, &local, agent.as_deref(), key).await {
                 Some(keys) => keys,
                 None => {
                     self.wire.error(
@@ -1532,11 +1540,7 @@ impl Session {
                     return;
                 }
             },
-            false => {
-                let mut keys = vec![key.to_string()];
-                keys.extend(submit_key(agent.as_deref()).map(str::to_string));
-                keys
-            }
+            false => numbered_keys(agent.as_deref(), key),
         };
         for stroke in keystrokes {
             if let Err(e) = session
@@ -1558,8 +1562,21 @@ impl Session {
     /// somebody at the desk may have moved the cursor since; the arrows are counted from a read
     /// taken at the moment of the press, and a dialog that has gone in the meantime answers
     /// nothing rather than pressing Enter into whatever replaced it.
-    async fn moves_to(&self, herdr: &kampr_herdr::Herdr, local: &str, key: &str) -> Option<Vec<String>> {
-        cursor_moves(&pending::read(herdr, local, Some(OMP_LIKE)).await?, key)
+    ///
+    /// **Claude asks both ways** (#550), so the dialog read is what says which: a numbered one takes
+    /// its digit, and a screen with no dialog on it takes the digit Claude has always been sent.
+    async fn moves_to(
+        &self,
+        herdr: &kampr_herdr::Herdr,
+        local: &str,
+        agent: Option<&str>,
+        key: &str,
+    ) -> Option<Vec<String>> {
+        match pending::read(herdr, local, agent).await {
+            Some(found) if found.cursor.is_some() => cursor_moves(&found, key),
+            None if agent == Some(kampr_journal::omp::AGENT) => None,
+            _ => Some(numbered_keys(agent, key)),
+        }
     }
 
     /// Commits a question that takes several answers, after the operator has ticked what they want.
@@ -2639,10 +2656,6 @@ const COMMIT: &str = "\r";
 /// What ticks a box on a question that takes several answers, where Enter would answer it.
 const TOGGLE: &str = " ";
 
-/// Any harness [`pending::cursor_dialogs`] answers for; the read only needs to know that the
-/// screen should be looked at for a cursor rather than for numbers.
-const OMP_LIKE: &str = kampr_journal::omp::AGENT;
-
 /// The arrows that reach `key` from where the cursor is, and the press that acts on it.
 ///
 /// **A press means different things on the two shapes, and the screen says which.** On a question
@@ -2687,6 +2700,12 @@ fn commit_keys(agent: Option<&str>) -> Option<&'static [&'static str]> {
         .iter()
         .find(|(harness, _)| *harness == agent)
         .map(|(_, keys)| *keys)
+}
+
+fn numbered_keys(agent: Option<&str>, key: &str) -> Vec<String> {
+    let mut keys = vec![key.to_string()];
+    keys.extend(submit_key(agent).map(str::to_string));
+    keys
 }
 
 fn submit_key(agent: Option<&str>) -> Option<&'static str> {
@@ -2736,6 +2755,13 @@ mod dialog_tests {
             Some(vec![DOWN.to_string(), DOWN.to_string(), COMMIT.to_string()])
         );
         assert_eq!(cursor_moves(&dialog("omp-ask"), "9"), None);
+
+        // Claude's trust prompt defaults to `No, exit`, so the answer that keeps the session is
+        // the one a step away (#550).
+        assert_eq!(
+            cursor_moves(&dialog("claude-trust"), "2"),
+            Some(vec![DOWN.to_string(), COMMIT.to_string()])
+        );
 
         // **A press on a question that takes several answers is a tick.** Enter there is `next
         // question` and would answer the whole thing with whatever happened to be ticked, so the

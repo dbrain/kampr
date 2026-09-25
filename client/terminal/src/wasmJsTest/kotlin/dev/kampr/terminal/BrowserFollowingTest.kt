@@ -22,7 +22,10 @@ private const val DEEP_ROWS = 200
 // passed.
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.sweepsNothing(size: Pair<Dp, Dp>) {
-    val pane = shellPane(rows = DEEP_ROWS, caretRow = 120)
+    // A screen the agent already fills, as a repaint rewrites one: on a shell whose record ends at
+    // the caret, rows written below it are the record growing, and a follower on the floor goes
+    // with that (`TerminalViewState.rest`).
+    val pane = writtenPane(rows = DEEP_ROWS, caretRow = 120)
     val session = PaneSession(BROWSER_PANE)
     browserTerminal(pane, session, size)
     assertTrue(

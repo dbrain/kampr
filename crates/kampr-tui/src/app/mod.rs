@@ -392,7 +392,7 @@ impl App {
             }
             Click::Save { pane, id } => self.save(&pane, &id),
             Click::Passthrough { pane, text } => {
-                self.client.input(&pane, &text);
+                self.client.typed(&pane, &text);
             }
             Click::Wheel { pane, up } => self.wheel(pane, up),
             Click::Menu(menu) => self.context_menu(menu),

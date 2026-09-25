@@ -55,31 +55,37 @@ pub async fn read(herdr: &Herdr, pane_id: &str, agent: Option<&str>) -> Option<P
 
 /// The detector this harness's screen is read with.
 ///
-/// **One or the other, never one and then the other.** omp draws no numbered dialog at all, and it
-/// *does* draw a numbered list — the steering queue, `1.` and `2.` under a `Steering · 2` header
-/// ([#489](#)) — so a numbered read of an omp screen finds a question nobody asked, with the
-/// prompts the operator is waiting on offered as the answers to it.
+/// **omp is read one way only.** It draws no numbered dialog at all, and it *does* draw a numbered
+/// list — the steering queue, `1.` and `2.` under a `Steering · 2` header ([#489](#)) — so a
+/// numbered read of an omp screen finds a question nobody asked, with the prompts the operator is
+/// waiting on offered as the answers to it.
+///
+/// **Claude is read both ways, numbers first.** Its permission and question dialogs are numbered,
+/// and since 2.1.282 its trust prompt is not (#550): a numbered run proves itself, so the cursor
+/// read is only what is left when no numbered one is on the screen.
 pub fn detect_for(agent: Option<&str>, screen: &str) -> Option<Pending> {
-    match cursor_dialogs(agent) {
-        true => detect_marked(screen),
-        false => detect(screen),
+    match agent {
+        Some(kampr_journal::omp::AGENT) => detect_marked(screen),
+        Some("claude") => detect(screen).or_else(|| detect_marked(screen)),
+        _ => detect(screen),
     }
 }
 
-/// The harnesses measured to ask with a cursor rather than with numbers.
+/// The harnesses measured to ask with a cursor rather than with numbers — some of the time, for
+/// Claude — whose answers are therefore the moves the dialog on the screen takes.
 ///
-/// **Per-harness on purpose, and `omp` alone.** A numbered run proves itself — a dialog that draws
-/// `1.` `2.` `3.` is a menu and nothing else looks like one — but a cursor run is anchored on a
-/// single glyph and a column, and turning that loose on a harness nobody has looked at is inviting
-/// a false question onto a pane. omp draws no numbers at all: a digit sent into either of its
-/// dialogs leaves them standing, measured against both ([#487](#)).
+/// **Per-harness on purpose.** A numbered run proves itself — a dialog that draws `1.` `2.` `3.`
+/// is a menu and nothing else looks like one — but a cursor run is anchored on a single glyph and
+/// a column, and turning that loose on a harness nobody has looked at is inviting a false question
+/// onto a pane. omp draws no numbers at all: a digit sent into either of its dialogs leaves them
+/// standing, measured against both ([#487](#)). Claude's trust prompt measured the same (#550).
 ///
 /// **`pi` is not on this list**, though the same adapter reads its transcripts. What [#490](#)
 /// measured about it is the session *format*; its TUI is a different program — herdr's own `pi`
 /// manifest matches `Working...` where omp paints `⎋ Working…` — and nobody has put a keystroke
 /// into one of its dialogs. A `pi` pane keeps the numbered reading every unmeasured harness gets.
 pub fn cursor_dialogs(agent: Option<&str>) -> bool {
-    matches!(agent, Some(kampr_journal::omp::AGENT))
+    matches!(agent, Some(kampr_journal::omp::AGENT | "claude"))
 }
 
 /// A dialog whose options are marked with a cursor.
@@ -986,8 +992,27 @@ mod tests {
         // measured the session format they share, and nobody has put a keystroke into one of its
         // dialogs. It keeps the numbered reading every unmeasured harness gets.
         assert!(!cursor_dialogs(Some("pi")));
-        assert!(!cursor_dialogs(Some("claude")));
+        assert!(cursor_dialogs(Some("claude")));
         assert!(!cursor_dialogs(None));
+    }
+
+    /// **Claude 2.1.282 asks for trust with no numbers at all**, and with `No, exit` first and
+    /// under the cursor where 2.1.237 drew `❯ 1. Yes, I trust this folder`. A digit leaves it
+    /// standing and `↓` then Enter answers it (#550), so read for numbers alone it was no dialog —
+    /// and a harness that is not in a dialog and has not drawn a composer is held as booting.
+    #[test]
+    fn claudes_trust_prompt_without_numbers_is_read_by_its_cursor() {
+        let p = detect_for(Some("claude"), &fixture("claude-trust")).expect("a dialog");
+        assert_eq!(
+            p.question,
+            "Quick safety check: Is this a project you created or one you trust?"
+        );
+        assert_eq!(
+            p.options.iter().map(|o| (&*o.key, &*o.label)).collect::<Vec<_>>(),
+            [("1", "No, exit"), ("2", "Yes, I trust this folder")]
+        );
+        assert_eq!(p.cursor, Some(0));
+        assert!(!p.multi);
     }
 
     /// Claude's own dialogs must read exactly as they did: the marked detector is a fallback for

@@ -1143,6 +1143,12 @@ the same path but is **not** an error and does not close anything — it arrives
 { "t": "input", "pane": "01J.../w3:p2", "text": "\u001b[5~" }
 { "t": "input", "pane": "01J.../w3:p2", "b64": "G1s1fg==" }   // must decode to valid UTF-8
 { "t": "input", "pane": "01J.../w3:p2", "keys": ["ctrl+c"] }
+// Optional `typed: true` says the input was typed at the grid, by someone looking at the screen it
+// lands on. Absent, it is a reply, and a reply into a harness that has not drawn its composer yet
+// is held until it has (up to 8 s), because one written earlier does not submit (#535). Typed
+// input is never held — but it still queues behind a reply that is, so it cannot land inside it.
+// An installed client that predates the field sends none, and keeps the hold on everything.
+{ "t": "input", "pane": "01J.../w3:p2", "text": "ls\r", "typed": true }
 
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
 // The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,

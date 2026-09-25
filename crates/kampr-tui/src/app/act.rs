@@ -220,7 +220,7 @@ impl App {
             self.note("this device is read-only");
             return;
         }
-        if !self.client.input(&pane, text) {
+        if !self.client.typed(&pane, text) {
             self.note("not delivered — the socket is down");
         }
     }

@@ -92,7 +92,7 @@ class PastingIntoAPaneTest {
         waitForIdle()
 
         assertEquals(
-            listOf(ClientMsg.InputText(Phone.PANE, PASTE_START + "cargo test -p kampr-term" + PASTE_END)),
+            listOf(ClientMsg.InputText(Phone.PANE, PASTE_START + "cargo test -p kampr-term" + PASTE_END, typed = true)),
             io.sent.filterIsInstance<ClientMsg.InputText>(),
             "probe #9: pane.send_text frames nothing itself, so an unbracketed multi-line paste " +
                 "runs line by line in a shell",

@@ -139,6 +139,17 @@ fn client_messages_parse_and_unknown_fields_are_ignored() {
         other => panic!("{other:?}"),
     }
 
+    // An installed client never sends `typed`, and what it sends keeps #535's hold.
+    for (raw, want) in [
+        (r#"{"t":"input","pane":"p","text":"x"}"#, false),
+        (r#"{"t":"input","pane":"p","text":"x","typed":true}"#, true),
+    ] {
+        match serde_json::from_str::<ClientMsg>(raw).unwrap() {
+            ClientMsg::Input { typed, .. } => assert_eq!(typed, want, "{raw}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
     let ping: ClientMsg = serde_json::from_str(r#"{"t":"ping","n":7}"#).unwrap();
     assert!(matches!(ping, ClientMsg::Ping { n: 7 }));
     assert_eq!(

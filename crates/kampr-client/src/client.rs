@@ -219,6 +219,13 @@ impl Client {
         self.send(json!({ "t": "input", "pane": pane, "text": text }))
     }
 
+    /// [`Client::input`] typed at the grid, which the node never holds for a harness that has not
+    /// drawn its composer: the person typing is looking at the screen it lands on. A reply keeps
+    /// the hold (#535).
+    pub fn typed(&self, pane: &str, text: &str) -> bool {
+        self.send(json!({ "t": "input", "pane": pane, "text": text, "typed": true }))
+    }
+
     /// Search this pane's whole scrollback. The answer arrives as an [`Event::Found`], not as a
     /// return value: a search of history that is not held here is a question for the node.
     pub fn find(&self, pane: &str, query: &str, backward: bool, from: Option<u32>) -> bool {

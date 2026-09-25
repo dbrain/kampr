@@ -34,6 +34,13 @@ fn main() {
         let text = fs::read_to_string(&screen).expect("the screen to draw");
         print!("\x1b[2J\x1b[H{text}");
         io_flush();
+        // Raw, as the real harness is at a dialog: an answer is a lone digit or an arrow with no
+        // newline behind it, and a line discipline would hold either back from the log. After the
+        // draw, because raw also stops `\n` returning the carriage.
+        std::process::Command::new("stty")
+            .args(["raw", "-echo"])
+            .status()
+            .expect("stty");
         loop {
             std::thread::sleep(Duration::from_secs(3600));
         }

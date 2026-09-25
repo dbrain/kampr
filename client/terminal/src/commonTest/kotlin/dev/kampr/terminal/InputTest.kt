@@ -48,6 +48,21 @@ private fun allCaps() = (KeyLayouts.portrait + KeyLayouts.portraitFn + KeyLayout
     .flatMap { listOfNotNull(it, it.alternate) }
 
 class InputTest {
+    // Everything the grid sends is typed by someone looking at where it lands, so none of it waits
+    // on the node's boot hold, which is for a reply sent from the conversation view (#535).
+    @Test
+    fun everythingTheGridSendsIsMarkedTyped() {
+        val (recorder, keys) = sink()
+        keys.type("ls")
+        keys.raw("\u001b[A")
+        keys.paste("cargo test")
+        assertTrue(recorder.sent.isNotEmpty(), "nothing was sent, so nothing is tested")
+        assertTrue(
+            recorder.sent.all { it is ClientMsg.InputText && it.typed },
+            "the grid sent input the node would hold as a reply: ${recorder.sent}",
+        )
+    }
+
     // Probe: a pointer down anywhere on the canvas blurs the browser's offscreen input, so a cap
     // that sends its key and stops has also closed the keyboard, and everything typed next is
     // eaten with no signal.

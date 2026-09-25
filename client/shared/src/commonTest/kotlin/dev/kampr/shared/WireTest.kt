@@ -12,6 +12,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WireTest {
+    // What is typed at the grid is never held for a harness still booting; a reply is, and an
+    // installed client that never sends the field is read as one (#535).
+    @Test
+    fun inputTypedAtTheGridSaysSoAndAReplyDoesNot() {
+        assertTrue(""""typed":true""" in Wire.encode(ClientMsg.InputText("p", "x", typed = true)))
+        assertFalse("typed" in Wire.encode(ClientMsg.InputText("p", "x")))
+    }
+
     @Test
     fun unknownMessageTypeIsIgnored() {
         assertNull(Wire.decode("""{"t":"teleport","pane":"x"}"""))

@@ -163,7 +163,10 @@ object Wire {
             put("scrollback", msg.scrollback); put("conversation", msg.conversation)
         }
         is ClientMsg.Unwatch -> buildJsonObject { put("t", "unwatch"); put("pane", msg.pane) }
-        is ClientMsg.InputText -> buildJsonObject { put("t", "input"); put("pane", msg.pane); put("text", msg.text) }
+        is ClientMsg.InputText -> buildJsonObject {
+            put("t", "input"); put("pane", msg.pane); put("text", msg.text)
+            if (msg.typed) put("typed", true)
+        }
         is ClientMsg.InputB64 -> buildJsonObject { put("t", "input"); put("pane", msg.pane); put("b64", msg.b64) }
         is ClientMsg.InputKeys -> buildJsonObject {
             put("t", "input"); put("pane", msg.pane)

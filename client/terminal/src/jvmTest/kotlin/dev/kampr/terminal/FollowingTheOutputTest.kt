@@ -229,7 +229,15 @@ class FollowingTheOutputTest {
     fun aRepaintThatSweepsTheCaretAcrossATallGridMovesNothing() {
         for (size in listOf(DESK, PHONE)) {
             runComposeUiTest {
-                val (pane, session) = deep(size, caretRow = 120)
+                // A screen the agent already fills, as a repaint rewrites one: on a shell whose
+                // record ends at the caret, rows written below it are the record growing, and a
+                // follower on the floor goes with that (`TerminalViewState.rest`).
+                val (pane, session) = redrawn(size, caretRow = 120)
+                assertTrue(
+                    session.view.maxScroll > DEEP_ROWS * session.grid.cellHeight * 0.5f,
+                    "the grid has to be far taller than the rectangle, or the excursion fits the " +
+                        "band and nothing is tested",
+                )
                 val resting = session.view.scrollY
                 val steps = listOf(0, 40, 90, 150, 199, 120)
                 repeat(3) {

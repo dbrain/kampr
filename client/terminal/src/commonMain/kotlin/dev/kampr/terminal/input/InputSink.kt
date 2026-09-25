@@ -55,7 +55,7 @@ class InputSink(
     private fun emit(text: String) {
         if (text.isEmpty()) return
         sends++
-        io.send(ClientMsg.InputText(paneId, text))
+        io.send(ClientMsg.InputText(paneId, text, typed = true))
     }
 
     // The submit is the hook, not the keystroke: by the time a whole command has been typed it is

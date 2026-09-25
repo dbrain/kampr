@@ -780,6 +780,11 @@ pub enum ClientMsg {
         b64: Option<String>,
         #[serde(default)]
         keys: Option<Vec<String>>,
+        /// Typed at the grid, by someone looking at the screen it lands on — never held for a
+        /// harness that has not drawn its composer. Absent is a reply, or an installed client that
+        /// predates this, and both keep #535's hold.
+        #[serde(default)]
+        typed: bool,
     },
     /// Bytes for the pane to work on, written to a file on the pane's own node and typed in as
     /// the path to it.
