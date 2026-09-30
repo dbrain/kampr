@@ -423,6 +423,23 @@ it — a timing change with no guard is how the next one gets re-tuned by accide
   alone. It costs **nothing**: the marker was already being read once per pane per rebuild for the
   title. `waiting`→`Blocked` is the state herdr structurally cannot see (#355), and the live test
   asserts it against herdr saying `working`, so it fails if the override is removed.
+- **`updated_at` is when the conversation moved, and a restart does not move it.** The report:
+  *"sessions that haven't been touched at all get flagged as done and move up the top of the list
+  with a 'now' edit time … consistently after restarts."* herdr was not the cause — measured on a
+  real Claude 2.1.285, an untouched pane never reaches `done`, one turn gives exactly one `done`
+  that holds for four minutes, and a `--continue` lands on `idle`. The cause was Kampr's own
+  clock. A client marks `done` read against `updated_at` (herdr's marker only clears on a focus),
+  and the node stamped `now` on every pane it had not seen — all of them, after a restart — and
+  on a viewer arriving or leaving, a geometry change, a new scrollback row. Each re-raised a flag
+  the operator had already put down, and a pane left `done` for good ranks at the top.
+  Now a pane with a transcript is stamped with the transcript's mtime or the run's `startedAt`,
+  whichever is later (`state.rs::conversation_moved`) — the same answer from every node that reads
+  it, a hub relaying a peer included. An idle Claude leaves its transcript alone (mtime unmoved
+  for 270 s after a turn). Everything else is stamped by `herd.rs::Stamps` on agent, status, cwd
+  or job changing only, remembered across a pane's brief absence, and not at all in the first herd
+  a node builds. The client keeps a read `done` read when the node has no clock for the pane, and
+  stops forgetting reads for panes whose node is missing from the herd — a hub serves its own
+  panes before its peers' links are back.
 - **`state_change_seq` is noted, not wired.** It is a free global monotonic change counter on
   `agent.list`. Wiring it without a consumer would be dead code; it wants a purpose first.
 

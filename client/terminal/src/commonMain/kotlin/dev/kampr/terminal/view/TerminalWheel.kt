@@ -6,6 +6,8 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import dev.kampr.terminal.input.PaneScroll
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import kotlin.math.pow
 
 // A notch is three rows, the way a terminal emulator moves.
@@ -17,17 +19,18 @@ internal const val ZOOM_PER_CLICK = 1.1f
 
 // The magnitude of `scrollDelta` belongs to the host, and the hosts disagree by two orders of
 // magnitude: AWT and Android hand over wheel *clicks* — `1.0`, or a fraction of one from a precise
-// trackpad — while CMP's web backend forwards the DOM wheel deltas as they arrive, around a
-// hundred per notch in Chrome. That is why `androidx.compose.foundation` carries a per-platform
-// `ScrollConfig` at all, and its web actual (`JsScrollable.web.kt`) converts with a plain `dp`
-// factor where the desktop one goes through `MouseWheelEvent.getScrollAmount`. `ScrollConfig`
-// needs a `CompositionLocalConsumerModifierNode` to reach, which a `pointerInput` block is not.
-//
-// So the sign and the arrival of an event are portable and the size of one is not: a delta below
-// a click is a fraction of a notch, and no single event is worth more than one notch whatever
-// number the host put in it. **Unverified on a real browser** — the web figure above is read off
-// the shape of CMP's own web scroll config, not measured.
-private fun notches(delta: Float) = (delta * WHEEL_ROWS).coerceIn(-WHEEL_ROWS, WHEEL_ROWS)
+// trackpad — while CMP's web backend passes the DOM's `deltaY` through untouched
+// (`ComposeWindowInternal.onWheelEvent`, 1.11.1, #562): 100 CSS px for a notch in Chrome, a few px an
+// event from a trackpad. The conversation's list moves 1 dp for each of those, so here they are
+// the same distance in rows of this grid. Clamping every web event to one three-row notch left a
+// Chrome notch at three rows beside a conversation that moved a hundred dp.
+internal expect val wheelDeltaIsPixels: Boolean
+
+private fun Density.rowsOf(delta: Float, cell: Float): Float = when {
+    cell <= 0f -> 0f
+    wheelDeltaIsPixels -> delta.dp.toPx() / cell
+    else -> (delta * WHEEL_ROWS).coerceIn(-WHEEL_ROWS, WHEEL_ROWS)
+}
 
 // The fraction of a row a stream of small deltas has asked for and not yet been given. A terminal
 // moves by the row: spending each fraction as it came glided the surface through positions that
@@ -44,9 +47,8 @@ private class WholeRows {
     }
 }
 
-// The same rule `notches` applies, in clicks rather than rows: a fraction of a click is a fraction
-// of a step, and no single event is worth more than one however large a number the host put in it.
-// Negated because the wheel away from the reader — the direction that walks into history — is the
+// A fraction of a click is a fraction of a step, and no single event is worth more than one
+// however large a number the host put in it. Negated because the wheel away from the reader — the direction that walks into history — is the
 // direction every browser and every editor zooms in.
 private fun zoomStep(delta: Float) = ZOOM_PER_CLICK.pow(-delta.coerceIn(-1f, 1f))
 
@@ -89,8 +91,8 @@ internal suspend fun PointerInputScope.terminalWheel(
                 dx = dy
                 dy = 0f
             }
-            val cols = if (dx == 0f) 0 else across.take(notches(dx))
-            val rows = if (dy == 0f) 0 else down.take(notches(dy))
+            val cols = if (dx == 0f) 0 else across.take(rowsOf(dx, probe.cellWidth))
+            val rows = if (dy == 0f) 0 else down.take(rowsOf(dy, probe.cellHeight))
             if (cols == 0 && rows == 0) continue
             // Negated on both axes: the wheel says where the *content* goes, a drag says where the
             // surface goes, and `scrollBy` speaks the drag's language.

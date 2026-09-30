@@ -37,6 +37,9 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
     private var since: TimeMark? = null
     private var expectCol = -1
     private var expectRow = -1
+    private var width = 0
+    private var wrapCol = -1
+    private var wrapWidth = -1
 
     // Snapshot state: the surface redraws when a guess appears or is taken back.
     var shown by mutableIntStateOf(0)
@@ -57,12 +60,15 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
             distrust()
             return
         }
+        this.width = width
+        val edge = if (wrapWidth == width) wrapCol else width - 1
         for (ch in text) {
             val row = if (pending == 0) caret.row else rows[pending - 1]
             val col = if (pending == 0) caret.col else cols[pending - 1] + 1
-            // The last column is where the line wraps, and where it wraps to is the program's
-            // business. The key goes unwritten, so its echo reads as a caret nothing explained.
-            if (col >= width - 1 || pending == MAX_PENDING) break
+            // The last column is where a line wraps, or the column a program was already seen to
+            // wrap at, and where it wraps to is the program's business. The key goes unwritten, so
+            // its echo reads as a caret nothing explained.
+            if (col >= edge || pending == MAX_PENDING) break
             if (pending == 0) since = clock.markNow()
             rows[pending] = row
             cols[pending] = col
@@ -88,7 +94,8 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
                 confirmed++
                 continue
             }
-            if (caret.row != row || caret.col > col) {
+            if (caret.row != row || caret.col != col) {
+                learnWrap(cell, caret, col, row, glyphs[confirmed])
                 distrust()
                 return
             }
@@ -108,6 +115,19 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
 
     // How long until [expire] could take something back, for a caller that has to wake up for it.
     val deadlineMs: Long get() = UNANSWERED_MS + 1
+
+    // Claude's composer ends two columns short of the edge and takes the key that would land there
+    // to a new line, with the caret left on the same screen row (#558). A guess found at
+    // the start of the caret's line, instead of where it was typed, is that; the column is kept for
+    // this width so the next line is not guessed past it.
+    private fun learnWrap(cell: (col: Int, row: Int) -> Int, caret: Cursor, col: Int, row: Int, glyph: Int) {
+        val landed = caret.col - 1
+        if (landed < 0 || landed >= col) return
+        if (caret.row != row && caret.row != row + 1) return
+        if (cell(landed, caret.row) != glyph) return
+        wrapCol = col
+        wrapWidth = width
+    }
 
     private fun drop(count: Int) {
         rows.copyInto(rows, 0, count, pending)

@@ -89,15 +89,12 @@ class PaneChromeTest {
         val session = PaneSession(PANE)
         setContent {
             CompositionLocalProvider(LocalSafeArea provides SafeArea(top = 32.dp, bottom = 46.dp)) {
-                Themed { TerminalView(filledPane(), session, QuietIo) }
+                Themed { TerminalView(filledPane(), session, ReadableIo) }
             }
         }
         waitForIdle()
         val root = onRoot().getUnclippedBoundsInRoot()
-        // The pill is the tallest thing in the strip; the Row pads 4.dp above it and 6.dp below.
-        val pill = onNodeWithContentDescription("Review this pane row by row")
-            .getUnclippedBoundsInRoot()
-        val stripTop = pill.top - 4.dp
+        val stripTop = stripTop()
         // What the grid stops painting at: the chrome the strip stands off, plus the strip.
         val reserved = root.bottom - 46.dp - with(density) { session.indicatorHeight.toDp() }
         assertTrue(

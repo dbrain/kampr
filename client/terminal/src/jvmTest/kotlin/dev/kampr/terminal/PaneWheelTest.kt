@@ -116,11 +116,11 @@ class PaneWheelTest {
         )
     }
 
-    // A trackpad's stream of fractions is one notch's worth of scroll, not one report per event:
-    // a report is the program's own step, so sending one for every tiny delta ran Claude's view
-    // a notch per event and a flick of two fingers across a whole transcript.
+    // A trackpad's stream of fractions is one notch's worth of rows, not a report per event:
+    // sending one for every tiny delta ran Claude's view a row per event and a flick of two
+    // fingers across a whole transcript.
     @Test
-    fun fractionsOfAClickAddUpToOneReport() = runComposeUiTest {
+    fun fractionsOfAClickAddUpToOneNotchOfRows() = runComposeUiTest {
         val io = AgentIo("claude")
         val session = PaneSession(Phone.PANE)
         phoneTerminal(noRing(), session, io = io)
@@ -128,7 +128,7 @@ class PaneWheelTest {
         val before = io.typed.size
 
         repeat(4) { wheel(-0.25f) }
-        assertEquals(1, io.typed.size - before, "four quarter clicks: ${io.typed.drop(before)}")
+        assertEquals(3, io.typed.size - before, "four quarter clicks: ${io.typed.drop(before)}")
     }
 
     // The gate that keeps the two apart. A pane Kampr holds history for is a pane Kampr scrolls

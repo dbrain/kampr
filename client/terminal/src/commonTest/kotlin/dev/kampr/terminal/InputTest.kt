@@ -493,9 +493,9 @@ class PaneScrollTest {
     }
 
     @Test
-    fun aHarnessThatAskedForTheMouseGetsAWheelReportAndNothingElseMoves() {
-        assertEquals(listOf("\u001b[<64;41;21M"), reports(ScrollKeys.Wheel, up = true))
-        assertEquals(listOf("\u001b[<65;41;21M"), reports(ScrollKeys.Wheel, up = false))
+    fun aHarnessThatAskedForTheMouseGetsAWheelReportARowAndNothingElseMoves() {
+        assertEquals(List(3) { "\u001b[<64;41;21M" }, reports(ScrollKeys.Wheel, up = true))
+        assertEquals(List(3) { "\u001b[<65;41;21M" }, reports(ScrollKeys.Wheel, up = false))
     }
 
     // Alternate scroll, which is what herdr does at the desk. The **application** form: `less`,
@@ -556,7 +556,7 @@ class PaneScrollTest {
         val sent = mutableListOf<String>()
         val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
         scroll.wheel(rows = 3, col = 0, row = 0)
-        assertEquals(1, sent.size, "a notch waited for a pace it does not need")
+        assertEquals(3, sent.size, "a notch waited for a pace it does not need")
         assertEquals(0, scroll.queued)
     }
 
@@ -576,8 +576,8 @@ class PaneScrollTest {
         scroll.rest()
         assertEquals(1, lines.size, "one gesture is one line")
         assertTrue(
-            lines[0].contains("reports=6"),
-            "five rows of drag and one notch is six reports on the wire, not ${lines[0]}",
+            lines[0].contains("reports=8"),
+            "five rows of drag and a three-row notch is eight reports on the wire, not ${lines[0]}",
         )
         assertTrue(lines[0].contains("frames=1"), "the frame that answered them was not counted")
     }

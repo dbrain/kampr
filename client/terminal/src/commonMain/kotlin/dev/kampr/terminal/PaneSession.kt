@@ -55,9 +55,16 @@ class PaneSession(val paneId: String) {
         private set
     var keyRowHeight by mutableStateOf(0f)
 
-    // Measured, not guessed: the strip grows with the review pill, the type scale and the
-    // review bar, and a constant that is short by any of them paints the prompt behind it.
+    // Measured, not guessed: the strip is absent until something scrolls out of view, and grows
+    // with the review bar, the handover line and the type scale.
     var indicatorHeight by mutableStateOf(0f)
+
+    // The pane actions sheet is composed at the app root and never sees the grid, so it asks here
+    // and the terminal view on screen carries it out. `onScreen` is how the sheet knows there is
+    // one to ask; `attachable` is that view's own verdict on a picker and a device that may type.
+    var asked by mutableStateOf<PaneTool?>(null)
+    var onScreen by mutableIntStateOf(0)
+    var attachable by mutableStateOf(false)
 
     // Tapping the grid is the only way in, the way every terminal emulator behaves. A pan or a
     // pinch must not count as a tap, or the keyboard flickers on every flick.
@@ -81,6 +88,8 @@ class PaneSession(val paneId: String) {
         if (keyboardOpen) focusRequests++
     }
 }
+
+enum class PaneTool { Review, Attach }
 
 class PaneSessions {
     private val sessions = HashMap<String, PaneSession>()

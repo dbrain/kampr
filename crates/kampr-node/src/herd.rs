@@ -1,5 +1,7 @@
+use kampr_core::provider::AgentStatus;
 use kampr_core::wire::{HerdDelta, NodeEntry, PaneEntry, ServerMsg};
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -87,20 +89,75 @@ impl HerdModel {
             .map(|node| (node.id.clone(), node.online))
             .collect()
     }
+}
 
-    /// Carries each pane's previous timestamp forward unless something about it actually moved.
-    /// Herdr's snapshot carries no clock, so the node owns this one — and re-stamping every pane
-    /// on every poll would make `updated_at` mean "when we last looked" instead of "when it last
-    /// changed".
-    pub fn stamp(&mut self, previous: &Self) {
-        let before: HashMap<&str, &PaneEntry> = previous.panes.iter().map(|p| (p.id.as_str(), p)).collect();
+/// The clock behind `updated_at` for a pane nothing better stamped.
+///
+/// A pane whose harness keeps a transcript arrives already stamped with when that conversation
+/// last moved, and a peer's arrive stamped by the peer; both are left alone. Everything else is
+/// stamped here, and only for what somebody would call the pane *doing* something — a viewer
+/// arriving, a geometry change or a new scrollback row is not it. A client marks herdr's `done`
+/// read against this value, so each of those re-raised a flag the operator had already put down.
+///
+/// Remembered past a pane's absence, because a herd rebuilt while herdr was unreachable carries
+/// none and the panes coming back are the same panes. And the herd a node first builds stamps
+/// nothing: "now" there is when this process started, not when the pane was touched.
+#[derive(Default)]
+pub struct Stamps {
+    seen: HashMap<String, Seen>,
+    primed: bool,
+}
+
+struct Seen {
+    doing: Doing,
+    at: Option<String>,
+    last: Instant,
+}
+
+type Doing = (
+    Option<String>,
+    AgentStatus,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+const FORGET: Duration = Duration::from_secs(600);
+
+fn doing(pane: &PaneEntry) -> Doing {
+    (
+        pane.agent.clone(),
+        pane.agent_status,
+        pane.cwd.clone(),
+        pane.cmd.clone(),
+        pane.argv.clone(),
+    )
+}
+
+impl Stamps {
+    pub fn stamp(&mut self, model: &mut HerdModel) {
         let now = OffsetDateTime::now_utc().format(&Rfc3339).ok();
-        for pane in &mut self.panes {
-            pane.updated_at = match before.get(pane.id.as_str()) {
-                Some(old) if same(old, pane) => old.updated_at.clone(),
-                _ => now.clone(),
-            };
+        let at = Instant::now();
+        for pane in &mut model.panes {
+            let doing = doing(pane);
+            if pane.updated_at.is_none() {
+                pane.updated_at = match self.seen.get(&pane.id) {
+                    Some(seen) if seen.doing == doing => seen.at.clone(),
+                    None if !self.primed => None,
+                    _ => now.clone(),
+                };
+            }
+            self.seen.insert(
+                pane.id.clone(),
+                Seen {
+                    doing,
+                    at: pane.updated_at.clone(),
+                    last: at,
+                },
+            );
         }
+        self.primed = true;
+        self.seen.retain(|_, seen| at.duration_since(seen.last) < FORGET);
     }
 }
 
@@ -115,7 +172,8 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
 }
 
 fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
-    a.workspace == b.workspace
+    a.updated_at == b.updated_at
+        && a.workspace == b.workspace
         && a.tab == b.tab
         && a.cwd == b.cwd
         && a.label == b.label
@@ -199,20 +257,92 @@ mod tests {
         assert_eq!(removed, ["01J/w1:p2"]);
     }
 
+    fn stamped(stamps: &mut Stamps, mut model: HerdModel) -> HerdModel {
+        stamps.stamp(&mut model);
+        model
+    }
+
+    fn primed() -> (Stamps, Option<String>) {
+        let mut stamps = Stamps::default();
+        stamped(&mut stamps, HerdModel::default());
+        let first = stamped(&mut stamps, model(&[("w1:p1", 74)]));
+        let at = first.panes[0].updated_at.clone();
+        assert!(
+            at.is_some(),
+            "a pane that opened while the node was running is stamped"
+        );
+        (stamps, at)
+    }
+
     #[test]
-    fn a_pane_that_did_not_move_keeps_its_timestamp() {
-        let mut first = model(&[("w1:p1", 74)]);
-        first.stamp(&HerdModel::default());
-        let stamped = first.panes[0].updated_at.clone();
-        assert!(stamped.is_some());
+    fn a_node_that_has_just_started_claims_no_pane_was_touched_just_now() {
+        let mut stamps = Stamps::default();
+        let first = stamped(&mut stamps, model(&[("w1:p1", 74)]));
+        assert_eq!(first.panes[0].updated_at, None);
+        let second = stamped(&mut stamps, model(&[("w1:p1", 74)]));
+        assert_eq!(
+            second.panes[0].updated_at, None,
+            "and nothing it did since says otherwise"
+        );
+    }
 
-        let mut second = model(&[("w1:p1", 74)]);
-        second.stamp(&first);
-        assert_eq!(second.panes[0].updated_at, stamped);
+    /// A client marks a `done` read against this stamp, so every one of these re-raised a flag the
+    /// operator had already put down — a viewer leaving the pane they had just read among them.
+    #[test]
+    fn looking_at_a_pane_or_reshaping_it_is_not_touching_it() {
+        let (mut stamps, at) = primed();
+        let mut watched = model(&[("w1:p1", 94)]);
+        watched.panes[0] = watched.panes[0].clone().with_watchers(2);
+        watched.panes[0].scrollback_rows = 400;
+        watched.panes[0].detail = Some("no picture".into());
+        watched.panes[0].label = Some("renamed".into());
+        assert_eq!(stamped(&mut stamps, watched).panes[0].updated_at, at);
+    }
 
-        let mut third = model(&[("w1:p1", 94)]);
-        third.stamp(&second);
-        assert_ne!(third.panes[0].updated_at, stamped);
+    #[test]
+    fn a_pane_that_starts_doing_something_is_stamped_again() {
+        let (mut stamps, at) = primed();
+        let mut working = model(&[("w1:p1", 74)]);
+        working.panes[0].agent_status = AgentStatus::Working;
+        assert_ne!(stamped(&mut stamps, working).panes[0].updated_at, at);
+
+        let (mut stamps, at) = primed();
+        let mut job = model(&[("w1:p1", 74)]);
+        job.panes[0].cmd = Some("cargo".into());
+        assert_ne!(stamped(&mut stamps, job).panes[0].updated_at, at);
+    }
+
+    /// A herd rebuilt while herdr was unreachable carries no panes, and the ones that come back are
+    /// the same panes.
+    #[test]
+    fn a_pane_that_drops_out_of_one_herd_comes_back_with_its_stamp() {
+        let (mut stamps, at) = primed();
+        stamped(&mut stamps, HerdModel::default());
+        assert_eq!(
+            stamped(&mut stamps, model(&[("w1:p1", 74)])).panes[0].updated_at,
+            at
+        );
+    }
+
+    /// The transcript's own clock, or a peer's: either is the same answer from every node that
+    /// relays it, which a stamp taken here could never be.
+    #[test]
+    fn a_pane_that_arrives_stamped_keeps_the_stamp_it_came_with() {
+        let mut stamps = Stamps::default();
+        let mut heard = model(&[("w1:p1", 74)]);
+        heard.panes[0].updated_at = Some("2026-09-30T00:15:34Z".into());
+        let kept = stamped(&mut stamps, heard);
+        assert_eq!(kept.panes[0].updated_at.as_deref(), Some("2026-09-30T00:15:34Z"));
+    }
+
+    /// A conversation moving is news for a client whether or not anything else about the pane did.
+    #[test]
+    fn a_new_stamp_is_a_change() {
+        let before = model(&[("w1:p1", 74)]);
+        let mut after = model(&[("w1:p1", 74)]);
+        after.panes[0].updated_at = Some("2026-09-30T00:15:34Z".into());
+        let (_, changed, _) = patch(&after.diff(&before).unwrap());
+        assert_eq!(changed, ["01J/w1:p1"]);
     }
 
     /// A viewer joining or leaving is a change to the pane like any other: a client that is told

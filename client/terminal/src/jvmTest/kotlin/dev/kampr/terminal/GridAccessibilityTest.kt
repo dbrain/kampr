@@ -1,5 +1,7 @@
 package dev.kampr.terminal
 
+import dev.kampr.terminal.view.ZoomButton
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -323,12 +325,20 @@ class ScrollbackHonestyTest {
     @Test
     fun aClippedRecordSaysHerdrCannotBeAskedForMore() = runComposeUiTest {
         val io = GridIo(conversation = false)
-        setContent { Themed(io) { TerminalView(scrolledPane(complete = true, capped = true), PaneSession(GRID_PANE), io) } }
+        val session = PaneSession(GRID_PANE)
+        setContent {
+            Themed(io) {
+                Column {
+                    ZoomButton(session)
+                    TerminalView(scrolledPane(complete = true, capped = true), session, io)
+                }
+            }
+        }
         onNodeWithContentDescription("history is clipped", substring = true).assertExists()
         onNodeWithText("older output is unreachable").assertExists()
 
         // And in words, for anyone who never scrolls to the top of a 20,000-row ring.
-        onNodeWithContentDescription("Opens the zoom sheet", substring = true)
+        onNodeWithContentDescription("Zoom, currently", substring = true)
             .performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
         onNodeWithContentDescription("The scrollback: history is clipped", substring = true).assertExists()

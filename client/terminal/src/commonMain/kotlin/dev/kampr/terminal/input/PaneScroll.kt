@@ -1,6 +1,6 @@
 package dev.kampr.terminal.input
 
-import dev.kampr.terminal.view.WHEEL_ROWS
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -14,9 +14,10 @@ import kotlinx.coroutines.launch
 // every terminal does, herdr included, and what the operator already sees at the desk.
 enum class ScrollKeys {
     // What a terminal sends when the program asked for the mouse: a scroll the program understands
-    // as a scroll, moving its view and nothing else. One report per notch, the way a terminal sends
-    // one event per notch and lets the program choose its own step.
-    Wheel(1),
+    // as a scroll, moving its view and nothing else. Claude moves 0.83 rows for one (#527), so a
+    // report is sent per row of travel — one per notch left a Chrome notch at under a row of
+    // Claude beside a conversation that moved five.
+    Wheel,
 
     // Alternate scroll, and the default for everything else: the wheel becomes cursor keys. The
     // caret moves and the view follows it at the edge — which is exactly what herdr does with vim,
@@ -24,16 +25,7 @@ enum class ScrollKeys {
     //
     // The **application** form, not `ESC [ A`. `less`, `man` and `vim` all set DECCKM, and the
     // normal form moved `less` by nothing at all where this form moves it a line a press (#390).
-    CursorKeys(3),
-    ;
-
-    // How many go out for one notch of the wheel. A notch is three rows on this surface
-    // (`WHEEL_ROWS`), and a cursor key is worth a row; a wheel report is worth whatever the program
-    // says it is worth.
-    val perNotch: Int
-    constructor(perNotch: Int) {
-        this.perNotch = perNotch
-    }
+    CursorKeys,
 }
 
 // Harnesses measured to do better than the default: they take a real wheel report, so their view
@@ -68,8 +60,7 @@ internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): St
 // A drag pushes **60 reports a second** into a pipeline that returns 20-35 distinct frames, and the
 // excess is *merged rather than queued* — the same 26 reports bought 12 visible steps sent fast and
 // 34 sent slow, so half the journey arrived as one jump instead of two. The round trip was never
-// the limit: 14-31 ms throughout. A wheel never meets this because a hand makes 10-30 detents a
-// second, which is the whole of "the desktop feels smooth and the phone does not".
+// the limit: 14-31 ms throughout.
 private const val PACE_MS = 40L
 
 // The most travel a finger may run ahead of the program, in reports.
@@ -83,16 +74,17 @@ private const val PENDING_CAP = 50
 
 // The scroll a pane is given, by whichever gesture asked for it.
 //
-// A wheel hands over by notch and a finger by distance: once the surface underneath is spent, a drag
-// asks for a row for every row it travels, which is the one-to-one a touch scroll is. The remainder
-// is carried, or a slow drag rounds to nothing on every frame and the pane never moves at all.
+// Both hand over by distance: once the surface underneath is spent, a wheel or a drag asks for a
+// report for every row it travels. A drag's remainder is carried here, or a slow drag rounds to
+// nothing on every frame and the pane never moves at all; a wheel arrives in whole rows already.
 //
 // Positive is into history — the same sense `TerminalViewState.scrollY` uses — so a finger pulled
 // *down* the screen asks for what is above it, and that is a scroll *up*.
 //
-// **The finger is paced and the wheel is not**, because only one of them outruns the program: a
-// notch goes out the moment it is asked for, and a drag's rows are queued and released at
-// [`PACE_MS`]. `scope` is what releases them; without one the queue only moves when [`drain`] is
+// **The finger is paced and the wheel is not.** A notch's rows go out together and some are merged on
+// the way back (#527), which costs visible steps and not distance; paced, a spun
+// wheel would trail seconds behind the hand. A drag's rows are queued and released at [`PACE_MS`]
+// because a drag *is* the steps between. `scope` is what releases them; without one the queue only moves when [`drain`] is
 // called, which is how a test drives it without a clock.
 class PaneScroll(
     val keys: ScrollKeys,
@@ -113,23 +105,10 @@ class PaneScroll(
         send(scrollReport(keys, up, col, row))
     }
 
-    // Rows, not notches, because a trackpad hands over a notch in fractions and a report is a
-    // whole step of the program's own: the rows are kept until they make a report's worth. A turn
-    // of the wheel the other way is a new request, not a correction of the last one's remainder.
-    private var wheelRows = 0
-
+    // Whole rows, because the fractions a trackpad hands over are carried by the wheel until they
+    // make one: a report for every tiny delta ran Claude's view a row per event.
     fun wheel(rows: Int, col: Int, row: Int) {
-        val per = WHEEL_ROWS.toInt() / keys.perNotch
-        if (wheelRows != 0 && (wheelRows > 0) != (rows > 0)) wheelRows = 0
-        wheelRows += rows
-        while (wheelRows >= per) {
-            wheelRows -= per
-            report(true, col, row)
-        }
-        while (wheelRows <= -per) {
-            wheelRows += per
-            report(false, col, row)
-        }
+        repeat(abs(rows)) { report(rows > 0, col, row) }
     }
 
     fun refused(distance: Float, step: Float, col: Int, row: Int) {

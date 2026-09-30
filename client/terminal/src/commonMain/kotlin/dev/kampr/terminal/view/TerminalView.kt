@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.PaneState
@@ -73,6 +75,7 @@ import dev.kampr.shared.wire.MIN_PANE_ROWS
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.talks
 import dev.kampr.terminal.PaneSession
+import dev.kampr.terminal.PaneTool
 import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.file.handoverAfter
 import dev.kampr.terminal.file.handoverName
@@ -116,9 +119,8 @@ import kotlin.math.roundToInt
 
 private const val CURSOR_BLINK_MS = 530L
 
-// What the strip is assumed to take for the one frame before it has been measured. The measured
-// height replaces it immediately; nothing but the first paint ever depends on this number.
-private const val INDICATOR_FLOOR_DP = 36f
+const val BOTTOM_CHROME_TAG = "pane bottom chrome"
+
 private const val DECAY = 0.94f
 private const val PREFS_DEBOUNCE_MS = 400L
 private const val FONT_SETTLE_FRAMES = 120
@@ -140,10 +142,6 @@ private const val ECHO_EXPIRY_POLL_MS = 250L
 // Measured on pi 0.86.1 (#552); omp shares pi's records, not its terminal,
 // and nobody has typed into one to look.
 private val TYPES_BEHIND_A_HIDDEN_CARET = setOf("pi")
-
-// The review strip is chrome like any other: without insetting for it the row the reader is
-// being read is the row sitting behind the controls that read it.
-private const val REVIEW_BAR_DP = 52f
 
 // The wash over the cells a click hit, and the rule under them. Light enough that the glyphs it
 // covers are still read through it, which a `selectionWash` sized for an unread block is not.
@@ -298,6 +296,11 @@ fun TerminalView(
         session.handover = Handover.Going(handoverName(picked))
         session.handover = handoverOf(pane, io, picked)
     }
+    DisposableEffect(session) {
+        session.onScreen++
+        onDispose { session.onScreen-- }
+    }
+    SideEffect { session.attachable = !io.readOnly && filePickAvailable }
 
     val stillness = LocalReduceMotion.current
     var cursorOn by remember { mutableStateOf(true) }
@@ -387,18 +390,11 @@ fun TerminalView(
         // from its own size is what would leave blank rows under the last line.
         val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
         val chromeBottom = max(session.keyRowHeight, with(density) { safe.bottom.toPx() })
-        // The strip measures itself. It carries the review bar when review is on, a pill sized by
-        // the touch rule and text sized by the type scale, and every one of those moves it.
-        val strip = if (session.indicatorHeight > 0f) {
-            session.indicatorHeight
-        } else {
-            with(density) { (INDICATOR_FLOOR_DP + if (review.active) REVIEW_BAR_DP else 0f).dp.toPx() }
-        }
         val paint = PaintRect(
             width = with(density) { maxWidth.toPx() },
             height = with(density) { maxHeight.toPx() },
             insetTop = with(density) { chromeTop.toPx() },
-            insetBottom = chromeBottom + strip,
+            insetBottom = chromeBottom + session.indicatorHeight,
         )
 
         var fontEpoch by remember(cache) { mutableIntStateOf(0) }
@@ -1043,7 +1039,8 @@ fun TerminalView(
                 )
                 // Inside the padding on purpose: the paint already insets for the chrome this
                 // stands off, and measuring the padded node would count that chrome twice.
-                .onSizeChanged { session.indicatorHeight = it.height.toFloat() },
+                .onSizeChanged { session.indicatorHeight = it.height.toFloat() }
+                .testTag(BOTTOM_CHROME_TAG),
         ) {
             if (review.active) {
                 ReviewStrip(
@@ -1055,24 +1052,39 @@ fun TerminalView(
                 )
             }
             HandoverLine(session.handover, info?.agent)
+        }
+
+        // Floats rather than standing in the column above: a bar that takes rows from the grid
+        // changes the fit it reports on, and under a standing hold that is a resize of the pane.
+        if (window.clipped) {
             ColumnIndicator(
                 window = window,
-                reviewing = review.active,
                 onOpen = { view.sheetOpen = true },
-                onReview = { session.closeKeyboard(); review.enter(reviewSurface()) },
-                attachTo = info?.agent,
-                onAttach = if (io.readOnly || !filePickAvailable) {
-                    null
-                } else {
-                    {
-                        scope.launch {
-                            val picked = pickFile() ?: return@launch
-                            session.handover = Handover.Going(handoverName(picked))
-                            session.handover = handoverOf(pane, io, picked)
-                        }
-                    }
-                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .absolutePadding(
+                        right = safe.right + 8.dp,
+                        bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() } + 6.dp,
+                    ),
             )
+        }
+
+        LaunchedEffect(session.asked) {
+            when (session.asked) {
+                PaneTool.Review -> {
+                    session.closeKeyboard()
+                    review.enter(reviewSurface())
+                }
+                PaneTool.Attach -> if (session.attachable) {
+                    scope.launch {
+                        val picked = pickFile() ?: return@launch
+                        session.handover = Handover.Going(handoverName(picked))
+                        session.handover = handoverOf(pane, io, picked)
+                    }
+                }
+                null -> return@LaunchedEffect
+            }
+            session.asked = null
         }
 
         view.selection?.let { selection ->
@@ -1157,7 +1169,7 @@ fun TerminalView(
                     onCopy = copy,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(bottom = with(density) { (chromeBottom + strip).toDp() }),
+                        .padding(bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() }),
                 )
             }
         }

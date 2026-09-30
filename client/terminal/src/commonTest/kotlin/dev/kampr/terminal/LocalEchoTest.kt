@@ -152,4 +152,88 @@ class LocalEchoTest {
         edge.type("cd")
         assertEquals("c", edge.shown(), "a guess never goes into the last column, where the line wraps")
     }
+
+    // Claude's composer, as measured: `❯ ` then the text from column 2, and the key that would land
+    // two columns short of the edge starts a new line at column 2 instead. The box grows upward, so
+    // the line typed so far scrolls up a row and the caret stays on the same screen row, back at
+    // the left. One frame per key, as it was measured at a typing pace.
+    private class Composer(val cols: Int = 12) {
+        val clock = Clock()
+        val echo = LocalEcho(clock)
+        val rows = Array(3) { IntArray(cols) { ' '.code } }
+        var caret = Cursor(2, 2, true)
+
+        init {
+            rows[2][0] = '❯'.code
+        }
+
+        fun type(text: String) = echo.typed(text, caret, cols)
+
+        fun echoes(text: String) {
+            for (ch in text) {
+                if (caret.col == cols - 2) {
+                    rows[0] = rows[1]
+                    rows[1] = rows[2]
+                    rows[2] = IntArray(cols) { ' '.code }
+                    caret = Cursor(2, caret.row, caret.visible)
+                }
+                rows[caret.row][caret.col] = ch.code
+                caret = Cursor(caret.col + 1, caret.row, caret.visible)
+                echo.frame({ col, row -> rows[row][col] }, caret)
+            }
+        }
+
+        fun shown(): String = (0 until echo.shown).joinToString("") { echo.glyph(it).toChar().toString() }
+    }
+
+    @Test
+    fun aComposerThatWrapsShortOfTheEdgeTakesTheGuessBackOnTheFrameThatWrapped() {
+        val box = Composer()
+        box.type("ab")
+        box.echoes("ab")
+        box.type("cdefghi")
+        box.echoes("cdefgh")
+        assertEquals("i", box.shown(), "the key that wraps is guessed where the line would have gone")
+        box.echoes("i")
+        assertEquals("", box.shown(), "the composer put it on a new line and the guess stayed at the edge")
+        assertEquals(box.caret, box.echo.caret(box.caret), "the caret was drawn at the edge while the real one moved on")
+    }
+
+    @Test
+    fun aLineThatWrappedIsNotGuessedAtItsWrapColumnAgain() {
+        val box = Composer()
+        box.type("ab")
+        box.echoes("ab")
+        box.type("cdefghi")
+        box.echoes("cdefghi")
+        box.type("jk")
+        box.echoes("jk")
+        box.type("lmnopq")
+        assertEquals("lmnop", box.shown(), "the column the composer wrapped at is guessed at again")
+
+        val wider = Composer(cols = 14)
+        wider.type("ab")
+        wider.echoes("ab")
+        wider.type("cdefghi")
+        wider.echoes("cdefghi")
+        wider.type("jk")
+        assertEquals("jk", wider.shown(), "a wrap nothing has shown at this width is still guessed up to the edge")
+    }
+
+    // A program that clears its line and redraws it from the left has moved the caret back without
+    // wrapping anything; that disagrees with the guess, and teaches nothing about where lines end.
+    @Test
+    fun aCaretSentBackToTheLeftTakesTheGuessBackWithoutInventingAWrap() {
+        val line = Line()
+        line.type("ab")
+        line.echoes("ab")
+        line.type("x")
+        line.caret = Cursor(2, 0, true)
+        line.frame()
+        assertEquals("", line.shown(), "the pane sent the caret back and the guess stayed")
+        line.type("cd")
+        line.echoes("cd")
+        line.type("efg")
+        assertEquals("efg", line.shown(), "a redraw was taken for a wrap")
+    }
 }

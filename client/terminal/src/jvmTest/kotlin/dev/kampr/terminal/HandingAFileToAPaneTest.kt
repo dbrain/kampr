@@ -89,23 +89,6 @@ class HandingAFileToAPaneTest {
     }
 
     @Test
-    fun theTerminalOffersToAttachSomethingWhereThereIsAPickerToRaise() = runComposeUiTest {
-        val session = PaneSession(Phone.PANE)
-        phoneTerminal(Phone.shell(), session)
-        onNodeWithContentDescription("Attach a file for this pane").assertExists()
-    }
-
-    @Test
-    fun aReadOnlyDeviceIsOfferedNothingToAttach() = runComposeUiTest {
-        val session = PaneSession(Phone.PANE)
-        phoneTerminal(Phone.shell(), session, io = Node(readOnly = true))
-        assertTrue(
-            onAllNodesWithContentDescription("Attach a file for this pane").fetchSemanticsNodes().isEmpty(),
-            "a device that cannot type was offered a way to type a path in",
-        )
-    }
-
-    @Test
     fun whatIsGoingIsSaidOnTheTerminalsOwnChrome() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(LocalTokens provides Phone.tokens()) {

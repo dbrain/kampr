@@ -84,6 +84,7 @@ internal fun ComposeUiTest.browserTerminal(
     pane: PaneState,
     session: PaneSession,
     size: Pair<Dp, Dp>,
+    io: PaneIo = Hush,
 ) {
     mainClock.autoAdvance = false
     val fonts = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
@@ -91,12 +92,12 @@ internal fun ComposeUiTest.browserTerminal(
     setContent {
         CompositionLocalProvider(
             LocalTokens provides tokens,
-            LocalPaneIo provides Hush,
+            LocalPaneIo provides io,
             LocalSafeArea provides SafeArea(top = 32.dp, bottom = 46.dp),
             LocalPaneChrome provides PaneChrome(96.dp),
         ) {
             Box(Modifier.size(size.first, size.second).keyboardInset()) {
-                Box(Modifier.fillMaxSize()) { TerminalView(pane, session, Hush) }
+                Box(Modifier.fillMaxSize()) { TerminalView(pane, session, io) }
             }
         }
     }

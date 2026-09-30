@@ -14,7 +14,9 @@ import dev.kampr.shared.wire.PaneInfo
 //
 // Read is keyed by the pane's `updatedAt` as well as its id, so the *next* time that pane finishes
 // the flag is raised again rather than the pane going quiet for good. A pane with no `updatedAt`
-// has nothing to re-arm against and is remembered by id alone.
+// has nothing to re-arm against and is remembered by id alone — including one that had a stamp
+// when it was read: herdr keeps `done` on a pane whose agent has exited, and a node that starts
+// after that has no clock for it. That is a node that does not know, not a pane that moved.
 private const val NEVER = ""
 
 private const val PAIR = '\u001f'
@@ -37,12 +39,18 @@ class SeenDone(private val prefs: Prefs? = null, private val key: String = "seen
         store()
     }
 
-    internal fun hasRead(pane: PaneInfo): Boolean = read[pane.id] == (pane.updatedAt ?: NEVER)
+    internal fun hasRead(pane: PaneInfo): Boolean {
+        val at = read[pane.id] ?: return false
+        return pane.updatedAt == null || at == pane.updatedAt
+    }
 
-    // Panes the herd no longer carries cannot come back under the same id, so remembering them is
-    // only growth.
-    fun keep(live: Set<String>) {
-        val kept = read.filterKeys { it in live }
+    // A pane its own node no longer carries cannot come back under the same id, so remembering it
+    // is only growth. A pane whose node is missing too is a hub that has just restarted and whose
+    // peers' links are not back yet, and it is the same pane when they are.
+    fun keep(herd: Herd) {
+        val live = herd.panes.mapTo(mutableSetOf()) { it.id }
+        val nodes = herd.nodes.mapTo(mutableSetOf()) { it.id }
+        val kept = read.filterKeys { it in live || it.substringBefore('/') !in nodes }
         if (kept.size == read.size) return
         read = kept
         store()

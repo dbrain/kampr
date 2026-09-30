@@ -10,7 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
@@ -40,6 +40,7 @@ import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.terminal.view.BOTTOM_CHROME_TAG
 import dev.kampr.terminal.view.TerminalView
 
 internal object HushIo : PaneIo {
@@ -165,7 +166,7 @@ internal fun ComposeUiTest.rowBottom(pane: PaneState, session: PaneSession, row:
 
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.stripTop(): Dp =
-    onNodeWithContentDescription("Review this pane row by row").getUnclippedBoundsInRoot().top
+    onNodeWithTag(BOTTOM_CHROME_TAG).getUnclippedBoundsInRoot().top
 
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.onScreen(pane: PaneState, session: PaneSession, row: Int): Boolean =

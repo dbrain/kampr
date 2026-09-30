@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::herd::HerdModel;
+use crate::herd::{HerdModel, Stamps};
 use crate::sessions::{SessionNode, Sessions};
 use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
@@ -324,7 +324,7 @@ async fn refresh_herd(
     home: PathBuf,
     mut update: watch::Receiver<Option<String>>,
 ) {
-    let mut previous = Arc::new(HerdModel::default());
+    let mut stamps = Stamps::default();
     let mut mesh = peers.subscribe();
     let conversations = Conversations::default();
     let names = Names::default();
@@ -359,10 +359,8 @@ async fn refresh_herd(
                 .filter(|p| !ours(&p.node_id) && !ours(&p.id))
                 .cloned(),
         );
-        model.stamp(&previous);
-        let model = Arc::new(model);
-        previous = model.clone();
-        herd.send_replace(model);
+        stamps.stamp(&mut model);
+        herd.send_replace(Arc::new(model));
 
         // A transcript appearing on disk is the one change nothing signals — no herdr event, no
         // provider revision, no watcher — so the sweep shortens to the retry floor for exactly as
@@ -732,12 +730,29 @@ async fn build_model(
             // approval dialog — measured, with `agent explain` returning no rules ([#485](#)).
             let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
             entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
+            entry.updated_at = conversation_moved(transcript.as_deref(), marker.as_ref());
             panes.push(entry);
         }
     }
     conversations.keep(&live, &live_panes);
     names.keep(&titled);
     HerdModel { nodes, panes }
+}
+
+/// When the conversation last moved: the transcript's last write, or the run starting if that is
+/// later — a `--continue` is the operator touching the pane even before it says anything.
+///
+/// Read off the harness's own files, so every node that looks — this one, the one that replaces it
+/// on a restart, a hub relaying either — gives the same answer. An idle Claude leaves its
+/// transcript alone: its mtime held for 270 s after a turn with nothing touching the pane.
+fn conversation_moved(transcript: Option<&Path>, marker: Option<&SessionMarker>) -> Option<String> {
+    let written = transcript.and_then(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+    let started = marker.and_then(|m| m.started.at());
+    let at = time::OffsetDateTime::from(written.max(started)?);
+    at.replace_nanosecond(0)
+        .ok()?
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
 }
 
 /// The pane's status once the harness has had its say.

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -240,17 +241,20 @@ fun Segmented(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
     what: String = "view",
+    compact: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val outer = RoundedCornerShape(tokens.radii.md)
     val inner = RoundedCornerShape(tokens.radii.sm)
+    val style = if (compact) tokens.type.badge else tokens.type.tab
     Row(
         modifier
+            .let { if (compact) it.width(IntrinsicSize.Max) else it }
             .background(tokens.color.surface, outer)
             .edge(tokens.card, outer)
             .group()
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(if (compact) 2.dp else 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
     ) {
         options.forEachIndexed { index, option ->
             val active = index == selectedIndex
@@ -258,7 +262,7 @@ fun Segmented(
                 Modifier
                     .weight(1f)
                     .let { if (active) it.background(tokens.color.raise, inner) else it }
-                    .touchable(LANDSCAPE_TOUCH)
+                    .touchable(if (compact) COMPACT_SEGMENT else LANDSCAPE_TOUCH)
                     .action(
                         "$option $what",
                         { onSelect(index) },
@@ -266,7 +270,7 @@ fun Segmented(
                         role = Role.Tab,
                         selected = active,
                     )
-                    .padding(vertical = 8.dp),
+                    .padding(horizontal = if (compact) 10.dp else 0.dp, vertical = if (compact) 0.dp else 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 // Every segment reserves the width its label takes *selected*, whichever segment
@@ -285,13 +289,13 @@ fun Segmented(
                 DisableSelection {
                     KText(
                         option,
-                        tokens.type.tab,
+                        style,
                         tokens.color.text,
                         Modifier.clearAndSetSemantics {}.drawWithContent {},
                     )
                     KText(
                         option,
-                        if (active) tokens.type.tab else tokens.type.tab.copy(fontWeight = FontWeight.W500),
+                        if (active) style else style.copy(fontWeight = FontWeight.W500),
                         if (active) tokens.color.text else tokens.color.dim,
                     )
                 }
@@ -299,6 +303,8 @@ fun Segmented(
         }
     }
 }
+
+private val COMPACT_SEGMENT = 30.dp
 
 @Composable
 fun Gap(width: Dp) {

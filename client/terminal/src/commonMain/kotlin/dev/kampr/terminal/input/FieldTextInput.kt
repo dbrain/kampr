@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import dev.kampr.terminal.PaneSession
 import kotlinx.coroutines.flow.drop
 
@@ -83,6 +84,7 @@ fun FieldTextInput(
     enabled: Boolean,
     onChord: (PaneChord) -> Unit,
     modifier: Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
 ) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -146,6 +148,7 @@ fun FieldTextInput(
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None,
             autoCorrectEnabled = false,
+            keyboardType = keyboardType,
             imeAction = ImeAction.None,
         ),
     )

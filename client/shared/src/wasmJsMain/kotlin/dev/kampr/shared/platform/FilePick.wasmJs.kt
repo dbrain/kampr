@@ -63,6 +63,11 @@ private fun jsPick(): Promise<JsString?> = js(
 // listener that is absent for the paste that arrives while a view is being switched; what is
 // scoped to the composable is the *waiter*, so an unread file simply sits in the queue.
 //
+// A file dropped on the page is the same hand-over by a different gesture and joins the same
+// queue. `dragover` has to be refused its default for a drop to fire at all, and a drop that is
+// let through is the browser navigating away from Kampr to show the file — so both are taken
+// whenever the drag carries files, wherever on the page it lands.
+//
 // It is a capture-phase listener so that it sees the event before Compose's own, and it calls
 // `preventDefault` **only** when it took files — a file copied in a file manager also puts its
 // name on the clipboard as text, and pasting that name into the reply box is not what the operator
@@ -81,8 +86,7 @@ private fun jsNextPaste(): Promise<JsString?> = js(
           var waiter = box.waiting.shift();
           if (waiter) waiter(value); else box.ready.push(value);
         };
-        window.addEventListener('paste', function (event) {
-          var data = event.clipboardData;
+        var take = function (event, data) {
           if (!data) return;
           var files = [];
           for (var i = 0; i < data.items.length; i++) {
@@ -103,6 +107,21 @@ private fun jsNextPaste(): Promise<JsString?> = js(
             };
             reader.readAsArrayBuffer(file);
           });
+        };
+        var carriesFiles = function (event) {
+          var types = event.dataTransfer && event.dataTransfer.types;
+          return !!types && Array.prototype.indexOf.call(types, 'Files') >= 0;
+        };
+        window.addEventListener('paste', function (event) { take(event, event.clipboardData); }, true);
+        window.addEventListener('dragover', function (event) {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }, true);
+        window.addEventListener('drop', function (event) {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          take(event, event.dataTransfer);
         }, true);
       }
       return new Promise(function (resolve) {

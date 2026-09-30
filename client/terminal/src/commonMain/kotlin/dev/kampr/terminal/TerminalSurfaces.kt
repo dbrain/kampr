@@ -6,6 +6,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.ui.Chip
 import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneSurfaces
@@ -27,6 +28,19 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
     @Composable
     override fun Zoom(pane: PaneState, modifier: Modifier) {
         ZoomButton(sessions[pane.id], modifier)
+    }
+
+    @Composable
+    override fun Tools(paneId: String, onUsed: () -> Unit) {
+        conversation.Tools(paneId, onUsed)
+        val session = sessions[paneId]
+        if (session.onScreen == 0) return
+        fun ask(tool: PaneTool) {
+            onUsed()
+            session.asked = tool
+        }
+        Chip("review", false, { ask(PaneTool.Review) }, label = "Review this pane row by row")
+        if (session.attachable) Chip("attach", false, { ask(PaneTool.Attach) }, label = "Attach a file for this pane")
     }
 
     @Composable

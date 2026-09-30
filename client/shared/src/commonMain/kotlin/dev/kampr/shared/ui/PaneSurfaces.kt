@@ -28,6 +28,11 @@ interface PaneSurfaces {
     // The header carries the zoom control, but only the terminal surface knows what the zoom is.
     @Composable
     fun Zoom(pane: PaneState, modifier: Modifier) = Unit
+
+    // Chips in the pane actions sheet for what only the surface on screen can do. `onUsed` closes
+    // the sheet, which has to be out of the way of whatever the chip starts.
+    @Composable
+    fun Tools(paneId: String, onUsed: () -> Unit) = Unit
 }
 
 // A surface is handed a PaneState, not the connection, so this is how a renderer answers back:

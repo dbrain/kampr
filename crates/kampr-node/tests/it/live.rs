@@ -6408,6 +6408,96 @@ async fn a_pane_that_finished_unwatched_stays_done_when_its_harness_says_idle() 
     until_status(&mut socket, &pane, "done", 30).await;
 }
 
+/// The operator's report: *"sessions that haven't been touched at all get flagged as done and move
+/// up the top of the list with a 'now' edit time. this consistently happens after restarts."*
+///
+/// A client marks a `done` read against the pane's `updated_at`, because herdr's own marker only
+/// clears on a focus (#357) and a read here must not press one. So `updated_at` moving is the
+/// client's cue that the pane finished *again* — and a node that stamps every pane it has never
+/// seen with the time it first looked re-arms every read `done` on the herd each time it starts.
+///
+/// The time the conversation last moved is the transcript's own, and it is the same for every
+/// node that reads it: this one, the one that replaces it, and a hub relaying either.
+///
+/// The mutation that must fail: stamp a pane on first sight with `now` again and the first
+/// assertion finds this morning's transcript called a minute old.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_node_calls_a_quiet_conversation_as_old_as_its_transcript() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("quiet", {
+        let home_path = home_path.clone();
+        move |c: &mut Config| c.journals.home = home_path
+    });
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+    let id = "66666666-6666-4666-8666-666666666666";
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, id);
+    fixture.transcript(id, "A TURN FROM THIS MORNING", -3 * 3600);
+    let written = std::time::SystemTime::now() - Duration::from_secs(3 * 3600);
+    std::fs::File::options()
+        .append(true)
+        .open(fixture.project.join(format!("{id}.jsonl")))
+        .unwrap()
+        .set_modified(written)
+        .unwrap();
+    let expected = time::OffsetDateTime::from(written)
+        .replace_nanosecond(0)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+
+    let first = conversation_stamp(&h.node, &local).await;
+    assert_eq!(
+        first, expected,
+        "a pane whose conversation last moved three hours ago was stamped {first}"
+    );
+
+    let state = tempfile::tempdir().unwrap();
+    let mut config = Config::bootstrap("restarted");
+    config.update.check = false;
+    config.herdr.socket = h._session.socket.display().to_string();
+    config.herdr.binary = kampr_testkit::herdr_on_path().display().to_string();
+    config.herdr.sessions = Some(Vec::new());
+    config.journals.home = home_path;
+    let (restarted, _, server) = serve_config(config, &state).await;
+    let again = conversation_stamp(&restarted, &local).await;
+    server.abort();
+    assert_eq!(
+        again, first,
+        "the node that replaced it called the same pane touched at {again}"
+    );
+}
+
+async fn conversation_stamp(node: &Arc<Node>, local: &str) -> String {
+    let suffix = format!("/{local}");
+    let mut saw = None;
+    for _ in 0..150 {
+        let herd = node.herd();
+        let entry = herd
+            .panes
+            .iter()
+            .find(|p| p.id.ends_with(&suffix) && p.has_conversation);
+        if let Some(entry) = entry {
+            saw = entry.updated_at.clone();
+            if let Some(at) = &saw {
+                return at.clone();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the herd never served {local} with a conversation and a stamp; last saw {saw:?}");
+}
+
 /// The three the harness still outranks, on one pane in sequence: `done` is the exception it may
 /// not correct, not the end of the override.
 ///
@@ -10878,4 +10968,58 @@ async fn a_keystroke_typed_at_the_grid_is_never_held_and_a_reply_still_is() {
         ["typed", "reply", "after"],
         "the hold released out of order"
     );
+}
+
+/// The operator, in split view: *"the half typed thing doesn't seem to really work at the moment -
+/// it used to but i haven't seen it work for a while"*. A real node, a real herdr, a pane that is
+/// `claude` by its process, drawing Claude 2.1.285's composer exactly as it was captured with a
+/// line half-typed into it and the caret at the end of the words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_line_half_typed_into_claudes_own_box_reaches_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join(".claude/projects/-tmp");
+    std::fs::create_dir_all(&project).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("desk", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    herdr_has_scraped(&h._session, &local).await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    let (body, _) = claude_transcript("/tmp", 2);
+    std::fs::write(project.join("9f1c0b2e-0000-4000-8000-000000000044.jsonl"), body).unwrap();
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    until_pane(&mut socket, "convo", &pane, 25).await;
+
+    let rule = "─".repeat(60);
+    h._session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "printf '\\033[2J\\033[1;1H{rule}\\r\\n❯\\302\\240push the branch when\\r\\n{rule}\\r\\n  \
+                     ⏵⏵ auto mode on (shift+tab to cycle)\\033[2;23H'; read -r _\n"
+                ),
+            }),
+        )
+        .await;
+
+    let composer = until_pane(&mut socket, "convo.composer", &pane, 15).await;
+    assert_eq!(composer["text"], "push the branch when", "{composer}");
+    assert_eq!(composer["clear"], "\u{3}", "{composer}");
 }

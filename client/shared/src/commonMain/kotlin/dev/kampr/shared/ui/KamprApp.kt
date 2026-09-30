@@ -228,7 +228,7 @@ internal fun AppScaffold(
     val herd = served.withoutReadDone(state.seenDone)
     // A pane id is never reissued, so a pane the herd has dropped is only growth in the set.
     LaunchedEffect(served.panes.size, served.known) {
-        if (served.known) state.seenDone.keep(served.panes.mapTo(mutableSetOf()) { it.id })
+        if (served.known) state.seenDone.keep(served)
     }
     val hello by state.store.hello.collectAsState()
     val localRtt by state.store.localRttMs.collectAsState()
@@ -323,7 +323,7 @@ internal fun AppScaffold(
             failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
             refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
             state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
-            ManageLayer(state, herd, breakpoint)
+            ManageLayer(state, herd, breakpoint, surfaces)
             return@KeyboardFloor
         }
         Box(Modifier.fillMaxSize().behindSheet()) {
@@ -560,7 +560,7 @@ internal fun AppScaffold(
         // A demotion or a promotion that landed on this socket. Nothing the operator did caused
         // it, so it is said here rather than discovered by pressing a control that has gone.
         state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
-        ManageLayer(state, herd, breakpoint)
+        ManageLayer(state, herd, breakpoint, surfaces)
     }
 }
 

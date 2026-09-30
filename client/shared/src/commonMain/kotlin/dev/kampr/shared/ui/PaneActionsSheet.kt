@@ -41,6 +41,7 @@ fun PaneActionsSheet(
     onDismiss: () -> Unit,
     panes: List<PaneInfo> = emptyList(),
     onFind: (() -> Unit)? = null,
+    tools: @Composable () -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -76,6 +77,7 @@ fun PaneActionsSheet(
                     zoomable = true,
                     onManage = ::send,
                     onFind = onFind?.let { go -> { onDismiss(); go() } },
+                    extra = tools,
                 )
                 pane.tabId?.let { tabId ->
                     Target(
@@ -218,12 +220,12 @@ private fun Target(
                     // history, and the node asks herdr for the rest (probe #511).
                     Chip("find", false, it, label = "Search this $kind's whole scrollback")
                 }
+                extra?.invoke()
                 Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind", )
                 Chip(
                     "close", confirming, { confirming = !confirming }, quiet = !confirming,
                     label = "Close this $kind",
                 )
-                extra?.invoke()
             }
             if (focusing) {
                 Row(

@@ -6,6 +6,7 @@ import dev.kampr.shared.model.SeenDone
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.withoutReadDone
 import dev.kampr.shared.platform.MemoryPrefs
+import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -105,11 +106,39 @@ class SeenDoneTest {
         val prefs = MemoryPrefs()
         val seen = SeenDone(prefs)
         seen.saw(pane("done"))
-        seen.keep(emptySet())
+        seen.keep(Herd(nodes = listOf(NodeInfo(id = "01JNODE")), known = true))
         assertEquals(
             AgentStatus.Done,
             statusOf(herdOf(pane("done")).withoutReadDone(seen).panes.single()),
             "a pane that left the herd and came back was still remembered as read",
+        )
+    }
+
+    // herdr keeps `done` on a pane after the agent in it has exited, and a pane with no harness
+    // left in it has no clock for a node that has just started to read. That is a node that does
+    // not know when the pane moved — not a pane that finished again.
+    @Test
+    fun aPaneTheNodeHasNoClockForStaysRead() {
+        val seen = SeenDone(MemoryPrefs())
+        seen.saw(pane("done", at = "2026-09-01T03:00:00Z"))
+        assertEquals(
+            AgentStatus.Idle,
+            statusOf(herdOf(pane("done", at = null)).withoutReadDone(seen).panes.single()),
+            "a node restart re-raised a flag the operator had already put down",
+        )
+    }
+
+    // A hub that has just restarted serves its own panes before its peers' links are back, so for
+    // a moment every peer pane is missing — and it is the same pane when it returns.
+    @Test
+    fun aPaneWhoseNodeIsMissingFromTheHerdIsStillRemembered() {
+        val seen = SeenDone(MemoryPrefs())
+        seen.saw(pane("done"))
+        seen.keep(Herd(nodes = listOf(NodeInfo(id = "01JHUB")), known = true))
+        assertEquals(
+            AgentStatus.Idle,
+            statusOf(herdOf(pane("done")).withoutReadDone(seen).panes.single()),
+            "a peer pane read before the hub restarted was flagged again when its link came back",
         )
     }
 }

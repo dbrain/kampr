@@ -144,7 +144,7 @@ fun PaneMenuAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Modi
 }
 
 @Composable
-fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
+fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: PaneSurfaces = FallbackSurfaces) {
     val outcome by state.store.managed.collectAsState()
     val caps by state.store.nodeCaps.collectAsState()
     // A sheet already up when the role moved is a write affordance like any other. `openSheet`
@@ -203,6 +203,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint) {
                 // Absent rather than present-and-failing, the same rule the passkey button follows.
                 onFind = { state.openFind(pane.id) }
                     .takeIf { state.store.hello.value?.caps?.find == true },
+                tools = { surfaces.Tools(pane.id, state::closeSheet) },
             )
         }
         is Sheet.Menu -> {

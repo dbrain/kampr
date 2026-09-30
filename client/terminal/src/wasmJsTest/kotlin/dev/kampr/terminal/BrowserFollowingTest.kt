@@ -50,14 +50,14 @@ private fun ComposeUiTest.sweepsNothing(size: Pair<Dp, Dp>) {
 // synthesised mouse event plus a frame of a full pane, and a two-hundred-notch walk of the surface
 // runs past mocha's per-test timeout on a loaded machine — the failure arrives as "Timeout of
 // 2000ms exceeded", which reads like a hung test and is nothing but a long one. So a browser walk
-// is sized to the distance it actually has to cover: forty notches is a hundred and twenty rows,
-// which is the whole of either surface here twice over.
+// is sized to the distance it actually has to cover: forty of Chrome's 100 px notches is well
+// past the whole of either surface here.
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.wheel(notches: Int, towards: Float) {
     repeat(notches) {
         onRoot().performMouseInput {
             moveTo(Offset(width / 2f, height / 2f))
-            scroll(towards, ScrollWheel.Vertical)
+            scroll(towards * CHROME_NOTCH, ScrollWheel.Vertical)
         }
         frames(1)
     }
