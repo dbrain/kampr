@@ -257,8 +257,8 @@ fun Composer(
             .readingOrder(1f)
     ) {
         // Beside the box only while the two say different things: a line the box is in step with
-        // is already in it.
-        val apart = desk?.takeIf { it.text.isNotEmpty() && it.text != typed }
+        // is already in it, or is about to be.
+        val apart = desk?.takeIf { it.text.isNotEmpty() && it.text != typed && mirror?.echoing(it, typed) != true }
         DeskStrip(apart, agent, enabled, { apart?.let(::takeOver) })
         HandoverLine(handover, agent)
         Row(

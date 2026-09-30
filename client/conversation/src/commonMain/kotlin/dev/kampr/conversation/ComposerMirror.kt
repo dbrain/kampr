@@ -35,6 +35,11 @@ class ComposerMirror {
         return desk.text.takeIf { inStep && it != box }
     }
 
+    // Whether a reading that differs from the box is only the box's own keys still on their way
+    // back. A box in step holds the pane's line as those keys leave it, so anything else the pane
+    // reads is either that lag or the desk's own typing, which `settled` is about to take up.
+    fun echoing(desk: DeskLine, box: String): Boolean = desk.keys != null && box == line
+
     // The desk's last line, once the box's own keys have had time to come back as the pane's.
     fun settled(box: String, now: Long = elapsed()): String? {
         val waiting = unheard ?: return null

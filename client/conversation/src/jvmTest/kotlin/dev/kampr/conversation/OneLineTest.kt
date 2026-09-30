@@ -93,6 +93,31 @@ class OneLineTest {
         assertEquals(listOf("push", "\r"), typedIntoThePane())
     }
 
+    // The phone report: every reading of the pane lags the keys this box has just typed into it, so
+    // mid-sentence the pane always reads a few characters behind — and each of those readings stood
+    // the strip up for a frame, which on a phone was the strip flashing on every keystroke. The
+    // same after a send, where the pane still reads the sent line until its Enter comes back.
+    @Test
+    fun thePanesEchoOfTheBoxsOwnKeysNeverStandsTheStripUp() = runComposeUiTest {
+        val (store, pane) = paneWithNoQuestion()
+        store.hears(composer(null))
+        setContent { Harnessed(pane) }
+        waitForIdle()
+        onNodeWithContentDescription(REPLY).performTextInput("push")
+        onNodeWithContentDescription(REPLY).performTextInput(" the")
+        waitForIdle()
+        store.hears(composer("push"))
+        waitForIdle()
+        onAllNodesWithText("added to the end", substring = true).assertCountEquals(0)
+        assertEquals("push the", box())
+
+        onNodeWithContentDescription(SEND).performClick()
+        waitForIdle()
+        store.hears(composer("push the"))
+        waitForIdle()
+        onAllNodesWithText("added to the end", substring = true).assertCountEquals(0)
+    }
+
     // **A digit answers a dialog** (#413, #421, #487): a question standing on the pane is a box
     // nothing is typed into, and the words wait in this one until they are sent.
     @Test
