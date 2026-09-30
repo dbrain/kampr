@@ -114,6 +114,32 @@ pub fn checked_size(cols: u32, rows: u32) -> Result<(u32, u32), ManageError> {
     Ok((cols, rows))
 }
 
+/// Where a `grow` takes a pane: each dimension to the larger of the pane's and the view's, and
+/// `None` when the pane already has at least the view in both.
+///
+/// No floor, deliberately. The floor is there so Kampr can never leave a pane too small to use
+/// (#219), and a grow cannot make either dimension smaller than the pane already had it — a phone's
+/// 45 columns leave a 120-column pane at 120, and a 60-column pane stays at 60 because it was.
+pub fn grown(pane: (u16, u16), view: (u32, u32)) -> Result<Option<(u32, u32)>, ManageError> {
+    let pane = (u32::from(pane.0), u32::from(pane.1));
+    let target = (pane.0.max(view.0), pane.1.max(view.1));
+    if target == pane {
+        return Ok(None);
+    }
+    if target.0 > MAX_COLS || target.1 > MAX_ROWS {
+        return Err(ManageError::BadRequest(format!(
+            "{}x{} is larger than {MAX_COLS}x{MAX_ROWS}",
+            target.0, target.1
+        )));
+    }
+    Ok(Some(target))
+}
+
+enum Grow {
+    To((u32, u32)),
+    Enough(Value),
+}
+
 /// The geometry a fleet run gets.
 ///
 /// **This is the one place Kampr chooses a pane's size, and rule 3 permits it precisely because
@@ -595,6 +621,8 @@ impl Manager<'_> {
     ///   that asked for it, so it ends when that view does however the view ends, and it records
     ///   the geometry it found so that letting go puts the pane back. See
     ///   [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
+    /// - `grow` is `match` for a view smaller than a desk: it enlarges only the dimensions the pane
+    ///   is short of, measured here because the pane's honest geometry is only known here.
     /// - `release` lets a hold go.
     async fn size_pane(&self, op: &ManageOp) -> Result<Value, ManageError> {
         let Target::Pane(pane) = self.target(op)? else {
@@ -613,14 +641,21 @@ impl Manager<'_> {
 
         // Checked before the numbers, so an unknown mode is reported as an unknown mode rather
         // than as the missing `cols` it also happens to have.
-        if !matches!(mode, "hold" | "once" | "match") {
+        if !matches!(mode, "hold" | "once" | "match" | "grow") {
             return Err(ManageError::BadRequest(format!("unknown size mode {mode}")));
         }
         let (cols, rows) = match (op.cols, op.rows) {
             (Some(c), Some(r)) => (c, r),
             _ => return Err(ManageError::BadRequest("pane.size needs cols and rows".into())),
         };
-        checked_size(cols, rows)?;
+        let (cols, rows) = match mode {
+            "grow" => match self.grow_target(&pane, op.lease, cols, rows).await? {
+                Grow::To(target) => target,
+                Grow::Enough(ack) => return Ok(ack),
+            },
+            _ => checked_size(cols, rows)?,
+        };
+        let mode = if mode == "grow" { "match" } else { mode };
 
         // Let go *before* claiming, never after. Herdr allows one controller at a time and refuses
         // the second with `already has an attached client` (#21), so a re-size while holding has to
@@ -715,6 +750,38 @@ impl Manager<'_> {
                 }))
             }
         }
+    }
+
+    /// What a `grow` claims, or the ack that says nothing needed claiming.
+    ///
+    /// Measured against the pane as it stands — another viewer's hold included, so a phone never
+    /// shrinks a desk's — except against this socket's own hold, which is measured by what that
+    /// hold will put back: a view that stops needing more than the pane has on its own lets the
+    /// hold go rather than keeping the pane at a size nothing is asking for.
+    async fn grow_target(
+        &self,
+        pane: &str,
+        lease: Option<u64>,
+        cols: u32,
+        rows: u32,
+    ) -> Result<Grow, ManageError> {
+        let own = lease.and_then(|token| Some((token, self.holds.found_under(pane, token)?)));
+        let base = match own {
+            Some((_, found)) => found,
+            None => self.found_geometry(pane).await.ok_or_else(|| {
+                ManageError::BadRequest(format!(
+                    "{pane} has not had its width read yet, and a grow cannot tell which way is larger"
+                ))
+            })?,
+        };
+        Ok(match grown(base, (cols, rows))? {
+            Some(target) => Grow::To(target),
+            None => {
+                let was_held = own.is_some_and(|(token, _)| self.holds.let_go(pane, token));
+                Grow::Enough(json!({ "pane_id": pane, "cols": base.0, "rows": base.1,
+                            "held": false, "was_held": was_held }))
+            }
+        })
     }
 
     /// The pane's own geometry before a matched hold claims it, and `None` unless **both** halves
@@ -1346,5 +1413,34 @@ mod tests {
 
         assert_eq!(checked_size(MIN_COLS, MIN_ROWS).unwrap(), (80, 24));
         assert_eq!(checked_size(200, 50).unwrap(), (200, 50));
+    }
+
+    /// The operator's rule for a phone, in their words: *"don't shrink anything, only enlarge the
+    /// dimension that is smaller."* A phone is far under the floor in columns, and that must not
+    /// matter: a dimension the pane already has more of is left exactly where the pane put it.
+    #[test]
+    fn a_grow_enlarges_only_the_dimension_the_pane_is_short_of() {
+        for (pane, view, want) in [
+            ((120, 20), (45, 40), Some((120, 40))),
+            ((60, 50), (90, 30), Some((90, 50))),
+            ((60, 20), (45, 22), Some((60, 22))),
+            ((40, 30), (100, 60), Some((100, 60))),
+            ((120, 40), (45, 40), None),
+            ((120, 40), (45, 38), None),
+            ((200, 50), (200, 50), None),
+        ] {
+            assert_eq!(
+                grown(pane, view).unwrap(),
+                want,
+                "a {pane:?} pane under a {view:?} view"
+            );
+        }
+        assert!(
+            matches!(
+                grown((120, 20), (MAX_COLS + 1, 40)),
+                Err(ManageError::BadRequest(_))
+            ),
+            "the ceiling still stands",
+        );
     }
 }

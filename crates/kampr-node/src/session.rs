@@ -1725,8 +1725,11 @@ impl Session {
         // *replaced* it let go of the hold thirty milliseconds after it was taken, left the pane
         // back at the geometry it was found at, and left the client believing it still held the
         // view's size and therefore never asking again.
+        //
+        // A `grow` is scoped the same way, because it is measured against what this socket's own
+        // hold will put back and against what anybody else's is holding.
         if op.op == "pane.size"
-            && op.mode.as_deref() == Some("release")
+            && matches!(op.mode.as_deref(), Some("release" | "grow"))
             && op.lease.is_none()
             && let Some(token) = op
                 .at
@@ -1870,6 +1873,20 @@ impl Session {
     /// the hub waits for the peer's `managed` and hands it back — with the *caller's* correlation
     /// token, never the one the hub minted for its own bookkeeping.
     async fn manage_peer(&mut self, target: &str, op: &ManageOp, mut raw: Value, rid: Option<Value>) {
+        // The same promise `hello` makes, kept for a peer that cannot: a phone growing a pane is a
+        // default rather than a request, so a peer too old to grow one is a pane that is not held,
+        // which is what the ack says.
+        if op.op == "pane.size"
+            && op.mode.as_deref() == Some("grow")
+            && self.node.peers.can_grow(target) == Some(false)
+        {
+            let mut ack = json!({ "t": "managed", "op": op.op, "ok": true, "held": false });
+            if let Some(rid) = rid {
+                ack["rid"] = rid;
+            }
+            self.wire.send_json(&ack);
+            return;
+        }
         if let Some(object) = raw.as_object_mut() {
             object.remove("rid");
         }
@@ -1937,7 +1954,7 @@ impl Session {
             // what `MatchLease`'s `Drop` is for — so forgetting a *newer* lease because a release
             // for the one it superseded went past is the same defect as honouring that release
             // would have been, one step further along.
-            _ if op.mode.as_deref() == Some("release") && self.named_our_lease(&at, op) => {
+            _ if let_go_by(op, reply) && self.named_our_lease(&at, op) => {
                 self.matched.remove(&at);
             }
             _ => {}
@@ -1965,7 +1982,7 @@ impl Session {
                     },
                 );
             }
-            None if op.mode.as_deref() == Some("release") && self.named_our_lease(&at, op) => {
+            None if let_go_by(op, reply) && self.named_our_lease(&at, op) => {
                 self.matched.remove(&at);
             }
             None => {}
@@ -2051,6 +2068,16 @@ async fn reconcile_hard(node: &Node) {
     tracing::warn!("could not read the session list after a session op; the herd is a poll behind");
 }
 
+/// A release, or a `grow` whose view no longer needs more than the pane has on its own — which the
+/// node answers by letting this socket's hold go.
+fn let_go_by(op: &ManageOp, reply: &Value) -> bool {
+    match op.mode.as_deref() {
+        Some("release") => true,
+        Some("grow") => reply["was_held"] == json!(true),
+        _ => false,
+    }
+}
+
 fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
     let mut ack = json!({ "t": "managed", "op": op, "ok": false,
                           "code": code, "message": message });
@@ -2132,6 +2159,10 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // answer `find` and too old to have heard of this, and a client that read one for the other
     // would offer a count it never gets. See [`ClientMsg::ConvoFind`].
     value["caps"]["convo.find"] = json!(true);
+    // `pane.size`'s `grow`, which a phone sends by default: a node that predates it refuses it as
+    // an unknown mode, and a refusal is a strip over a pane on a phone whose operator asked for
+    // nothing.
+    value["caps"]["pane.grow"] = json!(true);
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
     // and the point of that route is that bytes never share a queue with terminal frames.

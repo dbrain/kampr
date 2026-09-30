@@ -42,6 +42,8 @@ data class PaneSizing(
     val matching: Boolean = false,
     // False on a view too small to ask, and on a pane Kampr forked for a job of its own.
     val canMatch: Boolean = false,
+    // The switch enlarges only what the pane is short of, rather than holding it at the view.
+    val grows: Boolean = false,
 )
 
 internal fun PaneSizing.fitIsUsable() = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
@@ -122,9 +124,15 @@ internal fun ResizePanel(
             Toggle(
                 on = sizing.matching,
                 title = "Match this view while it's open · ${sizing.viewCols}×${sizing.viewRows}",
-                detail = "Holds the pane at this window's size until you leave it. Their screen at " +
-                    "the desk is wrong while it is held, and the pane goes back to the size it was " +
-                    "when you let go.",
+                detail = (
+                    if (sizing.grows) {
+                        "Enlarges the pane where it is smaller than this view, and never shrinks it, " +
+                            "until you leave it. "
+                    } else {
+                        "Holds the pane at this window's size until you leave it. "
+                    }
+                    ) + "Their screen at the desk is wrong while it is held, and the pane goes back " +
+                    "to the size it was when you let go.",
                 onChange = onMatchView,
             )
         }

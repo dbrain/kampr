@@ -39,7 +39,7 @@ are still forbidden and nothing here reaches them. Four properties keep the dist
 | | |
 |---|---|
 | It is a **setting**, with a switch on the same panel the resize lives on | An operator who did not want it turns it off and it stays off for that pane, on that device |
-| It is **defaulted by measurement**, not by platform | The gate is the viewport the client already measured. A phone never claims; a mosaic cell never claims; a split half never claims |
+| It is **defaulted by measurement**, not by platform | The gate is the viewport the client already measured. A phone never claims its own size — only the dimensions the pane is short of (see "Below a desk, enlarge only"); a mosaic cell never claims |
 | It **only ever means the operator's own desk** | The terminal surface holds; the conversation and mosaic surfaces never claim anything, and switching a pane from terminal to conversation releases |
 | It **puts the pane back** | Which is the one thing the panel's hold has never done, and it is what answers [#298](../03-probe-log.md) |
 
@@ -129,8 +129,42 @@ things are new.
    is the "this is a desk" signal and the second is what makes it honest: below the floor the node
    would refuse the claim anyway, so a view that small must never ask. The terminal surface measures
    its own box rather than the window's, so a split half, a mosaic cell and a phone in landscape all
-   fall out on the same test. Below that line matching is off and stays off until the operator turns
-   it on for that pane.
+   fall out on the same test. Below that line the default is the enlarge-only hold described next,
+   never an exact one.
+
+### Below a desk, enlarge only (amended 2026-09-30)
+
+The operator, on a phone, of a Claude pane: *"counts the terminal as half the size of the screen, so
+scrolling up scrolls just a portion of the screen"* — a pane with fewer rows than the phone shows.
+Their call: *"only if current size is smaller … don't shrink anything, only enlarge the dimension
+that is smaller."*
+
+So below the desk line the same setting defaults **on** as `pane.size` mode **`grow`**: the view
+sends its own grid and the node takes the pane to `max(pane, view)` in each dimension, or claims
+nothing when the pane already has at least the view both ways. Everything else in this ADR is
+unchanged — it is the same lease, the same restore, the same held mark on the zoom control and the
+same per-pane switch that turns it off.
+
+- **The node owns the `max`**, because the node is where the pane's honest geometry is:
+  `viewport_rows` for the rows and the width read off the pane (#509) for the columns, read at the
+  moment of the claim. The client's grid width is inferred (`ARCHITECTURE.md` §4.2), and a `max`
+  taken against a width that lags the PTY's would *shrink* the columns it was told to leave alone.
+  A pane whose width has not been read yet is refused rather than guessed at.
+- **"Current" is the pane as anybody left it**, a desk's hold included — a phone opening a pane a
+  desk is holding larger than the phone never shrinks the desk's. The one exception is this socket's
+  own hold, which is measured by what that hold will put back: a keyboard opening under a grown pane
+  is a view that no longer needs the rows, and the hold is let go rather than kept.
+- **No 80x24 floor on a `grow`.** The floor stops Kampr leaving a pane too small to use; a `grow`
+  cannot make either dimension smaller than the pane already had it, so a 60-column pane stays 60
+  and a phone's 45 columns leave a 120-column pane at 120.
+- **Point 2 still holds.** The client asks only while its grid is short of the view, and reads that
+  when the view asks — opening, a size change, a reconnect — never as the pane moves afterwards.
+  Read against the pane, a pane arriving grown would let its own hold go and be asked for again.
+  And two enlarge-only viewers cannot take turns: neither ever asks for less than the pane has.
+- **Promised, not assumed.** A node that predates `grow` refuses it as an unknown mode, and a
+  refusal is a strip over the pane of an operator who asked for nothing — so a client sends one
+  only where `hello.caps["pane.grow"]` says so, and a hub answers "not held" for a peer that has not
+  said it.
 
 **A fleet pane is untouched, and needs to be.** Rule 3 already says a pane Kampr forked for a job of
 its own is Kampr's: `kampr-fleet` gives it a geometry when the run starts and there is no operator

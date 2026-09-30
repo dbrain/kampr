@@ -103,6 +103,7 @@ fn each_target_lands_on_the_kind_its_op_requires() {
         "pane.size",
         "pane.size.hold",
         "pane.size.match",
+        "pane.size.grow",
         "pane.size.release",
     ] {
         assert!(
@@ -129,6 +130,11 @@ fn a_size_carries_its_two_numbers_and_a_release_carries_none() {
     assert_eq!(
         (op("pane.size.match").cols, op("pane.size.match").rows),
         (Some(200), Some(50))
+    );
+    assert_eq!(op("pane.size.grow").mode.as_deref(), Some("grow"));
+    assert_eq!(
+        (op("pane.size.grow").cols, op("pane.size.grow").rows),
+        (Some(45), Some(50))
     );
     assert_eq!(
         (op("pane.size.release").cols, op("pane.size.release").rows),

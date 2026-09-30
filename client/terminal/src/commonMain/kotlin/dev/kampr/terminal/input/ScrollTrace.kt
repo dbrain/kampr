@@ -3,6 +3,7 @@ package dev.kampr.terminal.input
 import dev.kampr.terminal.bench.emitBench
 import dev.kampr.terminal.bench.platformLabel
 import kotlin.math.abs
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 // Read once, at the platform entry point, before anything composes — the same switch the bench is
@@ -28,15 +29,17 @@ class ScrollTrace(
     // Taken at construction rather than read per call, so a test can trace without touching a
     // global and two panes cannot disagree about whether they are being traced.
     private val on: Boolean = scrollTracing,
+    private val clock: TimeSource = TimeSource.Monotonic,
     private val emit: (String) -> Unit = ::emitBench,
 ) {
-    private val clock = TimeSource.Monotonic
     private var started = clock.markNow()
     private var lastSent = clock.markNow()
-    private var waitingSince: TimeSource.Monotonic.ValueTimeMark? = null
+    private var span = 0L
+    private var waitingSince: TimeMark? = null
     private var open = false
     private var reports = 0
     private var writes = 0
+    private var carried = 0
     private var rows = 0
     private var travel = 0
     private var frames = 0
@@ -44,7 +47,7 @@ class ScrollTrace(
 
     // `rows` is what the program is expected to move for them, which is the number to hold against
     // `travel`: a finger that travelled 60 rows and moved the pane 20 is the defect this exists for.
-    fun sent(keys: ScrollKeys, reports: Int, rows: Int) {
+    fun sent(keys: ScrollKeys, reports: Int, rows: Int, carried: Boolean = false) {
         if (!on) return
         if (open && lastSent.elapsedNow().inWholeMilliseconds > IDLE_GAP_MS) flush(keys)
         if (!open) {
@@ -52,9 +55,11 @@ class ScrollTrace(
             started = clock.markNow()
         }
         lastSent = clock.markNow()
+        span = started.elapsedNow().inWholeMilliseconds
         this.reports += reports
         this.rows += rows
         writes++
+        if (carried) this.carried++
         // Only the first unanswered write starts the clock: the wait being measured is the round
         // trip, and writes two and three of a burst are queued behind the same repaint.
         if (waitingSince == null) waitingSince = clock.markNow()
@@ -70,6 +75,7 @@ class ScrollTrace(
     fun arrived() {
         if (!on || !open) return
         frames++
+        span = started.elapsedNow().inWholeMilliseconds
         waitingSince?.let {
             waits += it.elapsedNow().inWholeMilliseconds
             waitingSince = null
@@ -78,18 +84,24 @@ class ScrollTrace(
 
     fun flush(keys: ScrollKeys) {
         if (!on || !open) return
-        val ms = started.elapsedNow().inWholeMilliseconds
+        // Over the gesture's own span, first write to last frame: the idle gap that ends one is
+        // not part of it, and counted in it would read as a stall.
+        val ms = span
         val sorted = waits.sorted()
         emit(
             "KAMPR_SCROLL $platformLabel | keys=${keys.name}" +
-                " | travel=$travel rows=$rows reports=$reports writes=$writes frames=$frames ms=$ms" +
+                " | travel=$travel rows=$rows reports=$reports writes=$writes carried=$carried" +
+                " frames=$frames ms=$ms" +
                 " rate=${if (ms > 0) reports * 1000 / ms else 0}/s" +
+                " fps=${if (ms > 0) frames * 1000 / ms else 0}" +
                 " wait_p50=${sorted.getOrNull(sorted.size / 2) ?: -1}ms" +
                 " wait_max=${sorted.lastOrNull() ?: -1}ms",
         )
         open = false
         reports = 0
         writes = 0
+        carried = 0
+        span = 0
         rows = 0
         travel = 0
         frames = 0

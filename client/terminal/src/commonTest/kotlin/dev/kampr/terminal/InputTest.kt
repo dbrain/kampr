@@ -17,6 +17,7 @@ import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.input.KeyTrace
 import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.input.ScrollKeys
+import dev.kampr.terminal.input.land
 import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.chordSendsControl
 import dev.kampr.terminal.input.paneChord
@@ -586,6 +587,66 @@ class PaneScrollTest {
         assertEquals(1, scroll.queued)
     }
 
+    // #567's table, measured on a real Claude one write at a time: fresh, and after a reversal —
+    // whose first report moves nothing whatever the ramp stood at.
+    @Test
+    fun oneWriteLandsWhatClaudeMeasuredForIt() {
+        val counts = listOf(1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30, 40)
+        val fresh = listOf(1, 2, 3, 4, 6, 13, 19, 39, 67, 97, 127, 187)
+        val reversed = listOf(0, 1, 2, 3, 4, 10, 16, 34, 61, 91, 121, 181)
+        for ((i, k) in counts.withIndex()) {
+            assertEquals(fresh[i], ScrollKeys.Wheel.land(k, reversed = false).rows, "$k fresh")
+            assertEquals(reversed[i], ScrollKeys.Wheel.land(k, reversed = true, ramp = 6.0).rows, "$k reversed")
+        }
+    }
+
+    // The ramp is one multiplier every report inside 40 ms of the last moves on, whichever write it
+    // came in (#569) — #567 measured two writes of 5 landing 19 rows 5-35 ms apart. So two
+    // writes carried back to back land exactly what one write of both would, at any split.
+    @Test
+    fun aWriteThatCarriesTheRampLandsWhatOneWriteOfBothWould() {
+        for (first in listOf(1, 3, 5, 10, 17, 25)) {
+            for (second in listOf(1, 2, 5, 12, 30)) {
+                val a = ScrollKeys.Wheel.land(first, reversed = false)
+                val b = ScrollKeys.Wheel.land(second, reversed = false, ramp = a.ramp)
+                val whole = ScrollKeys.Wheel.land(first + second, reversed = false)
+                assertEquals(whole.rows, a.rows + b.rows, "$first reports then $second")
+                assertEquals(whole.ramp, b.ramp, "$first reports then $second left the ramp elsewhere")
+            }
+        }
+        assertEquals(13, ScrollKeys.Wheel.land(5, reversed = false, ramp = ScrollKeys.Wheel.land(5, false).ramp).rows)
+    }
+
+    // Sized from where the last write left the ramp: after five reports it stands at 2.2, so 12 rows
+    // is 2 + 2 + 3 + 3 with 2 left over. Sized fresh it would be seven reports, which Claude —
+    // carrying — would have taken 21 rows for.
+    @Test
+    fun aCarriedWriteIsSizedFromWhereTheLastLeftTheRamp() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
+        repeat(6) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        assertFalse(scroll.drain())
+        repeat(12) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        assertTrue(scroll.drain(carry = true))
+        assertEquals("\u001b[<64;1;1M".repeat(4), sent[1], "12 rows carried on from 5 reports")
+        assertEquals(2, scroll.queued)
+    }
+
+    // A carried report is worth at least two rows past the fifth, so a finger that has moved less
+    // than that since the last write is not sent anything: one report would overshoot it.
+    @Test
+    fun aCarriedWriteThatWouldOvershootSendsNothing() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
+        repeat(6) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        scroll.drain()
+        scroll.refused(100f, step = 100f, col = 0, row = 0)
+        assertTrue(scroll.drain(carry = true), "the row claimed to have gone out")
+        assertEquals(1, sent.size, "a carried report worth 2 rows was sent for 1")
+        assertFalse(scroll.drain(), "the same row, fresh, is one report")
+        assertEquals(2, sent.size)
+    }
+
     // A program that does not ramp is sent a row per row, still in one write.
     @Test
     fun cursorKeysAreARowAPieceInOneWrite() {
@@ -636,6 +697,38 @@ class PaneScrollTest {
             "five rows of drag and a three-row notch is eight reports on the wire, not ${lines[0]}",
         )
         assertTrue(lines[0].contains("frames=1"), "the frame that answered them was not counted")
+    }
+
+    // Frames a second is the smoothness a finger sees: #568's pump returned ~24-38 of them on a
+    // real Claude and the carried pump ~41-53 (#571). Taken over the gesture's own span —
+    // first write to last frame — not over the idle gap that ends it, or it reads as a stall.
+    @Test
+    fun theTraceSaysHowManyFramesASecondTheGestureGotAndHowManyWritesCarried() {
+        val clock = object : kotlin.time.TimeSource {
+            var now = 0L
+            override fun markNow(): kotlin.time.TimeMark = object : kotlin.time.TimeMark {
+                val at = now
+                override fun elapsedNow() = (now - at).milliseconds
+            }
+        }
+        val lines = mutableListOf<String>()
+        val trace = ScrollTrace(on = true, emit = { lines += it }, clock = clock)
+        trace.sent(ScrollKeys.Wheel, reports = 4, rows = 4)
+        repeat(10) {
+            clock.now += 10
+            trace.arrived()
+            clock.now += 10
+            trace.sent(ScrollKeys.Wheel, reports = 1, rows = 2, carried = true)
+        }
+        clock.now += 10
+        trace.arrived()
+        clock.now += 2_000
+        trace.flush(ScrollKeys.Wheel)
+        val line = lines.single()
+        assertTrue(line.contains("frames=11"), line)
+        assertTrue(line.contains("carried=10"), line)
+        assertTrue(line.contains("ms=210 "), "the span ran past the gesture's last frame: $line")
+        assertTrue(line.contains("fps=52"), line)
     }
 
     // A pane nobody asked to trace pays nothing and says nothing.

@@ -62,7 +62,10 @@ private val NEARLY = 899.dp to 900.dp
 
 private val PHONE = 411.dp to 914.dp
 
-private class MatchIo(private val stored: PanePrefs = PanePrefs()) : PaneIo {
+private class MatchIo(
+    private val stored: PanePrefs = PanePrefs(),
+    override val growsPanes: Boolean = false,
+) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     override fun send(msg: ClientMsg) {
         sent += msg
@@ -79,9 +82,11 @@ private class SessionIo(
     // Whether the node takes the pane. A claim is `pane.size` and it can be refused — herdr allows
     // one controller at a time and refuses the second outright (#21).
     private val takes: Boolean = true,
+    override val growsPanes: Boolean = false,
 ) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     val claims = mutableListOf<Triple<String, Int, Int>>()
+    val grows = mutableListOf<Boolean>()
     val releases = mutableListOf<Pair<String, Boolean>>()
 
     override fun send(msg: ClientMsg) {
@@ -90,8 +95,9 @@ private class SessionIo(
 
     override fun prefs(paneId: String) = stored
 
-    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean): Boolean {
         claims += Triple(paneId, cols, rows)
+        grows += grow
         return takes
     }
 
@@ -113,14 +119,14 @@ private fun ClientMsg.sizing(): ManageOp.PaneSize? =
 
 private fun List<ClientMsg>.sizings() = mapNotNull { it.sizing() }
 
-private fun grid(cols: Int): PaneState {
+private fun grid(cols: Int, rows: Int = 40): PaneState {
     val pane = PaneState(Phone.PANE, StyleTable())
     val line = "$ ls"
     pane.applyReset(
         ServerMsg.GridReset(
             pane = Phone.PANE,
             cols = cols,
-            rows = 40,
+            rows = rows,
             rowsData = listOf(RowDiff(0, listOf(Run(0, line)))),
             cursor = Cursor(line.length, 0, true),
             links = emptyList(),
@@ -294,17 +300,105 @@ class MatchingTheViewTest {
     // The half of the gate that is not the floor. This window would show a pane well above 80x24
     // and still is not a desk — a phone in landscape, a half-screen window, a mosaic cell.
     @Test
-    fun aWindowThatIsNotDeskSizedHoldsNothingEvenThoughThePaneWouldFit() = runComposeUiTest {
+    fun aWindowThatIsNotDeskSizedDoesNotHoldThePaneAtItsOwnSize() = runComposeUiTest {
         val io = MatchIo()
         terminal(grid(cols = 40), io, NEARLY)
         assertNull(settled(io, SizeMode.Match), "a window under desk size claimed a pane: ${io.sent}")
     }
 
     @Test
-    fun aPhoneNeverHoldsAPaneWithoutBeingAsked() = runComposeUiTest {
-        val io = MatchIo()
+    fun aPhoneNeverHoldsAPaneAtItsOwnSize() = runComposeUiTest {
+        val io = MatchIo(growsPanes = true)
         terminal(grid(cols = 40), io, PHONE)
-        assertNull(settled(io, SizeMode.Match), "a phone claimed a pane: ${io.sent}")
+        assertNull(settled(io, SizeMode.Match), "a phone claimed a pane at its own size: ${io.sent}")
+    }
+
+    // The operator's report, on a phone: a Claude pane *"counts the terminal as half the size of
+    // the screen, so scrolling up scrolls just a portion of the screen"*. Their decision: *"only if
+    // current size is smaller … don't shrink anything, only enlarge the dimension that is
+    // smaller."* So the phone asks for its view as a `grow`, and the node — which is where the
+    // pane's honest width is — enlarges only what the pane is short of: here the rows, never the
+    // 300 columns down to a phone's.
+    @Test
+    fun aPhoneTallerThanThePaneAsksToGrowIt() = runComposeUiTest {
+        val io = MatchIo(growsPanes = true)
+        terminal(grid(cols = 300, rows = 10), io, PHONE)
+        val asked = assertNotNull(settled(io, SizeMode.Grow), "a phone taller than the pane asked nothing: ${io.sent}")
+        assertEquals(Phone.PANE, asked.at)
+        assertTrue(asked.rows!! > 10, "it asked for no more rows than the pane has: $asked")
+        assertTrue(io.sent.sizings().none { it.mode == SizeMode.Match }, "a phone asked for its exact size: ${io.sent}")
+    }
+
+    @Test
+    fun aPaneThePhoneAlreadyFitsInIsNotAskedFor() = runComposeUiTest {
+        val io = MatchIo(growsPanes = true)
+        terminal(grid(cols = 300, rows = 200), io, PHONE)
+        assertNull(settled(io, SizeMode.Grow), "a pane larger than the phone both ways was claimed: ${io.sent}")
+    }
+
+    // A node that predates `grow` refuses it as an unknown mode, and a refusal is a strip over the
+    // pane on a phone whose operator asked for nothing.
+    @Test
+    fun aNodeThatCannotGrowAPaneIsNotAskedTo() = runComposeUiTest {
+        val io = MatchIo()
+        terminal(grid(cols = 300, rows = 10), io, PHONE)
+        assertNull(settled(io, SizeMode.Grow), "a node with no grow was asked for one: ${io.sent}")
+    }
+
+    @Test
+    fun aPaneTheOperatorTurnedMatchingOffForIsNotGrownOnAPhone() = runComposeUiTest {
+        val io = MatchIo(PanePrefs(mapOf("match" to "off")), growsPanes = true)
+        terminal(grid(cols = 300, rows = 10), io, PHONE)
+        assertNull(settled(io, SizeMode.Grow), "a pane switched off was grown anyway: ${io.sent}")
+    }
+
+    // The price rule 3 charges a claim nobody pressed, on a phone as on a desk: the header says the
+    // pane is held, and the control saying it leads to the switch that lets it go.
+    @Test
+    fun aGrownPaneSaysSoOnItsHeaderAndTheSwitchLetsItGo() {
+        runDesktopComposeUiTest(PHONE.first.value.toInt(), PHONE.second.value.toInt()) {
+            val io = SessionIo(growsPanes = true)
+            val session = PaneSession(Phone.PANE)
+            terminal(grid(cols = 300, rows = 10), io, PHONE, session, header = true)
+            try {
+                waitUntil(timeoutMillis = 3_000) { saysHeld() }
+            } catch (_: Throwable) {
+                // Asserted below.
+            }
+            assertEquals(listOf(true), io.grows, "a phone did not ask to grow the pane: ${io.claims}")
+            assertTrue(saysHeld(), "the pane is grown and its header says nothing about it")
+
+            onNodeWithContentDescription("Zoom, currently", substring = true).performClick()
+            waitForIdle()
+            onNodeWithContentDescription("Match this view while it's open ·", substring = true)
+                .performClick()
+            waitForIdle()
+
+            assertTrue(io.releases.any { it == Phone.PANE to false }, "the switch let nothing go: ${io.releases}")
+            assertFalse(saysHeld(), "the header still says held after the operator let go")
+        }
+    }
+
+    // **A pane that arrives grown is what the hold asked for, not a reason to let it go.** The gate
+    // that asks nothing of a pane the phone already fits is read when the view asks, never against
+    // the pane afterwards: read against the pane, the grown pane would release its own hold, the
+    // release would put the pane back, and the short pane would be asked for again.
+    @Test
+    fun aPaneArrivingGrownKeepsItsHoldAndIsNotAskedForAgain() = runComposeUiTest {
+        val io = SessionIo(growsPanes = true)
+        val session = PaneSession(Phone.PANE)
+        val pane = grid(cols = 300, rows = 10)
+        terminal(pane, io, PHONE, session, header = true)
+        quiet(1_000)
+        val (_, _, rows) = assertNotNull(io.claims.singleOrNull(), "nothing was grown: ${io.claims}")
+
+        pane.applyReset(anchoredToTheLastRow(300, rows))
+        waitForIdle()
+        quiet(1_500)
+
+        assertEquals(1, io.claims.size, "the pane arriving grown asked again: ${io.claims}")
+        assertTrue(io.releases.isEmpty(), "the pane arriving grown let its own hold go: ${io.releases}")
+        assertTrue(saysHeld(), "the header stopped saying the grown pane is held")
     }
 
     // Leaving the terminal for the conversation is this composable leaving the composition, which

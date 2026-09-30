@@ -306,6 +306,12 @@ impl Peers {
         self.link_for(id).is_some_and(|link| link.serves_convo_find())
     }
 
+    /// `pane.size`'s `grow` mode, which a peer that predates it refuses as an unknown mode. `None`
+    /// when no link serves `id` at all, which is a different answer.
+    pub fn can_grow(&self, id: &str) -> Option<bool> {
+        self.link_for(id).map(|link| link.serves_grow())
+    }
+
     /// Pulls one attachment off a peer, a chunk at a time.
     ///
     /// `ceiling` is the caller's own decoded-bytes limit, enforced *before* anything is pulled —
@@ -665,6 +671,7 @@ struct LinkState {
     attachments: bool,
     find: bool,
     convo_find: bool,
+    grow: bool,
 }
 
 impl LinkState {
@@ -792,6 +799,7 @@ impl PeerLink {
         state.attachments = message["caps"]["attachments"].as_bool().unwrap_or(false);
         state.find = message["caps"]["find"].as_bool().unwrap_or(false);
         state.convo_find = message["caps"]["convo.find"].as_bool().unwrap_or(false);
+        state.grow = message["caps"]["pane.grow"].as_bool().unwrap_or(false);
     }
 
     fn serves_find(&self) -> bool {
@@ -800,6 +808,10 @@ impl PeerLink {
 
     fn serves_convo_find(&self) -> bool {
         self.state.lock().unwrap().convo_find
+    }
+
+    fn serves_grow(&self) -> bool {
+        self.state.lock().unwrap().grow
     }
 
     async fn fetch_attachment(
@@ -1417,6 +1429,9 @@ mod tests {
             link.serves_convo_find(),
             "the peer said it searches transcripts too"
         );
+        assert!(!link.serves_grow(), "nothing said the peer grows a pane");
+        link.absorb_hello(&json!({ "t": "hello", "caps": { "pane.grow": true } }));
+        assert!(link.serves_grow());
     }
 
     #[tokio::test]

@@ -55,12 +55,15 @@ deliberate, and the fastest way to be useless is to file thirty findings about m
    intent to match the view for as long as a desk-sized terminal is open, owned by the socket that
    claimed it and put back on release
    ([ADR 0013](./docs/adr/0013-a-standing-intent-to-match-the-view.md)). The second is defaulted on
-   above a desk threshold, so it pays for its silence three ways — the pane goes back to the
+   — above a desk threshold as the view's exact size, and below it, by the operator's call, as
+   **enlarge only**: each dimension the pane is short of the view is raised to it, neither is ever
+   shrunk, and a pane already at least the view both ways is not claimed at all. So it pays for its
+   silence three ways — the pane goes back to the
    geometry it was found at unless something else moved it meanwhile, a dropped socket releases it
    without the client having to remember anything (#298 is what happens when it does not), and the
-   hold is visible with an off switch wherever it is held. Small screens are still handled by
-   rendering — zoom, pan, and the conversation view — never by resizing what somebody else is
-   looking at, and a view too small to ask never asks.
+   hold is visible with an off switch wherever it is held. A small screen never takes a pane down
+   to its own size — narrower than the pane is handled by rendering: zoom, pan, and the
+   conversation view.
 
    **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is what destroys
    herdr's `done` marker — the state herdr synthesises for a pane that finished `working`→`idle`

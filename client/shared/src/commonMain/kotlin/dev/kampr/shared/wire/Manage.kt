@@ -21,6 +21,9 @@ enum class SizeMode(val wire: String) {
     // `Hold` with an owner and an undo: the node ties it to this websocket, so it ends when
     // the socket does however it ends, and letting go puts the pane back (ADR 0013).
     Match("match"),
+    // `Match` for a view smaller than a desk: the node enlarges only the dimensions the pane is
+    // short of, and holds nothing when it is short of none.
+    Grow("grow"),
     Release("release"),
 }
 

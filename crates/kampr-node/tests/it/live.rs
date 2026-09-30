@@ -3422,6 +3422,150 @@ async fn a_release_naming_a_superseded_lease_leaves_the_hold_that_replaced_it_st
     );
 }
 
+/// **A phone enlarges the dimension the pane is short of, and nothing else.**
+///
+/// The operator, on a phone: a Claude pane *"counts the terminal as half the size of the screen,
+/// so scrolling up scrolls just a portion of the screen"*. Their decision: *"only if current size is
+/// smaller … don't shrink anything, only enlarge the dimension that is smaller."* A phone is 45
+/// columns and that is under the floor, which must not matter — the columns stay the pane's own.
+/// The rest is ADR 0013's hold unchanged: owned by the socket, put back when the socket goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_phone_grows_only_the_rows_the_pane_is_short_of_and_the_pane_goes_back_when_it_leaves() {
+    let h = harness!("growrows");
+    let token = h.token(Role::Full).await;
+    let mut phone = h.connect(&token).await;
+    let hello = until(&mut phone, "hello", 10).await;
+    assert_eq!(
+        hello["caps"]["pane.grow"],
+        json!(true),
+        "a phone sends `grow` only to a node that says it takes one: {hello}"
+    );
+    until(&mut phone, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut phone, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut phone, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut phone, &pane, &local).await;
+    paint_screen(&mut phone, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+    let grow = |rows: u16| json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 45, "rows": rows, "mode": "grow" });
+
+    let enough = ok(&mut phone, grow(found_rows), 30).await;
+    assert_eq!(
+        enough["held"],
+        json!(false),
+        "a pane the view already fits was claimed: {enough}"
+    );
+    assert!(enough["lease"].is_null(), "{enough}");
+
+    let taller = found_rows + 10;
+    let ack = ok(&mut phone, grow(taller), 30).await;
+    assert_eq!(
+        (&ack["held"], &ack["matched"], &ack["cols"], &ack["rows"]),
+        (&json!(true), &json!(true), &json!(found_cols), &json!(taller)),
+        "a {found_cols}x{found_rows} pane under a 45x{taller} view: {ack}",
+    );
+    assert_eq!(
+        (&ack["found_cols"], &ack["found_rows"]),
+        (&json!(found_cols), &json!(found_rows)),
+        "{ack}"
+    );
+    assert!(
+        rows_settle_at(&h._session, &local, taller, 20).await,
+        "the rows never grew; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+    paint_screen(&mut phone, &pane, &"#".repeat(400)).await;
+    assert_eq!(
+        filled_width(&h._session, &local).await,
+        found_cols,
+        "a view narrower than the pane moved its columns",
+    );
+
+    // The keyboard opening: this socket's own view no longer needs more than the pane has on its
+    // own, so the hold is let go and the pane is put back rather than kept at the taller size.
+    let back = ok(&mut phone, grow(found_rows - 1), 30).await;
+    assert_eq!(
+        (&back["held"], &back["was_held"]),
+        (&json!(false), &json!(true)),
+        "{back}"
+    );
+    assert!(
+        rows_settle_at(&h._session, &local, found_rows, 30).await,
+        "the view shrank back under the pane and the pane stayed grown; it is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    ok(&mut phone, grow(taller), 30).await;
+    assert!(rows_settle_at(&h._session, &local, taller, 20).await);
+    drop(phone);
+    assert!(
+        rows_settle_at(&h._session, &local, found_rows, 45).await,
+        "a grown pane was left grown after the phone went; it is {} rows and was found at {found_rows}",
+        viewport_rows(&h._session, &local).await,
+    );
+}
+
+/// **"Don't shrink anything" is about the pane as anybody left it**, a desk's hold included: a
+/// phone opening a pane a desk is holding larger than the phone can show asks for nothing, and one
+/// that is taller than the desk's hold grows the rows and leaves the desk's columns alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_phone_never_shrinks_a_pane_a_desk_is_holding() {
+    let h = harness!("growdesk");
+    let token = h.token(Role::Full).await;
+    let mut desk = h.connect(&token).await;
+    until(&mut desk, "hello", 10).await;
+    until(&mut desk, "herd", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    send(&mut desk, json!({ "t": "watch", "pane": pane })).await;
+    until_pane(&mut desk, "grid.reset", &pane, 15).await;
+    a_painter_on_the_pane(&h, &mut desk, &pane, &local).await;
+    paint_screen(&mut desk, &pane, &"#".repeat(400)).await;
+    let found_cols = filled_width(&h._session, &local).await;
+    a_pane_the_node_streams_at(&h, &pane, found_cols).await;
+    let found_rows = viewport_rows(&h._session, &local).await;
+
+    let desk_cols = found_cols + 24;
+    let desk_rows = (found_rows + 3).max(30);
+    ok(
+        &mut desk,
+        json!({ "t": "manage", "op": "pane.size", "at": pane,
+                "cols": desk_cols, "rows": desk_rows, "mode": "match" }),
+        30,
+    )
+    .await;
+    assert!(rows_settle_at(&h._session, &local, desk_rows, 20).await);
+
+    let mut phone = h.connect(&token).await;
+    until(&mut phone, "hello", 10).await;
+    let grow = |rows: u16| json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 45, "rows": rows, "mode": "grow" });
+    let under = ok(&mut phone, grow(desk_rows - 2), 30).await;
+    assert_eq!(under["held"], json!(false), "{under}");
+    assert!(
+        rows_stay_at(&h._session, &local, desk_rows, 5).await,
+        "a phone shorter than the desk's hold shrank it; the pane is {} rows",
+        viewport_rows(&h._session, &local).await,
+    );
+
+    let over = ok(&mut phone, grow(desk_rows + 4), 30).await;
+    assert_eq!(
+        (&over["cols"], &over["rows"]),
+        (&json!(desk_cols), &json!(desk_rows + 4)),
+        "the phone grew the rows and took the desk's columns away: {over}",
+    );
+    assert_eq!(
+        (&over["found_cols"], &over["found_rows"]),
+        (&json!(found_cols), &json!(found_rows)),
+        "the pane's own geometry was not carried across the handover: {over}",
+    );
+    assert!(rows_settle_at(&h._session, &local, desk_rows + 4, 20).await);
+}
+
 /// Waits for a pane to arrive at `want` rows. The release is a controller exiting and then a
 /// second claim-and-release putting the size back, so it is seconds rather than instant.
 async fn rows_settle_at(session: &Session, pane: &str, want: u16, seconds: u64) -> bool {

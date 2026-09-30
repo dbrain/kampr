@@ -52,6 +52,25 @@ class AClaimTheNodeAnsweredTest {
         assertEquals(listOf(SizeMode.Match), sent.sizings(A).modes(), "${sent.sizings(A)}")
     }
 
+    // A `grow` the pane did not need is answered `ok` and not held, and it is not a hold: a header
+    // saying the pane is held over a pane nothing is holding is the lie the ack exists to prevent,
+    // and a later view that does need the rows would be told it already has them.
+    @Test
+    fun a_grow_the_pane_did_not_need_is_not_remembered_as_a_hold() = runTest {
+        val sent = mutableListOf<ClientMsg>()
+        val holds = MatchHolds(backgroundScope, sent::add)
+
+        val grow = async { holds.claim(A, 45, 40, grow = true) }
+        runCurrent()
+        val ask = sent.manages().last()
+        holds.acked(took(ask.rid).copy(held = false))
+
+        assertFalse(grow.await(), "a grow the node held nothing for answered as held")
+        assertEquals(listOf(SizeMode.Grow), sent.sizings(A).modes(), "${sent.sizings(A)}")
+        assertTrue(claim(holds, sent, A, 45, 40), "an exact claim for the same size was not asked for")
+        assertEquals(listOf(SizeMode.Grow, SizeMode.Match), sent.sizings(A).modes())
+    }
+
     // An ack names the ask it answers and nothing else. Two panes claimed at once is an ordinary
     // pane switch, and matching answers to asks by arrival would hand one pane's refusal to the
     // other — which is the same wrong belief, arrived at from the other end.

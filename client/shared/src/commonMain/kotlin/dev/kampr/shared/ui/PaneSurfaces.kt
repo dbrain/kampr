@@ -76,10 +76,14 @@ interface PaneIo {
     // it has nowhere to hear an ack. The surface has to know, because the pane's header says a pane
     // is being held and that sentence has to be true — so the answer here is the old behaviour,
     // for a surface with no session behind it, and `AppState` is the one that waits for the node.
-    suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
-        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match)))
+    suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean): Boolean {
+        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, if (grow) SizeMode.Grow else SizeMode.Match)))
         return true
     }
+
+    // Whether the node takes `SizeMode.Grow`. One that predates it refuses it as an unknown mode,
+    // and a refusal is a strip over the pane on a phone whose operator asked for nothing.
+    val growsPanes: Boolean get() = false
 
     fun releaseMatch(paneId: String, linger: Boolean = true) =
         send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))

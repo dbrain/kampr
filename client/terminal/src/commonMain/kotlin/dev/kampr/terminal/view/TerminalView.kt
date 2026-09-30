@@ -196,6 +196,10 @@ private const val MATCH_TRIES = 3
 // not — a switch to the conversation, a pane closed, a window that stopped being desk-sized, the
 // switch turned off. ADR 0013.
 //
+// A `grow` is asked for only while the pane is short of the view, and that is read when the view
+// asks rather than whenever the pane moves: read against the pane, a pane arriving grown would let
+// its own hold go, the release would put it back, and the short pane would be asked for again.
+//
 // **The release the operator cannot send is the node's**, not this: a closed laptop never reaches
 // here. What this covers is the ordinary end of a view; `session.rs` covers the rest.
 @Composable
@@ -204,8 +208,11 @@ private fun MatchTheView(
     io: PaneIo,
     view: TerminalViewState,
     on: Boolean,
+    grow: Boolean,
     cols: Int,
     rows: Int,
+    painted: Boolean,
+    short: () -> Boolean,
 ) {
     // Whether the session actually took the pane. It may decline one already close enough to this
     // view to be worth a reflow, and everything below answers to *that* rather than to the switch:
@@ -219,15 +226,16 @@ private fun MatchTheView(
     // this shape, over a pane already given back.
     val live = LocalConnectionStatus.current is ConnectionStatus.Live
     var claimed by remember(paneId) { mutableStateOf(false) }
-    LaunchedEffect(paneId, on, cols, rows, live) {
+    LaunchedEffect(paneId, on, grow, cols, rows, live, grow && painted) {
         if (!live || !on) {
             claimed = false
             return@LaunchedEffect
         }
         delay(MATCH_SETTLE_MS)
+        if (grow && !claimed && !short()) return@LaunchedEffect
         repeat(MATCH_TRIES) { attempt ->
             if (attempt > 0) delay(MATCH_RETRY_MS)
-            claimed = io.claimMatch(paneId, cols, rows)
+            claimed = io.claimMatch(paneId, cols, rows, grow)
             if (claimed) return@LaunchedEffect
         }
     }
@@ -453,9 +461,17 @@ fun TerminalView(
         // when the run started and no operator desk to trample — rule 3's other half. It is not a
         // herdr pane either, so `pane.size` refuses one outright.
         val ownPane = io.info(pane.id)?.fleet != null
-        val matching = !io.readOnly && !ownPane && roomToMatch && !LocalMosaicCell.current &&
-            (matchAsked ?: (breakpoint == Breakpoint.Desktop))
-        MatchTheView(pane.id, io, view, matching, viewCols, viewRows)
+        // Below a desk the default is the operator's call rather than nothing: a pane shorter or
+        // narrower than the view is enlarged in that dimension and never shrunk in either, so a
+        // phone gets the rows its screen has without taking a desk's columns away.
+        val mayHold = !io.readOnly && !ownPane && !LocalMosaicCell.current
+        val deskSized = roomToMatch && breakpoint == Breakpoint.Desktop
+        val exact = mayHold && roomToMatch && (matchAsked ?: deskSized)
+        val grow = mayHold && !exact && !deskSized && matchAsked != false && io.growsPanes
+        val matching = exact || grow
+        MatchTheView(pane.id, io, view, matching, grow, viewCols, viewRows, pane.painted) {
+            pane.painted && (pane.cells.cols < viewCols || pane.cells.rows < viewRows)
+        }
 
         // **The bar is travel, never fit.** Everything above measured the view without it, because
         // a bar that took rows off `viewRows` reshaped a held pane each time columns went off screen
@@ -851,7 +867,7 @@ fun TerminalView(
             when {
                 io.readOnly || keptScroll -> null
                 else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
-                    PaneScroll(keys, session.scrollTrace, scope) { report ->
+                    PaneScroll(keys, session.scrollTrace, scope, session.clock) { report ->
                         io.send(ClientMsg.InputText(pane.id, report, typed = true))
                     }
                 }
@@ -1257,7 +1273,8 @@ fun TerminalView(
                         viewRows = viewRows,
                         held = view.sizeHeld,
                         matching = matching,
-                        canMatch = roomToMatch && !ownPane,
+                        canMatch = (roomToMatch || io.growsPanes) && !ownPane,
+                        grows = grow,
                     )
                 },
                 onResize = { c, r ->

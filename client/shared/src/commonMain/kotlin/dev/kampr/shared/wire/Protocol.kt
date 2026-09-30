@@ -90,6 +90,7 @@ data class Caps(
     // to answer `find` and predate this, and reading one for the other is a count that never
     // arrives. Absent means this client searches the turns it holds and says that is what it did.
     @SerialName("convo.find") val convoFind: Boolean = false,
+    @SerialName("pane.grow") val paneGrow: Boolean = false,
 )
 
 // What the client may offer is decided here, never by inspecting the URL: an affordance that
@@ -560,6 +561,9 @@ sealed interface ServerMsg {
         val code: String? = null,
         val message: String? = null,
         val layout: JsonObject? = null,
+        // `pane.size`'s answer to whether a controller is now held on the pane. A `grow` the pane
+        // did not need is `ok` and not held.
+        val held: Boolean? = null,
     ) : ServerMsg
 
     data class NodeCaps(

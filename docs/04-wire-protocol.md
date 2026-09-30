@@ -47,7 +47,8 @@ hostname would buy (findings §3.7).
   "caps": { "push": true, "scrollback": true, "conversation": true, "manage": true,
             "mesh": true,     // this node accepts peer links; see "The mesh"
             "find": true,     // this node answers `find`; absent means it does not — see below
-            "convo.find": true },  // and the transcript search beside it, promised separately
+            "convo.find": true,    // and the transcript search beside it, promised separately
+            "pane.grow": true },   // `pane.size` takes `grow`; a client sends none to a node without it
   "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
                                      // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
@@ -1533,6 +1534,15 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 // by a newer one cannot take the newer one's hold down with it. Same floor, same measurement rule.
 { "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 200, "rows": 50, "mode": "match" }
 { "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "mode": "release", "lease": 7 }
+// "grow" is "match" for a view below the desk threshold, and it is what a phone sends by default:
+// the node enlarges only the dimensions the pane is short of — `cols` and `rows` are the view's, and
+// the target is max(pane, view) per dimension, measured at the node against the pane's honest
+// geometry. No floor, because nothing is made smaller than the pane already was. Against this
+// socket's own hold it measures what that hold will put back, so a view that no longer needs more
+// than the pane has lets the hold go. A pane already at least the view both ways is acked `ok` with
+// `held: false` and nothing is claimed. A node that has not promised `caps["pane.grow"]` is never
+// sent one: it would refuse it as an unknown mode.
+{ "t": "manage", "op": "pane.size",        "at": "01J.../w3:p2", "cols": 45, "rows": 50, "mode": "grow" }
 // A `release` with no `lease` lets go of whatever is standing, which is the panel's meaning of it.
 // A node scopes its own clients' releases for them: a socket that is matching a pane has its bare
 // `release` narrowed to that socket's hold before it runs.
@@ -1674,11 +1684,11 @@ client a resize had happened when it had not — [#233](#)'s shape on the one op
 | `kept` | `once` | whether the pane really has the size it was given. `false` is routine on an attached pane |
 | `measured_rows` | `once` | the PTY's own rows, read back after the release. **Absent** when herdr would not answer — a row count that is not a row count must not travel as `null` |
 | `held` | every mode | whether a controller is being held open on this pane |
-| `was_held` | `release` | whether there was a hold to let go of |
-| `cols`, `rows` | `once`, `hold`, `match` | what was asked for, echoed beside what was measured |
-| `matched` | `match` | this hold is owned by the socket that asked for it and dies with it |
-| `lease` | `match` | names this hold. A client need not keep it — the node scopes that socket's own `release` for it — but a **hub** must, because the hold lives on the peer and the hub is the only thing that can let go of *that* hold rather than whatever is standing |
-| `found_cols`, `found_rows` | `match` | the pane's own geometry, which the release will put back. **Absent** when the node has nothing honest to put back — columns are proved by a wrap and nothing else (#84, #221), so a pane that has never wrapped keeps the viewer's size until something deliberate moves it |
+| `was_held` | `release`, `grow` | whether there was a hold to let go of — on a `grow`, this socket's own, let go because the view no longer needs it |
+| `cols`, `rows` | `once`, `hold`, `match`, `grow` | what was asked for, echoed beside what was measured; on a `grow`, the size the pane was taken to, or the size it already had when nothing was claimed |
+| `matched` | `match`, `grow` | this hold is owned by the socket that asked for it and dies with it |
+| `lease` | `match`, `grow` | names this hold. A client need not keep it — the node scopes that socket's own `release` for it — but a **hub** must, because the hold lives on the peer and the hub is the only thing that can let go of *that* hold rather than whatever is standing |
+| `found_cols`, `found_rows` | `match`, `grow` | the pane's own geometry, which the release will put back. **Absent** when the node has nothing honest to put back — columns are proved by a wrap and nothing else (#84, #221), so a pane that has never wrapped keeps the viewer's size until something deliberate moves it |
 
 All additive: a client that has never heard of them is left exactly where it was, which is what
 every build before this one does. Columns are reported by nothing anywhere (#221), so `kept` turns

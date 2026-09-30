@@ -15,11 +15,14 @@ import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.review.ReviewState
 import dev.kampr.terminal.view.GridProbe
 import dev.kampr.terminal.view.TerminalViewState
+import kotlin.time.TimeSource
 
 // The terminal surface and the key row are separate composables in separate subtrees, so the
 // latches, the keyboard request and the zoom they share live here, keyed by pane.
+// `clock` is what a finger's scroll pump reads to tell a tick that ran late from one that did not,
+// and a test's virtual clock is not the wall's.
 @Stable
-class PaneSession(val paneId: String) {
+class PaneSession(val paneId: String, val clock: TimeSource = TimeSource.Monotonic) {
     val view = TerminalViewState()
 
     // Where the grid was last painted. A gesture detector reads it to turn a finger into a cell,

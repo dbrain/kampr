@@ -127,6 +127,7 @@ object Wire {
                 code = obj.str("code"),
                 message = obj.str("message"),
                 layout = obj["layout"] as? JsonObject,
+                held = obj.bool("held"),
             )
             "caps" -> ServerMsg.NodeCaps(
                 node = obj.str("node").orEmpty(),

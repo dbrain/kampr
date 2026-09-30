@@ -47,14 +47,16 @@ class MatchHolds(
     private val scope: CoroutineScope,
     private val send: (ClientMsg) -> Unit,
 ) {
-    private val held = mutableMapOf<String, Pair<Int, Int>>()
+    private val held = mutableMapOf<String, Claim>()
     private val asking = mutableMapOf<String, Asking>()
     private val letting = mutableMapOf<String, Job>()
     private var asks = 0L
 
+    private data class Claim(val cols: Int, val rows: Int, val grow: Boolean)
+
     private class Asking(
         val paneId: String,
-        val size: Pair<Int, Int>,
+        val claim: Claim,
         val answer: CompletableDeferred<Boolean>,
     )
 
@@ -69,15 +71,16 @@ class MatchHolds(
     // number to judge against is the geometry the pane has when nothing of Kampr's is on it, which
     // this side of the wire does not know — the node's match ack carries it as `found_cols`/
     // `found_rows`, and that is where a slack test would have to live.
-    suspend fun claim(paneId: String, cols: Int, rows: Int): Boolean {
+    suspend fun claim(paneId: String, cols: Int, rows: Int, grow: Boolean = false): Boolean {
         letting.remove(paneId)?.cancel()
-        val size = cols to rows
-        asking.values.find { it.paneId == paneId && it.size == size }?.let { return it.answer.await() }
-        if (held[paneId] == size) return true
-        val asked = Asking(paneId, size, CompletableDeferred())
+        val claim = Claim(cols, rows, grow)
+        asking.values.find { it.paneId == paneId && it.claim == claim }?.let { return it.answer.await() }
+        if (held[paneId] == claim) return true
+        val asked = Asking(paneId, claim, CompletableDeferred())
         val rid = "match-${++asks}"
         asking[rid] = asked
-        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, SizeMode.Match), rid))
+        val mode = if (grow) SizeMode.Grow else SizeMode.Match
+        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, cols, rows, mode), rid))
         return asked.answer.await()
     }
 
@@ -109,8 +112,9 @@ class MatchHolds(
     // size, and it is the one that asks again.
     fun acked(ack: ServerMsg.Managed) {
         val asked = asking.remove(ack.rid ?: return) ?: return
-        if (ack.ok) held[asked.paneId] = asked.size else held.remove(asked.paneId)
-        asked.answer.complete(ack.ok)
+        val holds = ack.ok && ack.held != false
+        if (holds) held[asked.paneId] = asked.claim else held.remove(asked.paneId)
+        asked.answer.complete(holds)
     }
 
     // The socket went, and the node let go of every lease on it as it did — including restoring

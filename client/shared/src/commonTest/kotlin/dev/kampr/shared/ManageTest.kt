@@ -50,6 +50,29 @@ class ManageTest {
         assertEquals("read-only", refused.message)
     }
 
+    // A phone grows a pane only on a node that promised it can, and believes a hold only where the
+    // ack says one was taken: a `grow` the pane did not need is `ok` and holds nothing.
+    @Test
+    fun aGrowIsPromisedInTheGreetingAndItsAckSaysWhetherAnythingIsHeld() {
+        val older = Wire.decode(
+            """{"t":"hello","protocol":1,"node_id":"01JNODE","node_name":"n","build":"0.1.101",
+                "role":"full","caps":{"find":true},"security":{}}""",
+        ) as ServerMsg.Hello
+        assertFalse(older.caps.paneGrow, "a node that never said it grows a pane was credited with it")
+        val newer = Wire.decode(
+            """{"t":"hello","protocol":1,"node_id":"01JNODE","node_name":"n","build":"0.1.102",
+                "role":"full","caps":{"pane.grow":true},"security":{}}""",
+        ) as ServerMsg.Hello
+        assertTrue(newer.caps.paneGrow)
+
+        val enough = Wire.decode(
+            """{"t":"managed","op":"pane.size","ok":true,"held":false,"cols":120,"rows":40,"rid":"match-1"}"""
+        ) as ServerMsg.Managed
+        assertEquals(false, enough.held)
+        val create = Wire.decode("""{"t":"managed","op":"workspace.create","ok":true}""") as ServerMsg.Managed
+        assertNull(create.held)
+    }
+
     // error.code is an open string, so an unknown one still has to reach the operator by message.
     @Test
     fun anUnknownCodeStillCarriesItsMessage() {

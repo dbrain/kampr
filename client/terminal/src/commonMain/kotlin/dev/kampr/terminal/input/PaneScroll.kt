@@ -6,6 +6,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 // What a pane is scrolled with when Kampr cannot scroll it itself.
 //
@@ -16,7 +18,7 @@ import kotlinx.coroutines.launch
 enum class ScrollKeys {
     // What a terminal sends when the program asked for the mouse: a scroll the program understands
     // as a scroll, moving its view and nothing else. How far a report moves Claude depends on what
-    // arrived just before it (#567), which is `rowsFor`.
+    // arrived just before it (#567), which is `land`.
     Wheel,
 
     // Alternate scroll, and the default for everything else: the wheel becomes cursor keys. The
@@ -55,32 +57,36 @@ internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): St
     ScrollKeys.CursorKeys -> if (up) "\u001bOA" else "\u001bOB"
 }
 
-// What `count` reports sent in one write move the program, and it is Claude's own arithmetic, read
-// out of 2.1.285 and measured to the row for 1 to 40 reports (#567). A report landing within
-// 40 ms of the last one ramps: +0.3 rows each, floored, from 1 to a ceiling of 6. And the first
-// report after a change of direction moves nothing at all. `CursorKeys` programs do neither.
-//
-// This is what made the finger tick. A pump releasing one report every 40 ms sits exactly on the
-// reset, so every report moved one row — ~21 rows a second however far the finger went.
-internal fun ScrollKeys.rowsFor(count: Int, reversed: Boolean): Int = when (this) {
-    ScrollKeys.CursorKeys -> count
+// What `count` reports sent in one write move the program, and where they leave its ramp. It is
+// Claude's own arithmetic, read out of 2.1.285 and measured to the row for 1 to 40 reports (#567):
+// a report landing within 40 ms of the last one ramps, +0.3 rows each, floored, from 1 to a ceiling
+// of 6, and the first report after a change of direction moves nothing at all. `ramp` is where the
+// last write left the multiplier when this one lands inside that window — the ramp is Claude's,
+// not the write's, and carries across writes exactly (#569) — and null starts it again.
+// `CursorKeys` programs do none of it.
+internal class Landing(val rows: Int, val ramp: Double?)
+
+internal fun ScrollKeys.land(count: Int, reversed: Boolean, ramp: Double? = null): Landing = when (this) {
+    ScrollKeys.CursorKeys -> Landing(count, null)
     ScrollKeys.Wheel -> {
         var rows = 0
         // Summed in doubles as Claude's JavaScript sums them: the eleventh step is 3.999… and
         // floors to 3, which is why 15 reports measured 39 rows and not 40.
-        var mult = 1.0
+        var mult = if (reversed) null else ramp
         repeat((if (reversed) count - 1 else count).coerceAtLeast(0)) {
-            rows += mult.toInt()
-            mult = (mult + 0.3).coerceAtMost(6.0)
+            val next = mult?.let { (it + 0.3).coerceAtMost(6.0) } ?: 1.0
+            rows += next.toInt()
+            mult = next
         }
-        rows
+        Landing(rows, mult)
     }
 }
 
-// The biggest write that does not overshoot. Travel it cannot land exactly waits for the next one.
-private fun ScrollKeys.reportsFor(rows: Int, reversed: Boolean): Int {
+// The biggest write that does not overshoot. Travel it cannot land exactly waits for the next one,
+// and a carried ramp can make even one report too many.
+private fun ScrollKeys.reportsFor(rows: Int, reversed: Boolean, ramp: Double?): Int {
     var count = 0
-    while (count < MAX_REPORTS && rowsFor(count + 1, reversed) <= rows) count++
+    while (count < MAX_REPORTS && land(count + 1, reversed, ramp).rows <= rows) count++
     return count
 }
 
@@ -88,10 +94,22 @@ private fun ScrollKeys.reportsFor(rows: Int, reversed: Boolean): Int {
 // frames.
 private const val MAX_REPORTS = 40
 
-// **The ramp only resets after 40 ms of quiet at Claude's end**, so the next write goes out that
-// long after the frame that answered the last one — which cannot have been drawn before the last
-// one landed. Sent sooner, it lands inside the ramp and moves further than the model says (#567:
-// two writes of 5 moved 19 rows 35 ms apart and 12 rows 45 ms apart).
+// **A write goes out on one side of Claude's 40 ms reset or well clear of the other, never near
+// it**, because the gap Claude sees is the gap sent plus whatever the link does to it. Inside:
+// every tick, which is Claude's own ~17 ms repaint (#570), sized from where the last write
+// left the ramp. A tick the dispatcher ran late past `CARRY_MS` is not trusted to carry. That
+// leaves 16 ms of link jitter before a carried write lands outside the window and moves less than
+// it was sized for (#571: exact at 0-20 ms, one row over at 0-30). What it cannot absorb is
+// herdr holding one write for 100 ms (#445), which resets the ramp under a run the model thinks is
+// carried: 61 rows for 100 (#572). That is ~1 write in 1000 at this cadence.
+private const val TICK_MS = 16L
+private const val CARRY_MS = 24L
+
+// Outside: a fresh write waits for the frame that came back after the last one and then long
+// enough that Claude's window has shut. The tick that found nothing to carry comes first, so that
+// is never sooner than 61 ms after the last write — 21 ms of margin for a link that bunches the two
+// up. Sent sooner, it lands inside the ramp and moves further than the model says (#567: two
+// writes of 5 moved 19 rows 35 ms apart and 12 rows 45 ms apart).
 private const val QUIET_MS = 45L
 
 // A write that changed nothing on screen — the top of the transcript — is answered by no frame.
@@ -108,18 +126,23 @@ private const val UNANSWERED_MS = 150L
 //
 // **A drag goes out as whole writes and the wheel does not.** Each write carries every row the
 // finger travelled since the last, turned into however many reports land that many rows, so the
-// program's view keeps up with the finger and nothing is left to trickle out once it lifts. `scope`
+// program's view keeps up with the finger and nothing is left to trickle out once it lifts. While
+// the finger keeps moving a write goes out every tick with Claude's ramp carried across them; when
+// it slows past what one carried report is worth, the ramp is let reset before the next. `scope`
 // is what releases them; without one the rows only move when [`drain`] is called, which is how a
 // test drives it without a clock.
 class PaneScroll(
     val keys: ScrollKeys,
     private val trace: ScrollTrace? = null,
     private val scope: CoroutineScope? = null,
+    private val clock: TimeSource = TimeSource.Monotonic,
     private val send: (String) -> Unit,
 ) {
     private var carried = 0f
     private var pending = 0
     private var lastUp: Boolean? = null
+    private var ramp: Double? = null
+    private var wrote: TimeMark = clock.markNow()
     private var atCol = 0
     private var atRow = 0
     private var pump: Job? = null
@@ -127,7 +150,7 @@ class PaneScroll(
 
     val queued: Int get() = pending
 
-    private val cap = keys.rowsFor(MAX_REPORTS, reversed = false)
+    private val cap = keys.land(MAX_REPORTS, reversed = false).rows
 
     // Whole rows, because the fractions a trackpad hands over are carried by the wheel until they
     // make one: a report for every tiny delta ran Claude's view a row per event. Unpaced: a hand
@@ -158,19 +181,30 @@ class PaneScroll(
         answers.trySend(true)
     }
 
-    // Everything travelled so far as one write, and whether any is left over. Public because the
-    // release has to be drivable without a clock.
-    fun drain(): Boolean {
+    // Everything travelled so far that one write can land, and whether any is left over. `carry`
+    // sizes it from where the last write left Claude's ramp, which is only true of a write that
+    // lands inside the window. Public because the release has to be drivable without a clock.
+    fun drain(carry: Boolean = false): Boolean {
+        write(carry)
+        return pending != 0
+    }
+
+    private fun write(carry: Boolean): Boolean {
         if (pending == 0) return false
         val up = pending > 0
         val reversed = lastUp != null && lastUp != up
-        val count = keys.reportsFor(abs(pending), reversed)
-        val rows = keys.rowsFor(count, reversed)
-        pending -= if (up) rows else -rows
+        val from = if (carry) ramp else null
+        val count = keys.reportsFor(abs(pending), reversed, from)
+        if (count == 0) return false
+        val landing = keys.land(count, reversed, from)
+        pending -= if (up) landing.rows else -landing.rows
         lastUp = up
-        trace?.sent(keys, reports = count, rows = rows)
+        ramp = landing.ramp
+        answers.tryReceive()
+        wrote = clock.markNow()
+        trace?.sent(keys, reports = count, rows = landing.rows, carried = carry)
         send(scrollReport(keys, up, atCol, atRow).repeat(count))
-        return pending != 0
+        return true
     }
 
     private fun start() {
@@ -180,8 +214,10 @@ class PaneScroll(
             // The first write of a gesture is not made to wait: the gap is between writes, not a
             // delay on the answer.
             while (pending != 0) {
-                answers.tryReceive()
-                drain()
+                write(carry = false)
+                do {
+                    delay(TICK_MS)
+                } while (wrote.elapsedNow().inWholeMilliseconds <= CARRY_MS && write(carry = true))
                 // A timer racing the frame rather than `withTimeoutOrNull`, whose clock is not the
                 // dispatcher's on every platform: under the Compose test clock it waited in real time.
                 val unanswered = launch {

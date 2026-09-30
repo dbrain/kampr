@@ -58,6 +58,14 @@
     "rows": 50,
     "mode": "match"
   },
+  "pane.size.grow": {
+    "t": "manage",
+    "op": "pane.size",
+    "at": "01JNODE/w3:p2",
+    "cols": 45,
+    "rows": 50,
+    "mode": "grow"
+  },
   "pane.size.release": {
     "t": "manage",
     "op": "pane.size",

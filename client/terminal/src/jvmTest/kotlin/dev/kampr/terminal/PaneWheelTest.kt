@@ -9,7 +9,6 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
-import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.RowDiff
@@ -187,38 +186,27 @@ class PaneWheelTest {
         assertTrue(atLift.size * 3 <= reports, "$reports reports went out as ${atLift.size} writes")
     }
 
-    // The pane's own frames are what release the next write, so a drag keeps up with a pane that
-    // answers fast rather than waiting out the ceiling meant for one that never answers.
+    // The report on 0.1.101: *"better but still too slow / a little chuggy."* #568's pump let the
+    // next write out 45 ms after the frame that answered the last, so the pane stepped ~14 times a
+    // second. A finger still moving is written on the next tick instead, with no frame in between,
+    // because the ramp carries across writes that land that close (#569).
     @Test
-    fun theFrameThatAnswersAWriteReleasesTheNext() = runComposeUiTest {
+    fun aFingerStillMovingIsWrittenOnTheNextTickWithoutWaitingForAFrame() = runComposeUiTest {
         val io = AgentIo("claude", clock = { mainClock.currentTime })
-        val session = PaneSession(Phone.PANE)
-        val pane = noRing()
-        phoneTerminal(pane, session, io = io)
+        val session = PaneSession(Phone.PANE, TestClock { mainClock.currentTime })
+        phoneTerminal(noRing(), session, io = io)
         mainClock.autoAdvance = false
 
         onRoot().performTouchInput {
             down(Offset(width / 2f, 100f))
-            repeat(4) { moveBy(Offset(0f, 150f)) }
-        }
-        mainClock.advanceTimeBy(20, ignoreFrameDuration = true)
-        assertEquals(1, io.at.size, "the drag did not reach the pane")
-        pane.applyPatch(
-            ServerMsg.GridPatch(
-                pane = Phone.PANE,
-                rows = listOf(RowDiff(0, listOf(Run(0, "answered")))),
-                cursor = Cursor(0, 3, true),
-                links = emptyList(),
-            ),
-        )
-        mainClock.advanceTimeBy(1, ignoreFrameDuration = true)
-        onRoot().performTouchInput {
-            repeat(2) { moveBy(Offset(0f, 150f)) }
+            repeat(30) { moveBy(Offset(0f, 40f), delayMillis = 8) }
             up()
         }
-        mainClock.advanceTimeBy(120, ignoreFrameDuration = true)
-        assertEquals(2, io.at.size, "the frame came back and the rest of the drag waited for the ceiling")
-        assertTrue(io.at[1] - io.at[0] < 150, "the second write went ${io.at[1] - io.at[0]}ms after the first")
+        mainClock.advanceTimeBy(400, ignoreFrameDuration = true)
+        val gaps = io.at.zipWithNext { a, b -> b - a }
+        assertTrue(gaps.size >= 10, "a 240 ms drag went out as ${io.at.size} writes")
+        assertTrue(gaps.take(10).all { it <= 20 }, "the drag waited on frames that never came: $gaps")
+        assertTrue(gaps.none { it in 25..59 }, "a write went out inside the band jitter decides: $gaps")
     }
 
     @Test

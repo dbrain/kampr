@@ -57,6 +57,12 @@ class ManageWireTest {
             rows = 50,
             mode = SizeMode.Match,
         ),
+        "pane.size.grow" to ManageOp.PaneSize(
+            at = "01JNODE/w3:p2",
+            cols = 45,
+            rows = 50,
+            mode = SizeMode.Grow,
+        ),
         "pane.size.release" to ManageOp.PaneSize("01JNODE/w3:p2", mode = SizeMode.Release),
         "rename" to ManageOp.Rename("01JNODE/w3:p2", "build"),
         "rename.clear" to ManageOp.Rename("01JNODE/w3:p2", null),

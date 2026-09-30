@@ -152,7 +152,8 @@ class AppState(
     // ownership on this side of it.
     private val matches = MatchHolds(scope) { connection.send(it) }
 
-    suspend fun claimMatch(paneId: String, cols: Int, rows: Int) = matches.claim(paneId, cols, rows)
+    suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean = false) =
+        matches.claim(paneId, cols, rows, grow)
 
     fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
 

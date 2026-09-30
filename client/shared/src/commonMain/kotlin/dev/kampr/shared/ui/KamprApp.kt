@@ -199,8 +199,9 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun echoed(paneId: String, ms: Long) = state.store.echoed(paneId, ms)
     override val searchesTranscript: Boolean get() = state.store.hello.value?.caps?.convoFind == true
     override fun show(view: PaneView) = state.setPaneView(view)
-    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int) =
-        state.claimMatch(paneId, cols, rows)
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean) =
+        state.claimMatch(paneId, cols, rows, grow)
+    override val growsPanes: Boolean get() = state.store.hello.value?.caps?.paneGrow == true
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
 }

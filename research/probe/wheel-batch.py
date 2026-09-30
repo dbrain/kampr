@@ -176,41 +176,47 @@ def paced(pane, frames, k, gap_ms, button, label):
     print(f"  {label:<12} top {before} -> {after}  moved={moved}  frames={len(got)}  faithful={same}/{total}")
 
 
-def main():
-    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+def transcript(lines=300):
+    """A real claude in the throwaway session with `lines` numbered lines on its transcript, and an
+    observe stream on it. The caller owns `composer.stop()` and the returned directory."""
     cwd = subprocess.run(["mktemp", "-d", "/tmp/kampr-batch-XXXXXX"], capture_output=True, text=True).stdout.strip()
     composer.start()
-    try:
-        ws = call("workspace.create", {"label": "claude", "cwd": cwd, "focus": False})
-        pane = ws["root_pane"]["pane_id"]
-        time.sleep(1.0)
-        call("pane.send_text", {"pane_id": pane, "text": "claude --model haiku\r"})
-        for _ in range(60):
-            time.sleep(0.5)
-            text = visible(pane)
-            if "trust" in text.lower():
-                call("pane.send_text", {"pane_id": pane, "text": "\r"})
-                time.sleep(4)
-                break
-            if "\n❯" in text:
-                break
-        call("pane.send_text", {"pane_id": pane, "text":
-             "Print the numbers 1 to 300, one per line, each followed by a dash and its English word. "
-             "No tools, nothing else."})
+    ws = call("workspace.create", {"label": "claude", "cwd": cwd, "focus": False})
+    pane = ws["root_pane"]["pane_id"]
+    time.sleep(1.0)
+    call("pane.send_text", {"pane_id": pane, "text": "claude --model haiku\r"})
+    for _ in range(60):
         time.sleep(0.5)
-        call("pane.send_text", {"pane_id": pane, "text": "\r"})
-        for _ in range(180):
-            time.sleep(1)
-            v = visible(pane)
-            if "300 - three" in v and "esc to interrupt" not in v.lower():
-                break
-        time.sleep(2)
-        cols = max(len(line) for line in visible(pane).splitlines())
-        frames = Frames(pane, cols)
-        time.sleep(1.5)
-        print(f"claude {subprocess.run(['claude', '--version'], capture_output=True, text=True).stdout.strip()}"
-              f"  observe {cols}x{ROWS}  top at rest {top(pane)}")
+        text = visible(pane)
+        if "trust" in text.lower():
+            call("pane.send_text", {"pane_id": pane, "text": "\r"})
+            time.sleep(4)
+            break
+        if "\n❯" in text:
+            break
+    call("pane.send_text", {"pane_id": pane, "text":
+         f"Print the numbers 1 to {lines}, one per line, each followed by a dash and its English word. "
+         "No tools, nothing else."})
+    time.sleep(0.5)
+    call("pane.send_text", {"pane_id": pane, "text": "\r"})
+    for _ in range(lines):
+        time.sleep(1)
+        v = visible(pane)
+        if f"{lines} - " in v and "esc to interrupt" not in v.lower():
+            break
+    time.sleep(2)
+    cols = max(len(line) for line in visible(pane).splitlines())
+    frames = Frames(pane, cols)
+    time.sleep(1.5)
+    print(f"claude {subprocess.run(['claude', '--version'], capture_output=True, text=True).stdout.strip()}"
+          f"  observe {cols}x{ROWS}  top at rest {top(pane)}")
+    return pane, frames, cwd
 
+
+def main():
+    rounds = int(sys.argv[1]) if len(sys.argv) > 1 else 2
+    pane, frames, cwd = transcript()
+    try:
         up, down = "\x1b[<64;40;20M", "\x1b[<65;40;20M"
         home = lambda: (call("pane.send_text", {"pane_id": pane, "text": "\x1b[1;5F"}), time.sleep(1.0))
         for r in range(rounds):

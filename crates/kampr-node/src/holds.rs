@@ -202,6 +202,15 @@ impl PaneHolds {
         carried
     }
 
+    /// The geometry `token`'s hold will put back, if `token` is the hold standing on `pane`.
+    pub fn found_under(&self, pane: &str, token: HoldToken) -> Option<(u16, u16)> {
+        let held = self.inner.lock().expect("holds");
+        held.get(pane)
+            .filter(|e| e.token == token)
+            .and_then(|e| e.restore.as_ref())
+            .map(|r| r.found)
+    }
+
     pub fn is_held(&self, pane: &str) -> bool {
         self.inner.lock().expect("holds").contains_key(pane)
     }
