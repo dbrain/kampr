@@ -7,5 +7,7 @@ gradle.allprojects {
     tasks.withType(AbstractTestTask::class.java).configureEach {
         outputs.upToDateWhen { false }
         outputs.doNotCacheIf("a result from another machine is not evidence this one ran") { true }
+        // A runner's failure is only ever read from its log, and the default says only a line number.
+        testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
