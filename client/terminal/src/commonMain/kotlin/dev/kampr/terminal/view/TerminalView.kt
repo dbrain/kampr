@@ -112,7 +112,6 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -458,6 +457,21 @@ fun TerminalView(
             (matchAsked ?: (breakpoint == Breakpoint.Desktop))
         MatchTheView(pane.id, io, view, matching, viewCols, viewRows)
 
+        // **The bar is travel, never fit.** Everything above measured the view without it, because
+        // a bar that took rows off `viewRows` reshaped a held pane each time columns went off screen
+        // and back. Everything below rests the grid above it, so the row being typed into is never
+        // behind it. Gated on columns alone: that reading does not move with the height, where the
+        // bar's rows-back half does and would flip the bar at a row back.
+        val columnsOff = columnWindow(view.panX, paint.width, cols, metrics.width, 0).columnsOff
+        val stage = if (columnsOff && session.columnBarHeight > 0f) {
+            paint.copy(
+                insetBottom = paint.insetBottom + session.columnBarHeight +
+                    with(density) { COLUMN_BAR_GAP.toPx() },
+            )
+        } else {
+            paint
+        }
+
         LaunchedEffect(cache, zoom) {
             repeat(FONT_SETTLE_FRAMES) {
                 withFrameNanos { }
@@ -577,13 +591,13 @@ fun TerminalView(
         // already theirs rather than pushing the pane down a screen.
         val reserved = (deepestRing - rows.historyRows).coerceAtLeast(0) * metrics.height
         val band = caretBand(
-            paint, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
+            stage, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
             rows.liveRows, reserved,
         )
         view.band = band
-        view.viewportHeight = paint.contentHeight
+        view.viewportHeight = stage.contentHeight
         view.contentFloor =
-            contentFloor(paint, rows.total, rows.total - contentBelow, metrics.height, rows.liveRows)
+            contentFloor(stage, rows.total, rows.total - contentBelow, metrics.height, rows.liveRows)
         var placedCell by remember(pane.id) { mutableFloatStateOf(0f) }
         if (placedCell != metrics.height) {
             placedCell = metrics.height
@@ -631,7 +645,7 @@ fun TerminalView(
         val edgeLabel = historyEdgeLabel(reviewSurface())
         val edgePad = if (edgeLabel == null) 0f else with(density) { HISTORY_EDGE_DP.toPx() }
         val geometry = terminalGeometry(
-            paint, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY,
+            stage, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY,
             edgePad + reserved,
         )
         view.minPanX = geometry.minPanX
@@ -644,10 +658,10 @@ fun TerminalView(
             val top = geometry.originY + review.row * metrics.height
             // Row 0 reveals the mark that says where the record stops, rather than stopping flush
             // against the header with it still above the fold.
-            val wanted = paint.insetTop + if (review.row == 0) edgePad else 0f
+            val wanted = stage.insetTop + if (review.row == 0) edgePad else 0f
             val shift = when {
                 top < wanted -> wanted - top
-                top + metrics.height > paint.contentBottom -> paint.contentBottom - top - metrics.height
+                top + metrics.height > stage.contentBottom -> stage.contentBottom - top - metrics.height
                 else -> 0f
             }
             if (shift != 0f) view.scrollY = (view.scrollY + shift).coerceIn(0f, view.maxScroll)
@@ -672,7 +686,7 @@ fun TerminalView(
             if (view.followCursor && view.following && !view.pinching) {
                 view.chaseCursor(
                     followCursorPan(
-                        view.panX, geometry.minPanX, pane.cursor.col, metrics.width, paint.width,
+                        view.panX, geometry.minPanX, pane.cursor.col, metrics.width, stage.width,
                     )
                 )
             }
@@ -798,7 +812,7 @@ fun TerminalView(
             }
         }
 
-        val visibleRows = (paint.contentHeight / metrics.height).toInt().coerceAtLeast(1)
+        val visibleRows = (stage.contentHeight / metrics.height).toInt().coerceAtLeast(1)
         val transcript = info.talks
         val gridSummary = buildString {
             append("Terminal grid, $cols columns by ${rows.liveRows} rows")
@@ -908,7 +922,7 @@ fun TerminalView(
                         Modifier
                     } else {
                         Modifier.pointerInput(pane.id, scrollToPane != null) {
-                            terminalGestures(session, presets, paint, probe, rows, scrollToPane, ::tapped)
+                            terminalGestures(session, presets, stage, probe, rows, scrollToPane, ::tapped)
                         }
                     },
                 ),
@@ -1028,9 +1042,7 @@ fun TerminalView(
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),
         )
 
-        val firstCol = floor(-geometry.panX / metrics.width).toInt().coerceIn(0, cols)
-        val lastCol = min(cols, firstCol + (paint.width / metrics.width).toInt() + 1)
-        val window = ColumnWindow(firstCol, lastCol, cols, rowsBack(view, metrics.height))
+        val window = columnWindow(view.panX, stage.width, cols, metrics.width, rowsBack(view, metrics.height))
 
         Column(
             Modifier
@@ -1058,8 +1070,8 @@ fun TerminalView(
             HandoverLine(session.handover, info?.agent)
         }
 
-        // Floats rather than standing in the column above: a bar that takes rows from the grid
-        // changes the fit it reports on, and under a standing hold that is a resize of the pane.
+        // Floats rather than standing in the column above, which is counted in the fit; the room
+        // it needs is `stage`'s.
         if (window.clipped) {
             ColumnIndicator(
                 window = window,
@@ -1068,8 +1080,9 @@ fun TerminalView(
                     .align(Alignment.BottomEnd)
                     .absolutePadding(
                         right = safe.right + 8.dp,
-                        bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() } + 6.dp,
-                    ),
+                        bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() } + COLUMN_BAR_GAP,
+                    )
+                    .onSizeChanged { session.columnBarHeight = it.height.toFloat() },
             )
         }
 

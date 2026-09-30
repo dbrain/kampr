@@ -58,6 +58,7 @@ class PaneSession(val paneId: String) {
     // Measured, not guessed: the strip is absent until something scrolls out of view, and grows
     // with the review bar, the handover line and the type scale.
     var indicatorHeight by mutableStateOf(0f)
+    var columnBarHeight by mutableStateOf(0f)
 
     // The pane actions sheet is composed at the app root and never sees the grid, so it asks here
     // and the terminal view on screen carries it out. `onScreen` is how the sheet knows there is

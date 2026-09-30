@@ -18,6 +18,8 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
+import kotlin.math.floor
+import kotlin.math.min
 
 data class ColumnWindow(
     val firstCol: Int,
@@ -25,8 +27,18 @@ data class ColumnWindow(
     val cols: Int,
     val rowsBack: Int,
 ) {
-    val clipped: Boolean get() = firstCol > 0 || lastCol < cols || rowsBack > 0
+    val columnsOff: Boolean get() = firstCol > 0 || lastCol < cols
+    val clipped: Boolean get() = columnsOff || rowsBack > 0
 }
+
+fun columnWindow(panX: Float, paintWidth: Float, cols: Int, cellWidth: Float, rowsBack: Int): ColumnWindow {
+    val clampedPan = panX.coerceIn(min(0f, paintWidth - cols * cellWidth), 0f)
+    val firstCol = floor(-clampedPan / cellWidth).toInt().coerceIn(0, cols)
+    val lastCol = min(cols, firstCol + (paintWidth / cellWidth).toInt() + 1)
+    return ColumnWindow(firstCol, lastCol, cols, rowsBack)
+}
+
+val COLUMN_BAR_GAP = 6.dp
 
 @Composable
 fun ColumnIndicator(

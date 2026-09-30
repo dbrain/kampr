@@ -1,14 +1,55 @@
 package dev.kampr.terminal
 
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.Cursor
+import dev.kampr.shared.wire.PanePrefs
+import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
+import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private val columnBar = hasContentDescription("Showing columns", substring = true)
+private class ClaimIo : PaneIo {
+    val claims = mutableListOf<Pair<Int, Int>>()
+    override fun send(msg: ClientMsg) = Unit
+    override fun prefs(paneId: String) = PanePrefs()
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
+        claims += cols to rows
+        return true
+    }
+}
+
+private fun written(cols: Int, rows: Int = 24): PaneState {
+    val pane = PaneState(Phone.PANE, StyleTable())
+    val lines = (0 until rows).map { "$ line $it" }
+    pane.applyReset(
+        ServerMsg.GridReset(
+            pane = Phone.PANE,
+            cols = cols,
+            rows = rows,
+            rowsData = lines.mapIndexed { index, text -> RowDiff(index, listOf(Run(0, text))) },
+            cursor = Cursor(lines.last().length, rows - 1, true),
+            links = emptyList(),
+        ),
+    )
+    return pane
+}
+
+@OptIn(ExperimentalTestApi::class)
+private fun ComposeUiTest.claimOn(pane: PaneState): Pair<Int, Int> {
+    val io = ClaimIo()
+    phoneTerminal(pane, PaneSession(Phone.PANE), width = 1624.dp, height = 1000.dp, io = io)
+    waitUntil(timeoutMillis = 3_000) { io.claims.isNotEmpty() }
+    return io.claims.last()
+}
 
 @OptIn(ExperimentalTestApi::class)
 class ColumnBarTest {
@@ -33,5 +74,43 @@ class ColumnBarTest {
             session.indicatorHeight,
             "the bar took room from the grid, so its coming and going reshapes the view it reports on",
         )
+    }
+
+    // The operator: "the horizontal scroll bar ... covers the bottom part of the terminal". A
+    // grid written to its last row with the caret on it, on a phone that cannot show every column:
+    // at the live edge the row being typed into has to rest above the bar, not behind it.
+    @Test
+    fun theLastRowAndTheCaretRestAboveTheBarAtTheLiveEdge() = runComposeUiTest {
+        val pane = written(cols = 200)
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(pane, session, io = ReadableIo)
+        waitForIdle()
+        assertEquals(1, onAllNodes(columnBar).fetchSemanticsNodes().size, "columns are off screen and nothing says so")
+        val last = pane.cells.rows - 1
+        assertTrue(
+            onScreen(pane, session, last),
+            "the last row ends at ${rowBottom(pane, session, last)}, behind a bar starting at ${visibleBottom()}",
+        )
+        assertTrue(
+            onScreen(pane, session, pane.cursor.row),
+            "the caret's row ends at ${rowBottom(pane, session, pane.cursor.row)}, behind a bar at ${visibleBottom()}",
+        )
+    }
+
+    // The room the bar makes is travel, never fit: a bar that took rows off what the view says it
+    // can show would resize a held pane each time columns went off screen and back.
+    @Test
+    fun theBarDoesNotChangeTheSizeTheViewAsksFor() {
+        var fits: Pair<Int, Int>? = null
+        var clipped: Pair<Int, Int>? = null
+        runComposeUiTest {
+            fits = claimOn(written(cols = 40))
+            assertTrue(onAllNodes(columnBar).fetchSemanticsNodes().isEmpty(), "a pane that fits showed a bar")
+        }
+        runComposeUiTest {
+            clipped = claimOn(written(cols = 400))
+            assertEquals(1, onAllNodes(columnBar).fetchSemanticsNodes().size, "a pane wider than a desk showed no bar")
+        }
+        assertEquals(fits, clipped, "the bar changed the grid the desk asks the pane for")
     }
 }
