@@ -6,12 +6,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.waitUntilAtLeastOneExists
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
@@ -183,8 +186,7 @@ class SoundSurfaceTest {
         onNodeWithContentDescription("Play clip.wav").performClick()
         waitForIdle()
         onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
-        onNodeWithContentDescription("Pause clip.wav").assertExists()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
 
         decoder.latest?.ended()
         waitUntil(timeoutMillis = 5_000) {
@@ -198,9 +200,8 @@ class SoundSurfaceTest {
     fun bytes_a_decoder_will_not_take_say_so_and_leave_the_file_on_offer() = runComposeUiTest {
         setContent { Screen(paneOf(SPOKEN), SoundNode(), Decoder(deaf = true)) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
-
-        onNodeWithText("would not play it", substring = true).assertExists()
+        // The decoder answers off the test clock, so idle is not the same as refused.
+        waitUntilAtLeastOneExists(hasText("would not play it", substring = true), 5_000)
         onNodeWithContentDescription("Save clip.wav").assertExists()
     }
 

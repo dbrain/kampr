@@ -498,7 +498,7 @@ impl Harness {
 
     /// The pane of this harness's session rooted at `cwd`, once herdr has reported it.
     async fn pane_with_cwd(&self, cwd: &str) -> Option<String> {
-        for _ in 0..100 {
+        for _ in 0..300 {
             let found = self
                 .node
                 .herd()
@@ -511,6 +511,17 @@ impl Harness {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        // Only ever missed on a loaded CI runner, never here; what the herd held instead is the
+        // evidence the next miss has to carry.
+        let seen: Vec<_> = self
+            .node
+            .herd()
+            .panes
+            .iter()
+            .filter(|p| p.node_id == self.node.node_id())
+            .map(|p| (p.id.clone(), p.cwd.clone()))
+            .collect();
+        eprintln!("no pane at {cwd} after 30 s; this node's panes: {seen:?}");
         None
     }
 
