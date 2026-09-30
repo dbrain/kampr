@@ -14,6 +14,7 @@ import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.LatchState
 import dev.kampr.terminal.input.active
 import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.KeyTrace
 import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.input.ScrollKeys
 import dev.kampr.terminal.input.PaneChord
@@ -21,6 +22,7 @@ import dev.kampr.terminal.input.chordSendsControl
 import dev.kampr.terminal.input.paneChord
 import dev.kampr.terminal.input.paneScrollKeys
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -486,7 +488,7 @@ private fun fnSlot(rows: List<List<dev.kampr.terminal.input.KeyCap?>>): Pair<Int
 class PaneScrollTest {
     private fun reports(keys: ScrollKeys, up: Boolean): List<String> {
         val sent = mutableListOf<String>()
-        PaneScroll(keys) { sent += it }.notch(up = up, col = 40, row = 20)
+        PaneScroll(keys) { sent += it }.wheel(rows = if (up) 3 else -3, col = 40, row = 20)
         return sent
     }
 
@@ -553,7 +555,7 @@ class PaneScrollTest {
     fun aWheelNotchIsNotPacedBecauseAHandNeverOutrunsTheProgram() {
         val sent = mutableListOf<String>()
         val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
-        scroll.notch(up = true, col = 0, row = 0)
+        scroll.wheel(rows = 3, col = 0, row = 0)
         assertEquals(1, sent.size, "a notch waited for a pace it does not need")
         assertEquals(0, scroll.queued)
     }
@@ -569,7 +571,7 @@ class PaneScrollTest {
         val scroll = PaneScroll(ScrollKeys.Wheel, trace) { }
         repeat(5) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
         while (scroll.drain()) Unit
-        scroll.notch(up = true, col = 0, row = 0)
+        scroll.wheel(rows = 3, col = 0, row = 0)
         trace.arrived()
         scroll.rest()
         assertEquals(1, lines.size, "one gesture is one line")
@@ -646,5 +648,106 @@ class PaneScrollTest {
         assertFalse(chordSendsControl(ctrl = false, meta = true), "a command chord made a control byte")
         assertFalse(chordSendsControl(ctrl = false, meta = false))
         assertNull(paneChord('x', ctrl = false, meta = true, shift = false))
+    }
+}
+
+// The keystroke half of the same instrument. The only latency the app showed was the node's ping to
+// herdr, which is one leg of a keystroke's trip and says nothing about the rest — so a keystroke
+// that visibly stalls behind a 2 ms figure has to be taken apart where it is typed: the wait for
+// the frame that answers it, and the wait from that frame to the one the client paints.
+class KeyTraceTest {
+    private class Clock : kotlin.time.TimeSource {
+        var now = 0L
+        override fun markNow(): kotlin.time.TimeMark = object : kotlin.time.TimeMark {
+            val at = now
+            override fun elapsedNow() = (now - at).milliseconds
+        }
+    }
+
+    private class Rig(on: Boolean = true) {
+        val clock = Clock()
+        val lines = mutableListOf<String>()
+        val echoes = mutableListOf<Long>()
+        val trace = KeyTrace(on = on, emit = { lines += it }, clock = clock, echoed = { echoes += it })
+        var col = 0
+
+        fun type(answerIn: Long) {
+            trace.sent()
+            clock.now += answerIn
+            col++
+            trace.frame(col, 0)
+            clock.now += 5L
+            trace.drawn()
+            clock.now += 100L
+        }
+    }
+
+    @Test
+    fun aBurstOfTypingIsSplitIntoTheRoundTripAndThePaint() {
+        val rig = Rig()
+        rig.trace.frame(0, 0)
+        rig.type(20L)
+        rig.type(20L)
+        rig.type(400L)
+        rig.type(30L)
+        rig.trace.flush()
+        assertEquals(1, rig.lines.size, "one burst is one line: ${rig.lines}")
+        val line = rig.lines[0]
+        assertTrue(line.startsWith("KAMPR_KEYS "), line)
+        assertTrue(line.contains("keys=4"), line)
+        assertTrue(line.contains("echo_p50=30ms"), line)
+        assertTrue(line.contains("echo_max=400ms"), line)
+        assertTrue(line.contains("paint_max=5ms"), line)
+        assertTrue(line.contains("stalls=1"), "a 400 ms echo is a stall a hand can feel: $line")
+        assertEquals(listOf(20L, 20L, 400L, 30L), rig.echoes, "every answered key is a sample for the herd")
+    }
+
+    // A pane that is working repaints whether anybody types or not — Claude's spinner is a frame
+    // every tick — so the first frame after a key is not its answer. The caret moving is.
+    @Test
+    fun aFrameThatLeavesTheCaretWhereItWasIsNotTheAnswer() {
+        val rig = Rig()
+        rig.trace.frame(4, 2)
+        rig.trace.sent()
+        rig.clock.now += 3L
+        rig.trace.frame(4, 2)
+        rig.clock.now += 40L
+        rig.trace.frame(5, 2)
+        assertEquals(listOf(43L), rig.echoes)
+    }
+
+    // A key typed before the last was answered waits on the same frame, and is not timed twice.
+    @Test
+    fun aKeyTypedAheadOfItsAnswerSharesIt() {
+        val rig = Rig()
+        rig.trace.frame(0, 0)
+        rig.trace.sent()
+        rig.clock.now += 10L
+        rig.trace.sent()
+        rig.clock.now += 20L
+        rig.trace.frame(2, 0)
+        assertEquals(listOf(30L), rig.echoes)
+    }
+
+    // A key that moves nothing — an arrow at the end of a line, a press a dialog swallowed — is
+    // never answered, and the next keystroke must not be charged for the wait.
+    @Test
+    fun aKeyNothingAnsweredIsDroppedRatherThanReadAsAStall() {
+        val rig = Rig()
+        rig.trace.frame(0, 0)
+        rig.trace.sent()
+        rig.clock.now += 5_000L
+        rig.type(15L)
+        assertEquals(listOf(15L), rig.echoes)
+    }
+
+    @Test
+    fun theHerdIsToldEvenWhenNobodyIsTracing() {
+        val rig = Rig(on = false)
+        rig.trace.frame(0, 0)
+        rig.type(12L)
+        rig.trace.flush()
+        assertEquals(emptyList(), rig.lines, "the log line is the trace's; nobody asked for it")
+        assertEquals(listOf(12L), rig.echoes)
     }
 }

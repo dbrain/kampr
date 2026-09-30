@@ -43,6 +43,9 @@ interface PaneIo {
 
     val readOnly: Boolean get() = false
 
+    // How long a keystroke into this pane took to come back as a moved caret.
+    fun echoed(paneId: String, ms: Long) = Unit
+
     // Whether the node behind this pane answers `convo.find`. A verb that owes an answer cannot be
     // offered on a promise the client made itself: a node too old to have it leaves the count
     // waiting for a frame that is never coming. Without it the conversation searches the turns it

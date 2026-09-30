@@ -3,8 +3,12 @@ package dev.kampr.shared.net
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
+import okhttp3.OkHttpClient
 
-actual fun createHttpClient(): HttpClient = HttpClient(OkHttp) { install(WebSockets) }
+actual fun createHttpClient(): HttpClient = HttpClient(OkHttp) {
+    engine { preconfigured = OkHttpClient.Builder().socketFactory(NoDelaySockets).build() }
+    install(WebSockets)
+}
 
 actual fun defaultEndpoint(): Endpoint? = null
 

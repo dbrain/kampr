@@ -172,6 +172,7 @@ fun KamprApp(
                     if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null
                 },
                 LocalFleet provides remember(state) { { state.go(Screen.Fleet) } },
+                LocalKeystrokeMs provides state.store.keystrokeMs.collectAsState().value,
             ) {
                 AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
             }
@@ -198,6 +199,7 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override fun prefs(paneId: String) = state.store.prefsFor(paneId)
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
+    override fun echoed(paneId: String, ms: Long) = state.store.echoed(paneId, ms)
     override val searchesTranscript: Boolean get() = state.store.hello.value?.caps?.convoFind == true
     override fun show(view: PaneView) = state.setPaneView(view)
     override suspend fun claimMatch(paneId: String, cols: Int, rows: Int) =
@@ -634,8 +636,9 @@ private fun StatusStrip(
             )
             KText("hub · ${hub?.name ?: "—"}", tokens.type.meta, if (live) tokens.color.done else tokens.color.working)
         }
+        val keystrokes by state.store.keystrokeMs.collectAsState()
         for (node in herd.nodes.filter { it.kind != "local" }) {
-            KText("${node.name} ${formatLatency(node.rttMs)}", tokens.type.meta, tokens.color.mute)
+            KText("${node.name} ${nodeLatency(node, keystrokes, node.rttMs)}", tokens.type.meta, tokens.color.mute)
         }
         Box(Modifier.weight(1f))
         val offline = connectionStatus as? ConnectionStatus.Offline
@@ -657,7 +660,11 @@ private fun StatusStrip(
                 )
             },
         )
-        KText("local ${formatLatency(localRtt)}", tokens.type.meta, tokens.color.mute)
+        KText(
+            "local ${hub?.let { nodeLatency(it, keystrokes, localRtt) } ?: "ping ${formatLatency(localRtt)}"}",
+            tokens.type.meta,
+            tokens.color.mute,
+        )
         KText("kampr ${build ?: "0.1.0"}", tokens.type.meta, tokens.color.mute)
     }
 }

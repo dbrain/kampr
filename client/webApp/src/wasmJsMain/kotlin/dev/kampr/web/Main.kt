@@ -8,6 +8,7 @@ import dev.kampr.conversation.ConversationSurfaces
 import dev.kampr.mosaic.MosaicSurfaces
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
+import dev.kampr.terminal.input.keyTracing
 import kotlinx.browser.document
 import kotlinx.browser.window
 
@@ -42,6 +43,7 @@ private val mosaic = MosaicSurfaces()
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     val bench = query("bench") != null
+    keyTracing = query("keytrace") != null
     val deepLink = DeepLink(
         query("theme"), query("mode"), query("screen"), query("view"), query("pane"),
         fragment("pair"),

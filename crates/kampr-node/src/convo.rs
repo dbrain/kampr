@@ -556,7 +556,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     _ => {}
                 }
                 match drain(&journal).await {
-                    Ok(turns) if !turns.is_empty() => {
+                    Ok(mut turns) if !turns.is_empty() => {
+                        // A record that carries the words the preview is showing replaces it in
+                        // this frame. Left to the next screen poll, the client files the record
+                        // under a preview still standing and draws the message twice until then (#554).
+                        if live.showing() && superseded(&journal, &panes, &local) {
+                            live.stop();
+                            turns.insert(0, kampr_journal::retired());
+                        }
                         holding(&held, &turns);
                         let revised = ServerMsg::ConvoTurn { pane: global.clone(), sub: None, turns };
                         if !wire.send(&revised) {
@@ -757,6 +764,18 @@ async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> bool {
         }
         _ => true,
     }
+}
+
+fn superseded(journal: &Open, panes: &PaneRegistry, local: &str) -> bool {
+    let Some(screen) = panes.screen(local) else {
+        return true;
+    };
+    let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
+    journal
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_none_or(|j| j.preview(&rows).is_none())
 }
 
 /// A live turn is a *revision* like any other, which is what lets it be withdrawn: the same id

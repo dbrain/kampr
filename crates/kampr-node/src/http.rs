@@ -180,9 +180,28 @@ async fn interrupted() -> &'static str {
 }
 
 pub async fn serve_on(listener: tokio::net::TcpListener, app: Router) -> Result<()> {
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .context("serving http")
+    axum::serve(
+        interactive(listener),
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("serving http")
+}
+
+/// Every socket the node accepts carries keystrokes one way and their echo the other, a few dozen
+/// bytes at a time — and with Nagle on, a small frame written while the last one is unacknowledged
+/// waits for that ACK, which a peer delaying its ACKs holds for up to 40 ms.
+pub fn interactive(
+    listener: tokio::net::TcpListener,
+) -> axum::serve::TapIo<tokio::net::TcpListener, fn(&mut tokio::net::TcpStream)> {
+    use axum::serve::ListenerExt;
+    listener.tap_io(no_delay as fn(&mut tokio::net::TcpStream))
+}
+
+fn no_delay(tcp: &mut tokio::net::TcpStream) {
+    if let Err(e) = tcp.set_nodelay(true) {
+        tracing::warn!(error = %e, "TCP_NODELAY refused; this connection's small frames can wait on ACKs");
+    }
 }
 
 /// Terminating TLS in-process is the alternative to a reverse proxy, not a replacement for one:
@@ -194,7 +213,10 @@ async fn serve_tls(node: Arc<Node>, addr: SocketAddr, app: Router) -> Result<()>
     let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert, &tls.key)
         .await
         .with_context(|| format!("loading {} and {}", tls.cert, tls.key))?;
-    axum_server::bind_rustls(addr, config)
+    let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(config)
+        .acceptor(axum_server::accept::NoDelayAcceptor::new());
+    axum_server::bind(addr)
+        .acceptor(acceptor)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .context("serving https")
@@ -1172,4 +1194,23 @@ fn asset_links_response(document: Option<String>) -> Response {
 async fn static_asset(uri: Uri, headers: HeaderMap) -> Response {
     let held = headers.get(IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     assets::serve(uri.path(), held)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interactive;
+    use axum::serve::Listener;
+
+    #[tokio::test]
+    async fn a_keystroke_s_answer_leaves_the_node_the_moment_it_is_written() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let mut accepting = interactive(listener);
+        let _client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let (accepted, _) = accepting.accept().await;
+        assert!(
+            accepted.nodelay().expect("getsockopt"),
+            "Nagle is on, so a small frame written while the last is unacknowledged waits for the ACK"
+        );
+    }
 }

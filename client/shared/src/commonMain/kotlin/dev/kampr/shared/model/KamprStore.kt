@@ -31,6 +31,8 @@ sealed interface ConnectionStatus {
 // answer at once — reaches a collector that is a frame behind rather than being dropped.
 private const val ACK_BACKLOG = 32
 
+private const val KEYSTROKE_WINDOW = 21
+
 class KamprStore {
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Idle)
     val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
@@ -153,6 +155,21 @@ class KamprStore {
 
     fun recordRtt(ms: Double) {
         _localRttMs.value = ms
+    }
+
+    // A median over the last few keystrokes rather than the last one, so a single stall does not
+    // read as the machine being slow, and a machine that was slow an hour ago does not either.
+    private val keystrokes = mutableMapOf<String, ArrayDeque<Long>>()
+    private val _keystrokeMs = MutableStateFlow<Map<String, Double>>(emptyMap())
+    val keystrokeMs: StateFlow<Map<String, Double>> = _keystrokeMs.asStateFlow()
+
+    fun echoed(paneId: String, ms: Long) {
+        val node = nodeOfPane(paneId)
+        val window = keystrokes.getOrPut(node) { ArrayDeque() }
+        window.addLast(ms)
+        while (window.size > KEYSTROKE_WINDOW) window.removeFirst()
+        val sorted = window.sorted()
+        _keystrokeMs.value += node to sorted[sorted.size / 2].toDouble()
     }
 
     // Only for a pane that is actually on screen: creating one here would announce a lost

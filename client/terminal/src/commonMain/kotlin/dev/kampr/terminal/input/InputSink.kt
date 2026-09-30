@@ -31,6 +31,8 @@ class InputSink(
     private val io: PaneIo,
     val latches: Latches,
     private val guard: SubmitGuard? = null,
+    private val trace: KeyTrace? = null,
+    private val typed: (String) -> Unit = {},
 ) {
     // Every byte that reaches the pane without passing through the IME's own buffer: a cap on the
     // key row, a paste, a submit the guard held and then let go. The hidden field mirrors the
@@ -55,6 +57,8 @@ class InputSink(
     private fun emit(text: String) {
         if (text.isEmpty()) return
         sends++
+        trace?.sent()
+        typed(text)
         io.send(ClientMsg.InputText(paneId, text, typed = true))
     }
 

@@ -1,5 +1,6 @@
 package dev.kampr.terminal.input
 
+import dev.kampr.terminal.view.WHEEL_ROWS
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -112,8 +113,23 @@ class PaneScroll(
         send(scrollReport(keys, up, col, row))
     }
 
-    fun notch(up: Boolean, col: Int, row: Int) {
-        repeat(keys.perNotch) { report(up, col, row) }
+    // Rows, not notches, because a trackpad hands over a notch in fractions and a report is a
+    // whole step of the program's own: the rows are kept until they make a report's worth. A turn
+    // of the wheel the other way is a new request, not a correction of the last one's remainder.
+    private var wheelRows = 0
+
+    fun wheel(rows: Int, col: Int, row: Int) {
+        val per = WHEEL_ROWS.toInt() / keys.perNotch
+        if (wheelRows != 0 && (wheelRows > 0) != (rows > 0)) wheelRows = 0
+        wheelRows += rows
+        while (wheelRows >= per) {
+            wheelRows -= per
+            report(true, col, row)
+        }
+        while (wheelRows <= -per) {
+            wheelRows += per
+            report(false, col, row)
+        }
     }
 
     fun refused(distance: Float, step: Float, col: Int, row: Int) {

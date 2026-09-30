@@ -9,6 +9,7 @@ import androidx.compose.ui.text.drawText
 import dev.kampr.shared.model.BLANK
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
+import dev.kampr.terminal.input.LocalEcho
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -41,6 +42,7 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
         selection: Selection?,
         selectionWash: Color,
         linkInk: Color,
+        echo: LocalEcho? = null,
     ) {
         cols = rows.cols
         val total = rows.total
@@ -89,6 +91,13 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
             paintLinks(scope, firstCol, lastCol, originX, y, cellWidth, cellHeight, linkInk)
         }
         modes.endFrame(cache.hitRate)
+
+        if (echo != null && echo.shown > 0) {
+            val index = rows.historyRows + echo.row
+            if (index in firstRow until lastRow) {
+                paintGuesses(scope, rows, styles, echo, index, firstCol, lastCol, originX, originY, cellWidth, cellHeight)
+            }
+        }
 
         if (cursorOn) {
             val index = rows.historyRows + cursorRow
@@ -277,6 +286,34 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
                 )
             }
             col = end
+        }
+    }
+
+    // Drawn in the style of the cell each guess lands on, which is what the pane's own echo will
+    // almost always wear: the same face, the same cell, and the background painted under it so a
+    // placeholder the program drew there does not show through.
+    private fun paintGuesses(
+        scope: DrawScope,
+        rows: SurfaceRows,
+        styles: ResolvedStyles,
+        echo: LocalEcho,
+        index: Int,
+        firstCol: Int,
+        lastCol: Int,
+        originX: Float,
+        originY: Float,
+        cellWidth: Float,
+        cellHeight: Float,
+    ) {
+        if (!rows.into(index, glyphs, styleIds, null, marks)) return
+        val y = originY + index * cellHeight
+        for (i in 0 until echo.shown) {
+            val col = echo.col(i)
+            if (col !in firstCol until lastCol) continue
+            val id = styles.clamp(styleIds[col])
+            val x = originX + col * cellWidth
+            scope.drawRect(Color(styles.bg[id]), Offset(x, y), Size(cellWidth, cellHeight))
+            scope.drawText(cache.glyph(echo.glyph(i), styles.fontKey[id]), Color(styles.fg[id]), Offset(x, y))
         }
     }
 

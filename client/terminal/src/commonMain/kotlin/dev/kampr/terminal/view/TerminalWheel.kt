@@ -24,10 +24,25 @@ internal const val ZOOM_PER_CLICK = 1.1f
 // needs a `CompositionLocalConsumerModifierNode` to reach, which a `pointerInput` block is not.
 //
 // So the sign and the arrival of an event are portable and the size of one is not: a delta below
-// a click moves proportionally, and no single event moves more than one notch whatever number the
-// host put in it. **Unverified on a real browser** — the web figure above is read off the shape of
-// CMP's own web scroll config, not measured.
+// a click is a fraction of a notch, and no single event is worth more than one notch whatever
+// number the host put in it. **Unverified on a real browser** — the web figure above is read off
+// the shape of CMP's own web scroll config, not measured.
 private fun notches(delta: Float) = (delta * WHEEL_ROWS).coerceIn(-WHEEL_ROWS, WHEEL_ROWS)
+
+// The fraction of a row a stream of small deltas has asked for and not yet been given. A terminal
+// moves by the row: spending each fraction as it came glided the surface through positions that
+// cut every row on screen through its glyphs.
+private class WholeRows {
+    private var carried = 0f
+
+    fun take(rows: Float): Int {
+        if (carried != 0f && (carried > 0f) != (rows > 0f)) carried = 0f
+        carried += rows
+        val whole = carried.toInt()
+        carried -= whole
+        return whole
+    }
+}
 
 // The same rule `notches` applies, in clicks rather than rows: a fraction of a click is a fraction
 // of a step, and no single event is worth more than one however large a number the host put in it.
@@ -47,6 +62,8 @@ internal suspend fun PointerInputScope.terminalWheel(
     presets: ZoomPresets,
     toPane: PaneScroll? = null,
 ) {
+    val across = WholeRows()
+    val down = WholeRows()
     awaitPointerEventScope {
         while (true) {
             val event = awaitPointerEvent()
@@ -72,11 +89,13 @@ internal suspend fun PointerInputScope.terminalWheel(
                 dx = dy
                 dy = 0f
             }
-            if (dx == 0f && dy == 0f) continue
+            val cols = if (dx == 0f) 0 else across.take(notches(dx))
+            val rows = if (dy == 0f) 0 else down.take(notches(dy))
+            if (cols == 0 && rows == 0) continue
             // Negated on both axes: the wheel says where the *content* goes, a drag says where the
             // surface goes, and `scrollBy` speaks the drag's language.
             val before = view.scrollY
-            view.scrollBy(-notches(dx) * probe.cellWidth, -notches(dy) * probe.cellHeight)
+            view.scrollBy(-cols * probe.cellWidth, -rows * probe.cellHeight)
             // The surface had nothing left to give, so the notch belongs to whatever is drawing the
             // pane. Asked of the clamp rather than of the model: a pane that keeps no ring can
             // still be zoomed past its own viewport, and that scroll is Kampr's until it runs out.
@@ -84,9 +103,9 @@ internal suspend fun PointerInputScope.terminalWheel(
             // Down as well as up, and for the same reason. A pane scrolled up by this path moved
             // inside the program rather than inside Kampr, so nothing here can bring it back —
             // only the notch the other way, sent the same route.
-            if (toPane != null && dy != 0f && view.scrollY == before) {
+            if (toPane != null && rows != 0 && view.scrollY == before) {
                 val cell = probe.cellAt(event.changes.first().position)
-                toPane.notch(up = dy < 0f, col = cell.col, row = cell.row)
+                toPane.wheel(rows = -rows, col = cell.col, row = cell.row)
             }
         }
     }

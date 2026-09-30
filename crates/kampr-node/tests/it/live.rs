@@ -5604,41 +5604,34 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
             "The **parser** is a state machine over the byte stream, and every escape sequence is one walk through it.\n\nPrintable text takes the short path and lands in a cell; a control byte takes the long one." } ] },
     }));
 
+    // What a client is drawing after each frame, applied the way `PaneState.applyConvoTurn` does:
+    // a live turn with blocks stands, one without is gone, and a frame that names neither leaves
+    // it where it was. **The record and the withdrawal share a frame.** In two frames the client
+    // spends the gap between them drawing the message twice — the preview, and the record filed
+    // under it — and then jumps as the preview goes (the operator's *"rewrites over existing
+    // text"*).
+    let mut standing = true;
     let mut authoritative = false;
-    let mut withdrawn = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    while tokio::time::Instant::now() < deadline && !(authoritative && withdrawn) {
+    while tokio::time::Instant::now() < deadline && !authoritative {
         let Some(message) = recv(&mut socket, Duration::from_secs(2)).await else {
             continue;
         };
         if message["t"] != "convo.turn" || message["pane"] != pane.as_str() {
             continue;
         }
-        // **The whole frame first.** The claim is about what happens *once the record is on the
-        // wire*, and the two can share a frame — a client that applied a non-empty preview
-        // alongside the record would draw the message twice, so within a frame the rule still
-        // holds. What the rule does not forbid is the preview being published one more time in
-        // the window between the record reaching the disk and the node reading it: the pump polls
-        // the screen on its own clock, that frame is a truthful reading, and asserting on it made
-        // this test fail two runs in twenty saying the opposite of what its own message says.
-        authoritative |= message["turns"]
-            .as_array()
-            .is_some_and(|turns| turns.iter().any(|turn| turn["id"] == "a-1"));
-        for turn in message["turns"].as_array().unwrap_or(&Vec::new()) {
-            if turn["id"] == "live" {
-                withdrawn = turn["blocks"].as_array().is_none_or(Vec::is_empty);
-                assert!(
-                    withdrawn || !authoritative,
-                    "once the record is on the wire the preview may only be withdrawn: {turn}"
-                );
-            }
+        let turns = message["turns"].as_array().cloned().unwrap_or_default();
+        authoritative = turns.iter().any(|turn| turn["id"] == "a-1");
+        if let Some(live) = turns.iter().rev().find(|turn| turn["id"] == "live") {
+            standing = !live["blocks"].as_array().is_none_or(Vec::is_empty);
         }
+        assert!(
+            !(authoritative && standing),
+            "the record arrived with the preview still standing, so the client drew the message \
+             twice: {message}"
+        );
     }
     assert!(authoritative, "the transcript record never arrived");
-    assert!(
-        withdrawn,
-        "the preview was never withdrawn, so the client renders the message twice"
-    );
 
     // And nothing is streamed for a client that did not ask for the conversation.
     send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;

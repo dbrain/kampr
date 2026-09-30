@@ -19,6 +19,7 @@ import dev.kampr.conversation.ConversationSurfaces
 import dev.kampr.mosaic.MosaicSurfaces
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
+import dev.kampr.terminal.input.keyTracing
 import dev.kampr.terminal.input.scrollTracing
 
 // ConversationSurfaces wraps: it renders the transcript and delegates the terminal and the
@@ -39,6 +40,7 @@ class MainActivity : ComponentActivity() {
         val bench = intent?.getBooleanExtra("bench", false) == true
         // Set before anything composes, which is the whole contract on it — see `ScrollTrace`.
         scrollTracing = intent?.getBooleanExtra("scrolltrace", false) == true
+        keyTracing = intent?.getBooleanExtra("keytrace", false) == true
         link = linkOf(intent)
         askForPermissions()
         setContent { if (bench) TerminalBenchApp() else KamprApp(surfaces, link, mosaic) }

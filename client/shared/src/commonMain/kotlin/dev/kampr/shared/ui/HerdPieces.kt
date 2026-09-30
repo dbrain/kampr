@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -302,14 +303,24 @@ fun NodeListSheet(
     }
 }
 
+val LocalKeystrokeMs = compositionLocalOf<Map<String, Double>> { emptyMap() }
+
+// What a keystroke into this machine costs, once one has been typed: the whole round trip from the
+// key to the caret it moved. Until then the node's ping to herdr, *named* a ping — shown bare, it
+// read as the latency an operator types against and was one leg of it (a 2.2 ms figure over a
+// pane that visibly halted).
+fun nodeLatency(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?): String =
+    keystrokes[node.id]?.let { "key ${formatLatency(it)}" } ?: "ping ${formatLatency(ping)}"
+
 @Composable
 fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
     val tokens = Kampr.tokens
     val reach = nodeReach(node)
+    val latency = nodeLatency(node, LocalKeystrokeMs.current, node.rttMs ?: measuredRtt)
     Row(
         Modifier
             .fillMaxWidth()
-            .named("${node.name}, $reach, ${formatLatency(node.rttMs ?: measuredRtt)}")
+            .named("${node.name}, $reach, $latency")
             .padding(padding),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -322,7 +333,7 @@ fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            KText("$reach · ${formatLatency(node.rttMs ?: measuredRtt)}", tokens.type.meta, tokens.color.mute)
+            KText("$reach · $latency", tokens.type.meta, tokens.color.mute)
             QuickWorkspaceAction(node, LANDSCAPE_TOUCH)
         }
     }

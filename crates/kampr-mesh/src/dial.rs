@@ -129,15 +129,27 @@ pub async fn dial(
     // this tree carries exactly one — ring. Installing twice is not an error worth reporting.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let url = mesh_url(&hub.url);
-    let (socket, _) = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(&url))
-        .await
-        .map_err(|_| DialError::Connect(url.clone(), "timed out".into()))?
-        .map_err(|e| DialError::Connect(url.clone(), e.to_string()))?;
+    let socket = open(&url, timeout).await?;
     let (sink, stream) = socket.split();
     let mut link = Link::new(WsOut(sink), WsIn(stream, Arc::default()));
     let hub_identity = greet(&mut link, identity, me, hub.join.as_deref(), hub.key.as_deref()).await?;
     let (out, incoming) = link.split();
     Ok((hub_identity, out, incoming))
+}
+
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+// The link carries every relayed keystroke and its echo, a few dozen bytes each way, so Nagle's
+// wait for an ACK is latency on every one of them.
+async fn open(url: &str, timeout: Duration) -> Result<Socket, DialError> {
+    let (socket, _) = tokio::time::timeout(
+        timeout,
+        tokio_tungstenite::connect_async_with_config(url, None, true),
+    )
+    .await
+    .map_err(|_| DialError::Connect(url.to_string(), "timed out".into()))?
+    .map_err(|e| DialError::Connect(url.to_string(), e.to_string()))?;
+    Ok(socket)
 }
 
 /// Keeps one outbound link up for as long as the process lives.
@@ -179,6 +191,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_link_to_a_hub_sends_a_keystroke_s_frame_the_moment_it_is_written() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let hub = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.expect("accept");
+            tokio_tungstenite::accept_async(tcp).await.expect("upgrade")
+        });
+        let socket = open(&format!("ws://{addr}/mesh"), Duration::from_secs(5))
+            .await
+            .expect("dial");
+        let MaybeTlsStream::Plain(tcp) = socket.get_ref() else {
+            panic!("a ws:// link is a plain socket");
+        };
+        assert!(
+            tcp.nodelay().expect("getsockopt"),
+            "Nagle is on, so a relayed frame written while the last is unacknowledged waits"
+        );
+        drop(hub.await);
+    }
 
     #[test]
     fn every_spelling_of_a_hub_address_becomes_one_mesh_url() {

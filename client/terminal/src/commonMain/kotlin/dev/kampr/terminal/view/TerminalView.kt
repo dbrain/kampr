@@ -133,6 +133,8 @@ private const val SPEECH_SETTLE_MS = 450L
 // back inside one repaint interval.
 internal const val CARET_SETTLE_MS = 200L
 
+private const val ECHO_EXPIRY_POLL_MS = 250L
+
 // The harnesses measured to hide the caret for their whole run and still park it where the next
 // character goes, so a hidden caret there is the text being typed rather than #499's `top`.
 // Measured on pi 0.86.1 (#552); omp shares pi's records, not its terminal,
@@ -266,7 +268,9 @@ fun TerminalView(
     val styles = remember(palette) { ResolvedStyles(palette) }
     val rows = remember(pane) { SurfaceRows(pane) }
     val guard = remember(pane, io, session) { SubmitGuard(pane, io, session.confirm) }
-    val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
+    val sink = remember(pane.id, io, session, guard) {
+        InputSink(pane.id, io, session.latches, guard, session.keyTrace) { session.echo.typed(it, pane.cursor, pane.cells.cols) }
+    }
     val logical = remember(rows) { LogicalText(rows) }
     val probe = session.grid
     val review = session.review
@@ -329,6 +333,33 @@ fun TerminalView(
     LaunchedEffect(pane, session) {
         if (!scrollTracing) return@LaunchedEffect
         snapshotFlow { pane.revision }.collect { session.scrollTrace.arrived() }
+    }
+
+    // The frame that answers a keystroke, and the next frame the client paints after it. Always
+    // on, because the herd shows what a keystroke costs in place of the node's ping to herdr.
+    DisposableEffect(pane.id, session, io) {
+        session.keyTrace.echoed = { io.echoed(pane.id, it) }
+        onDispose { session.keyTrace.echoed = {} }
+    }
+    // A guess the pane never answered is taken back even when no frame comes to disagree with it
+    // — a socket that died under it sends nothing at all.
+    LaunchedEffect(session, session.echo.shown > 0) {
+        while (session.echo.shown > 0) {
+            delay(ECHO_EXPIRY_POLL_MS)
+            session.echo.expire()
+        }
+    }
+    LaunchedEffect(pane, session) {
+        snapshotFlow { pane.revision }.collect {
+            val cells = pane.cells
+            session.echo.frame(
+                { col, row -> if (col in 0 until cells.cols && row in 0 until cells.rows) cells.codePointAt(col, row) else -1 },
+                pane.cursor,
+            )
+            session.keyTrace.frame(pane.cursor.col, pane.cursor.row)
+            withFrameNanos { }
+            session.keyTrace.drawn()
+        }
     }
 
     // Resolving the anchor against the surface as it is now is how a reader learns that the row
@@ -895,6 +926,7 @@ fun TerminalView(
                     .drawBehind {
                         pane.revision
                         styles.sync(pane.styles)
+                        val caret = session.echo.caret(pane.cursor)
                         renderer.draw(
                             scope = this,
                             rows = rows,
@@ -903,12 +935,13 @@ fun TerminalView(
                             cellHeight = metrics.height,
                             originX = geometry.originX,
                             originY = geometry.originY,
-                            cursorCol = pane.cursor.col,
-                            cursorRow = pane.cursor.row,
+                            cursorCol = caret.col,
+                            cursorRow = caret.row,
                             cursorOn = cursorOn && pane.cursor.visible,
                             selection = view.selection,
                             selectionWash = palette.selectionWash,
                             linkInk = palette.linkInk,
+                            echo = session.echo,
                         )
                         if (review.active) {
                             val top = geometry.originY + review.row * metrics.height

@@ -44,7 +44,11 @@ async fn main() -> Result<()> {
 
     let mut frames = 0usize;
     let mut bytes = 0usize;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let watch = std::env::var("KAMPR_SPIKE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(watch);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {

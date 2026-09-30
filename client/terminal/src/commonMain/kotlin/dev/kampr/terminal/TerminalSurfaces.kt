@@ -39,7 +39,9 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
         val io = LocalPaneIo.current
         val session = sessions[pane.id]
         val guard = remember(pane, io, session) { SubmitGuard(pane, io, session.confirm) }
-        val sink = remember(pane.id, io, session, guard) { InputSink(pane.id, io, session.latches, guard) }
+        val sink = remember(pane.id, io, session, guard) {
+            InputSink(pane.id, io, session.latches, guard, session.keyTrace) { session.echo.typed(it, pane.cursor, pane.cells.cols) }
+        }
         // The terminal insets its scrollable content by whatever the key row actually occupies,
         // including the keyboard it is docked above, so the pinned last row settles clear of it.
         DisposableEffect(session) { onDispose { session.keyRowHeight = 0f } }

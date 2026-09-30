@@ -62,24 +62,37 @@ class WheelScrollTest {
         assertTrue(!session.view.following, "the reader took the viewport, so it stops following")
     }
 
-    // A precise trackpad sends fractions of a click and a browser sends the raw DOM delta, which
-    // is around a hundred per notch. Below a click the wheel moves proportionally; above one it
-    // stops, because that number is the host's unit and not one this surface can read.
+    // A terminal scrolls by the row and nothing smaller. A precise trackpad sends fractions of a
+    // click and a browser sends the raw DOM delta, and moving the surface by each of those as it
+    // came glided it through positions where every row on screen was cut through its glyphs —
+    // the operator's *"scrolling on desktop is real smooth scrolling, which feels wrong"*. The
+    // fractions are kept and spent a whole row at a time, and one event is still worth at most a
+    // notch, because a hundred-per-notch number is the host's unit and not one this surface reads.
     @Test
-    fun oneEventIsWorthAtMostOneNotch() = runComposeUiTest {
+    fun aWheelMovesWholeRowsAndNeverSlicesOne() = runComposeUiTest {
         val session = deepPane()
+        val cell = session.grid.cellHeight
         val floor = session.view.scrollY
-        wheel(-0.25f)
+        repeat(4) {
+            wheel(-0.25f)
+            val rows = (session.view.scrollY - floor) / cell
+            assertEquals(
+                kotlin.math.round(rows),
+                rows,
+                0.001f,
+                "a quarter click left the surface ${rows} rows off the floor, part way through a row",
+            )
+        }
         assertEquals(
-            floor + 0.25f * WHEEL_ROWS * session.grid.cellHeight,
+            floor + WHEEL_ROWS * cell,
             session.view.scrollY,
             0.01f,
-            "a quarter of a click is meant to be a quarter of a notch",
+            "four quarter clicks are one notch, and a notch is $WHEEL_ROWS rows",
         )
-        val quarter = session.view.scrollY
+        val notch = session.view.scrollY
         wheel(-500f)
         assertEquals(
-            quarter + WHEEL_ROWS * session.grid.cellHeight,
+            notch + WHEEL_ROWS * cell,
             session.view.scrollY,
             0.01f,
             "a browser's hundred-per-notch delta threw the pane across its history",

@@ -713,3 +713,74 @@ fn omp_withdraws_the_preview_once_the_record_lands() {
     // Six records: the assistant message the screen was painting is now on disk.
     assert_eq!(omp_upto(6).preview(&lines(&text)), None);
 }
+
+fn alnum(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A preview that slides is a card whose every word moves under the reader: once the message is
+/// taller than the pane, each poll's window drops lines off its top as it gains them at its foot,
+/// and publishing the window replaced 3.4 KB of text with a different 3.4 KB five times a second —
+/// the operator's *"it kind of draws over itself"*. Captured off claude 2.1.285 in a 40-row pane
+/// at the node's own 200 ms cadence (`research/probe/live-preview-capture.py`), with the record the
+/// same turn wrote.
+///
+/// What a reader is owed is the message, growing: every revision the one before it plus what was
+/// written since, and the last of them the record's own words from its first to its last, with no
+/// line lost to the slide and none carried twice across it.
+#[test]
+fn a_message_that_outgrows_the_pane_is_published_whole_and_only_ever_grows() {
+    let path = common::fixtures().join("live").join("claude-slide-run.json");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).expect("json");
+    let journal = upto(&claude(), "claude-vt320", 1);
+    let mut watch = kampr_journal::Watch::default();
+    let mut shown: Vec<String> = Vec::new();
+    for screen in run["screens"].as_array().expect("screens") {
+        let rows: Vec<&str> = screen["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| r.as_str().expect("row"))
+            .collect();
+        match watch.observe(journal.preview(&rows), false) {
+            kampr_journal::Change::Show(turn) => shown.push(md(&turn).to_string()),
+            kampr_journal::Change::Retire => panic!(
+                "withdrawn mid-message at t={} after {} revisions",
+                screen["t"],
+                shown.len()
+            ),
+            kampr_journal::Change::Held => {}
+        }
+    }
+    assert!(shown.len() > 20, "the run streams: {} revisions", shown.len());
+    for pair in shown.windows(2) {
+        let (before, after) = (alnum(&pair[0]), alnum(&pair[1]));
+        assert!(
+            after.starts_with(&before),
+            "a revision took back words the one before it showed:\n  before …{}\n  after  {}…",
+            &pair[0][pair[0].len().saturating_sub(120)..],
+            &pair[1][..pair[1].len().min(120)],
+        );
+    }
+    let record = alnum(run["record"].as_str().expect("record"));
+    let last = alnum(shown.last().expect("a revision"));
+    assert!(
+        record.starts_with(&last),
+        "the stitched message is not the record's own words: {} of {} characters agree",
+        last.chars()
+            .zip(record.chars())
+            .take_while(|(a, b)| a == b)
+            .count(),
+        last.len(),
+    );
+    assert!(
+        last.len() * 10 >= record.len() * 9,
+        "the last revision carries most of the message ({} of {}), not a pane's worth of it",
+        last.len(),
+        record.len(),
+    );
+}

@@ -218,6 +218,7 @@ pub enum Change {
 #[derive(Debug, Default)]
 pub struct Watch {
     seen: Option<String>,
+    whole: Option<String>,
     sent: Option<String>,
 }
 
@@ -238,9 +239,17 @@ impl Watch {
             Some(Block::Md { text, .. }) => text.clone(),
             _ => return self.stop(),
         };
-        let moving = self.seen.as_deref().is_some_and(|seen| advanced(seen, &text));
         let static_block = self.seen.as_deref() == Some(text.as_str());
+        let grown = match (&self.seen, &self.whole) {
+            (Some(seen), Some(whole)) if !static_block => stitch(seen, whole, &text),
+            _ => None,
+        };
+        let moving = grown.is_some();
         self.seen = Some(text.clone());
+        self.whole = Some(grown.unwrap_or_else(|| match static_block {
+            true => self.whole.take().unwrap_or_else(|| text.clone()),
+            false => text.clone(),
+        }));
         if !moving && !(asking && static_block) {
             // Unchanged, so still whatever it was — a one-line notice that never becomes a
             // message, or a published message that has stopped growing and is waiting for its
@@ -252,10 +261,13 @@ impl Watch {
                 self.withdraw()
             };
         }
-        if self.sent.as_deref() == Some(text.as_str()) {
+        let whole = self.whole.clone().unwrap_or(text);
+        if self.sent.as_deref() == Some(whole.as_str()) {
             return Change::Held;
         }
-        self.sent = Some(text);
+        self.sent = Some(whole.clone());
+        let mut turn = turn;
+        turn.blocks = vec![Block::md(whole)];
         Change::Show(turn)
     }
 
@@ -263,6 +275,7 @@ impl Watch {
     /// the next block starts from nothing.
     pub fn stop(&mut self) -> Change {
         self.seen = None;
+        self.whole = None;
         self.withdraw()
     }
 
@@ -278,24 +291,43 @@ impl Watch {
     }
 }
 
-/// Whether `text` is the same block as `seen`, further on.
+/// The whole message so far, if `text` is the same block as `seen` further on.
 ///
 /// A message shorter than the pane simply extends. One longer than the pane **slides**: its header
 /// scrolls off the top while new lines arrive at the bottom, so successive views share a middle
-/// and not a prefix — and treating that as a new block withdraws a preview in the middle of the
-/// message it is previewing. The last line already seen is the anchor, because it is the one line
-/// that must still be on screen if this is the same message.
-fn advanced(seen: &str, text: &str) -> bool {
+/// and not a prefix. Publishing the view as it stands replaced the whole card with a different
+/// window of it five times a second (#553), so a slide is stitched onto everything already gathered
+/// instead: the view's top lines are the tail of `whole`, and only what is under them is new.
+///
+/// The overlap is found in lines because the screen is wrapped and a wrapped row is the one unit
+/// both views agree on — except the last row gathered, which may have been caught half-written and
+/// only has to be a prefix of the row it became.
+fn stitch(seen: &str, whole: &str, text: &str) -> Option<String> {
     if text == seen {
-        return false;
+        return None;
     }
-    if text.len() > seen.len() && text.starts_with(seen) {
-        return true;
+    if text.len() > seen.len()
+        && text.starts_with(seen)
+        && let Some(base) = whole.strip_suffix(seen)
+    {
+        return Some(format!("{base}{text}"));
     }
-    match seen.lines().rev().find(|l| l.trim().len() >= ANCHOR) {
-        Some(anchor) => text.contains(anchor),
-        None => false,
+    let had: Vec<&str> = whole.lines().collect();
+    let now: Vec<&str> = text.lines().collect();
+    for overlap in (1..=had.len().min(now.len())).rev() {
+        let tail = &had[had.len() - overlap..];
+        let head = &now[..overlap];
+        let anchored = tail.iter().any(|l| l.trim().len() >= ANCHOR);
+        if anchored
+            && tail[..overlap - 1] == head[..overlap - 1]
+            && head[overlap - 1].starts_with(tail[overlap - 1])
+        {
+            let mut out: Vec<&str> = had[..had.len() - overlap].to_vec();
+            out.extend_from_slice(&now);
+            return Some(out.join("\n"));
+        }
     }
+    None
 }
 
 /// How much of a line has to match before it can anchor a slide. A whole wrapped row is far longer
