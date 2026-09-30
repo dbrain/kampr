@@ -6,11 +6,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.waitUntilAtLeastOneExists
+import androidx.compose.ui.test.waitUntilExactlyOneExists
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
@@ -118,9 +122,10 @@ class FileTargetSurfaceTest {
         val io = node()
         setContent { Screen(paneOf(READ_CARD), io) }
         onNodeWithContentDescription("Open notes.md").performClick()
-        waitForIdle()
+        // The viewer's controls arrive with the fetch, which runs off the test clock.
+        waitUntilExactlyOneExists(hasContentDescription("Show what has changed in notes.md since HEAD"), 5_000)
         onNodeWithContentDescription("Show what has changed in notes.md since HEAD").performClick()
-        waitForIdle()
+        waitUntilAtLeastOneExists(hasText("+the fourth hop drops it", substring = true), 5_000)
         assertEquals(
             listOf(PANE_ID to fileAttachmentId(PATH), PANE_ID to diffAttachmentId(PATH)),
             io.asked,

@@ -10,21 +10,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.platform.LocalClipboardText
-import dev.kampr.shared.theme.KamprFonts
-import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.theme.typography
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneChrome
@@ -70,8 +67,9 @@ internal object Phone {
     // `KeyboardFloor` is what takes it, and SafeAreaValueTest pins that.
     val KEYBOARD = SafeArea(top = 32.dp, bottom = 0.dp, ime = 320.dp)
 
-    fun tokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
-        .let { KamprTokens(SoftTheme, it, typography(it, SoftTheme.label, TypeScale.Phone)) }
+    // The shipped faces, because the cell height is the grid: a runner's system monospace fitted a
+    // 40-row grid that overflows on the phone, and every "has to overflow" guard tripped on it.
+    fun tokens() = tokensFor(SoftTheme, TypeScale.Phone)
 
     // The desktop's row count, a few lines of output at the top, the caret on the last of them,
     // and the whole rest of the grid blank. The caret is nowhere near the bottom of the grid,
@@ -168,6 +166,17 @@ internal fun ComposeUiTest.rowBottom(pane: PaneState, session: PaneSession, row:
 internal fun ComposeUiTest.stripTop(): Dp =
     onNodeWithTag(BOTTOM_CHROME_TAG).getUnclippedBoundsInRoot().top
 
+internal val columnBar = hasContentDescription("Showing columns", substring = true)
+
+// The column bar floats over the grid, so a row behind it is no more on screen than one behind
+// the key row.
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.visibleBottom(): Dp {
+    val bar = onAllNodes(columnBar).fetchSemanticsNodes().firstOrNull()
+        ?: return stripTop()
+    return minOf(stripTop(), with(density) { bar.boundsInRoot.top.toDp() })
+}
+
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.onScreen(pane: PaneState, session: PaneSession, row: Int): Boolean =
-    rowTop(pane, session, row) >= Phone.HEADER && rowBottom(pane, session, row) <= stripTop()
+    rowTop(pane, session, row) >= Phone.HEADER && rowBottom(pane, session, row) <= visibleBottom()

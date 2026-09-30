@@ -4,20 +4,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEventDispatcher
 import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
 import dev.kampr.shared.theme.Ground
-import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.themeOf
-import dev.kampr.shared.theme.typography
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.ManageIo
@@ -36,10 +32,9 @@ val SIDE_BARS = listOf(
     SafeArea(top = 24.dp, bottom = 0.dp, left = 0.dp, right = 48.dp),
 )
 
-fun phoneTokens(): KamprTokens = themeOf("soft").on(Ground.Dark).let { spec ->
-    val fonts = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
-    KamprTokens(spec, fonts, typography(fonts, spec.label, TypeScale.Phone))
-}
+// The faces the app ships, not the machine's: a runner's DejaVu measured a title 24 px wider than
+// this desk's Noto, and a header test is a claim about the phone's Manrope.
+fun phoneTokens(): KamprTokens = tokensFor(themeOf("soft"), TypeScale.Phone, Ground.Dark)
 
 // Every layout assertion in this suite measures Compose's own semantics tree, which knows nothing
 // about what SystemUI paints on top of it — so a full suite passed while the gesture handle sat on
