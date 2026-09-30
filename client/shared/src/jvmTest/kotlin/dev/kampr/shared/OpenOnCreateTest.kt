@@ -4,7 +4,9 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.platform.MemoryPrefs
 import dev.kampr.shared.ui.AppState
+import dev.kampr.shared.ui.MosaicSeed
 import dev.kampr.shared.ui.Screen
+import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +108,36 @@ class OpenOnCreateTest {
             assertEquals(Screen.Herd, state.screen)
         } finally {
             scope.cancel()
+        }
+    }
+
+    // The operator, on 0.1.100: *"split pane doesn't seem to work — pressed '+', chose 'right', chose
+    // '1/2' and it opened a new terminal completely separate from the current pane"*. herdr split it;
+    // Kampr then showed the new half alone, which is indistinguishable from a new workspace.
+    @Test
+    fun aSplitOpensTheMosaicWithTheSourceAndTheNewPaneInTheShapeItWasSplit() {
+        for ((direction, stacked) in listOf(SplitDirection.Right to false, SplitDirection.Down to true)) {
+            val (state, store, scope) = app()
+            try {
+                store.take(herd(pane("w1:p1", workspace = "01JNODE/w1")))
+                state.openPane("01JNODE/w1:p1")
+
+                state.openingSplit("01JNODE/w1:p1", "01JNODE/w1:p2", direction)
+                assertEquals("01JNODE/w1:p1", (state.screen as Screen.Pane).paneId, "$direction: nothing to show yet")
+                assertNull(state.mosaicSeed)
+
+                store.take(herd(pane("w1:p1", workspace = "01JNODE/w1"), pane("w1:p2", workspace = "01JNODE/w1")))
+                assertEquals(Screen.Mosaic, state.screen, "$direction")
+                assertEquals(MosaicSeed(listOf("01JNODE/w1:p1", "01JNODE/w1:p2"), stacked), state.mosaicSeed)
+
+                state.clearMosaicSeed()
+                state.go(Screen.Herd)
+                store.take(herd(pane("w1:p1", workspace = "01JNODE/w1"), pane("w1:p2", workspace = "01JNODE/w1")))
+                assertEquals(Screen.Herd, state.screen, "$direction: the intent is spent")
+                assertNull(state.mosaicSeed)
+            } finally {
+                scope.cancel()
+            }
         }
     }
 

@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.LocalTokens
@@ -60,10 +61,10 @@ private object CanManage : ManageIo {
 }
 
 @androidx.compose.runtime.Composable
-private fun Rail() {
+private fun Rail(connection: ConnectionStatus = ConnectionStatus.Live("full")) {
     CompositionLocalProvider(LocalTokens provides phoneTokens(), LocalManage provides CanManage) {
         Box(Modifier.size(RAIL_WIDTH, 700.dp)) {
-            HerdRail(HERD, now = 0.0, activePaneId = null, deviceName = "this phone", deviceDetail = "paired", {}, {}, {})
+            HerdRail(HERD, connection, now = 0.0, activePaneId = null, deviceName = "this phone", deviceDetail = "paired", {}, {}, {})
         }
     }
 }

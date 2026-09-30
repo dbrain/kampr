@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Haiku 4.5 · Claude Pro
+ ▝▝   ▝▝   /tmp/kampr-mir-4cElBi · /rc
+
+
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+
+● I can keep the old config or replace it. Do you want to keep it, or would you like to replace it?
+
+✻ Baked for 2s · done 4:14 pm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+!
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ! for shell mode

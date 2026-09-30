@@ -17,7 +17,10 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -37,7 +40,7 @@ import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.wire.ClientMsg
+import kotlinx.coroutines.delay
 import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.LocalSafeArea
@@ -51,11 +54,6 @@ import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
 
-// Herdr's send_text takes a JSON string, and a carriage return is what a harness reads as submit.
-// It goes as its own message so a harness that debounces sees the text settle before the newline.
-fun replyMessages(paneId: String, text: String): List<ClientMsg> =
-    listOf(ClientMsg.InputText(paneId, text), ClientMsg.InputText(paneId, "\r"))
-
 // Android hangs a text selection handle 25 dp below the line it grips, and hangs the start handle
 // the same distance to the left of the character the selection begins at. They are windows of
 // their own, so nothing here can clip them or move them — the only thing this bar can do is not
@@ -67,6 +65,10 @@ fun replyMessages(paneId: String, text: String): List<ClientMsg> =
 private val SELECTION_HANDLE = 25.dp
 private val FIELD_INSET_X = 16.dp
 private val FIELD_INSET_Y = 12.dp
+
+// How often a line the desk typed while the box's own keys were still coming back is looked at
+// again. See `ComposerMirror.QUIET`.
+private const val SETTLE_EVERY = 250L
 
 // Where a file the operator handed over has got to. The node writes the bytes on the pane's own
 // machine and types the path in, so "sent" is the whole of the success — there is no upload to
@@ -93,6 +95,9 @@ fun Composer(
     desk: DeskLine? = null,
     onTakeOver: (DeskLine) -> Unit = {},
     answering: Answering = Answering.Ready,
+    mirror: ComposerMirror? = null,
+    mirroring: Boolean = false,
+    onKeys: (List<String>) -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
@@ -117,7 +122,40 @@ fun Composer(
     //
     // An input transformation does not see `state.edit`, which is deliberate elsewhere
     // (`FieldTextInput`) and is why the three edits this file makes report for themselves.
-    val report = remember(onDraft) { InputTransformation { onDraft(asCharSequence().toString()) } }
+    val live by rememberUpdatedState(mirroring)
+    val keys by rememberUpdatedState(onKeys)
+
+    // **Only a press moves a key into the pane.** The box's own edits are typed there as they are
+    // made, and the pane's line is taken up only into a box still in step with it — a read, which
+    // is all that opening this view, switching to it or reconnecting ever does (rule 3).
+    fun edited(before: String, after: String) {
+        if (before != after) mirror?.typed(before, after, live)?.let(keys)
+    }
+
+    fun adopt(text: String) {
+        value.edit {
+            replace(0, length, text)
+            placeCursorBeforeCharAt(length)
+        }
+        onDraft(text)
+    }
+
+    val report = remember(onDraft, mirror) {
+        InputTransformation {
+            val after = asCharSequence().toString()
+            onDraft(after)
+            edited(originalText.toString(), after)
+        }
+    }
+    LaunchedEffect(mirror, desk) {
+        mirror?.heard(desk, value.text.toString())?.let(::adopt)
+    }
+    LaunchedEffect(mirror) {
+        while (mirror != null) {
+            delay(SETTLE_EVERY)
+            mirror.settled(value.text.toString())?.let(::adopt)
+        }
+    }
     val typed = value.text.toString()
     // A fixed radius and not `pill`, which is 999 dp and therefore always half the height of
     // whatever it is put on. That reads as a chip on one line of reply and as an oval by four,
@@ -138,12 +176,14 @@ fun Composer(
     // shift and return inserts a line on its own and alt and return inserts nothing at all. Doing
     // both here is what makes the two modifiers the same key to whoever is holding one.
     fun newline() {
+        val before = value.text.toString()
         value.edit {
             val at = selection.min
             replace(selection.min, selection.max, "\n")
             placeCursorBeforeCharAt(at + 1)
         }
         onDraft(value.text.toString())
+        edited(before, value.text.toString())
     }
 
     // Return sends, and a modifier with it writes the second line — which is what every agent CLI
@@ -178,12 +218,14 @@ fun Composer(
     fun lineEditing(event: KeyEvent): Boolean {
         val key = lineKeyFor(event) ?: return false
         if (event.type == KeyEventType.KeyDown) {
+            val before = value.text.toString()
             val edit = lineEdit(key, value.text, value.selection.min, value.selection.max)
             value.edit {
                 if (edit.to > edit.from) replace(edit.from, edit.to, "")
                 placeCursorBeforeCharAt(edit.from)
             }
             onDraft(value.text.toString())
+            edited(before, value.text.toString())
         }
         return true
     }
@@ -214,7 +256,10 @@ fun Composer(
             .edgeTop()
             .readingOrder(1f)
     ) {
-        DeskStrip(desk, agent, enabled, { desk?.let(::takeOver) })
+        // Beside the box only while the two say different things: a line the box is in step with
+        // is already in it.
+        val apart = desk?.takeIf { it.text.isNotEmpty() && it.text != typed }
+        DeskStrip(apart, agent, enabled, { apart?.let(::takeOver) })
         HandoverLine(handover, agent)
         Row(
             Modifier

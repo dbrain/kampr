@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Haiku 4.5 · Claude Pro
+ ▝▝   ▝▝   /tmp/kampr-typedblock-MthnL7 · /rc
+
+
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+
+● I can keep the old config or replace it. Do you want to keep it, or would you like to replace it?
+
+✻ Sautéed for 1s · done 4:11 pm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  * claude (agent) – Catch-all for any task that doesn't fit a more specific age…
+  * claude-code-guide (agent) – Use this agent when the user asks questions ("Can Claude...…
+  * Explore (agent) – Fast read-only search agent for locating code. Use it to fi…
+  * general-purpose (agent) – General-purpose agent for researching complex questions, se…
+  * Plan (agent) – Software architect agent for designing implementation plans…
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ @
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

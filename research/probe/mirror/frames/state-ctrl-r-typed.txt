@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Haiku 4.5 · Claude Pro
+ ▝▝   ▝▝   /tmp/kampr-states-xr4Vcr · /rc
+
+
+❯ first message, say ok
+
+● ok
+
+✻ Cooked for 3s · done 4:15 pm
+
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+
+● I can keep the old config or replace it. Do you want to keep it, or would you like to replace it?
+
+✻ Cooked for 1s · done 4:15 pm
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Search prompts · everywhere
+                                           ╭────────────────────────────────────────────────────────────────────────╮
+                                           │ re: questions from last turn                                           │
+                                           │ - herdr is like tmux i guess - collects shells -                       │
+                                           │ adds some "agent watching stuff" on top - i have a                     │
+                                           │ tool that sits on top of this "herdr" that combines                    │
+                                           │ across multiple devices. basically i want the thing                    │
+                                           │ … +116 lines                                                           │
+  ❯ 1w ago   re: questions from last turn  ╰────────────────────────────────────────────────────────────────────────╯
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ Reply with exactly these two sentences and nothing else, no tools: I can keep the olpush the branch           │
+  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ to nav · Enter to use · Esc to cancel · ctrl+s to scope

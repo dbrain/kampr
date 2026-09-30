@@ -91,14 +91,6 @@ class InteractionTest {
         assertEquals(listOf(ClientMsg.ConvoLoad(PANE_ID, "a-0003")), RecordingIo.sent.filterIsInstance<ClientMsg.ConvoLoad>())
     }
 
-    @Test
-    fun aReplyIsTextThenACarriageReturn() {
-        assertEquals(
-            listOf(ClientMsg.InputText(PANE_ID, "run the tests"), ClientMsg.InputText(PANE_ID, "\r")),
-            replyMessages(PANE_ID, "run the tests"),
-        )
-    }
-
     // The transcript bar's search control is the last thing in a fixed-height row, so its centre
     // is derivable; tapping it must swap the bar for the field and its match counter.
     @Test

@@ -1005,7 +1005,8 @@ which never gets one and is closed by its own real result.
 ### `convo.composer`
 ```jsonc
 node -> client  { "t": "convo.composer", "pane": "01J/w1:p1",
-                  "text": "push the branch when", "clear": "\u0003" }
+                  "text": "push the branch when", "clear": "\u0003", "caret": 20,
+                  "keys": { "back": "\u007f", "left": "\u001b[D", "right": "\u001b[C", "newline": "\n" } }
 ```
 
 The line the operator has **half-typed at the pane's own keyboard** and not yet sent.
@@ -1033,9 +1034,47 @@ was given, as ordinary `input` — which is already refused with `not_writer` on
 not type — and must offer no takeover at all where `clear` is absent. A guessed key deletes part of
 somebody's sentence or quits their agent.
 
-Published **when the line moves**, on the conversation's own follow tick and only for a client that
-asked for the conversation, so a composer nobody is typing into is not a frame. It is read off the
-grid the client is already streaming: no `pane.read`, no socket call, no second emulation.
+Published **when the line moves**, read every 100 ms off the grid the client is already streaming
+and only for a client that asked for the conversation, so a composer nobody is typing into is not a
+frame: no `pane.read`, no socket call, no second emulation. A key typed at the desk reaches the
+client in ~50 ms (#566). It is not held for a transcript — a fresh session's first message is
+typed into a box the conversation has no turns for yet.
+
+**One line, not two.** `caret` and `keys` ride only on a box that is **drawn with the caret in
+it**, and a drawn empty box is published too, as `text: null` with `caret: 0` and `keys`: it is a box
+a client can type into. `caret` is where the pane's caret is, in characters into `text`. `keys` are
+the keystrokes measured to edit that harness's box a character at a time (#564) — one `back`
+takes the character before the caret, `left`/`right` move one character and cross a wrapped row,
+text lands at the caret, and a lone `newline` writes a line without submitting — and they are
+**absent where nobody has measured them** (omp, pi). A frame without `keys` is a box nothing may be
+typed into: not drawn, not a harness that has been measured, or not reading its keys yet.
+
+A client mirrors its reply box through these and nothing else, as ordinary `input`:
+
+- **Box → pane.** Each edit to the reply box is the fewest measured keys that make the pane's box
+  read the same — walk the caret to the edit, `back` over what went, type what came — and only
+  while the box is in step with the pane's line, `keys` is present, the socket is live and no
+  question stands on the pane (a digit answers a dialog, #413/#421/#487). A write happens only
+  because the operator pressed a key in the box: opening a view, switching to it and reconnecting
+  never write (rule 3). A paste longer than 800 characters is not typed — 1500 came back as a
+  `[Pasted text]` placeholder on Claude and Codex (#564) — and waits for the send.
+- **Pane → box.** A line the desk typed is taken up into a reply box that is empty or still holds
+  exactly what it last mirrored; a box the operator has written in out of step keeps its words, and
+  the line is shown beside it as before. The box's own keys come back a frame or two behind it, so
+  a line that disagrees is taken up only once the box has been quiet for longer than that.
+- **Send** is `\r` alone when the pane already holds the line. Out of step, the pane's line is taken
+  back with `back` — never with `clear`, which is `ctrl+c` on Claude and an exit on an empty one —
+  and the reply typed in its place.
+
+**The text is the operator's, reassembled from rows the harness drew.** All three harnesses wrap at
+a word and draw nothing for the space they broke at, and a newline the operator wrote looks the
+same on the screen — so a row filled to the wrap column broke at a space if it holds one and inside
+a word if it does not, a row whose next word would not have fitted broke at a space, and a row that
+stopped short of a word that would have fitted was ended by the operator (#564). Spaces typed
+before the caret are part of the line. A placeholder painted after the caret — Claude's `Try "…"`
+and its suggested next prompt, Codex's `Ask Codex to do anything` — is drawn faint, so a faint
+remainder is an empty box and anything else is the operator's line with the caret at its front
+(#565).
 
 **A harness whose composer has not been probed publishes nothing**, which is the same conversation
 this protocol described before desk lines existed. Today that is `claude`, `codex` and `agy`; every

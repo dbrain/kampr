@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.RowDiff
@@ -27,10 +28,15 @@ private class AgentIo(
     private val agent: String? = null,
     private val cmd: String? = agent,
     override val readOnly: Boolean = false,
+    private val clock: () -> Long = { 0L },
 ) : PaneIo {
     val typed = mutableListOf<String>()
+    val at = mutableListOf<Long>()
     override fun send(msg: ClientMsg) {
-        if (msg is ClientMsg.InputText) typed += msg.text
+        if (msg is ClientMsg.InputText) {
+            typed += msg.text
+            at += clock()
+        }
     }
     override fun prefs(paneId: String) = PanePrefs()
     override fun info(paneId: String) =
@@ -158,6 +164,61 @@ class PaneWheelTest {
             io.typed.all { it.startsWith(WHEEL_UP) && it.endsWith("M") },
             "a finger pulled down asked for the wrong direction: ${io.typed.first().drop(1)}",
         )
+    }
+
+    // The report on 0.1.100: *"a long drag on the screen sort of loads line by line and ticks down
+    // the screen."* A pump that let one report out every 40 ms moved Claude a row at a time and
+    // was still sending seconds after the finger lifted. The travel goes out in whole writes, and
+    // by the time a frame could have answered the last of them there is nothing left to send.
+    @Test
+    fun aFingerDragIsSentWithTheFingerAndNothingTrailsItsLift() = runComposeUiTest {
+        val io = AgentIo("claude")
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(noRing(), session, io = io)
+
+        mainClock.autoAdvance = false
+        dragDown(steps = 20)
+        mainClock.advanceTimeBy(400)
+        val atLift = io.typed.toList()
+        mainClock.advanceTimeBy(5_000)
+        val reports = io.typed.sumOf { it.split(WHEEL_UP).size - 1 }
+        assertTrue(reports > 10, "the drag asked for almost nothing: $reports reports")
+        assertEquals(atLift, io.typed, "the pane was still being scrolled seconds after the finger lifted")
+        assertTrue(atLift.size * 3 <= reports, "$reports reports went out as ${atLift.size} writes")
+    }
+
+    // The pane's own frames are what release the next write, so a drag keeps up with a pane that
+    // answers fast rather than waiting out the ceiling meant for one that never answers.
+    @Test
+    fun theFrameThatAnswersAWriteReleasesTheNext() = runComposeUiTest {
+        val io = AgentIo("claude", clock = { mainClock.currentTime })
+        val session = PaneSession(Phone.PANE)
+        val pane = noRing()
+        phoneTerminal(pane, session, io = io)
+        mainClock.autoAdvance = false
+
+        onRoot().performTouchInput {
+            down(Offset(width / 2f, 100f))
+            repeat(4) { moveBy(Offset(0f, 150f)) }
+        }
+        mainClock.advanceTimeBy(20, ignoreFrameDuration = true)
+        assertEquals(1, io.at.size, "the drag did not reach the pane")
+        pane.applyPatch(
+            ServerMsg.GridPatch(
+                pane = Phone.PANE,
+                rows = listOf(RowDiff(0, listOf(Run(0, "answered")))),
+                cursor = Cursor(0, 3, true),
+                links = emptyList(),
+            ),
+        )
+        mainClock.advanceTimeBy(1, ignoreFrameDuration = true)
+        onRoot().performTouchInput {
+            repeat(2) { moveBy(Offset(0f, 150f)) }
+            up()
+        }
+        mainClock.advanceTimeBy(120, ignoreFrameDuration = true)
+        assertEquals(2, io.at.size, "the frame came back and the rest of the drag waited for the ceiling")
+        assertTrue(io.at[1] - io.at[0] < 150, "the second write went ${io.at[1] - io.at[0]}ms after the first")
     }
 
     @Test

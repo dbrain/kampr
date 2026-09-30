@@ -540,13 +540,69 @@ class PaneScrollTest {
         assertEquals(listOf("\u001bOB"), sent, "back up the screen is a scroll down")
     }
 
-    // The bound on how far a finger may run ahead of the program. Pacing without one queues
-    // seconds of scrolling nobody can cancel, which is worse than the coalescing it fixes (#527).
+    // What a batch of reports is worth to Claude, measured on a real pane (#567): reports that
+    // land together ramp, and the first one after a reversal moves nothing. Each row is travel
+    // asked for and the one write it has to go out as — the finger's travel, not a report per row.
     @Test
-    fun aFingerMayNotRunMoreThanAScreenfulAheadOfTheProgram() {
+    fun aDragsWholeTravelGoesOutAsOneWriteWorthExactlyThatMuchToClaude() {
+        val table = listOf(
+            Triple(1, false, 1),
+            Triple(3, false, 3),
+            Triple(6, false, 5),
+            Triple(19, false, 10),
+            Triple(67, false, 20),
+            Triple(1, true, 2),
+            Triple(16, true, 10),
+            Triple(61, true, 20),
+        )
+        for ((rows, reversed, reports) in table) {
+            val sent = mutableListOf<String>()
+            val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
+            if (reversed) {
+                scroll.refused(-100f, step = 100f, col = 0, row = 0)
+                scroll.drain()
+                sent.clear()
+            }
+            repeat(rows) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+            assertTrue(scroll.drain().not(), "$rows rows left travel behind: ${scroll.queued}")
+            assertEquals(1, sent.size, "$rows rows went out as ${sent.size} writes")
+            assertEquals(
+                "\u001b[<64;1;1M".repeat(reports),
+                sent.single(),
+                "$rows rows${if (reversed) " after a reversal" else ""} is $reports reports to claude",
+            )
+        }
+    }
+
+    // Travel a batch cannot land exactly is carried rather than overshot: 7 rows is 5 reports
+    // landing 6, because a sixth would land 8.
+    @Test
+    fun whatABatchCannotLandExactlyWaitsForTheNextOne() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Wheel) { sent += it }
+        repeat(7) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        assertTrue(scroll.drain(), "the batch claimed to land all 7 rows")
+        assertEquals("\u001b[<64;1;1M".repeat(5), sent.single(), "7 rows is 5 reports landing 6")
+        assertEquals(1, scroll.queued)
+    }
+
+    // A program that does not ramp is sent a row per row, still in one write.
+    @Test
+    fun cursorKeysAreARowAPieceInOneWrite() {
+        val sent = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.CursorKeys) { sent += it }
+        repeat(12) { scroll.refused(-100f, step = 100f, col = 0, row = 0) }
+        assertEquals(false, scroll.drain())
+        assertEquals(listOf("\u001bOB".repeat(12)), sent)
+    }
+
+    // The bound on how far a finger may run ahead of the program: one write's worth. A finger
+    // faster than that is a wheel spun faster than the program follows, and the excess is dropped.
+    @Test
+    fun aFingerMayNotRunMoreThanOneWriteAheadOfTheProgram() {
         val scroll = PaneScroll(ScrollKeys.Wheel) { }
-        repeat(400) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
-        assertTrue(scroll.queued in 1..50, "400 rows of travel queued ${scroll.queued} reports")
+        repeat(4000) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
+        assertEquals(187, scroll.queued, "4000 rows of travel queued ${scroll.queued} rows")
     }
 
     // The wheel is inside the pipeline's capacity already — a hand makes 10-30 detents a second

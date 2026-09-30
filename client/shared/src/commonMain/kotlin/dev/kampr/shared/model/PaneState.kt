@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.Cursor
+import dev.kampr.shared.wire.EditKeys
 import dev.kampr.shared.wire.Facets
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.PaneInfo
@@ -17,7 +18,10 @@ import dev.kampr.shared.wire.Turn
 // a harness nobody has measured one for, which is a takeover that is not offered rather than one
 // that guesses a key — and the wrong key is worse than none: `ctrl+u` takes a single visual row of
 // Claude's wrapped buffer, and `ctrl+c` arms an exit on agy.
-data class DeskLine(val text: String, val clear: String?)
+//
+// `text` is empty for a box that is drawn with nothing in it, which a reply box can still type into
+// when `keys` came with it; no line at all is a pane whose box is not taking keys.
+data class DeskLine(val text: String, val clear: String?, val caret: Int? = null, val keys: EditKeys? = null)
 
 // The depth a client keeps, and it is **the node's own** rather than a display cap.
 //
@@ -454,9 +458,10 @@ class PaneState(val id: String, val styles: StyleTable) {
         revision++
     }
 
-    // What is sitting in the pane's own composer, and the key measured to take it out. Null is an
-    // empty box: the node publishes `text: null` when the desk empties it, and holding the last
-    // line instead would leave the strip claiming a sentence that is no longer there.
+    // What is sitting in the pane's own composer, and the key measured to take it out. Null is a
+    // box with nothing to show and nothing to type into: the node publishes `text: null` when the
+    // desk empties it, and holding the last line instead would leave the strip claiming a sentence
+    // that is no longer there.
     //
     // Kept across a dropped socket for the same reason `facets` is — it describes the pane rather
     // than asking this client anything, so a stale one is dated and not wrong.
@@ -464,7 +469,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         private set
 
     fun applyComposer(msg: ServerMsg.ConvoComposer) {
-        desk = msg.text?.let { DeskLine(it, msg.clear) }
+        desk = if (msg.text == null && msg.keys == null) null else DeskLine(msg.text.orEmpty(), msg.clear, msg.caret, msg.keys)
         revision++
     }
 

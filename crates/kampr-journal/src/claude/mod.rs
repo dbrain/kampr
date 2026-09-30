@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
-use crate::composer::{Caret, Composed, ComposerReader, ListeningReader};
+use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, ListeningReader, Measured};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -522,6 +522,13 @@ const LAYOUT: Layout = Layout {
 /// same key arms an exit instead, which is why this is per-harness and not a constant.
 const CLEAR: &str = "\u{3}";
 
+/// Text runs to `W-3` before it wraps (#558, #564).
+const MEASURED: Measured = Measured {
+    margin: 2,
+    clear: Some(CLEAR),
+    keys: Some(EDIT_KEYS),
+};
+
 /// `Write(notes.md)`, `Bash(herdr pane list)`, `Read(…)`. Prose does not open with a bare
 /// identifier and an opening bracket, and a card is already in the transcript under its own turn.
 fn is_tool_card(head: &str) -> bool {
@@ -538,8 +545,8 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     crate::live::read(screen, &LAYOUT)
 }
 
-pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
-    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
+pub fn composer(screen: &[&str], caret: Caret, frame: Frame) -> Option<Composed> {
+    crate::composer::read(screen, caret, frame, &LAYOUT, &MEASURED)
 }
 
 pub fn listening(screen: &[&str], caret: Caret) -> bool {

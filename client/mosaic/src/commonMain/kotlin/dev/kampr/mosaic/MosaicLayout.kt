@@ -17,11 +17,12 @@ data class MosaicShape(val perRow: List<Int>) {
     val cells: Int get() = perRow.sum()
 }
 
-// 2x2 when the window can hold two readable columns, a single stack when it cannot. Three panes
-// on two columns give the last one the full width rather than leaving a hole where a pane isn't.
-fun mosaicShape(count: Int, width: Dp): MosaicShape {
+// 2x2 when the window can hold two readable columns, a single stack when it cannot or when the
+// panes were split downwards. Three panes on two columns give the last one the full width rather
+// than leaving a hole where a pane isn't.
+fun mosaicShape(count: Int, width: Dp, stacked: Boolean = false): MosaicShape {
     val n = count.coerceIn(1, MAX_CELLS)
-    if (n == 1 || width < MIN_CELL_WIDTH * 2) return MosaicShape(List(n) { 1 })
+    if (n == 1 || stacked || width < MIN_CELL_WIDTH * 2) return MosaicShape(List(n) { 1 })
     val rows = mutableListOf<Int>()
     var left = n
     while (left > 0) {

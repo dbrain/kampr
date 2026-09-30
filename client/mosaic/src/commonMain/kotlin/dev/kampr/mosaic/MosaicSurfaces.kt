@@ -16,7 +16,8 @@ import dev.kampr.shared.ui.PaneSurfaces
 
 // The arrangement outlives the screen — leaving the mosaic drops the streams, not the layout.
 class MosaicSurfaces : MosaicHost {
-    private var held: MosaicState? = null
+    internal var held: MosaicState? = null
+        private set
 
     private fun stateFor(app: AppState): MosaicState =
         held ?: MosaicState(app.prefs, app.connection).also {
@@ -36,6 +37,13 @@ class MosaicSurfaces : MosaicHost {
         val connectionStatus by state.store.status.collectAsState()
         val hello by state.store.hello.collectAsState()
         var picking by remember { mutableStateOf(false) }
+
+        state.mosaicSeed?.let { seed ->
+            LaunchedEffect(seed) {
+                mosaic.arrange(seed.panes, seed.stacked)
+                state.clearMosaicSeed()
+            }
+        }
 
         DisposableEffect(mosaic) {
             mosaic.attach()

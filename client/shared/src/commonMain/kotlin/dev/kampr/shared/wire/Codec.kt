@@ -104,6 +104,8 @@ object Wire {
                 pane = obj.str("pane") ?: return null,
                 text = obj.str("text"),
                 clear = obj.str("clear"),
+                caret = obj.int("caret"),
+                keys = obj.decode<EditKeys>("keys"),
             )
             "convo.facets" -> ServerMsg.ConvoFacets(
                 pane = obj.str("pane") ?: return null,

@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
-use crate::composer::{Caret, Composed, ComposerReader};
+use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, Measured};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -399,6 +399,13 @@ const LAYOUT: Layout = Layout {
 /// harnesses this crate serves, and there is nothing to win by spending it here.
 const CLEAR: &str = "\u{15}";
 
+/// Text runs to `W-2` before it wraps (#558, #564).
+const MEASURED: Measured = Measured {
+    margin: 1,
+    clear: Some(CLEAR),
+    keys: Some(EDIT_KEYS),
+};
+
 fn is_status(head: &str) -> bool {
     head.starts_with("Working (")
 }
@@ -407,6 +414,6 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     crate::live::read(screen, &LAYOUT)
 }
 
-pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
-    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
+pub fn composer(screen: &[&str], caret: Caret, frame: Frame) -> Option<Composed> {
+    crate::composer::read(screen, caret, frame, &LAYOUT, &MEASURED)
 }

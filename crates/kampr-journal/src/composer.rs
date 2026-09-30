@@ -14,24 +14,70 @@ pub struct Caret {
     pub row: u16,
 }
 
-/// What the operator has typed at the desk and has not sent, and the keystroke measured to take
-/// it back off the pane.
+/// What the grid says about itself beyond its text, which a composer read turns on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame {
+    pub cols: u16,
+    /// Every glyph right of the caret on its row is drawn faint. Claude's `Try "…"` hint and
+    /// Codex's `Ask Codex to do anything` are SGR 2 in the cells the operator's words would take
+    /// (#565); the operator's own words are not, whether or not `ctrl+a` has put the caret in
+    /// front of them.
+    pub faint_after_caret: bool,
+}
+
+/// The keys measured to edit a harness's box one character at a time, which is what lets a reply
+/// box be the same line as the box rather than a second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct EditKeys {
+    pub back: &'static str,
+    pub left: &'static str,
+    pub right: &'static str,
+    pub newline: &'static str,
+}
+
+/// Claude 2.1.285, Codex and agy alike (#564): one `\x7f` takes the character before the
+/// caret, `←`/`→` move one character and cross a wrapped row, text lands at the caret, and a lone
+/// `\n` writes a line without submitting.
+pub const EDIT_KEYS: EditKeys = EditKeys {
+    back: "\u{7f}",
+    left: "\u{1b}[D",
+    right: "\u{1b}[C",
+    newline: "\n",
+};
+
+/// What one harness's box has been measured to do.
+#[derive(Debug, Clone, Copy)]
+pub struct Measured {
+    /// Columns the harness keeps free right of its text before it wraps (#558).
+    pub margin: usize,
+    pub clear: Option<&'static str>,
+    pub keys: Option<EditKeys>,
+}
+
+/// What the operator has typed into the harness's box and has not sent, where the caret is in it,
+/// and the keystrokes measured to change it.
+///
+/// `text` is empty for a box that is drawn with nothing in it, which is a box a client can still
+/// type into — as against no reading at all, which is a harness that is not taking keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Composed {
     pub text: String,
+    /// In characters from the front of `text`.
+    pub caret: usize,
     /// `None` for a harness whose clearing keystroke has not been measured — which is a takeover
     /// that is not offered, never one that is guessed at.
     pub clear: Option<&'static str>,
+    pub keys: Option<EditKeys>,
 }
 
 /// Reads one harness's composer. A bare fn for the same reason [`crate::ScreenReader`] is one: it
 /// keeps no state, and every call sees the whole grid.
-pub type ComposerReader = fn(&[&str], Caret) -> Option<Composed>;
+pub type ComposerReader = fn(&[&str], Caret, Frame) -> Option<Composed>;
 
 /// Whether one harness is reading its keys yet. See [`listening`].
 pub type ListeningReader = fn(&[&str], Caret) -> bool;
 
-/// The operator's unsent line, or `None` when the composer is empty or cannot be read.
+/// The operator's unsent line, or `None` when no composer is drawn with the caret in it.
 ///
 /// Runs *downwards* from the composer marker, which is the opposite of the live preview beside it
 /// and is not the same reading: that one lifts the block the harness is painting above the
@@ -41,23 +87,65 @@ pub type ListeningReader = fn(&[&str], Caret) -> bool;
 /// caret lands inside what it gathered. That last check is what makes a partial read impossible:
 /// Codex paints its model and directory two columns in, one blank row below the box, and a walk
 /// that ran on into it would hand back a sentence with a path glued to the end.
-pub fn read(screen: &[&str], caret: Caret, layout: &Layout, clear: Option<&'static str>) -> Option<Composed> {
+///
+/// **A row break is one of three things and the widths say which** (#564). All three
+/// harnesses wrap at a word and draw nothing for the space they broke at, and a newline the
+/// operator wrote looks the same on the screen. A row filled to the wrap column broke at a space
+/// if it holds one, and inside a word too long for any row if it does not; one whose next row's
+/// first word would not have fitted after it broke at a space; and one that stopped short of a
+/// word that would have fitted was ended by the operator.
+pub fn read(
+    screen: &[&str],
+    caret: Caret,
+    frame: Frame,
+    layout: &Layout,
+    measured: &Measured,
+) -> Option<Composed> {
     let (head, last) = holding_caret(screen, caret, layout)?;
     let caret_row = caret.row as usize;
-    // The caret resting where the operator's first character would go is an empty composer,
-    // whatever is painted to the right of it. It is also where `ctrl+a` leaves the caret on all
-    // three harnesses with the line still full, which is a line this reports nothing for rather
-    // than one it reports wrongly.
-    if caret_row == head && caret.col as usize <= layout.input {
-        return None;
+    let composed = |text: String, caret: usize| Composed {
+        text,
+        caret,
+        clear: measured.clear,
+        keys: measured.keys,
+    };
+    if caret_row == head && caret.col as usize <= layout.input && frame.faint_after_caret {
+        return Some(composed(String::new(), 0));
     }
+    let limit = (frame.cols as usize).saturating_sub(measured.margin + 1);
+    let rows: Vec<(usize, String)> = (head..=last)
+        .map(|at| {
+            let start = if at == head { layout.input } else { layout.indent };
+            let mut seg: String = screen[at].chars().skip(start).collect();
+            let kept = seg.trim_end().chars().count();
+            let reach = match at == caret_row {
+                true => kept.max((caret.col as usize).saturating_sub(start)),
+                false => kept,
+            };
+            seg = seg.chars().chain(std::iter::repeat(' ')).take(reach).collect();
+            (start, seg)
+        })
+        .collect();
     let mut text = String::new();
-    text.push_str(screen[head].strip_prefix(layout.prompt)?.trim_end());
-    for line in &screen[head + 1..=last] {
-        text.push_str(dedent(line, layout.indent).trim_end());
+    let mut at = 0;
+    for (index, (start, seg)) in rows.iter().enumerate() {
+        let len = seg.chars().count();
+        if head + index == caret_row {
+            at = text.chars().count() + (caret.col as usize).saturating_sub(*start).min(len);
+        }
+        text.push_str(seg);
+        if let Some((_, next)) = rows.get(index + 1) {
+            let end = start + len.max(1) - 1;
+            let word = next.chars().take_while(|c| !c.is_whitespace()).count();
+            match end >= limit {
+                true if seg.contains(char::is_whitespace) => text.push(' '),
+                true => {}
+                false if end + 1 + word > limit => text.push(' '),
+                false => text.push('\n'),
+            }
+        }
     }
-    let text = text.trim().to_string();
-    (!text.is_empty()).then_some(Composed { text, clear })
+    Some(composed(text, at))
 }
 
 /// A composer is drawn and the caret is in it: the harness is reading its keys. A reply written to
@@ -84,8 +172,7 @@ fn holding_caret(screen: &[&str], caret: Caret, layout: &Layout) -> Option<(usiz
 
 /// Claude separates its `❯` from the text with a **non-breaking space** where Codex and agy use an
 /// ordinary one, so a matcher that knew only `' '` would not recognise Claude's composer at all
-/// the moment anything was typed into it. The separator itself is left on the front and taken off
-/// by the trim that closes [`read`], U+00A0 being whitespace like any other.
+/// the moment anything was typed into it.
 fn opens(line: &str, marker: char) -> bool {
     match line.strip_prefix(marker) {
         Some(rest) => rest.is_empty() || rest.starts_with([' ', '\u{a0}']),
@@ -97,18 +184,14 @@ fn is_continuation(line: &str, indent: usize) -> bool {
     line.bytes().take(indent).filter(|b| *b == b' ').count() == indent && !line.trim().is_empty()
 }
 
-fn dedent(line: &str, indent: usize) -> &str {
-    let strip = line.bytes().take(indent).take_while(|b| *b == b' ').count();
-    &line[strip..]
-}
-
 /// One pane's desk line across polls, and the rule that keeps an idle composer off the wire.
 ///
 /// **The comparison is the point**, exactly as it is in [`crate::FacetFeed`]: a conversation is
 /// polled several times a second and a desk line moves only when somebody at the keyboard moves
 /// it, so publishing every poll would be a frame per tick per pane for a string that had not
-/// changed. The first look at an empty composer is silence too — it says the same thing as never
-/// having sent anything at all.
+/// changed. The first look at a pane with no composer drawn is silence too — it says the same
+/// thing as never having sent anything at all. A drawn empty one is not: it is a box a client can
+/// start typing into.
 #[derive(Debug, Default)]
 pub struct ComposerFeed {
     last: Option<Composed>,
@@ -117,7 +200,8 @@ pub struct ComposerFeed {
 
 impl ComposerFeed {
     /// The line as it is now, or `None` when nothing has moved since the last call. The inner
-    /// `None` is a composer that has just been emptied, which the client has to be told about.
+    /// `None` is a composer that has just stopped being drawn, which the client has to be told
+    /// about.
     ///
     /// **The whole of [`Composed`] is compared, not only its words.** A pane whose agent is quit
     /// and a different one started in its place can hold the same half-sentence it held before,

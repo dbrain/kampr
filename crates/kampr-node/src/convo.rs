@@ -30,6 +30,10 @@ const POLL: Duration = Duration::from_millis(400);
 /// idle pane and a pane nobody is reading the conversation of both cost nothing at all.
 const LIVE_POLL: Duration = Duration::from_millis(200);
 
+/// How often the pane's own box is re-read. The reply box mirrors it as the operator types, so this
+/// is the lag between a key at the desk and the same key in the reply box (#566).
+const DESK_POLL: Duration = Duration::from_millis(100);
+
 /// How often the pane is asked which transcript it is on *now*. `/clear` opens a new file under
 /// the same working directory and nothing announces it (#259) — but deriving the answer reads
 /// directories, so it does not happen at the follow rate.
@@ -322,6 +326,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
 
     let mut live_poll = tokio::time::interval(LIVE_POLL);
     live_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut desk_poll = tokio::time::interval(DESK_POLL);
+    desk_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Where the pump before this one got to, which on a re-watch is a transcript already found,
     // already parsed and already folded (#409). A cold pane answers `None` to both and everything
@@ -592,19 +598,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 {
                     return;
                 }
-                // What the operator has left in the pane's own composer. Read off the grid the
-                // client is already streaming, so it costs a walk of the rows and no I/O at all;
-                // published only when it moves, so a composer nobody is typing into is free. On
-                // this tick rather than the live preview's, because a half-typed line is most
-                // interesting when the pane is *idle* and the preview only runs while it works.
-                if opened.is_some()
-                    && !wire.outbox().congested()
-                    && let Some(moved) = desk.moved(desk_line(&panes, &local, composer))
-                    && !wire.send(&ServerMsg::ConvoComposer {
-                        pane: global.clone(),
-                        text: moved.as_ref().map(|c| c.text.clone()),
-                        clear: moved.and_then(|c| c.clear).map(str::to_string),
-                    })
+            }
+            // What is in the pane's own box, read off the grid the client is already streaming —
+            // a walk of the rows and no I/O — and published only when it moves. Its own tick,
+            // and not held for a transcript: the reply box takes this up as it is typed, and a
+            // fresh session's first message is typed before anything is written down.
+            _ = desk_poll.tick(), if composer.is_some() && !wire.outbox().congested() => {
+                if let Some(moved) = desk.moved(desk_line(&panes, &local, composer))
+                    && !wire.send(&desk_frame(&global, moved))
                 {
                     return;
                 }
@@ -797,12 +798,6 @@ fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(),
     }
 }
 
-/// What the pane's composer holds now, for a harness whose composer has been measured.
-///
-/// The keystroke that clears it rides back with the text rather than being looked up by the
-/// client, because it is a per-harness *measurement* and the node is where measurements live — a
-/// phone already installed cannot be corrected when a harness changes its mind about what empties
-/// a box, and the three harnesses served here do not agree on it in the first place.
 /// The prompts waiting behind the running turn, for a harness that draws them and records nothing.
 ///
 /// Read on the same tick as the composer and off the same grid, so it costs a walk of the rows and
@@ -819,11 +814,29 @@ fn waiting(
     Some(reader(&rows))
 }
 
+/// What the pane's composer holds now, for a harness whose composer has been measured.
+///
+/// The keystroke that clears it rides back with the text rather than being looked up by the
+/// client, because it is a per-harness *measurement* and the node is where measurements live — a
+/// phone already installed cannot be corrected when a harness changes its mind about what empties
+/// a box, and the three harnesses served here do not agree on it in the first place.
 fn desk_line(panes: &PaneRegistry, local: &str, reader: Option<ComposerReader>) -> Option<Composed> {
     let reader = reader?;
     let screen = panes.screen(local)?;
     let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
-    reader(&rows, screen.caret)
+    reader(&rows, screen.caret, screen.frame)
+}
+
+/// An empty box goes out as `text: null`, which is what took the strip down before a box could be
+/// typed into; `keys` is what says it is drawn.
+fn desk_frame(pane: &str, line: Option<Composed>) -> ServerMsg {
+    ServerMsg::ConvoComposer {
+        pane: pane.to_string(),
+        text: line.as_ref().map(|c| c.text.clone()).filter(|t| !t.is_empty()),
+        clear: line.as_ref().and_then(|c| c.clear).map(str::to_string),
+        caret: line.as_ref().map(|c| c.caret),
+        keys: line.and_then(|c| c.keys),
+    }
 }
 
 fn status_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> AgentStatus {

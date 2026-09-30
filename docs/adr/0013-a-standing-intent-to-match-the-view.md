@@ -148,8 +148,9 @@ So: **the switch is the consent, and it is on the panel the confirmation is alre
 resize panel carries a "match this view" toggle that states what it costs, and it is stored per
 pane per device alongside `zoom` and `view` — which means an operator who turns it off has turned it
 off, and an operator who never opens the panel gets the default their screen size chose. The pane's
-own controls say while it is on that the pane is being held at this view's size, which is the
-answer to *"a geometry change they did not ask for and cannot find the switch for"*.
+own header says while it is on that the pane is being held at this view's size — the zoom control
+reads `held`, and it is the control that opens the panel the switch is on — which is the answer to
+*"a geometry change they did not ask for and cannot find the switch for"*.
 
 ## Consequences
 

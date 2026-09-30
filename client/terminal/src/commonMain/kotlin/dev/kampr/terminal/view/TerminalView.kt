@@ -203,28 +203,28 @@ private const val MATCH_TRIES = 3
 private fun MatchTheView(
     paneId: String,
     io: PaneIo,
+    view: TerminalViewState,
     on: Boolean,
     cols: Int,
     rows: Int,
 ) {
     // Whether the session actually took the pane. It may decline one already close enough to this
     // view to be worth a reflow, and everything below answers to *that* rather than to the switch:
-    // a strip saying a pane is held, and a release for a hold nobody took, are both lies.
+    // a header saying a pane is held, and a release for a hold nobody took, are both lies.
     //
     // **A socket dying is how a matched hold ends** (ADR 0013 point 1): the node lets the lease go
     // with the socket and puts the pane back. So a reconnect arrives at a pane this client no
     // longer holds, and nothing else here moves on one — `cols` and `rows` are the *view's* own
     // geometry, which a dropped socket does not change, and `claimed` is remembered per pane. The
-    // claim was therefore never re-issued and the strip went on saying the desk sees this pane at
+    // claim was therefore never re-issued and the header went on saying the desk sees this pane at
     // this shape, over a pane already given back.
     val live = LocalConnectionStatus.current is ConnectionStatus.Live
     var claimed by remember(paneId) { mutableStateOf(false) }
     LaunchedEffect(paneId, on, cols, rows, live) {
-        if (!live) {
+        if (!live || !on) {
             claimed = false
             return@LaunchedEffect
         }
-        if (!on) return@LaunchedEffect
         delay(MATCH_SETTLE_MS)
         repeat(MATCH_TRIES) { attempt ->
             if (attempt > 0) delay(MATCH_RETRY_MS)
@@ -232,19 +232,19 @@ private fun MatchTheView(
             if (claimed) return@LaunchedEffect
         }
     }
-    // The status strip is what stops this being a shape change nobody was told about: it says the
-    // pane is being held while it is, whether the operator ticked the switch or their screen size
-    // did.
+    // `matchHeld` is what stops this being a shape change nobody was told about: the pane's zoom
+    // control says the pane is held while it is, whether the operator ticked the switch or their
+    // screen size did, and it opens the panel the switch is on.
     // Snapshotted, because `onDispose` closes over the *state* and not over its value: read
     // straight, it sees `claimed` as it is when the effect is torn down, so the false-to-true flip
     // that follows a successful claim disposed the old effect and released a hold that had just
     // been taken. What this effect is holding is what it was set up with.
     DisposableEffect(paneId, claimed) {
         val holding = claimed
-        io.holding(paneId, holding)
+        view.matchHeld = holding
         onDispose {
             if (holding) {
-                io.holding(paneId, false)
+                view.matchHeld = false
                 io.releaseMatch(paneId)
             }
         }
@@ -456,7 +456,7 @@ fun TerminalView(
         val ownPane = io.info(pane.id)?.fleet != null
         val matching = !io.readOnly && !ownPane && roomToMatch && !LocalMosaicCell.current &&
             (matchAsked ?: (breakpoint == Breakpoint.Desktop))
-        MatchTheView(pane.id, io, matching, viewCols, viewRows)
+        MatchTheView(pane.id, io, view, matching, viewCols, viewRows)
 
         LaunchedEffect(cache, zoom) {
             repeat(FONT_SETTLE_FRAMES) {
@@ -827,11 +827,11 @@ fun TerminalView(
         // once the surface underneath is spent. `paneScrollKeys` decides whether anything may be
         // sent at all and in what dialect; a read-only viewer sends nothing whatever it says,
         // because these are pty bytes.
-        // **Remembered, because it now carries a queue.** A drag's leftover fraction of a row was
-        // always meant to survive to the next frame, and a fresh instance every recomposition
-        // could only keep it by accident — a spent surface stops writing `scrollY`, so nothing
-        // recomposes mid-drag and the same instance happened to live. The paced queue and its pump
-        // cannot be built on that.
+        // **Remembered, because it carries travel and a pump.** A drag's leftover fraction of a
+        // row was always meant to survive to the next frame, and a fresh instance every
+        // recomposition could only keep it by accident — a spent surface stops writing `scrollY`,
+        // so nothing recomposes mid-drag and the same instance happened to live. Travel not yet
+        // sent, and the frame the pump is waiting on, cannot be built on that.
         val keptScroll = rows.historyRows > 0
         val scrollToPane = remember(pane.id, io.readOnly, keptScroll, info?.agent, info?.cmd) {
             when {
@@ -842,6 +842,10 @@ fun TerminalView(
                     }
                 }
             }
+        }
+        LaunchedEffect(scrollToPane) {
+            val toPane = scrollToPane ?: return@LaunchedEffect
+            snapshotFlow { pane.revision }.drop(1).collect { toPane.answered() }
         }
 
         Box(
@@ -1268,7 +1272,6 @@ fun TerminalView(
                 },
                 onHoldSize = { on ->
                     view.sizeHeld = on
-                    io.holding(pane.id, on)
                     // Ticking it off is the release. Ticking it on claims nothing by itself — the
                     // next resize is what takes the PTY, so the toggle is a choice about how the
                     // next one behaves rather than an action of its own.
@@ -1280,7 +1283,6 @@ fun TerminalView(
                     // deadline regardless, but that is the backstop and this is the ordinary path.
                     if (view.sizeHeld) {
                         view.sizeHeld = false
-                        io.holding(pane.id, false)
                         io.send(ClientMsg.Manage(ManageOp.PaneSize(pane.id, mode = SizeMode.Release)))
                     }
                 },

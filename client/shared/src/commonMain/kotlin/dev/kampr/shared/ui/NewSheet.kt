@@ -53,7 +53,8 @@ private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 // them looking at it. `agent.start` is not one: it runs in a pane that already exists and is
 // already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
 // `layout.export` answers with the caller's own container.
-private val OPENS = listOf("workspace.create", "tab.create", "pane.split", "worktree.")
+private const val PANE_SPLIT = "pane.split"
+private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.")
 
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
@@ -86,6 +87,8 @@ fun NewSheet(
     // What the ack said was made, handed on so whoever is holding the herd can open it when the
     // patch carrying its pane lands. Nothing is opened from here: the sheet is gone by then.
     onCreated: (String) -> Unit = {},
+    // A split's result is two panes, not one, so where it can be shown whole it goes here instead.
+    onSplit: ((source: String, created: String, direction: SplitDirection) -> Unit)? = null,
     onRefreshCaps: () -> Unit = {},
     agentArgs: AgentArgs = NoAgentArgs,
 ) {
@@ -109,6 +112,7 @@ fun NewSheet(
     var keepFlags by remember { mutableStateOf(true) }
     val env = remember { mutableStateListOf<Pair<String, String>>() }
     var inFlight by remember { mutableStateOf<String?>(null) }
+    var splitting by remember { mutableStateOf<Pair<String, SplitDirection>?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
 
     val peers = nodes.filter { it.id != node.id }
@@ -151,7 +155,13 @@ fun NewSheet(
                 // The whole reason a create op carries an id back. Without this the sheet closed
                 // on a workspace that then appeared at the foot of the herd, and the operator had
                 // to go and find the thing they had just asked for.
-                ack.id?.takeIf { OPENS.any(ack.op::startsWith) }?.let(onCreated)
+                val made = ack.id?.takeIf { OPENS.any(ack.op::startsWith) }
+                val from = splitting?.takeIf { ack.op == PANE_SPLIT }
+                when {
+                    made == null -> Unit
+                    from != null && onSplit != null -> onSplit(from.first, made, from.second)
+                    else -> onCreated(made)
+                }
                 onDismiss()
             }
         }
@@ -174,7 +184,10 @@ fun NewSheet(
                 run(ManageOp.WorkspaceCreate(nodeId, cwd = trimmedCwd))
             }
             Pick.Split -> "Split ${direction.wire}" to (pane?.let { p ->
-                { run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd)) }
+                {
+                    splitting = p.id to direction
+                    run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd))
+                }
             })
             Pick.Agent -> "Start ${kind ?: "an agent"}" to (
                 if (agentTarget != null && kind != null) {
@@ -371,15 +384,9 @@ fun NewSheet(
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             if (step == Step.Menu && pick == Pick.Split) {
-                KText(
-                    "A split changes the Herdr layout, so the desk and every other viewer get the new shape too.",
-                    tokens.type.captionSmall,
-                    tokens.color.working,
-                    Modifier.announce(
-                        "A split changes the Herdr layout, so the desk and every other viewer get the new shape too.",
-                    ),
-                    maxLines = 3,
-                )
+                val note = "A split changes the Herdr layout, so the desk and every other viewer get the new shape too." +
+                    if (onSplit != null) " Both halves open together in the mosaic." else ""
+                KText(note, tokens.type.captionSmall, tokens.color.working, Modifier.announce(note), maxLines = 3)
             }
             // A "Start claude" that cannot be pressed, with the reason a scroll away in the card
             // above it, is what the operator read as a broken button. The reason belongs beside

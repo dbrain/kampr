@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.paneTitle
@@ -54,6 +55,7 @@ private fun paneSigil(pane: PaneInfo): String {
 @Composable
 fun HerdRail(
     herd: Herd,
+    connection: ConnectionStatus,
     now: Double,
     activePaneId: String?,
     deviceName: String,
@@ -87,6 +89,14 @@ fun HerdRail(
             NewAction(target = LANDSCAPE_TOUCH)
             MosaicAction(LANDSCAPE_TOUCH)
             FleetAction(LANDSCAPE_TOUCH)
+            // The pill's mark without the pill: with no strip under the desk, a folded sidebar is
+            // otherwise the one place a dropped socket goes unsaid.
+            Mark(
+                connectionColor(connection),
+                connectionShape(connection),
+                7.dp,
+                Modifier.announce(connectionWord(connection) ?: "Connected"),
+            )
         }
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -104,6 +114,7 @@ fun HerdRail(
             Modifier
                 .fillMaxWidth()
                 .edgeTop()
+                .padding(bottom = LocalSafeArea.current.bottom)
                 .height(TILE)
                 .action("Settings — $deviceName, $deviceDetail", onSettings),
             contentAlignment = Alignment.Center,

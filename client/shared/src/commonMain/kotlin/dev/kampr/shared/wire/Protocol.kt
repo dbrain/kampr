@@ -521,7 +521,17 @@ sealed interface ServerMsg {
     // `clear` is the keystroke the node measured to empty *this harness's* composer, and the three
     // do not agree on it — so it is carried rather than looked up here, and a harness that sends
     // none is one whose takeover is not offered at all rather than guessed at.
-    data class ConvoComposer(val pane: String, val text: String?, val clear: String?) : ServerMsg
+    //
+    // `caret` and `keys` come only with a box that is drawn with the caret in it, empty or not:
+    // where the pane's caret sits, in characters into `text`, and the keys the node measured to
+    // edit that harness's box. The reply box types into the pane only while `keys` is present.
+    data class ConvoComposer(
+        val pane: String,
+        val text: String?,
+        val clear: String?,
+        val caret: Int? = null,
+        val keys: EditKeys? = null,
+    ) : ServerMsg
 
     // question == null clears the prompt; there is no separate "resolved" message.
     data class Pending(
@@ -667,3 +677,6 @@ sealed interface ClientMsg {
     data object RequestCaps : ClientMsg
 
 }
+
+@Serializable
+data class EditKeys(val back: String, val left: String, val right: String, val newline: String)

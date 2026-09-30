@@ -2,7 +2,7 @@ use crate::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider};
 use crate::scrollback::{Ingest, ScrollbackDoc, ScrollbackRing};
 use crate::wire::Cursor;
 use anyhow::Result;
-use kampr_journal::Caret;
+use kampr_journal::{Caret, Frame};
 use kampr_term::{Emulator, RowDiff};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -375,9 +375,11 @@ impl PaneRegistry {
         }
         let (col, row, _) = state.term.cursor();
         let grid = state.term.grid();
+        let caret = Caret { col, row };
         Some(Screen {
             rows: (0..grid.rows()).map(|r| grid.row_text(r)).collect(),
-            caret: Caret { col, row },
+            caret,
+            frame: frame(grid, caret),
         })
     }
 
@@ -591,10 +593,25 @@ impl Watcher {
     }
 }
 
+pub fn frame(grid: &kampr_term::Grid, caret: Caret) -> Frame {
+    let faint_after_caret = caret.row < grid.rows()
+        && grid
+            .row(caret.row)
+            .iter()
+            .skip(caret.col as usize)
+            .filter(|c| !c.ch.is_whitespace() && !c.is_tail())
+            .all(|c| c.attrs.dim);
+    Frame {
+        cols: grid.cols(),
+        faint_after_caret,
+    }
+}
+
 /// One look at a pane's screen: the grid and the caret on it, taken together.
 pub struct Screen {
     pub rows: Vec<String>,
     pub caret: Caret,
+    pub frame: Frame,
 }
 
 fn cursor_of(state: &PaneState) -> Cursor {

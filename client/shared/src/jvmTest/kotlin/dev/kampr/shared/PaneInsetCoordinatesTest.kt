@@ -15,7 +15,6 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.KeyboardFloor
-import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.PhoneScaffold
 import dev.kampr.shared.ui.Screen
@@ -46,9 +45,8 @@ class PaneInsetCoordinatesTest {
         var drawn = Rect.Zero
         setContent {
             Bars {
-                val edge = LocalSafeArea.current
                 KeyboardFloor(Modifier.fillMaxSize()) {
-                    PhoneScaffold(Breakpoint.Portrait, screen, edge, {}) {
+                    PhoneScaffold(Breakpoint.Portrait, screen, {}) {
                         Box(
                             Modifier.fillMaxSize().onGloballyPositioned {
                                 reported = it.positionInWindow()

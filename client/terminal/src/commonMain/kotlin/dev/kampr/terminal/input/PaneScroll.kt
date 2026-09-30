@@ -3,6 +3,7 @@ package dev.kampr.terminal.input
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -14,9 +15,8 @@ import kotlinx.coroutines.launch
 // every terminal does, herdr included, and what the operator already sees at the desk.
 enum class ScrollKeys {
     // What a terminal sends when the program asked for the mouse: a scroll the program understands
-    // as a scroll, moving its view and nothing else. Claude moves 0.83 rows for one (#527), so a
-    // report is sent per row of travel — one per notch left a Chrome notch at under a row of
-    // Claude beside a conversation that moved five.
+    // as a scroll, moving its view and nothing else. How far a report moves Claude depends on what
+    // arrived just before it (#567), which is `rowsFor`.
     Wheel,
 
     // Alternate scroll, and the default for everything else: the wheel becomes cursor keys. The
@@ -55,37 +55,62 @@ internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): St
     ScrollKeys.CursorKeys -> if (up) "\u001bOA" else "\u001bOB"
 }
 
-// How often a queued report goes out, and it is a measurement rather than a taste (#527).
+// What `count` reports sent in one write move the program, and it is Claude's own arithmetic, read
+// out of 2.1.285 and measured to the row for 1 to 40 reports (#567). A report landing within
+// 40 ms of the last one ramps: +0.3 rows each, floored, from 1 to a ceiling of 6. And the first
+// report after a change of direction moves nothing at all. `CursorKeys` programs do neither.
 //
-// A drag pushes **60 reports a second** into a pipeline that returns 20-35 distinct frames, and the
-// excess is *merged rather than queued* — the same 26 reports bought 12 visible steps sent fast and
-// 34 sent slow, so half the journey arrived as one jump instead of two. The round trip was never
-// the limit: 14-31 ms throughout.
-private const val PACE_MS = 40L
+// This is what made the finger tick. A pump releasing one report every 40 ms sits exactly on the
+// reset, so every report moved one row — ~21 rows a second however far the finger went.
+internal fun ScrollKeys.rowsFor(count: Int, reversed: Boolean): Int = when (this) {
+    ScrollKeys.CursorKeys -> count
+    ScrollKeys.Wheel -> {
+        var rows = 0
+        // Summed in doubles as Claude's JavaScript sums them: the eleventh step is 3.999… and
+        // floors to 3, which is why 15 reports measured 39 rows and not 40.
+        var mult = 1.0
+        repeat((if (reversed) count - 1 else count).coerceAtLeast(0)) {
+            rows += mult.toInt()
+            mult = (mult + 0.3).coerceAtMost(6.0)
+        }
+        rows
+    }
+}
 
-// The most travel a finger may run ahead of the program, in reports.
-//
-// **Pacing without a bound is worse than not pacing.** The pipeline moves a program's view about
-// 21 rows a second and a 250 ms swipe asks for 104, so one drag trails a few hundred milliseconds
-// — which is momentum and reads as natural — and six in a row would queue *seconds* of scrolling
-// the operator cannot cancel. Past this the oldest travel is dropped, which is the behaviour of a
-// wheel that was turned faster than the program could follow.
-private const val PENDING_CAP = 50
+// The biggest write that does not overshoot. Travel it cannot land exactly waits for the next one.
+private fun ScrollKeys.reportsFor(rows: Int, reversed: Boolean): Int {
+    var count = 0
+    while (count < MAX_REPORTS && rowsFor(count + 1, reversed) <= rows) count++
+    return count
+}
+
+// Measured faithful up to here, and 187 rows of Claude — more than a finger travels between two
+// frames.
+private const val MAX_REPORTS = 40
+
+// **The ramp only resets after 40 ms of quiet at Claude's end**, so the next write goes out that
+// long after the frame that answered the last one — which cannot have been drawn before the last
+// one landed. Sent sooner, it lands inside the ramp and moves further than the model says (#567:
+// two writes of 5 moved 19 rows 35 ms apart and 12 rows 45 ms apart).
+private const val QUIET_MS = 45L
+
+// A write that changed nothing on screen — the top of the transcript — is answered by no frame.
+private const val UNANSWERED_MS = 150L
 
 // The scroll a pane is given, by whichever gesture asked for it.
 //
 // Both hand over by distance: once the surface underneath is spent, a wheel or a drag asks for a
-// report for every row it travels. A drag's remainder is carried here, or a slow drag rounds to
+// row for every row it travels. A drag's remainder is carried here, or a slow drag rounds to
 // nothing on every frame and the pane never moves at all; a wheel arrives in whole rows already.
 //
 // Positive is into history — the same sense `TerminalViewState.scrollY` uses — so a finger pulled
 // *down* the screen asks for what is above it, and that is a scroll *up*.
 //
-// **The finger is paced and the wheel is not.** A notch's rows go out together and some are merged on
-// the way back (#527), which costs visible steps and not distance; paced, a spun
-// wheel would trail seconds behind the hand. A drag's rows are queued and released at [`PACE_MS`]
-// because a drag *is* the steps between. `scope` is what releases them; without one the queue only moves when [`drain`] is
-// called, which is how a test drives it without a clock.
+// **A drag goes out as whole writes and the wheel does not.** Each write carries every row the
+// finger travelled since the last, turned into however many reports land that many rows, so the
+// program's view keeps up with the finger and nothing is left to trickle out once it lifts. `scope`
+// is what releases them; without one the rows only move when [`drain`] is called, which is how a
+// test drives it without a clock.
 class PaneScroll(
     val keys: ScrollKeys,
     private val trace: ScrollTrace? = null,
@@ -94,21 +119,26 @@ class PaneScroll(
 ) {
     private var carried = 0f
     private var pending = 0
+    private var lastUp: Boolean? = null
     private var atCol = 0
     private var atRow = 0
     private var pump: Job? = null
+    private val answers = Channel<Boolean>(Channel.CONFLATED)
 
     val queued: Int get() = pending
 
-    private fun report(up: Boolean, col: Int, row: Int) {
-        trace?.sent(keys)
-        send(scrollReport(keys, up, col, row))
-    }
+    private val cap = keys.rowsFor(MAX_REPORTS, reversed = false)
 
     // Whole rows, because the fractions a trackpad hands over are carried by the wheel until they
-    // make one: a report for every tiny delta ran Claude's view a row per event.
+    // make one: a report for every tiny delta ran Claude's view a row per event. Unpaced: a hand
+    // makes 10-30 detents a second, and the ramp is what Claude does for a wheel spun fast.
     fun wheel(rows: Int, col: Int, row: Int) {
-        repeat(abs(rows)) { report(rows > 0, col, row) }
+        if (rows == 0) return
+        lastUp = rows > 0
+        repeat(abs(rows)) {
+            trace?.sent(keys, reports = 1, rows = 1)
+            send(scrollReport(keys, rows > 0, col, row))
+        }
     }
 
     fun refused(distance: Float, step: Float, col: Int, row: Int) {
@@ -116,25 +146,30 @@ class PaneScroll(
         atCol = col
         atRow = row
         carried += distance
-        while (carried >= step) {
-            carried -= step
-            pending++
-        }
-        while (carried <= -step) {
-            carried += step
-            pending--
-        }
-        pending = pending.coerceIn(-PENDING_CAP, PENDING_CAP)
+        val rows = (carried / step).toInt()
+        carried -= rows * step
+        trace?.travelled(rows)
+        pending = (pending + rows).coerceIn(-cap, cap)
         start()
     }
 
-    // One report's worth of the queue, and whether any is left. Public because the pacing has to be
-    // drivable without a clock.
+    // A frame came back from the pane.
+    fun answered() {
+        answers.trySend(true)
+    }
+
+    // Everything travelled so far as one write, and whether any is left over. Public because the
+    // release has to be drivable without a clock.
     fun drain(): Boolean {
         if (pending == 0) return false
         val up = pending > 0
-        pending += if (up) -1 else 1
-        report(up, atCol, atRow)
+        val reversed = lastUp != null && lastUp != up
+        val count = keys.reportsFor(abs(pending), reversed)
+        val rows = keys.rowsFor(count, reversed)
+        pending -= if (up) rows else -rows
+        lastUp = up
+        trace?.sent(keys, reports = count, rows = rows)
+        send(scrollReport(keys, up, atCol, atRow).repeat(count))
         return pending != 0
     }
 
@@ -142,15 +177,25 @@ class PaneScroll(
         val where = scope ?: return
         if (pump?.isActive == true) return
         pump = where.launch {
-            // The first row of a gesture is not made to wait: the pace is a ceiling on the rate,
-            // not a delay on the answer.
-            while (drain()) delay(PACE_MS)
+            // The first write of a gesture is not made to wait: the gap is between writes, not a
+            // delay on the answer.
+            while (pending != 0) {
+                answers.tryReceive()
+                drain()
+                // A timer racing the frame rather than `withTimeoutOrNull`, whose clock is not the
+                // dispatcher's on every platform: under the Compose test clock it waited in real time.
+                val unanswered = launch {
+                    delay(UNANSWERED_MS)
+                    answers.trySend(false)
+                }
+                if (answers.receive()) delay(QUIET_MS)
+                unanswered.cancel()
+            }
         }
     }
 
-    // A gesture's leftovers are its own. Carried into the next one, the first row of a fresh
-    // drag arrives before the finger has travelled it. What is already queued is *not* dropped —
-    // a second swipe is more travel asked for, not a correction of the first.
+    // A gesture's leftover fraction of a row is its own. Carried into the next one, the first row
+    // of a fresh drag arrives before the finger has travelled it.
     fun rest() {
         carried = 0f
         trace?.flush(keys)

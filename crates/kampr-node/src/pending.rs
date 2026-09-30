@@ -66,9 +66,25 @@ pub async fn read(herdr: &Herdr, pane_id: &str, agent: Option<&str>) -> Option<P
 pub fn detect_for(agent: Option<&str>, screen: &str) -> Option<Pending> {
     match agent {
         Some(kampr_journal::omp::AGENT) => detect_marked(screen),
-        Some("claude") => detect(screen).or_else(|| detect_marked(screen)),
+        Some("claude") => {
+            detect(screen).or_else(|| confirming(screen).then(|| detect_marked(screen)).flatten())
+        }
         _ => detect(screen),
     }
+}
+
+/// The footer under the one Claude dialog measured without numbers (#550). Its Rewind menu is the
+/// same cursor-and-column shape over the operator's own sent messages, footed `Enter to continue`
+/// — a press there rewinds the conversation — and a box in shell mode leaves a sent message as the
+/// last `❯` on the screen (#563).
+const CLAUDE_CURSOR_FOOTER: &str = "Enter to confirm";
+
+fn confirming(screen: &str) -> bool {
+    screen
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim_start().starts_with(CLAUDE_CURSOR_FOOTER))
 }
 
 /// The harnesses measured to ask with a cursor rather than with numbers — some of the time, for
@@ -1013,6 +1029,23 @@ mod tests {
         );
         assert_eq!(p.cursor, Some(0));
         assert!(!p.multi);
+    }
+
+    /// Esc twice on an empty box opens Claude's Rewind menu, and its marker says `waiting` /
+    /// `dialog open` (#563), so the pane is blocked and its screen is read. The rows are
+    /// the operator's own sent messages, a cursor on `(current)`, and a press on one rewinds the
+    /// conversation to before it: nothing here is an answer to a question.
+    #[test]
+    fn claudes_rewind_menu_is_not_a_question_it_is_asking() {
+        assert_eq!(detect_for(Some("claude"), &fixture("claude-rewind")), None);
+    }
+
+    /// A box in shell mode draws `!` where the `❯` was, so the last `❯` on the screen is a sent
+    /// message whose wrapped second row sits in the label column: herdr calls the pane blocked
+    /// under a reply that asks "do you want to" (#563).
+    #[test]
+    fn a_sent_message_above_a_box_in_shell_mode_is_not_a_dialog() {
+        assert_eq!(detect_for(Some("claude"), &fixture("claude-shell-mode")), None);
     }
 
     /// Claude's own dialogs must read exactly as they did: the marked detector is a fallback for

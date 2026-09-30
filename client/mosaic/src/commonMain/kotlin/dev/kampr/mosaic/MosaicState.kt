@@ -22,6 +22,11 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
     var focused: String? by mutableStateOf(null)
         private set
 
+    // Only ever set by `arrange`, and let go the moment the set of panes changes: it is the shape
+    // herdr gave one split, not a preference about the mosaic, so it is never saved either.
+    var stacked: Boolean by mutableStateOf(false)
+        private set
+
     private var attached = false
 
     // Snapshot state, not a read straight off disk: the Save control has to stop saying "save"
@@ -35,6 +40,7 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
     fun restore() {
         persisted = prefs.get(KEY_ARRANGEMENT).orEmpty()
         panes = decodeArrangement(persisted)
+        stacked = false
         focused = panes.firstOrNull()
     }
 
@@ -52,8 +58,20 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
         for (pane in panes) connection.unwatch(pane, OWNER)
     }
 
+    fun arrange(next: List<String>, stacked: Boolean) {
+        val kept = next.distinct().take(MAX_CELLS)
+        if (attached) {
+            for (gone in panes - kept.toSet()) connection.unwatch(gone, OWNER)
+            for (added in kept - panes.toSet()) connection.watch(added, OWNER)
+        }
+        panes = kept
+        this.stacked = stacked
+        focused = kept.lastOrNull()
+    }
+
     fun add(paneId: String) {
         if (paneId in panes || full) return
+        stacked = false
         panes = panes + paneId
         if (attached) connection.watch(paneId, OWNER)
         focused = paneId
@@ -61,6 +79,7 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
 
     fun remove(paneId: String) {
         if (paneId !in panes) return
+        stacked = false
         panes = panes - paneId
         if (attached) connection.unwatch(paneId, OWNER)
         if (focused == paneId) focused = panes.firstOrNull()

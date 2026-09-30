@@ -42,11 +42,10 @@ import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
 import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -77,6 +76,10 @@ fun tabFor(screen: Screen): Tab = when (screen) {
     Screen.Setup, Screen.Devices, Screen.Appearance, Screen.Notifications -> Tab.Settings
     Screen.Herd, Screen.Mosaic, Screen.Fleet, is Screen.Pane -> Tab.Herd
 }
+
+// Two panes of one tab, in the order and the shape the split left them: the source, then the
+// pane it made, side by side for a split right and stacked for a split down.
+data class MosaicSeed(val panes: List<String>, val stacked: Boolean)
 
 sealed interface Screen {
     data object Herd : Screen
@@ -144,13 +147,6 @@ class AppState(
 ) {
     val connection = KamprConnection(scope, store)
 
-    // Which pane, if any, this client is holding a controller on. One at a time: the panel that
-    // starts a hold releases the previous one, and the node refuses a second controller anyway
-    // (#21). Kept here rather than on the pane's own state because the status strip is what has to
-    // stop claiming the desk is untouched.
-    private val held = MutableStateFlow<String?>(null)
-    val heldPane: StateFlow<String?> = held
-
     // ADR 0013's leases, owned by this session rather than by the views that come and go asking for
     // them — see `MatchHolds`. The node's own ceiling on one is this socket; this is the same
     // ownership on this side of it.
@@ -159,14 +155,6 @@ class AppState(
     suspend fun claimMatch(paneId: String, cols: Int, rows: Int) = matches.claim(paneId, cols, rows)
 
     fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
-
-    fun holdingPane(paneId: String, holding: Boolean) {
-        held.value = when {
-            holding -> paneId
-            held.value == paneId -> null
-            else -> held.value
-        }
-    }
 
     var theme: ThemeSpec by mutableStateOf(themeOf(prefs.get(KEY_THEME)))
         private set
@@ -626,7 +614,18 @@ class AppState(
     // nothing to open at the moment the sheet closes — which is why a new workspace used to appear
     // at the foot of the herd and stay there. Nothing here writes to herdr: opening a pane is a
     // watch and a screen, never a `focus` (rule 3).
-    private var creating: Pair<String, Double>? = null
+    private var creating: Creating? = null
+
+    private class Creating(val id: String, val deadline: Double, val splitFrom: String? = null, val stacked: Boolean = false)
+
+    // What the mosaic is to show the next time it composes, handed over here because the mosaic's
+    // own state lives in its module and the ack that decides it arrives in this one.
+    var mosaicSeed: MosaicSeed? by mutableStateOf(null)
+        private set
+
+    fun clearMosaicSeed() {
+        mosaicSeed = null
+    }
 
     // Held for a bounded time rather than until the next patch. A structural op is **not** settled
     // before its ack — only the session ops are, and they reconcile the herd first (`spawn_settle`)
@@ -635,19 +634,34 @@ class AppState(
     // come round again, and an intent nobody cancelled would one day open a pane the operator did
     // not ask for.
     fun opening(id: String?) {
-        creating = id?.let { it to wallClockMillis() + CREATE_OPEN_WINDOW_MS }
+        creating = id?.let { Creating(it, wallClockMillis() + CREATE_OPEN_WINDOW_MS) }
+    }
+
+    fun openingSplit(source: String, created: String, direction: SplitDirection) {
+        creating = Creating(
+            created,
+            wallClockMillis() + CREATE_OPEN_WINDOW_MS,
+            splitFrom = source,
+            stacked = direction == SplitDirection.Down,
+        )
     }
 
     private fun openWhenItArrives(herd: Herd) {
-        val (wanted, deadline) = creating ?: return
+        val wanted = creating ?: return
         if (!herd.known) return
-        val pane = herd.createdPane(wanted)
+        val pane = herd.createdPane(wanted.id)
         if (pane == null) {
-            if (wallClockMillis() > deadline) creating = null
+            if (wallClockMillis() > wanted.deadline) creating = null
             return
         }
         creating = null
-        openPane(pane.id)
+        val from = wanted.splitFrom
+        if (from == null) {
+            openPane(pane.id)
+            return
+        }
+        mosaicSeed = MosaicSeed(listOf(from, pane.id), wanted.stacked)
+        go(Screen.Mosaic)
     }
 
     private fun reconcileNotifications(herd: Herd) {

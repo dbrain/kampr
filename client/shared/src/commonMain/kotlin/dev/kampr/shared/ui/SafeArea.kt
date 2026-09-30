@@ -100,9 +100,9 @@ fun KeyboardFloor(modifier: Modifier = Modifier, content: @Composable BoxScope.(
 }
 
 // The gesture handle is owed by whatever ends at the bottom of the window, and by nothing else. A
-// container that puts its own chrome down there — the bottom navigation, the desktop status strip
-// — takes the bottom edge off everything it holds, so the bar above it does not pay a second time
-// and leave a dead strip between the two.
+// container that puts its own chrome down there — the bottom navigation — takes the bottom edge
+// off everything it holds, so the bar above it does not pay a second time and leave a dead strip
+// between the two.
 //
 // The container decides because only the container can see what is under it. A child that worked
 // it out for itself, by reconciling its own `positionInWindow` against `containerSize`, was left

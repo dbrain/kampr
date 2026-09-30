@@ -80,7 +80,7 @@ private fun Panel() {
 @Composable
 private fun Scaffolded(screen: Screen) {
     Bars {
-        PhoneScaffold(Breakpoint.Portrait, screen, BARS, {}) { Box(Modifier.fillMaxSize()) { Panel() } }
+        PhoneScaffold(Breakpoint.Portrait, screen, {}) { Box(Modifier.fillMaxSize()) { Panel() } }
     }
 }
 
@@ -220,7 +220,7 @@ class SelectableScreenTest {
         var scanned = false
         setContent {
             Bars {
-                PhoneScaffold(Breakpoint.Portrait, Screen.Setup, BARS, {}) {
+                PhoneScaffold(Breakpoint.Portrait, Screen.Setup, {}) {
                     Box(Modifier.fillMaxSize()) {
                         ConnectPanel(current = null, error = REFUSAL, onConnect = {}, onScan = { scanned = true })
                     }

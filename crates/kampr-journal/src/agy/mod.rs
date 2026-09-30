@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
-use crate::composer::{Caret, Composed, ComposerReader};
+use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, Measured};
 use crate::error::JournalError;
 use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
@@ -297,6 +297,13 @@ const LAYOUT: Layout = Layout {
 /// ctrl+c again to exit`, so a second one anywhere near it ends the session.
 const CLEAR: &str = "\u{15}";
 
+/// Text runs to `W-2` before it wraps (#558, #564).
+const MEASURED: Measured = Measured {
+    margin: 1,
+    clear: Some(CLEAR),
+    keys: Some(EDIT_KEYS),
+};
+
 /// **Not exercised by any capture, and deliberately kept.** Every `▸` line in every frame
 /// captured off `agy` 1.1.18 reads `Thought for …` — asserted over the whole corpus in
 /// `tests/live.rs` — so nothing here can produce a head this refuses. It is the guard the
@@ -320,6 +327,6 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     (!text.is_empty()).then_some(LiveBlock { text, clipped: false })
 }
 
-pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
-    crate::composer::read(screen, caret, &LAYOUT, Some(CLEAR))
+pub fn composer(screen: &[&str], caret: Caret, frame: Frame) -> Option<Composed> {
+    crate::composer::read(screen, caret, frame, &LAYOUT, &MEASURED)
 }

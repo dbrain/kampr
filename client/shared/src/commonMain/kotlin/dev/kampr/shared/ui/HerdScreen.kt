@@ -230,6 +230,7 @@ fun HerdSidebar(
     if (collapsed) {
         HerdRail(
             herd = herd,
+            connection = connection,
             now = now,
             activePaneId = activePaneId,
             deviceName = deviceName,
@@ -323,7 +324,7 @@ fun HerdSidebar(
                     .edgeTop()
                     .touchable()
                     .action("Settings — $deviceName, $deviceDetail", onSettings)
-                    .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp),
+                    .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 14.dp + LocalSafeArea.current.bottom),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {

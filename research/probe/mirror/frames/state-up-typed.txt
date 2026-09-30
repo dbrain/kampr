@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Haiku 4.5 · Claude Pro
+ ▝▝   ▝▝   /tmp/kampr-states-xr4Vcr · /rc
+
+
+❯ first message, say ok
+
+● ok
+
+✻ Cooked for 3s · done 4:15 pm
+
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+
+● I can keep the old config or replace it. Do you want to keep it, or would you like to replace it?
+
+✻ Cooked for 1s · done 4:15 pm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                             ctrl+r to search history
+─── History 2/3 ───────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

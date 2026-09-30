@@ -7,7 +7,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -40,8 +44,10 @@ import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.terminal.view.TerminalView
+import dev.kampr.terminal.view.ZoomButton
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -94,6 +100,14 @@ private class SessionIo(
     }
 }
 
+private val SAYS_HELD = SemanticsMatcher("says the pane is held") {
+    it.config.getOrNull(SemanticsProperties.StateDescription)?.contains("holding this pane") == true
+}
+
+@OptIn(ExperimentalTestApi::class)
+private fun ComposeUiTest.saysHeld(): Boolean =
+    onAllNodes(SAYS_HELD).fetchSemanticsNodes().isNotEmpty()
+
 private fun ClientMsg.sizing(): ManageOp.PaneSize? =
     ((this as? ClientMsg.Manage)?.request as? ManageOp.PaneSize)
 
@@ -142,6 +156,7 @@ private fun ComposeUiTest.terminal(
     size: Pair<Dp, Dp>,
     session: PaneSession? = null,
     status: () -> ConnectionStatus = { ConnectionStatus.Live("full") },
+    header: Boolean = false,
     shown: () -> Boolean = { true },
 ) {
     setContent {
@@ -158,6 +173,7 @@ private fun ComposeUiTest.terminal(
                         TerminalView(pane, session ?: PaneSession(Phone.PANE), io)
                     }
                 }
+                if (header && session != null) ZoomButton(session, Modifier.align(Alignment.TopEnd))
             }
         }
     }
@@ -370,6 +386,60 @@ class MatchingTheViewTest {
                 "an untick was given a view switch's grace window: ${io.releases}",
             )
         }
+    }
+
+    // **A hold is said where it is held, and the thing saying it leads to the switch** — rule 3's
+    // price for a claim nobody pressed. The pane's own zoom control carries it, because that is
+    // the control that opens the panel the off switch lives on, and it is in every pane header.
+    //
+    // The mutation that must fail: stop setting the view's matched flag from the claim, and the
+    // header never says a word while the desk is being overridden.
+    @Test
+    fun aHeldPaneSaysSoOnItsOwnHeaderAndThatLeadsToTheOffSwitch() {
+        runDesktopComposeUiTest(DESK.first.value.toInt(), DESK.second.value.toInt()) {
+            val io = SessionIo()
+            val session = PaneSession(Phone.PANE)
+            terminal(grid(cols = 40), io, DESK, session, header = true)
+            try {
+                waitUntil(timeoutMillis = 3_000) { saysHeld() }
+            } catch (_: Throwable) {
+                // Asserted below.
+            }
+            assertTrue(io.claims.isNotEmpty(), "a desk claimed nothing")
+            assertTrue(saysHeld(), "the pane is held and its header says nothing about it")
+
+            onNodeWithContentDescription("Zoom, currently", substring = true).performClick()
+            waitForIdle()
+            onNodeWithContentDescription("Match this view while it's open ·", substring = true)
+                .performClick()
+            waitForIdle()
+
+            assertTrue(io.releases.any { it == Phone.PANE to false }, "the switch let nothing go: ${io.releases}")
+            assertFalse(saysHeld(), "the header still says held after the operator let go")
+        }
+    }
+
+    // And it never says so of a pane it is not holding: a claim the node refused, and a claim a
+    // dropped socket has already given back (ADR 0013 point 1).
+    @Test
+    fun aPaneThatIsNotHeldIsNotSaidToBe() = runComposeUiTest {
+        val refused = SessionIo(takes = false)
+        terminal(grid(cols = 40), refused, DESK, PaneSession(Phone.PANE), header = true)
+        quiet(1_000)
+        assertTrue(refused.claims.isNotEmpty(), "nothing was asked for, so nothing was refused")
+        assertFalse(saysHeld(), "a refused claim was said to be a hold")
+    }
+
+    @Test
+    fun aHoldASocketGaveBackIsNotSaidToBeHeld() = runComposeUiTest {
+        val io = SessionIo()
+        var status: ConnectionStatus by mutableStateOf(ConnectionStatus.Live("full"))
+        terminal(grid(cols = 40), io, DESK, PaneSession(Phone.PANE), status = { status }, header = true)
+        quiet(1_000)
+        assertTrue(saysHeld(), "nothing was held to begin with")
+        status = ConnectionStatus.Offline("the wifi went", 60_000)
+        waitForIdle()
+        assertFalse(saysHeld(), "the header says held over a pane the node has already put back")
     }
 
     // The switch is stored per pane per device, and it wins over the size of the screen. An

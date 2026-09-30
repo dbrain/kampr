@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::Fetched;
-use crate::composer::{Caret, Composed, ComposerReader};
+use crate::composer::{Caret, Composed, ComposerReader, Frame};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -539,7 +539,7 @@ fn is_status(line: &str) -> bool {
 /// Everything else about the read is the same shape and the same caret rule — a caret resting at
 /// the input column is an empty composer whatever is painted to the right of it, which is also
 /// where `ctrl+a` leaves it on a full line — measured at col 3 for both ([#496](#)).
-pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
+pub fn composer(screen: &[&str], caret: Caret, _frame: Frame) -> Option<Composed> {
     let head = screen.iter().rposition(|line| line.starts_with(COMPOSER))?;
     let mut last = head;
     for (at, line) in screen.iter().enumerate().skip(head + 1) {
@@ -558,9 +558,11 @@ pub fn composer(screen: &[&str], caret: Caret) -> Option<Composed> {
         text.push_str(line[INPUT..].trim_end());
     }
     let text = text.trim().to_string();
-    (!text.is_empty()).then_some(Composed {
+    (!text.is_empty()).then(|| Composed {
+        caret: text.chars().count(),
         text,
         clear: Some(CLEAR),
+        keys: None,
     })
 }
 

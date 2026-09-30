@@ -183,6 +183,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 onNodePicker = { state.go(Screen.Setup) },
                 onDismiss = state::closeSheet,
                 onCreated = state::opening,
+                onSplit = if (LocalMosaic.current != null) state::openingSplit else null,
                 panes = herd.panes,
                 // `askCaps` keeps a ten-second floor under the connection's own polling, which is
                 // right for a herd patch and wrong for the one moment the operator has just

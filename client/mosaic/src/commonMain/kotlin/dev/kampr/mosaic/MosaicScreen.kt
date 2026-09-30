@@ -94,7 +94,7 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
     val nodes = herd.nodes.associateBy { it.id }
     val drag = remember { MosaicDrag() }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val shape = mosaicShape(mosaic.panes.size, maxWidth)
+        val shape = mosaicShape(mosaic.panes.size, maxWidth, mosaic.stacked)
         var index = 0
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(GAP)) {
             for (row in shape.perRow) {

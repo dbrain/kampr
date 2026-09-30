@@ -4,10 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -43,7 +41,6 @@ import dev.kampr.shared.theme.ThemeId
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.groundOf
 import dev.kampr.shared.theme.modeOf
-import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PanePrefs
@@ -205,7 +202,6 @@ private class AppPaneIo(private val state: AppState) : PaneIo {
     override suspend fun claimMatch(paneId: String, cols: Int, rows: Int) =
         state.claimMatch(paneId, cols, rows)
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
-    override fun holding(paneId: String, held: Boolean) = state.holdingPane(paneId, held)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
 }
 
@@ -221,7 +217,6 @@ internal fun AppScaffold(
     deepLink: DeepLink?,
 ) {
     val tokens = Kampr.tokens
-    val safe = LocalSafeArea.current
     val served by state.store.herd.collectAsState()
     // One place, so the mark, the spoken status, the triage list and `paneOrder`'s rank all agree
     // about a pane whose `done` the operator has already read.
@@ -311,9 +306,7 @@ internal fun AppScaffold(
     // of the window, so the inset applies without a subtraction, and everything inside — the
     // bottom navigation, a sheet's fields, the pane's own key row — is measured against a window
     // that already stops at the keyboard, and against system furniture the keys have already
-    // taken. `safe` is read above it, and is the window's own: the tab bar spans the edge the
-    // keys are moving through, so it is sized against what the window has rather than what is
-    // left of it.
+    // taken.
     KeyboardFloor(Modifier.fillMaxSize().background(tokens.color.bg)) {
         // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
         // and this screen is about four.
@@ -328,90 +321,87 @@ internal fun AppScaffold(
         }
         Box(Modifier.fillMaxSize().behindSheet()) {
             when (breakpoint) {
-                Breakpoint.Desktop -> Column(Modifier.fillMaxSize().screenInset(state.screen)) {
-                    Row(Modifier.weight(1f)) {
-                        HerdSidebar(
-                            herd = herd,
-                            connection = connectionStatus,
-                            now = now,
-                            localRtt = localRtt,
-                            triage = triage,
-                            activePaneId = (state.screen as? Screen.Pane)?.paneId,
-                            deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
-                            // The role off the store, not off the greeting: this caption is the
-                            // only place the desktop says what this device may do.
-                            deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
-                            onOpenPane = { state.openPane(it) },
-                            onSettings = { state.go(Screen.Setup) },
-                            onResync = { state.connection.send(ClientMsg.Resync) },
-                            collapsed = state.sidebarCollapsed,
-                            onCollapsed = state::collapseSidebar,
-                            scroll = state.herdScroll,
-                        )
-                        ScreenBody(
-                            Modifier.weight(1f).fillMaxSize(),
-                            bottomChrome(breakpoint, state.screen),
-                            screenSelects(state.screen),
-                        ) {
-                            when (val screen = state.screen) {
-                                is Screen.Pane -> PaneScreenDesktop(
-                                    pane = state.store.pane(screen.paneId),
-                                    info = state.store.paneInfo(screen.paneId),
-                                    gone = herd.gone(screen.paneId),
-                                    view = screen.view,
-                                    surfaces = surfaces,
-                                    readOnly = readOnly,
-                                    onView = state::setPaneView,
-                                )
-                                Screen.Setup -> SetupScreen(
-                                    status = auth.setup,
-                                    security = security,
-                                    running = connectionStatus is ConnectionStatus.Live,
-                                    endpoint = state.endpoint,
-                                    nodes = herd.nodes,
-                                    pairingCode = auth.pairingCode,
-                                    pairingError = state.pairingError,
-                                    onConnect = state::useEndpoint,
-                                    onPairingCode = auth.onPairingCode,
-                                    onDevices = { state.go(Screen.Devices) },
-                                    onAppearance = { state.go(Screen.Appearance) },
-                                    onNotifications = { state.go(Screen.Notifications) },
-                                    onPasskeys = passkeys,
-                                    onPasskeySignIn = passkeySignIn,
-                                    onInstall = install,
-                                    recentAddresses = state.recentAddresses,
-                                    offeredCode = deepLink?.pair,
-                                    wide = true,
-                                )
-                                Screen.Devices -> DevicesScreen(
-                                    auth.devices, auth.currentDeviceId, now,
-                                    { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
-                                )
-                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-                                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-                                Screen.Fleet -> FleetScreen(
-                                    herd = herd,
-                                    breakpoint = breakpoint,
-                                    onOpenPane = state::openPane,
-                                    onAnswer = state::answerFleet,
-                                    onStop = { state.manage(ManageOp.FleetStop(it)) },
-                                    onRun = { state.runFleet(it) },
-                                    canRun = !readOnly && state.store.canManage,
-                                    book = book,
-                                    onBook = state::manage,
-                                )
-                                Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
-                            }
+                Breakpoint.Desktop -> Row(Modifier.fillMaxSize().screenInset(state.screen)) {
+                    HerdSidebar(
+                        herd = herd,
+                        connection = connectionStatus,
+                        now = now,
+                        localRtt = localRtt,
+                        triage = triage,
+                        activePaneId = (state.screen as? Screen.Pane)?.paneId,
+                        deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
+                        // The role off the store, not off the greeting: this caption is the
+                        // only place the desktop says what this device may do.
+                        deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
+                        onOpenPane = { state.openPane(it) },
+                        onSettings = { state.go(Screen.Setup) },
+                        onResync = { state.connection.send(ClientMsg.Resync) },
+                        collapsed = state.sidebarCollapsed,
+                        onCollapsed = state::collapseSidebar,
+                        scroll = state.herdScroll,
+                    )
+                    ScreenBody(
+                        Modifier.weight(1f).fillMaxSize(),
+                        bottomChrome(breakpoint, state.screen),
+                        screenSelects(state.screen),
+                    ) {
+                        when (val screen = state.screen) {
+                            is Screen.Pane -> PaneScreenDesktop(
+                                pane = state.store.pane(screen.paneId),
+                                info = state.store.paneInfo(screen.paneId),
+                                gone = herd.gone(screen.paneId),
+                                view = screen.view,
+                                surfaces = surfaces,
+                                readOnly = readOnly,
+                                onView = state::setPaneView,
+                            )
+                            Screen.Setup -> SetupScreen(
+                                status = auth.setup,
+                                security = security,
+                                running = connectionStatus is ConnectionStatus.Live,
+                                endpoint = state.endpoint,
+                                nodes = herd.nodes,
+                                pairingCode = auth.pairingCode,
+                                pairingError = state.pairingError,
+                                onConnect = state::useEndpoint,
+                                onPairingCode = auth.onPairingCode,
+                                onDevices = { state.go(Screen.Devices) },
+                                onAppearance = { state.go(Screen.Appearance) },
+                                onNotifications = { state.go(Screen.Notifications) },
+                                onPasskeys = passkeys,
+                                onPasskeySignIn = passkeySignIn,
+                                onInstall = install,
+                                recentAddresses = state.recentAddresses,
+                                offeredCode = deepLink?.pair,
+                                wide = true,
+                            )
+                            Screen.Devices -> DevicesScreen(
+                                auth.devices, auth.currentDeviceId, now,
+                                { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
+                            )
+                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+                            Screen.Fleet -> FleetScreen(
+                                herd = herd,
+                                breakpoint = breakpoint,
+                                onOpenPane = state::openPane,
+                                onAnswer = state::answerFleet,
+                                onStop = { state.manage(ManageOp.FleetStop(it)) },
+                                onRun = { state.runFleet(it) },
+                                canRun = !readOnly && state.store.canManage,
+                                book = book,
+                                onBook = state::manage,
+                            )
+                            Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                         }
                     }
-                    StatusStrip(state, connectionStatus, localRtt, hello?.build)
                 }
 
                 // The nav lived in the Portrait branch alone, so a phone held sideways — a
                 // first-class layout — could reach Setup, Devices, Appearance and Notifications
                 // from nowhere at all. It stays off a pane, where every row of height is the
                 // terminal's and `onBack` already leads out.
-                Breakpoint.Landscape -> PhoneScaffold(breakpoint, state.screen, safe, state::selectTab) {
+                Breakpoint.Landscape -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
                     when (val screen = state.screen) {
                         is Screen.Pane -> PaneScreenMobile(
                             pane = state.store.pane(screen.paneId),
@@ -469,7 +459,7 @@ internal fun AppScaffold(
                     }
                 }
 
-                Breakpoint.Portrait -> PhoneScaffold(breakpoint, state.screen, safe, state::selectTab) {
+                Breakpoint.Portrait -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
                     when (val screen = state.screen) {
                         is Screen.Pane -> PaneScreenMobile(
                             pane = state.store.pane(screen.paneId),
@@ -570,8 +560,8 @@ internal fun AppScaffold(
 // so padding it here would take that away; it reads `LocalSafeArea` itself. Everything else is a
 // scrolling column of text that has no business under the clock — or, rotated with three-button
 // navigation, under the navigation bar that has moved to the side of the screen. Chrome that
-// carries the bar colour at an edge this box never takes — the desktop status strip, the bottom
-// navigation — pays for its own instead, so its ground still runs under what the system draws.
+// carries the bar colour at an edge this box never takes — the bottom navigation — pays for its
+// own instead, so its ground still runs under what the system draws.
 // The sidebar is not one of them: it sits inside this box on the desktop column, and adding the
 // top inset again there stood the app's own name two status bars down on every non-pane screen.
 //
@@ -597,74 +587,5 @@ private fun EmptyDetail(connectionStatus: ConnectionStatus) {
     val tokens = Kampr.tokens
     Box(Modifier.fillMaxSize().background(tokens.color.surface2).readingOrder(1f), contentAlignment = Alignment.Center) {
         KText(connectionWord(connectionStatus) ?: "Pick a pane", tokens.type.caption, tokens.color.mute)
-    }
-}
-
-@Composable
-private fun StatusStrip(
-    state: AppState,
-    connectionStatus: ConnectionStatus,
-    localRtt: Double?,
-    build: String?,
-) {
-    val tokens = Kampr.tokens
-    val herd by state.store.herd.collectAsState()
-    val held by state.heldPane.collectAsState()
-    val hub = herd.nodes.firstOrNull { it.kind == "local" }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(tokens.color.bar)
-            .edgeTop()
-            .padding(start = 18.dp, top = 8.dp, end = 18.dp, bottom = 8.dp + LocalSafeArea.current.bottom),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
-    ) {
-        val live = connectionStatus is ConnectionStatus.Live
-        Row(
-            Modifier.announce(
-                if (live) "Connected to hub ${hub?.name ?: "unknown"}"
-                else "Not connected to hub ${hub?.name ?: "unknown"}",
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(7.dp),
-        ) {
-            Mark(
-                if (live) tokens.color.done else tokens.color.working,
-                if (live) MarkShape.Bar else MarkShape.Ring,
-                6.dp,
-            )
-            KText("hub · ${hub?.name ?: "—"}", tokens.type.meta, if (live) tokens.color.done else tokens.color.working)
-        }
-        val keystrokes by state.store.keystrokeMs.collectAsState()
-        for (node in herd.nodes.filter { it.kind != "local" }) {
-            KText("${node.name} ${nodeLatency(node, keystrokes, node.rttMs)}", tokens.type.meta, tokens.color.mute)
-        }
-        Box(Modifier.weight(1f))
-        val offline = connectionStatus as? ConnectionStatus.Offline
-        val refused = connectionStatus is ConnectionStatus.Refused
-        KText(
-            when {
-                refused -> "not paired — this node does not know this device"
-                held != null -> "holding $held at a size — the desk sees it this shape too"
-                offline == null -> "no lease held — desktop shape untouched"
-                else -> "reconnecting in ${offline.retryInMs / 1000}s — showing cached grid"
-            },
-            tokens.type.meta,
-            if (refused) tokens.color.blocked else tokens.color.mute,
-            when {
-                refused -> Modifier.announce("Not paired — this node does not know this device")
-                offline == null -> Modifier
-                else -> Modifier.announce(
-                    "Offline — reconnecting in ${offline.retryInMs / 1000} seconds, showing a cached grid",
-                )
-            },
-        )
-        KText(
-            "local ${hub?.let { nodeLatency(it, keystrokes, localRtt) } ?: "ping ${formatLatency(localRtt)}"}",
-            tokens.type.meta,
-            tokens.color.mute,
-        )
-        KText("kampr ${build ?: "0.1.0"}", tokens.type.meta, tokens.color.mute)
     }
 }

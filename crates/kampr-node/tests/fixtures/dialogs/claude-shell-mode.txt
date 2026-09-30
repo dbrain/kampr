@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Haiku 4.5 · Claude Pro
+ ▝▝   ▝▝   /tmp/kampr-typedblock-MthnL7 · /rc
+
+
+❯ Reply with exactly these two sentences and nothing else, no tools: I can keep the old config or replace it. Do you
+  want to keep it, or would you like to replace it?
+
+● I can keep the old config or replace it. Do you want to keep it, or would you like to replace it?
+
+✻ Sautéed for 1s · done 4:11 pm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+!
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ! for shell mode

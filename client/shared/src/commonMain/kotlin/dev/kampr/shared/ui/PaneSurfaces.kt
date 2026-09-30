@@ -73,7 +73,7 @@ interface PaneIo {
     // answer about this pane and is owed the pane back at once — and true where a view merely
     // ended, which is not an answer at all.
     // Answers whether the **node** took the pane, which a session knows and this default cannot:
-    // it has nowhere to hear an ack. The surface has to know, because the status strip says a pane
+    // it has nowhere to hear an ack. The surface has to know, because the pane's header says a pane
     // is being held and that sentence has to be true — so the answer here is the old behaviour,
     // for a surface with no session behind it, and `AppState` is the one that waits for the node.
     suspend fun claimMatch(paneId: String, cols: Int, rows: Int): Boolean {
@@ -83,12 +83,6 @@ interface PaneIo {
 
     fun releaseMatch(paneId: String, linger: Boolean = true) =
         send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
-
-    // Told when a pane is being held at a size, because the status strip stands there saying "no
-    // lease held — desktop shape untouched" and that sentence is false exactly while one is. A
-    // held pane overrides whoever is at the desk (#18) and leaves their screen wrong (#298), so it
-    // is the one state the operator most needs said out loud rather than assumed away.
-    fun holding(paneId: String, held: Boolean) = Unit
 
     // The bytes behind a transcript attachment, on demand and over HTTP rather than over the
     // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines

@@ -464,17 +464,26 @@ fn a_desk_line_clears_with_a_null_text_and_omits_a_clear_nobody_measured() {
         pane: "01J/w3:p2".into(),
         text: Some("push the branch when".into()),
         clear: Some("\u{3}".into()),
+        caret: Some(20),
+        keys: Some(kampr_journal::EDIT_KEYS),
     })
     .unwrap();
     assert_eq!(typed["t"], "convo.composer");
     assert_eq!(typed["pane"], "01J/w3:p2");
     assert_eq!(typed["text"], "push the branch when");
     assert_eq!(typed["clear"], "\u{3}");
+    assert_eq!(typed["caret"], 20);
+    assert_eq!(
+        typed["keys"],
+        serde_json::json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n" })
+    );
 
     let emptied = serde_json::to_value(ServerMsg::ConvoComposer {
         pane: "01J/w3:p2".into(),
         text: None,
         clear: None,
+        caret: None,
+        keys: None,
     })
     .unwrap();
     // `Value["text"]` answers null for a key that is not there at all, so the presence is what is

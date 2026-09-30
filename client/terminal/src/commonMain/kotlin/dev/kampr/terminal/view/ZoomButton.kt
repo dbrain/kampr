@@ -26,6 +26,9 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
     val open = session.view.sheetOpen
+    // Rule 3's price for a hold: said wherever it is held, on the one control that opens the panel
+    // its off switch is on. ADR 0013.
+    val held = session.view.holdsPane
     Row(
         modifier
             .defaultMinSize(minWidth = 68.dp)
@@ -37,7 +40,10 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
                 { session.view.sheetOpen = !open },
                 shape,
                 selected = open,
-                state = if (open) "sheet open" else null,
+                state = listOfNotNull(
+                    "sheet open".takeIf { open },
+                    "holding this pane at this view's size — the desk sees it this shape too".takeIf { held },
+                ).joinToString(", ").ifEmpty { null },
             )
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -49,5 +55,6 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
             tokens.type.key,
             if (open) tokens.color.accent else tokens.color.dim,
         )
+        if (held) KText("held", tokens.type.key, tokens.color.working)
     }
 }

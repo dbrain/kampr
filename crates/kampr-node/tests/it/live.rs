@@ -10830,6 +10830,62 @@ async fn a_keystroke_into_a_dialog_the_node_has_already_read_is_not_held() {
     }
 }
 
+/// The operator: typed in a Claude pane, switched to Conversation, and was shown *"some kind of
+/// question select answer box"* instead of the line they had typed. Esc twice on an empty box is
+/// Claude's Rewind menu, and Claude's marker calls it `waiting` (#563), so the pane is blocked
+/// and its screen is read for a question — which offered the operator's own sent messages as
+/// answers, and an answer as the arrows and Enter that rewind the conversation to before one.
+/// Every door onto the same read: the socket's card, the press, and the warm resume a push opens.
+#[tokio::test(flavor = "multi_thread")]
+async fn claudes_rewind_menu_is_never_offered_as_a_question_to_answer() {
+    let dir = tempfile::tempdir().expect("a directory for the fake claude");
+    std::fs::create_dir_all(dir.path().join("journals").join(".claude")).expect("the journal root");
+    let h = harness!("rewind", |c| {
+        c.journals.home = dir.path().join("journals").display().to_string();
+    });
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    let rewind = include_str!("../fixtures/dialogs/claude-rewind.txt");
+    let (_bin, log) = until_booted_at_trust_prompt(&h, dir.path(), &pane, rewind).await;
+    assert!(
+        drawn_on_herdr(&h._session, &local, "(current)", 60).await,
+        "the menu never reached the screen"
+    );
+    report(&h._session, &local, "blocked").await;
+    until_herd(&h, &pane, "blocked").await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 10).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        assert!(
+            message["t"] != "pending" || message["question"].is_null(),
+            "the Rewind menu was offered as a question: {message}"
+        );
+    }
+
+    let (_, warm) = get(&format!("{}/api/warm?pane={pane}", h.origin), Some(&token)).await;
+    assert!(warm["pending"].is_null(), "the warm resume offered it: {warm}");
+
+    // A screen with no dialog on it still takes the bare digit Claude has always been sent; what
+    // must not reach it is a move and an Enter, which is a rewind.
+    send(&mut socket, json!({ "t": "answer", "pane": pane, "key": "2" })).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let pressed = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        !pressed.contains(['\r', '\u{1b}']),
+        "an answer moved and committed the Rewind menu: {pressed:?}"
+    );
+}
+
 /// The same dialog with nobody streaming its grid — the phone answering from the conversation view,
 /// the view the notification opens. There is no local screen to poll here, so the hold has to ask
 /// herdr rather than assume that a pane with no viewer is a pane with no composer.
@@ -10968,6 +11024,127 @@ async fn a_keystroke_typed_at_the_grid_is_never_held_and_a_reply_still_is() {
         ["typed", "reply", "after"],
         "the hold released out of order"
     );
+}
+
+/// Draws a Claude 2.1.285 composer the way it was captured (#558, #564): rules above and
+/// below, `❯` + U+00A0, continuation rows indented two, and the caret where it is put.
+async fn draw_claude_box(session: &Session, local: &str, rows: &[&str], caret: (usize, usize)) {
+    let rule = "─".repeat(40);
+    let body = rows
+        .iter()
+        .enumerate()
+        .map(|(at, row)| match at {
+            0 => format!("❯\\302\\240{row}"),
+            _ => format!("  {row}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\\r\\n");
+    session
+        .call(
+            "pane.send_text",
+            json!({
+                "pane_id": local,
+                "text": format!(
+                    "printf '\\033[2J\\033[1;1H{rule}\\r\\n{body}\\r\\n{rule}\\033[{};{}H'; read -r _\n",
+                    caret.0 + 2,
+                    caret.1 + 1
+                ),
+            }),
+        )
+        .await;
+}
+
+/// **One input, not two.** The reply box takes up what the desk typed as it is typed, so the line
+/// has to arrive whole: a word Claude wrapped comes back with its space, a line the operator broke
+/// comes back broken (#564), and the caret comes with it. It is owed before anything has
+/// been written to a transcript — a fresh session's first message is typed into a box the
+/// conversation has no turns for yet — and it says which keys edit the box, which is what lets a
+/// client type into it at all. A box showing Claude's own faint hint is an empty box that can be
+/// typed into; a real line with the caret moved to its front is a line.
+#[tokio::test(flavor = "multi_thread")]
+async fn claudes_box_reaches_the_reply_box_whole_with_its_caret_and_its_keys() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".claude/projects/-tmp")).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("mirror", |c: &mut Config| c.journals.home = home_path);
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    herdr_has_scraped(&h._session, &local).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let reset = until_pane(&mut socket, "grid.reset", &pane, 15).await;
+    let cols = reset["cols"].as_u64().expect("the grid's width") as usize;
+
+    let filled = "a".repeat(cols - 6);
+    draw_claude_box(&h._session, &local, &[&filled, "branch", "now"], (2, 5)).await;
+    let composer = until_composer(&mut socket, &pane, |c| c["text"].is_string()).await;
+    let want = format!("{filled} branch\nnow");
+    assert_eq!(composer["text"], want.as_str(), "{composer}");
+    assert_eq!(composer["caret"], want.chars().count(), "{composer}");
+    assert_eq!(
+        composer["keys"],
+        json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n" }),
+        "{composer}"
+    );
+
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "\n" }))
+        .await;
+    draw_claude_box(
+        &h._session,
+        &local,
+        &["\\033[2mTry \\\"fix lint errors\\\"\\033[0m"],
+        (0, 2),
+    )
+    .await;
+    let empty = until_composer(&mut socket, &pane, |c| {
+        c["text"].is_null() && c["keys"].is_object()
+    })
+    .await;
+    assert_eq!(empty["caret"], 0, "{empty}");
+
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "\n" }))
+        .await;
+    draw_claude_box(&h._session, &local, &["push the branch"], (0, 2)).await;
+    let fronted = until_composer(&mut socket, &pane, |c| c["text"].is_string()).await;
+    assert_eq!(fronted["text"], "push the branch", "{fronted}");
+    assert_eq!(fronted["caret"], 0, "{fronted}");
+
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "\n" }))
+        .await;
+    draw_claude_box(&h._session, &local, &["push "], (0, 7)).await;
+    let spaced = until_composer(&mut socket, &pane, |c| c["caret"] == 5).await;
+    assert_eq!(
+        spaced["text"], "push ",
+        "a space typed before the caret is typed: {spaced}"
+    );
+}
+
+async fn until_composer(socket: &mut Socket, pane: &str, wanted: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut seen = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        if message["t"] == "convo.composer" && message["pane"] == pane {
+            if wanted(&message) {
+                return message;
+            }
+            seen.push(message);
+        }
+    }
+    panic!("no convo.composer of the shape wanted arrived; saw {seen:?}");
 }
 
 /// The operator, in split view: *"the half typed thing doesn't seem to really work at the moment -

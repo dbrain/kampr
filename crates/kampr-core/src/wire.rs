@@ -658,12 +658,21 @@ pub enum ServerMsg {
     /// measured to empty this harness's composer, and is **absent where nobody has measured one**:
     /// a client offers the takeover only for a harness that carries it, and never guesses a key.
     /// Sent when the line moves and not on a tick, so a composer nobody is typing into is free.
+    ///
+    /// `caret` and `keys` ride only on a box that is drawn with the caret in it, empty or not:
+    /// where the pane's caret is, in characters into `text`, and the keys measured to edit that
+    /// harness's box one character at a time. A client mirrors its reply box into the pane only
+    /// while `keys` is present, and a frame without it is a box nothing may be typed into.
     #[serde(rename = "convo.composer")]
     ConvoComposer {
         pane: String,
         text: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         clear: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caret: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        keys: Option<kampr_journal::EditKeys>,
     },
     #[serde(rename = "error")]
     Error {

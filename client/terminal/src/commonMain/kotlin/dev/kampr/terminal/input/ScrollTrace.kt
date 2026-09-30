@@ -2,6 +2,7 @@ package dev.kampr.terminal.input
 
 import dev.kampr.terminal.bench.emitBench
 import dev.kampr.terminal.bench.platformLabel
+import kotlin.math.abs
 import kotlin.time.TimeSource
 
 // Read once, at the platform entry point, before anything composes — the same switch the bench is
@@ -35,10 +36,15 @@ class ScrollTrace(
     private var waitingSince: TimeSource.Monotonic.ValueTimeMark? = null
     private var open = false
     private var reports = 0
+    private var writes = 0
+    private var rows = 0
+    private var travel = 0
     private var frames = 0
     private val waits = mutableListOf<Long>()
 
-    fun sent(keys: ScrollKeys) {
+    // `rows` is what the program is expected to move for them, which is the number to hold against
+    // `travel`: a finger that travelled 60 rows and moved the pane 20 is the defect this exists for.
+    fun sent(keys: ScrollKeys, reports: Int, rows: Int) {
         if (!on) return
         if (open && lastSent.elapsedNow().inWholeMilliseconds > IDLE_GAP_MS) flush(keys)
         if (!open) {
@@ -46,10 +52,16 @@ class ScrollTrace(
             started = clock.markNow()
         }
         lastSent = clock.markNow()
-        reports++
-        // Only the first unanswered report starts the clock: the wait being measured is the round
-        // trip, and reports two and three of a burst are queued behind the same repaint.
+        this.reports += reports
+        this.rows += rows
+        writes++
+        // Only the first unanswered write starts the clock: the wait being measured is the round
+        // trip, and writes two and three of a burst are queued behind the same repaint.
         if (waitingSince == null) waitingSince = clock.markNow()
+    }
+
+    fun travelled(rows: Int) {
+        if (on) travel += abs(rows)
     }
 
     // Every frame the pane publishes, which past the handover is the program answering. Frames the
@@ -70,13 +82,16 @@ class ScrollTrace(
         val sorted = waits.sorted()
         emit(
             "KAMPR_SCROLL $platformLabel | keys=${keys.name}" +
-                " | reports=$reports frames=$frames ms=$ms" +
+                " | travel=$travel rows=$rows reports=$reports writes=$writes frames=$frames ms=$ms" +
                 " rate=${if (ms > 0) reports * 1000 / ms else 0}/s" +
                 " wait_p50=${sorted.getOrNull(sorted.size / 2) ?: -1}ms" +
                 " wait_max=${sorted.lastOrNull() ?: -1}ms",
         )
         open = false
         reports = 0
+        writes = 0
+        rows = 0
+        travel = 0
         frames = 0
         waits.clear()
         waitingSince = null

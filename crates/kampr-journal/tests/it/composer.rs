@@ -9,8 +9,8 @@
 use crate::common;
 
 use kampr_journal::{
-    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, JournalAdapter, OmpAdapter,
-    TranscriptRoot,
+    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, EDIT_KEYS, Frame, JournalAdapter,
+    OmpAdapter, TranscriptRoot,
 };
 
 /// A fixture's caret header and its grid. The caret has to travel with the screen: it is the only
@@ -26,10 +26,24 @@ fn capture(name: &str) -> (String, Caret) {
     (body.to_string(), Caret { col, row })
 }
 
-fn read(adapter: &dyn JournalAdapter, name: &str) -> Option<String> {
+/// The pane each capture was taken in: the rule Claude and agy draw is the pane's width, and Codex
+/// shared Claude's pane. What is right of the caret was measured faint only where a harness paints
+/// a placeholder into an empty box (#565), which is what the `-empty` captures are of.
+fn frame(name: &str) -> Frame {
+    Frame {
+        cols: if name.starts_with("agy") { 94 } else { 93 },
+        faint_after_caret: name.ends_with("-empty"),
+    }
+}
+
+fn composed(adapter: &dyn JournalAdapter, name: &str) -> Option<Composed> {
     let (body, caret) = capture(name);
     let rows: Vec<&str> = body.lines().collect();
-    adapter.composer()?(&rows, caret).map(|c| c.text)
+    adapter.composer()?(&rows, caret, frame(name))
+}
+
+fn read(adapter: &dyn JournalAdapter, name: &str) -> Option<String> {
+    composed(adapter, name).map(|c| c.text)
 }
 
 fn claude() -> ClaudeAdapter {
@@ -66,9 +80,9 @@ fn what_the_operator_has_typed_at_the_desk_is_read_off_every_harness_probed() {
 /// strip would claim a line nobody typed. The caret is the only thing that separates them.
 #[test]
 fn a_harnesss_own_placeholder_is_not_the_operators_line() {
-    assert_eq!(read(&claude(), "claude-empty"), None);
-    assert_eq!(read(&codex(), "codex-empty"), None);
-    assert_eq!(read(&agy(), "agy-empty"), None);
+    assert_eq!(read(&claude(), "claude-empty").as_deref(), Some(""));
+    assert_eq!(read(&codex(), "codex-empty").as_deref(), Some(""));
+    assert_eq!(read(&agy(), "agy-empty").as_deref(), Some(""));
     // omp paints no placeholder at all, and the caret says the same thing about it.
     assert_eq!(read(&omp(), "omp-empty"), None);
 }
@@ -94,19 +108,38 @@ fn a_line_too_long_for_the_box_is_read_whole_and_not_just_its_first_row() {
             !text.contains('\n'),
             "{name}: a wrapped row is not a new line: {text:?}"
         );
+        assert!(
+            name.starts_with("omp") || text.contains("release notes should say"),
+            "{name}: the space a row broke at was lost: {text:?}"
+        );
     }
 }
 
-/// **A measured limitation, kept deliberately.** `ctrl+a` puts the caret back at the input column
-/// on all three harnesses with the operator's text still on the line, and nothing else on the
-/// screen tells the two apart — so the strip goes away rather than reporting a line it cannot be
-/// sure of. Absent is the failure this is allowed to have; wrong is not.
+/// `ctrl+a` puts the caret back at the input column with the operator's text still on the line.
+/// A placeholder is drawn faint and the operator's words are not (#565), so the line is read
+/// with the caret at its front — a reply box that took it for empty would type in front of it.
+/// omp paints no placeholder and keeps its own reader, which still says nothing here.
 #[test]
-fn a_caret_sent_home_reads_as_empty_rather_than_as_a_guess() {
-    assert_eq!(read(&claude(), "claude-caret-at-home"), None);
-    assert_eq!(read(&codex(), "codex-caret-at-home"), None);
-    assert_eq!(read(&agy(), "agy-caret-at-home"), None);
+fn a_caret_sent_home_is_the_line_with_the_caret_at_its_front() {
+    for (adapter, name) in [
+        (&codex() as &dyn JournalAdapter, "codex-caret-at-home"),
+        (&agy(), "agy-caret-at-home"),
+    ] {
+        let line = composed(adapter, name).unwrap_or_else(|| panic!("{name}: nothing read"));
+        assert!(line.text.starts_with(TYPED), "{name}: {line:?}");
+        assert_eq!(line.caret, 0, "{name}");
+    }
     assert_eq!(read(&omp(), "omp-caret-at-home"), None);
+}
+
+/// The keys a reply box types with are the node's, like the clearing key: measured per harness
+/// (#564), and absent where nobody has measured them — omp's box is read and never typed into.
+#[test]
+fn a_harness_carries_the_keys_measured_to_edit_its_box_and_omp_carries_none() {
+    assert_eq!(composed(&claude(), "claude-typed").unwrap().keys, Some(EDIT_KEYS));
+    assert_eq!(composed(&codex(), "codex-typed").unwrap().keys, Some(EDIT_KEYS));
+    assert_eq!(composed(&agy(), "agy-typed").unwrap().keys, Some(EDIT_KEYS));
+    assert_eq!(composed(&omp(), "omp-typed").unwrap().keys, None);
 }
 
 /// The clearing keystroke is a per-harness measurement, and the three disagree: one `ctrl+u` takes
@@ -115,26 +148,9 @@ fn a_caret_sent_home_reads_as_empty_rather_than_as_a_guess() {
 /// three would delete part of somebody's sentence on one harness and quit the agent on another.
 #[test]
 fn each_harness_carries_the_keystroke_measured_to_clear_its_own_composer() {
-    let (body, caret) = capture("claude-typed");
-    let rows: Vec<&str> = body.lines().collect();
-    assert_eq!(
-        claude().composer().unwrap()(&rows, caret).unwrap().clear,
-        Some("\u{3}")
-    );
-
-    let (body, caret) = capture("codex-typed");
-    let rows: Vec<&str> = body.lines().collect();
-    assert_eq!(
-        codex().composer().unwrap()(&rows, caret).unwrap().clear,
-        Some("\u{15}")
-    );
-
-    let (body, caret) = capture("agy-typed");
-    let rows: Vec<&str> = body.lines().collect();
-    assert_eq!(
-        agy().composer().unwrap()(&rows, caret).unwrap().clear,
-        Some("\u{15}")
-    );
+    assert_eq!(composed(&claude(), "claude-typed").unwrap().clear, Some("\u{3}"));
+    assert_eq!(composed(&codex(), "codex-typed").unwrap().clear, Some("\u{15}"));
+    assert_eq!(composed(&agy(), "agy-typed").unwrap().clear, Some("\u{15}"));
 }
 
 /// **A menu is opened by the same marker the composer is**, and its second option is indented
@@ -158,9 +174,13 @@ fn a_screen_with_no_composer_on_it_reports_nothing() {
         "drwxr-xr-x 2 dbrain dbrain 4096 Aug 29 00:00 .",
     ];
     let caret = Caret { col: 8, row: 0 };
-    assert!(claude().composer().unwrap()(&rows, caret).is_none());
-    assert!(codex().composer().unwrap()(&rows, caret).is_none());
-    assert!(agy().composer().unwrap()(&rows, caret).is_none());
+    let frame = Frame {
+        cols: 95,
+        faint_after_caret: false,
+    };
+    assert!(claude().composer().unwrap()(&rows, caret, frame).is_none());
+    assert!(codex().composer().unwrap()(&rows, caret, frame).is_none());
+    assert!(agy().composer().unwrap()(&rows, caret, frame).is_none());
 }
 
 /// The same rule `FacetFeed` follows: a conversation is polled several times a second and a desk
@@ -190,8 +210,8 @@ fn the_same_words_under_a_different_harness_is_a_different_key_and_is_published(
     let mut feed = ComposerFeed::default();
     assert_eq!(feed.moved(Some(said(TYPED))), Some(Some(said(TYPED))));
     let elsewhere = Composed {
-        text: TYPED.to_string(),
         clear: Some("\u{15}"),
+        ..said(TYPED)
     };
     assert_eq!(feed.moved(Some(elsewhere.clone())), Some(Some(elsewhere)));
 }
@@ -199,7 +219,9 @@ fn the_same_words_under_a_different_harness_is_a_different_key_and_is_published(
 fn said(text: &str) -> Composed {
     Composed {
         text: text.to_string(),
+        caret: text.chars().count(),
         clear: Some("\u{3}"),
+        keys: Some(EDIT_KEYS),
     }
 }
 

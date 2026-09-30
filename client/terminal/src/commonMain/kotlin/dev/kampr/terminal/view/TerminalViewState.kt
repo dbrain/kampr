@@ -45,6 +45,11 @@ class TerminalViewState {
     // flick of the switch is felt before the node's `prefs` frame comes back. `null` is nobody
     // having answered yet, which is what lets the viewport decide (ADR 0013).
     var matchView by mutableStateOf<Boolean?>(null)
+
+    // Whether the node took this view's standing claim, as opposed to whether one was wanted.
+    var matchHeld by mutableStateOf(false)
+
+    val holdsPane: Boolean get() = matchHeld || sizeHeld
     var selection by mutableStateOf<Selection?>(null)
     var blockSelect by mutableStateOf(false)
     // The three halves of one gesture, set together because they are read together: what was hit,

@@ -38,6 +38,7 @@ class MosaicLayoutTest {
         for ((count, width, expected) in cases) {
             assertEquals(expected, mosaicShape(count, width).perRow, "$count panes at $width")
         }
+        assertEquals(listOf(1, 1), mosaicShape(2, 1440.dp, stacked = true).perRow, "a split downwards stays stacked")
     }
 
     @Test
