@@ -5,7 +5,9 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
@@ -86,11 +88,7 @@ class RowsBackTest {
     @Test
     fun theStripCountsTheRowsBehindRatherThanTheRowsHeld() = runComposeUiTest {
         val session = aPaneWithARing()
-        onRoot().performMouseInput {
-            moveTo(Offset(width / 2f, height / 2f))
-            repeat(NOTCHES) { scroll(-1f, ScrollWheel.Vertical) }
-        }
-        waitForIdle()
+        scrolledBack()
 
         val travelled = ((session.view.scrollY - session.view.band.floor) / session.grid.cellHeight)
             .toInt()
@@ -101,6 +99,34 @@ class RowsBackTest {
         assertEquals(1, saying("$travelled rows back"), "the strip does not say how far back it is")
         assertEquals(0, saying("$RING rows back"), "the strip is still reporting the ring's depth")
     }
+
+    // The operator: "the col scrollbar ... should be totally gone ... when theres no horizontal
+    // scroll", and "the rows back is a different view with a clear jump to bottom action". Every
+    // column fits here, so being back in history says so without a column bar, and the press
+    // takes the reader to the live edge.
+    @Test
+    fun rowsBackIsItsOwnViewAndPressingItReturnsToTheLiveEdge() = runComposeUiTest {
+        val session = aPaneWithARing()
+        scrolledBack()
+        assertEquals(0, onAllNodes(columnBar).fetchSemanticsNodes().size, "every column fits and a column bar stood up")
+        assertEquals(1, saying("rows back"), "nothing says the reader is back in history")
+
+        onNodeWithContentDescription("Jump to the live edge", substring = true).performClick()
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 2)
+        waitForIdle()
+        assertTrue(session.view.following, "the jump left the viewport parked")
+        assertEquals(session.view.band.floor, session.view.scrollY, 0.5f, "the jump did not land on the live edge")
+        assertEquals(0, saying("rows back"), "the reader is on the live edge and is still told they are back")
+    }
+}
+
+@OptIn(ExperimentalTestApi::class)
+private fun ComposeUiTest.scrolledBack() {
+    onRoot().performMouseInput {
+        moveTo(Offset(width / 2f, height / 2f))
+        repeat(NOTCHES) { scroll(-1f, ScrollWheel.Vertical) }
+    }
+    waitForIdle()
 }
 
 // The operator, on a new terminal, running `df -h` until it filled the screen: *"when full wait

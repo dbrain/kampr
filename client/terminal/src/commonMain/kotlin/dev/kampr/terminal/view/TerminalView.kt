@@ -480,13 +480,12 @@ fun TerminalView(
         // **The bar is travel, never fit.** Everything above measured the view without it, because
         // a bar that took rows off `viewRows` reshaped a held pane each time columns went off screen
         // and back. Everything below rests the grid above it, so the row being typed into is never
-        // behind it. Gated on columns alone: that reading does not move with the height, where the
-        // bar's rows-back half does and would flip the bar at a row back.
-        val columnsOff = columnWindow(view.panX, paint.width, cols, metrics.width, 0).columnsOff
+        // behind it. Columns are the only thing it reports, and that reading does not move with the
+        // height, so the room it takes cannot flip it.
+        val columnsOff = columnWindow(view.panX, paint.width, cols, metrics.width).columnsOff
         val stage = if (columnsOff && session.columnBarHeight > 0f) {
             paint.copy(
-                insetBottom = paint.insetBottom + session.columnBarHeight +
-                    with(density) { COLUMN_BAR_GAP.toPx() },
+                insetBottom = paint.insetBottom + session.columnBarHeight,
             )
         } else {
             paint
@@ -1062,7 +1061,7 @@ fun TerminalView(
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),
         )
 
-        val window = columnWindow(view.panX, stage.width, cols, metrics.width, rowsBack(view, metrics.height))
+        val window = columnWindow(view.panX, stage.width, cols, metrics.width)
 
         Column(
             Modifier
@@ -1092,16 +1091,14 @@ fun TerminalView(
 
         // Floats rather than standing in the column above, which is counted in the fit; the room
         // it needs is `stage`'s.
-        if (window.clipped) {
+        val barBottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() }
+        if (window.columnsOff) {
             ColumnIndicator(
                 window = window,
                 onOpen = { view.sheetOpen = true },
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .absolutePadding(
-                        right = safe.right + 8.dp,
-                        bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() } + COLUMN_BAR_GAP,
-                    )
+                    .align(Alignment.BottomStart)
+                    .absolutePadding(bottom = barBottom)
                     .onSizeChanged { session.columnBarHeight = it.height.toFloat() },
             )
         }
@@ -1119,6 +1116,23 @@ fun TerminalView(
                         session.handover = handoverOf(pane, io, picked)
                     }
                 }
+        // Over the history the reader has scrolled into, never counted in the stage: room made for
+        // it would move the rows it counts, and the chip would flip itself at a row back.
+        val back = rowsBack(view, metrics.height)
+        if (back > 0 && !review.active) {
+            val overBar = if (window.columnsOff) with(density) { session.columnBarHeight.toDp() } else 0.dp
+            RowsBackChip(
+                rowsBack = back,
+                onJump = {
+                    view.followAgain()
+                    view.reanchor()
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .absolutePadding(right = safe.right + 12.dp, bottom = barBottom + overBar + 8.dp),
+            )
+        }
+
                 null -> return@LaunchedEffect
             }
             session.asked = null

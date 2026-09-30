@@ -6,8 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -16,8 +15,9 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.action
-import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.edgeTop
 import kotlin.math.floor
 import kotlin.math.min
 
@@ -25,20 +25,16 @@ data class ColumnWindow(
     val firstCol: Int,
     val lastCol: Int,
     val cols: Int,
-    val rowsBack: Int,
 ) {
     val columnsOff: Boolean get() = firstCol > 0 || lastCol < cols
-    val clipped: Boolean get() = columnsOff || rowsBack > 0
 }
 
-fun columnWindow(panX: Float, paintWidth: Float, cols: Int, cellWidth: Float, rowsBack: Int): ColumnWindow {
+fun columnWindow(panX: Float, paintWidth: Float, cols: Int, cellWidth: Float): ColumnWindow {
     val clampedPan = panX.coerceIn(min(0f, paintWidth - cols * cellWidth), 0f)
     val firstCol = floor(-clampedPan / cellWidth).toInt().coerceIn(0, cols)
     val lastCol = min(cols, firstCol + (paintWidth / cellWidth).toInt() + 1)
-    return ColumnWindow(firstCol, lastCol, cols, rowsBack)
+    return ColumnWindow(firstCol, lastCol, cols)
 }
-
-val COLUMN_BAR_GAP = 6.dp
 
 @Composable
 fun ColumnIndicator(
@@ -47,26 +43,25 @@ fun ColumnIndicator(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
     val shape = RoundedCornerShape(tokens.radii.pill)
     val cols = window.cols.coerceAtLeast(1)
     val start = (window.firstCol.toFloat() / cols).coerceIn(0f, 1f)
     val span = ((window.lastCol - window.firstCol).toFloat() / cols).coerceIn(0.02f, 1f)
-    val trailer = if (window.rowsBack > 0) " · ${window.rowsBack} rows back" else ""
-
-    val spoken = "Showing columns ${window.firstCol + 1} to ${window.lastCol} of ${window.cols}" +
-        (if (window.rowsBack > 0) ", ${window.rowsBack} rows back" else "") + ". Opens the zoom sheet."
+    val spoken = "Showing columns ${window.firstCol + 1} to ${window.lastCol} of ${window.cols}. Opens the zoom sheet."
     Row(
         modifier
-            .background(tokens.color.bar, shape)
-            .edge(tokens.card, shape)
-            .action(spoken, onOpen, shape)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .fillMaxWidth()
+            .background(tokens.color.bar)
+            .edgeTop()
+            .action(spoken, onOpen)
+            .absolutePadding(left = 12.dp + safe.left, top = 5.dp, right = 12.dp + safe.right, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(
             Modifier
-                .width(48.dp)
+                .weight(1f)
                 .height(3.dp)
                 .background(tokens.color.raise, shape),
         ) {
@@ -84,7 +79,7 @@ fun ColumnIndicator(
             )
         }
         KText(
-            "col ${window.firstCol + 1}–${window.lastCol} of ${window.cols}$trailer",
+            "col ${window.firstCol + 1}–${window.lastCol} of ${window.cols}",
             tokens.type.metaSmall,
             tokens.color.mute,
         )

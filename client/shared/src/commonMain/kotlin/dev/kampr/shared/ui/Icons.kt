@@ -37,6 +37,7 @@ object KamprIcons {
     val done = icon(20f, 1.7f, d("M4 10.5 8.2 14.5 16 5.5"))
     val chevronRight = icon(14f, 1.8f, d("M4.5 2.5 9 7l-4.5 4.5"))
     val chevronLeft = icon(16f, 1.7f, d("M10 3 5 8l5 5"))
+    val chevronDown = icon(14f, 1.8f, d("M2.5 4.5 7 9l4.5-4.5"))
     val lock = icon(18f, 1.6f, Glyph.Frame(3f, 7.6f, 12f, 8f, 1.8f), d("M5.6 7.6V5.2a3.4 3.4 0 0 1 6.8 0v2.4"))
     val lockSmall = icon(14f, 1.6f, Glyph.Frame(3.4f, 6f, 7.2f, 6f, 1.4f), d("M4.8 6V4.2a2.2 2.2 0 0 1 4.4 0V6"))
     val gear = icon(
