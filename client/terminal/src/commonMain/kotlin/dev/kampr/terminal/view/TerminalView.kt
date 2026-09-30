@@ -395,8 +395,12 @@ fun TerminalView(
         // is the one thing rule 3 forbids.
         // A cell in a mosaic is landscape-shaped but wears a much shorter header, and guessing
         // from its own size is what would leave blank rows under the last line.
-        val chromeTop = LocalPaneChrome.current?.top ?: headerInsetDp(breakpoint).dp
-        val chromeBottom = max(session.keyRowHeight, with(density) { safe.bottom.toPx() })
+        val chrome = LocalPaneChrome.current
+        val chromeTop = chrome?.top ?: headerInsetDp(breakpoint).dp
+        val chromeBottom = max(
+            session.keyRowHeight,
+            with(density) { maxOf(safe.bottom, chrome?.bottom ?: 0.dp).toPx() },
+        )
         val paint = PaintRect(
             width = with(density) { maxWidth.toPx() },
             height = with(density) { maxHeight.toPx() },

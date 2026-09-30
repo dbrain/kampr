@@ -7,6 +7,7 @@ import dev.kampr.shared.model.ConnectionStatus
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.wire.ManageOp
@@ -114,7 +115,7 @@ val LocalPaneIo: ProvidableCompositionLocal<PaneIo> = staticCompositionLocalOf {
 val LocalMosaicCell = staticCompositionLocalOf { false }
 
 @Immutable
-data class PaneChrome(val top: Dp)
+data class PaneChrome(val top: Dp, val bottom: Dp = 0.dp)
 
 val LocalPaneChrome: ProvidableCompositionLocal<PaneChrome?> = staticCompositionLocalOf { null }
 

@@ -61,6 +61,11 @@ val REPLY_ROOM: Dp = 70.dp
 
 private val DESK_HEADER: Dp = 42.dp
 
+// A desktop window has no gesture handle and, since the status strip went, nothing of the app's
+// under the pane either — and a matched pane's last row lands wherever the division by the cell
+// leaves it, which on some heights is the window's edge.
+private val DESK_FOOT: Dp = 8.dp
+
 private val PHONE_HEADER: Dp = 88.dp
 
 // Why this pane will never paint, when there is nothing on its surface to read instead. The
@@ -376,7 +381,7 @@ fun PaneScreenDesktop(
     val shown = viewOn(info, view)
     val named = rememberLastKnown(pane.id, info)
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
-        CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
+        CompositionLocalProvider(LocalPaneChrome provides chrome?.let { PaneChrome(it, DESK_FOOT) }) {
             Row(Modifier.fillMaxSize()) {
                 // Split shares the width rather than pinning the terminal to a fixed one: on a
                 // wide monitor a fixed width crops the grid and leaves the other half empty.
