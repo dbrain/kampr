@@ -19,6 +19,16 @@ fun viewGrid(paint: PaintRect, cellWidth: Float, cellHeight: Float): Pair<Int, I
     (paint.contentHeight / cellHeight).toInt().coerceAtLeast(1),
 )
 
+// The view a standing hold asks for, which is the view with the keyboard down. A keyboard is typing,
+// not a smaller screen: measured with it up, a grown pane was let go and put back each time it
+// rose and grown again when it fell, seconds behind. The rectangle last seen with it down stands
+// in while the width is the same; a rotation under the keyboard has only the keyboard to add back.
+fun restingView(paint: PaintRect, down: PaintRect?, keyboard: Float): PaintRect = when {
+    keyboard <= 0f -> paint
+    down != null && down.width == paint.width -> down
+    else -> paint.copy(height = paint.height + keyboard)
+}
+
 // Paint and content are two different rectangles. The terminal paints the whole viewport so rows
 // run under the header and the key row and nothing is ever blank; the scrollable content is inset
 // by that chrome so the pinned last row settles clear of it. Fill is computed against the paint

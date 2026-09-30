@@ -202,6 +202,10 @@ private const val MATCH_TRIES = 3
 //
 // **The release the operator cannot send is the node's**, not this: a closed laptop never reaches
 // here. What this covers is the ordinary end of a view; `session.rs` covers the rest.
+private class KeyboardDown {
+    var paint: PaintRect? = null
+}
+
 @Composable
 private fun MatchTheView(
     paneId: String,
@@ -226,16 +230,22 @@ private fun MatchTheView(
     // this shape, over a pane already given back.
     val live = LocalConnectionStatus.current is ConnectionStatus.Live
     var claimed by remember(paneId) { mutableStateOf(false) }
+    var claimedAt by remember(paneId) { mutableStateOf<Pair<Int, Int>?>(null) }
     LaunchedEffect(paneId, on, grow, cols, rows, live, grow && painted) {
         if (!live || !on) {
             claimed = false
             return@LaunchedEffect
         }
         delay(MATCH_SETTLE_MS)
+        // A size that went away and came back inside the settle is a hold already at this view:
+        // the keyboard's inset and the height it takes land a frame apart, and that frame alone
+        // re-asked for the pane on every keyboard.
+        if (claimed && claimedAt == (cols to rows)) return@LaunchedEffect
         if (grow && !claimed && !short()) return@LaunchedEffect
         repeat(MATCH_TRIES) { attempt ->
             if (attempt > 0) delay(MATCH_RETRY_MS)
             claimed = io.claimMatch(paneId, cols, rows, grow)
+            claimedAt = (cols to rows).takeIf { claimed }
             if (claimed) return@LaunchedEffect
         }
     }
@@ -458,7 +468,10 @@ fun TerminalView(
         // top". Claude Code anchors its composer to the last row of whatever grid it is given, so
         // every one of those rows is a row of the record and none of it is blank tail.
         val viewCell = if (view.chosen) metrics else base
-        val (viewCols, viewRows) = viewGrid(paint, viewCell.width, viewCell.height)
+        val keyboard = with(density) { safe.ime.toPx() }
+        val keyboardDown = remember { KeyboardDown() }
+        if (keyboard <= 0f) keyboardDown.paint = paint
+        val (viewCols, viewRows) = viewGrid(restingView(paint, keyboardDown.paint, keyboard), viewCell.width, viewCell.height)
         val roomToMatch = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
         val matchAsked = view.matchView ?: io.prefs(pane.id).matchView
         // A fleet pane is a pty this node forked for a job of its own, with its geometry fixed
@@ -1103,19 +1116,6 @@ fun TerminalView(
             )
         }
 
-        LaunchedEffect(session.asked) {
-            when (session.asked) {
-                PaneTool.Review -> {
-                    session.closeKeyboard()
-                    review.enter(reviewSurface())
-                }
-                PaneTool.Attach -> if (session.attachable) {
-                    scope.launch {
-                        val picked = pickFile() ?: return@launch
-                        session.handover = Handover.Going(handoverName(picked))
-                        session.handover = handoverOf(pane, io, picked)
-                    }
-                }
         // Over the history the reader has scrolled into, never counted in the stage: room made for
         // it would move the rows it counts, and the chip would flip itself at a row back.
         val back = rowsBack(view, metrics.height)
@@ -1133,6 +1133,19 @@ fun TerminalView(
             )
         }
 
+        LaunchedEffect(session.asked) {
+            when (session.asked) {
+                PaneTool.Review -> {
+                    session.closeKeyboard()
+                    review.enter(reviewSurface())
+                }
+                PaneTool.Attach -> if (session.attachable) {
+                    scope.launch {
+                        val picked = pickFile() ?: return@launch
+                        session.handover = Handover.Going(handoverName(picked))
+                        session.handover = handoverOf(pane, io, picked)
+                    }
+                }
                 null -> return@LaunchedEffect
             }
             session.asked = null

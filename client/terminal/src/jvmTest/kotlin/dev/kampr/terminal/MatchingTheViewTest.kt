@@ -163,13 +163,14 @@ private fun ComposeUiTest.terminal(
     session: PaneSession? = null,
     status: () -> ConnectionStatus = { ConnectionStatus.Live("full") },
     header: Boolean = false,
+    safe: () -> SafeArea = { Phone.BARS },
     shown: () -> Boolean = { true },
 ) {
     setContent {
         CompositionLocalProvider(
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides io,
-            LocalSafeArea provides Phone.BARS,
+            LocalSafeArea provides safe(),
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
             LocalConnectionStatus provides status(),
         ) {
@@ -399,6 +400,32 @@ class MatchingTheViewTest {
         assertEquals(1, io.claims.size, "the pane arriving grown asked again: ${io.claims}")
         assertTrue(io.releases.isEmpty(), "the pane arriving grown let its own hold go: ${io.releases}")
         assertTrue(saysHeld(), "the header stopped saying the grown pane is held")
+    }
+
+    // The operator: "keyboard up to type, finish typing and close it, now claude sees the top of
+    // the terminal as part way down the terminal view until it realises and resizes after some
+    // amount of time". The keyboard took rows off the view, the phone asked to grow the pane to
+    // the shorter view, the node found that no taller than the pane was found at and let the hold
+    // go — putting the pane back — and the keyboard going down grew it again seconds later. The
+    // keyboard is not the view getting smaller; nothing about the pane moves for it.
+    @Test
+    fun theKeyboardComingAndGoingNeverMovesAGrownPane() = runComposeUiTest {
+        val io = SessionIo(growsPanes = true)
+        val pane = grid(cols = 300, rows = 10)
+        var bars by mutableStateOf(Phone.BARS)
+        terminal(pane, io, PHONE, PaneSession(Phone.PANE), header = true, safe = { bars })
+        quiet(1_000)
+        val (_, _, rows) = assertNotNull(io.claims.singleOrNull(), "nothing was grown: ${io.claims}")
+        pane.applyReset(anchoredToTheLastRow(300, rows))
+        waitForIdle()
+
+        bars = Phone.KEYBOARD
+        quiet(1_500)
+        bars = Phone.BARS
+        quiet(1_500)
+
+        assertEquals(1, io.claims.size, "the keyboard asked for the pane again: ${io.claims}")
+        assertTrue(io.releases.isEmpty(), "the keyboard let the hold go: ${io.releases}")
     }
 
     // Leaving the terminal for the conversation is this composable leaving the composition, which
