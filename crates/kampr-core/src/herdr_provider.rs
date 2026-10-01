@@ -1474,6 +1474,7 @@ async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) ->
         }
     });
     let mut watching = inner.watching.subscribe();
+    let mut resized = inner.resized.subscribe();
     let ended = loop {
         let live = tokio::select! {
             event = rx.recv() => {
@@ -1489,6 +1490,10 @@ async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) ->
             }
             // The first watcher arriving must not have to wait out the slow sweep it interrupted.
             _ = watching.changed() => true,
+            // A `pane.size` moved a PTY, which herdr announces nowhere (#68). The width probe
+            // wakes on the same bump, but a resize that leaves the width alone is rows only, and
+            // only a fresh snapshot carries those to a running stream (#573).
+            _ = resized.changed() => true,
             _ = tokio::time::sleep(inner.sweep()) => true,
         };
         if !live || inner.refresh().await.is_err() {

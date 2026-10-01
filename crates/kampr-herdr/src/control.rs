@@ -22,6 +22,9 @@ const RELEASE_GRACE: Duration = Duration::from_secs(3);
 /// forgotten hold is a nuisance rather than a wedge.
 pub const HOLD_LIMIT: Duration = Duration::from_secs(600);
 
+const LANDS_WITHIN: Duration = Duration::from_millis(500);
+const LANDS_POLL: Duration = Duration::from_millis(5);
+
 /// A `herdr terminal session control` child, which is the only instrument that can change a pane's
 /// PTY size — `stty` inside the pane moves the kernel winsize only and herdr goes on wrapping at
 /// its own grid width (#221), and nothing on the socket API sets a column count at all.
@@ -64,6 +67,7 @@ impl Controller {
             })?;
 
         let stdin = child.stdin.take().context("control child had no stdin")?;
+        lands(&crate::Herdr::new(socket), pane_id, rows).await;
         Ok(Self { child, stdin })
     }
 
@@ -99,6 +103,29 @@ impl Controller {
                 }
             }
         }
+    }
+}
+
+/// Waits for the PTY to read back the rows a claim asked for, so whoever is told about the resize
+/// next reads the pane at its new size. A spawn returning is only `exec` having worked, and the
+/// size lands a few milliseconds later; a snapshot taken in between is the old one, and nothing
+/// else announces the move (#68), so a stream that read it waited for the next sweep (#573). Not
+/// landing is not an error: every caller measures what stuck for itself.
+async fn lands(herdr: &crate::Herdr, pane_id: &str, rows: u32) {
+    let deadline = tokio::time::Instant::now() + LANDS_WITHIN;
+    while tokio::time::Instant::now() < deadline {
+        let reply = herdr
+            .call::<crate::model::PaneReply>("pane.get", serde_json::json!({ "pane_id": pane_id }))
+            .await;
+        if let Ok(reply) = reply
+            && reply
+                .pane
+                .scroll
+                .is_some_and(|s| s.viewport_rows == u64::from(rows))
+        {
+            return;
+        }
+        tokio::time::sleep(LANDS_POLL).await;
     }
 }
 

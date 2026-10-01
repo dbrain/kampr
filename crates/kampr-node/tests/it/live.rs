@@ -3741,6 +3741,71 @@ async fn one_resize_never_brings_the_stream_back_at_a_row_count_it_has_already_l
     );
 }
 
+/// The operator: *"there's various levels of delay before the resize happens"*. A phone's keyboard
+/// going down grows only the rows, and nothing in herdr announces a PTY move (#68): the width
+/// probe is woken by `pane.size` but finds the width it already has, so the stream went on at the
+/// old rows until the watched sweep — anywhere up to three seconds later — noticed the new ones.
+///
+/// Three resizes, because one could land just before a sweep by luck and pass with the defect
+/// restored; three in a row under the bound cannot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resize_that_only_moves_the_rows_reaches_the_stream_without_waiting_for_the_sweep() {
+    const PROMPTLY: Duration = Duration::from_millis(1000);
+    let h = harness!("rowsonly");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    a_pane_at_its_shell(&h._session, &local).await;
+
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "scrollback": false }),
+    )
+    .await;
+    let first = until(&mut socket, "grid.reset", 20).await;
+    let settled = drain_reset_sizes(&mut socket, &pane, Duration::from_secs(8)).await;
+    let (cols, was) = settled.last().copied().unwrap_or((
+        first["cols"].as_u64().expect("the reset's cols") as u16,
+        first["rows"].as_u64().expect("the reset's rows") as u16,
+    ));
+
+    for wanted in [was + 6, was + 2, was + 9] {
+        send(
+            &mut socket,
+            json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": cols, "rows": wanted, "mode": "match" }),
+        )
+        .await;
+        let asked = tokio::time::Instant::now();
+        let mut seen = Vec::new();
+        let landed = loop {
+            let left =
+                (asked + Duration::from_secs(10)).saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                break None;
+            }
+            let Some(message) = recv(&mut socket, left).await else {
+                continue;
+            };
+            if message["t"] == "grid.reset" && message["pane"] == pane {
+                let rows = message["rows"].as_u64().unwrap_or(0) as u16;
+                seen.push(rows);
+                if rows == wanted {
+                    break Some(asked.elapsed());
+                }
+            }
+        };
+        let landed =
+            landed.unwrap_or_else(|| panic!("the stream never reached {wanted} rows; resets {seen:?}"));
+        assert!(
+            landed < PROMPTLY,
+            "a resize to {cols}x{wanted} reached the stream {landed:?} after it was asked for — \
+             the rows waited for the sweep rather than following the resize"
+        );
+    }
+}
+
 async fn drain_resets(socket: &mut Socket, pane: &str, window: Duration) -> Vec<u16> {
     let deadline = tokio::time::Instant::now() + window;
     let mut widths = Vec::new();
