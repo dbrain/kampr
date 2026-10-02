@@ -141,6 +141,8 @@ fun SetupScreen(
     onDevices: () -> Unit,
     onAppearance: () -> Unit,
     onNotifications: () -> Unit,
+    confirmRisky: Boolean = false,
+    onConfirmRisky: ((Boolean) -> Unit)? = null,
     onPasskeys: (() -> Unit)? = null,
     onPasskeySignIn: ((Endpoint) -> Unit)? = null,
     onInstall: (() -> Unit)? = null,
@@ -185,7 +187,7 @@ fun SetupScreen(
                         }
                         Column(Modifier.width(column)) {
                             MachinesBlock(nodes)
-                            DeviceBlock(status, security, onDevices, onAppearance, onNotifications)
+                            DeviceBlock(status, security, onDevices, onAppearance, onNotifications, confirmRisky, onConfirmRisky)
                         }
                     }
                 } else {
@@ -197,7 +199,7 @@ fun SetupScreen(
                     )
                     LadderBlock(security, onPasskeys, onInstall)
                     MachinesBlock(nodes)
-                    DeviceBlock(status, security, onDevices, onAppearance, onNotifications)
+                    DeviceBlock(status, security, onDevices, onAppearance, onNotifications, confirmRisky, onConfirmRisky)
                 }
                 Box(Modifier.size(18.dp))
             }
@@ -424,6 +426,8 @@ private fun DeviceBlock(
     onDevices: () -> Unit,
     onAppearance: () -> Unit,
     onNotifications: () -> Unit,
+    confirmRisky: Boolean,
+    onConfirmRisky: ((Boolean) -> Unit)?,
 ) {
     val tokens = Kampr.tokens
     Block(top = 20.dp) {
@@ -479,6 +483,18 @@ private fun DeviceBlock(
                         )
                     }
                     IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
+                }
+            }
+        }
+        onConfirmRisky?.let { onChange ->
+            Surface(Modifier.fillMaxWidth()) {
+                Box(Modifier.padding(horizontal = 15.dp, vertical = 11.dp)) {
+                    Toggle(
+                        on = confirmRisky,
+                        title = "Check destructive commands",
+                        detail = "Holds Enter on rm -rf, sudo, force-push in shell panes. A pane's zoom sheet can override it.",
+                        onChange = onChange,
+                    )
                 }
             }
         }

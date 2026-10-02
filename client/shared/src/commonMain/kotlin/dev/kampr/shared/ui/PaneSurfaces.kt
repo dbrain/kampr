@@ -49,6 +49,10 @@ interface PaneIo {
 
     val readOnly: Boolean get() = false
 
+    // The device's own setting for the destructive-command check; a pane's `confirm` pref
+    // overrides it either way.
+    val confirmsByDefault: Boolean get() = false
+
     // How long a keystroke into this pane took to come back as a moved caret.
     fun echoed(paneId: String, ms: Long) = Unit
 

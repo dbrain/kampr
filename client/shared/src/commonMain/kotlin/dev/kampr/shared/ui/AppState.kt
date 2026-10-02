@@ -125,6 +125,7 @@ private const val KEY_DEVICE = "device"
 private const val KEY_RECENT = "endpoints"
 private const val KEY_AGENT_ARGS = "agent.args."
 private const val KEY_RAIL = "sidebar.collapsed"
+private const val KEY_CONFIRM = "confirm.risky"
 
 private const val RECENT_ADDRESSES = 5
 
@@ -183,6 +184,14 @@ class AppState(
     // operator who collapsed the sidebar to read a pane has not asked for it back on every refresh.
     var sidebarCollapsed: Boolean by mutableStateOf(prefs.get(KEY_RAIL) == "1")
         private set
+
+    var confirmRisky: Boolean by mutableStateOf(prefs.get(KEY_CONFIRM) == "1")
+        private set
+
+    fun confirmRisky(on: Boolean) {
+        confirmRisky = on
+        prefs.set(KEY_CONFIRM, if (on) "1" else null)
+    }
 
     fun collapseSidebar(collapsed: Boolean) {
         sidebarCollapsed = collapsed

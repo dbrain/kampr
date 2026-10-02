@@ -29,7 +29,7 @@ class SubmitGuard(private val pane: PaneState, private val io: PaneIo, val state
     private val rows = SurfaceRows(pane)
     private val logical = LogicalText(rows)
 
-    fun wanted(): Boolean = state.local ?: io.prefs(pane.id).confirm
+    fun wanted(): Boolean = state.local ?: io.prefs(pane.id).confirm ?: io.confirmsByDefault
 
     // An agent pane is typed *at*, not driven: `rm -rf` in a Claude prompt box is a description of
     // a command, and confirming it there would make the guard infuriating in the pane an operator

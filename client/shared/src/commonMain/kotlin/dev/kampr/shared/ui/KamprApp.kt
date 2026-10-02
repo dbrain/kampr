@@ -191,11 +191,12 @@ internal class AuthSurface(
     val onDismissFailure: () -> Unit,
 )
 
-private class AppPaneIo(private val state: AppState) : PaneIo {
+internal class AppPaneIo(private val state: AppState) : PaneIo {
     override fun send(msg: ClientMsg) = state.connection.send(msg)
     override fun prefs(paneId: String) = state.store.prefsFor(paneId)
     override fun info(paneId: String) = state.store.paneInfo(paneId)
     override val readOnly: Boolean get() = state.store.readOnly
+    override val confirmsByDefault: Boolean get() = state.confirmRisky
     override fun echoed(paneId: String, ms: Long) = state.store.echoed(paneId, ms)
     override val searchesTranscript: Boolean get() = state.store.hello.value?.caps?.convoFind == true
     override fun show(view: PaneView) = state.setPaneView(view)
@@ -369,6 +370,8 @@ internal fun AppScaffold(
                                 onDevices = { state.go(Screen.Devices) },
                                 onAppearance = { state.go(Screen.Appearance) },
                                 onNotifications = { state.go(Screen.Notifications) },
+                                confirmRisky = state.confirmRisky,
+                                onConfirmRisky = state::confirmRisky,
                                 onPasskeys = passkeys,
                                 onPasskeySignIn = passkeySignIn,
                                 onInstall = install,
@@ -428,6 +431,8 @@ internal fun AppScaffold(
                             onDevices = { state.go(Screen.Devices) },
                             onAppearance = { state.go(Screen.Appearance) },
                             onNotifications = { state.go(Screen.Notifications) },
+                            confirmRisky = state.confirmRisky,
+                            onConfirmRisky = state::confirmRisky,
                             onPasskeys = passkeys,
                             onPasskeySignIn = passkeySignIn,
                             onInstall = install,
@@ -486,6 +491,8 @@ internal fun AppScaffold(
                             onDevices = { state.go(Screen.Devices) },
                             onAppearance = { state.go(Screen.Appearance) },
                             onNotifications = { state.go(Screen.Notifications) },
+                            confirmRisky = state.confirmRisky,
+                            onConfirmRisky = state::confirmRisky,
                             onPasskeys = passkeys,
                             onPasskeySignIn = passkeySignIn,
                             onInstall = install,

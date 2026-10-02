@@ -15,6 +15,10 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.filterToOne
@@ -69,7 +73,7 @@ private class GridIo(
     val sent = mutableListOf<ClientMsg>()
     var shown: dev.kampr.shared.ui.PaneView? = null
     override fun send(msg: ClientMsg) { sent += msg }
-    override fun prefs(paneId: String) = PanePrefs()
+    override fun prefs(paneId: String) = PanePrefs(mapOf("confirm" to "on"))
     override fun info(paneId: String) = PaneInfo(
         id = GRID_PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
         cwd = "~/dev/kampr", agent = if (conversation || converses) "claude" else null,
@@ -221,6 +225,23 @@ class GridAccessibilityTest {
             onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty(),
             "the confirm sheet opened without taking focus",
         )
+    }
+
+    @Test
+    fun theDestructiveGuardIsAnsweredFromTheKeyboard() {
+        for ((key, expected) in listOf(Key.Y to "run", Key.N to "edit", Key.Escape to "edit", Key.Enter to null)) {
+            runComposeUiTest {
+                val io = GridIo(conversation = false)
+                val session = PaneSession(GRID_PANE)
+                InputSink(GRID_PANE, io, session.latches, SubmitGuard(gridPane(), io, session.confirm)).raw(Esc.ENTER)
+                val held = requireNotNull(session.confirm.held)
+                var answer: String? = null
+                setContent { Themed(io) { ConfirmSheet(held, { answer = "run" }, { answer = "edit" }, { answer = "mute" }) } }
+                waitUntil { onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty() }
+                onAllNodes(isFocused()).onFirst().performKeyInput { pressKey(key) }
+                assertEquals(expected, answer, "$key on the confirm sheet")
+            }
+        }
     }
 }
 

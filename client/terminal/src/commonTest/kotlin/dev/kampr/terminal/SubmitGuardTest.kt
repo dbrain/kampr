@@ -25,6 +25,7 @@ private const val PANE = "01JNODE.../w3:p1"
 private class GuardIo(
     private val agent: String? = null,
     private val prefs: PanePrefs = PanePrefs(),
+    override val confirmsByDefault: Boolean = false,
 ) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     override fun send(msg: ClientMsg) {
@@ -52,12 +53,15 @@ private fun screen(cols: Int, vararg lines: String): PaneState {
     return pane
 }
 
+private val OPTED_IN = PanePrefs(mapOf("confirm" to "on"))
+
 private fun rig(
     pane: PaneState,
     agent: String? = null,
-    prefs: PanePrefs = PanePrefs(),
+    prefs: PanePrefs = OPTED_IN,
+    byDefault: Boolean = false,
 ): Triple<GuardIo, InputSink, SubmitGuard> {
-    val io = GuardIo(agent, prefs)
+    val io = GuardIo(agent, prefs, byDefault)
     val session = PaneSession(PANE)
     val guard = SubmitGuard(pane, io, session.confirm)
     return Triple(io, InputSink(PANE, io, Latches(), guard), guard)
@@ -129,13 +133,24 @@ class SubmitGuardTest {
         assertEquals(listOf(Esc.ENTER), io.text)
     }
 
+    // The device's setting is the default and a pane's own answer overrides it either way, so a
+    // pane nobody has touched follows the device and nobody has to opt every pane in by hand.
     @Test
-    fun thePaneCanTurnItOffForItself() {
-        val pane = screen(80, "\$ rm -rf build")
-        val (io, sink, guard) = rig(pane, prefs = PanePrefs(mapOf("confirm" to "off")))
-        sink.raw(Esc.ENTER)
-        assertNull(guard.state.held)
-        assertEquals(listOf(Esc.ENTER), io.text)
+    fun aPaneFollowsTheDeviceUnlessItHasItsOwnAnswer() {
+        val table = listOf(
+            Triple(false, PanePrefs(), false),
+            Triple(true, PanePrefs(), true),
+            Triple(true, PanePrefs(mapOf("confirm" to "off")), false),
+            Triple(false, PanePrefs(mapOf("confirm" to "on")), true),
+        )
+        for ((byDefault, prefs, holds) in table) {
+            val pane = screen(80, "\$ rm -rf build")
+            val (io, sink, guard) = rig(pane, prefs = prefs, byDefault = byDefault)
+            sink.raw(Esc.ENTER)
+            val what = "device ${if (byDefault) "on" else "off"}, pane ${prefs.values["confirm"] ?: "unset"}"
+            assertEquals(holds, guard.state.held != null, what)
+            assertEquals(if (holds) emptyList() else listOf(Esc.ENTER), io.text, what)
+        }
     }
 
     // A multi-line paste executes line by line in a shell that ignores the bracketing, so the

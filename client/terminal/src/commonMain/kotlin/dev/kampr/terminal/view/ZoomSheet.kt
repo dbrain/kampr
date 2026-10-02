@@ -33,6 +33,7 @@ import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.Divider
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
@@ -247,7 +248,7 @@ fun ZoomSheet(
                         Toggle(
                             on = confirmRisky,
                             title = "Check destructive commands",
-                            detail = "Holds Enter on rm -rf, sudo, force-push. Shell panes only.",
+                            detail = "This pane only, over the setting for this device. Holds Enter on rm -rf, sudo, force-push.",
                             onChange = onConfirmRisky,
                         )
                         KText(
@@ -316,49 +317,5 @@ private fun Preset(
     ) {
         KText(title, tokens.type.pill, if (active) tokens.color.accent else tokens.color.text)
         KText(zoomLabel(value), tokens.type.metaSmall, if (active) tokens.color.accent else tokens.color.mute)
-    }
-}
-
-@Composable
-internal fun Toggle(on: Boolean, title: String, detail: String, onChange: (Boolean) -> Unit) {
-    val tokens = Kampr.tokens
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .touchable()
-            .action(
-                "$title. $detail",
-                { onChange(!on) },
-                role = androidx.compose.ui.semantics.Role.Switch,
-                selected = on,
-                state = if (on) "on" else "off",
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(11.dp),
-    ) {
-        Box(
-            Modifier
-                .width(40.dp)
-                .height(23.dp)
-                .background(
-                    if (on) tokens.color.accent else tokens.color.raise,
-                    RoundedCornerShape(tokens.radii.pill),
-                )
-                .padding(2.dp),
-            contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,
-        ) {
-            Box(
-                Modifier
-                    .size(19.dp)
-                    .background(
-                        if (on) tokens.color.onAccent else tokens.color.dim,
-                        RoundedCornerShape(tokens.radii.pill),
-                    ),
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            KText(title, tokens.type.cardTitle, tokens.color.text)
-            KText(detail, tokens.type.captionSmall, tokens.color.mute)
-        }
     }
 }

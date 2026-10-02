@@ -455,8 +455,10 @@ It is refused to a read-only device by the same gate as every other `manage` op,
 below 80x24, it releases on its own deadline, and the held pane's own header says so while a hold is live —
 but nothing stops a full-role device doing it, because a full-role device is equivalent to a shell.
 
-**A destructive-command confirmation does not exist.** It is on the roadmap and is not built. Do not
-plan around it.
+**The destructive-command confirmation is off by default.** It exists (`SubmitGuard.kt`) as a
+mistap guard on shell panes: one switch per device in Settings, which a pane's zoom sheet can
+override either way, and with neither set `rm -rf` goes straight through. It was never a control: anyone who can
+type into a pane can already run anything in it. Do not plan around it.
 
 ---
 

@@ -34,7 +34,7 @@ private const val PANE = "01JKAMPRNODE0000000000000/w3:p1"
 
 private object ArtboardIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit
-    override fun prefs(paneId: String) = PanePrefs()
+    override fun prefs(paneId: String) = PanePrefs(mapOf("confirm" to "on"))
     override fun info(paneId: String) = PaneInfo(
         id = PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
         cwd = "~/dev/kampr", agent = null, agentStatus = "idle", cols = 62, rows = 24,

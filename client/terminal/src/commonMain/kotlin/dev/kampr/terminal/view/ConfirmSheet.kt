@@ -14,6 +14,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
@@ -48,6 +53,16 @@ fun ConfirmSheet(
         modifier
             .fillMaxWidth()
             .modal(onEdit)
+            // Not Enter: a second Enter is exactly the mistap this sheet exists to catch.
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.Y -> onRun()
+                    Key.N -> onEdit()
+                    else -> return@onKeyEvent false
+                }
+                true
+            }
             .announce(
                 "$heading. ${held.reason}. The command is: ${held.command}",
                 urgent = true,
@@ -93,11 +108,11 @@ fun ConfirmSheet(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     QuietAction(
-                        "Back to edit", onEdit, Modifier.weight(1f), vertical = 13.dp,
+                        "Back to edit  n", onEdit, Modifier.weight(1f), vertical = 13.dp,
                         label = "Back to edit — do not run it",
                     )
                     PrimaryAction(
-                        "Run it", onRun, Modifier.weight(1f), vertical = 13.dp,
+                        "Run it  y", onRun, Modifier.weight(1f), vertical = 13.dp,
                         label = "Run ${held.command}",
                     )
                 }

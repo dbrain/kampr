@@ -602,7 +602,7 @@ sealed interface ServerMsg {
 data class PanePrefs(val values: Map<String, String> = emptyMap()) {
     val zoom: Float? get() = values["zoom"]?.toFloatOrNull()
     val view: String? get() = values["view"]
-    val confirm: Boolean get() = values["confirm"] != "off"
+    val confirm: Boolean? get() = values["confirm"]?.let { it == "on" }
 
     // Three states, and the third is the point: `null` means the operator has never said, so the
     // viewport decides (ADR 0013). A default that overrode an answer already given would be the
