@@ -10,10 +10,14 @@ package dev.kampr.terminal.input
 //
 // What does not change: ctrl+C without shift is still `^C`, which is the whole point of a terminal,
 // and every other `ctrl+shift+<letter>` still produces its own control byte, which is what a
-// terminal does with them. Only C and V are taken.
-enum class PaneChord { Copy, Paste }
+// terminal does with them.
+//
+// ctrl+K is the exception the other way round: it opens the palette, and readline's kill-line
+// moves to ctrl+shift+K, which still sends `^K`.
+enum class PaneChord { Copy, Paste, Palette }
 
 fun paneChord(key: Char, ctrl: Boolean, meta: Boolean, shift: Boolean): PaneChord? {
+    if (key.lowercaseChar() == 'k') return if ((ctrl || meta) && !shift) PaneChord.Palette else null
     val wanted = when (key.lowercaseChar()) {
         'c' -> PaneChord.Copy
         'v' -> PaneChord.Paste

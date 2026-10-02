@@ -81,6 +81,7 @@ import dev.kampr.terminal.file.handoverAfter
 import dev.kampr.terminal.file.handoverName
 import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
+import dev.kampr.shared.ui.LocalPalette
 import dev.kampr.terminal.input.ImeDismissal
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneChord
@@ -765,6 +766,8 @@ fun TerminalView(
             view.selection = null
         }
 
+        val openPalette = LocalPalette.current
+
         // Bracketed by `InputSink.paste`, so a multi-line paste reaches a shell as one block rather
         // than executing line by line (#9), and inspected by the guard on the way past like
         // anything else that arrives carrying its own Enter. The selection goes first: the read is
@@ -1069,6 +1072,7 @@ fun TerminalView(
                 when (chord) {
                     PaneChord.Copy -> copySelection()
                     PaneChord.Paste -> pasteIntoPane?.invoke()
+                    PaneChord.Palette -> openPalette()
                 }
             },
             modifier = Modifier.align(Alignment.BottomStart).size(1.dp),

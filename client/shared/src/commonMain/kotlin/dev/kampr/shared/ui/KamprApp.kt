@@ -171,7 +171,25 @@ fun KamprApp(
                 LocalFleet provides remember(state) { { state.go(Screen.Fleet) } },
                 LocalKeystrokeMs provides state.store.keystrokeMs.collectAsState().value,
             ) {
-                AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
+                PaletteHost(
+                    items = {
+                        paletteItems(
+                            state.store.herd.value.withoutReadDone(state.seenDone),
+                            mosaic = mosaic.available,
+                            canCreate = state.store.canManage,
+                        )
+                    },
+                    onPick = { target ->
+                        when (target) {
+                            is PaletteTarget.OpenPane -> state.openPane(target.paneId)
+                            is PaletteTarget.Go -> state.go(target.screen)
+                            is PaletteTarget.NewOn -> state.openSheet(Sheet.New(target.nodeId, null))
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    AppScaffold(state, breakpoint, surfaces, mosaic, now, auth, connectionStatus, deepLink)
+                }
             }
         }
     }

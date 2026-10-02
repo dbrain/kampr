@@ -550,6 +550,33 @@ class BrowserInputTest {
         }
     }
 
+    // ctrl+K opens the palette, and the input it would have reached is a DOM element Compose never
+    // sees — so the browser half has to hand it back rather than queue `^K`, and ctrl+shift+K is
+    // where `^K` went.
+    @Test
+    fun ctrlKIsHandedBackForThePaletteAndCtrlShiftKIsStillKillLine() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val chords = mutableListOf<PaneChord>()
+        val typed = StringBuilder()
+        deliverChordsTo { chords += it }
+        deliverInputTo { typed.append(it) }
+        try {
+            assertFalse(chordKey("k", ctrl = true, meta = false, shift = false), "ctrl+K left the browser its default")
+            assertEquals(listOf(PaneChord.Palette), chords, "ctrl+K reached nothing")
+            assertEquals("", typed.toString(), "ctrl+K was sent to the pane as bytes")
+            chords.clear()
+            chordKey("K", ctrl = true, meta = false, shift = true)
+            assertEquals("\u000b", typed.toString(), "ctrl+shift+K stopped sending ^K")
+            assertTrue(chords.isEmpty(), "ctrl+shift+K was taken for the palette")
+        } finally {
+            deliverChordsTo(null)
+            deliverInputTo(null)
+            focusInput(false)
+        }
+    }
+
     // And what must not change with it: an unshifted ctrl chord is still the control byte, which is
     // the whole of a terminal, and a shifted one that is not C or V still is too.
     @Test

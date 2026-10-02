@@ -45,6 +45,8 @@ private fun ComposeUiTest.editable(): String =
 
 private fun KeyInjectionScope.ctrl(key: Key) = withKeyDown(Key.CtrlLeft) { pressKey(key) }
 
+private fun KeyInjectionScope.ctrlShift(key: Key) = withKeyDown(Key.CtrlLeft) { withKeyDown(Key.ShiftLeft) { pressKey(key) } }
+
 private fun KeyInjectionScope.left(times: Int) = repeat(times) { pressKey(Key.DirectionLeft) }
 
 // The caret is not readable off the semantics of a `BasicText`, so every motion is proved by
@@ -63,7 +65,8 @@ private val CASES = listOf(
     Case("ctrl+E", "one two", { ctrl(Key.A); ctrl(Key.E) }, then = "|", expect = "one two|"),
     Case("ctrl+U on the whole line", "one two", { ctrl(Key.U) }, expect = ""),
     Case("ctrl+U behind the caret", "one two", { left(3); ctrl(Key.U) }, expect = "two"),
-    Case("ctrl+K", "one two", { left(3); ctrl(Key.K) }, expect = "one "),
+    Case("ctrl+shift+K", "one two", { left(3); ctrlShift(Key.K) }, expect = "one "),
+    Case("ctrl+K is the palette's", "one two", { left(3); ctrl(Key.K) }, expect = "one two"),
     Case("ctrl+W", "one two", { ctrl(Key.W) }, expect = "one "),
     Case("ctrl+W twice", "one two", { ctrl(Key.W); ctrl(Key.W) }, expect = ""),
 )

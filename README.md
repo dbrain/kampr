@@ -423,6 +423,15 @@ installed the app.
 
 Installed as a Herdr plugin, the same actions appear in Herdr's own workspace menu (`herdr-plugin.toml`).
 
+### The app, from a keyboard
+
+`ctrl+K` (`⌘K` on a Mac) opens a search over every pane on every host and the app's own places —
+a host name, a workspace, a tab, part of a path, an agent or a running command all find it, fuzzily.
+Results are numbered: press the digit to go there, or use the arrows and enter. With nothing typed
+it is the sidebar, numbered, which is the way out of a terminal without the mouse. Because the
+palette takes `ctrl+K`, readline's kill-to-end moved to `ctrl+shift+K`, in the terminal and in the
+reply box alike.
+
 ### The terminal client
 
 `kampr` with no arguments opens the herd in the terminal you typed it in — herdr's layout and

@@ -757,11 +757,11 @@ class PaneScrollTest {
     }
 
     // The whole table, because the defect was one row of it: `ctrl+shift+C` lowercased to `c` and
-    // went to the pane as `^C`, so copying interrupted the process, and `⌘C` did the same. Only C
-    // and V are taken, and only with shift or the command key — everything else is still a
-    // terminal's own control byte.
+    // went to the pane as `^C`, so copying interrupted the process, and `⌘C` did the same. C and V
+    // are taken only with shift or the command key, K only without shift — everything else is
+    // still a terminal's own control byte.
     @Test
-    fun onlyTheCopyAndPasteChordsAreTakenOffThePane() {
+    fun onlyTheCopyPasteAndPaletteChordsAreTakenOffThePane() {
         val table = listOf(
             Triple('c', "ctrl", null),
             Triple('v', "ctrl", null),
@@ -776,6 +776,11 @@ class PaneScrollTest {
             Triple('t', "meta", null),
             Triple('c', "", null),
             Triple('c', "shift", null),
+            Triple('k', "ctrl", PaneChord.Palette),
+            Triple('K', "ctrl", PaneChord.Palette),
+            Triple('k', "meta", PaneChord.Palette),
+            Triple('k', "ctrl+shift", null),
+            Triple('k', "", null),
         )
         for ((key, mods, wanted) in table) {
             val got = paneChord(

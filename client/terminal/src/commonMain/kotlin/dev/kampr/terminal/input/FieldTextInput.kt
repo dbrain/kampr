@@ -168,7 +168,7 @@ private fun emitDiff(previous: CharSequence, current: CharSequence, sink: InputS
     if (current.length > shared) sink.type(current.subSequence(shared, current.length).toString())
 }
 
-private val chordLetters = mapOf(Key.C to 'c', Key.V to 'v')
+private val chordLetters = mapOf(Key.C to 'c', Key.V to 'v', Key.K to 'k')
 
 private val functionKeys = listOf(
     Key.F1, Key.F2, Key.F3, Key.F4, Key.F5, Key.F6,

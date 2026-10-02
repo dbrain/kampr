@@ -22,14 +22,15 @@ enum class LineKey { Start, End, KillToStart, KillToEnd, KillWord }
 
 // The modifiers are read strictly: a chord carrying alt or meta is somebody else's, and shift with
 // one of these is not a readline key at all — ctrl+shift+Z is the platform's redo and taking it
-// here would swallow it.
+// here would swallow it. Kill-to-end is the one that wants shift, because ctrl+K is the palette
+// everywhere in the app, the terminal included, and ctrl+shift+K is where both moved it.
 fun lineKeyFor(event: KeyEvent): LineKey? {
-    if (!event.isCtrlPressed || event.isAltPressed || event.isMetaPressed || event.isShiftPressed) return null
+    if (!event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return null
+    if (event.isShiftPressed) return if (event.key == Key.K) LineKey.KillToEnd else null
     return when (event.key) {
         Key.A -> LineKey.Start
         Key.E -> LineKey.End
         Key.U -> LineKey.KillToStart
-        Key.K -> LineKey.KillToEnd
         Key.W -> LineKey.KillWord
         else -> null
     }

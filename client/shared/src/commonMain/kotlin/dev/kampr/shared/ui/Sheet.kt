@@ -45,7 +45,7 @@ private const val SCRIM_ALPHA = 0.72f
 
 // The requester is refused until the sheet is placed and the focus owner is live, and how many
 // frames that takes is not something a caller can know.
-private const val FOCUS_FRAMES = 8
+internal const val FOCUS_FRAMES = 8
 
 // The scrim is the theme's own ground at partial opacity rather than a colour of its own, so it
 // stays right on a black brutalist ground and on a light one.
