@@ -37,6 +37,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 
@@ -65,7 +66,10 @@ fun PaletteHost(
             true
         },
     ) {
-        CompositionLocalProvider(LocalPalette provides { open = true }) { content() }
+        CompositionLocalProvider(
+            LocalPalette provides { open = true },
+            LocalCovered provides (open || LocalCovered.current),
+        ) { content() }
         if (open) {
             CommandPalette(
                 items = remember { items() },
@@ -74,6 +78,36 @@ fun PaletteHost(
             )
         }
     }
+}
+
+private const val SEARCH_LABEL = "Search every pane and place"
+
+// Shaped like the field it opens, so it reads as search on a phone where nobody presses ctrl+K.
+@Composable
+fun PaletteBar(hint: String?, modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    val open = LocalPalette.current
+    val shape = RoundedCornerShape(tokens.radii.sm)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(tokens.color.surface2, shape)
+            .edge(tokens.card, shape)
+            .touchable(LANDSCAPE_TOUCH)
+            .action(SEARCH_LABEL, open, shape)
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        IconGlyph(KamprIcons.search, 13.dp, tokens.color.mute)
+        KText("Search", tokens.type.captionSmall, tokens.color.mute, Modifier.weight(1f))
+        if (hint != null) KText(hint, tokens.type.micro, tokens.color.mute)
+    }
+}
+
+@Composable
+fun PaletteAction(target: Dp = TOUCH, modifier: Modifier = Modifier) {
+    GlyphAction(KamprIcons.search, SEARCH_LABEL, Kampr.tokens.color.dim, target, modifier, onClick = LocalPalette.current)
 }
 
 @Composable

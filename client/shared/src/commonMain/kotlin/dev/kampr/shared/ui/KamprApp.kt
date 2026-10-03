@@ -170,6 +170,7 @@ fun KamprApp(
                 },
                 LocalFleet provides remember(state) { { state.go(Screen.Fleet) } },
                 LocalKeystrokeMs provides state.store.keystrokeMs.collectAsState().value,
+                LocalCovered provides (state.sheet != null),
             ) {
                 PaletteHost(
                     items = {

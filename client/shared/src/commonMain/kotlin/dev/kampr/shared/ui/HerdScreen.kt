@@ -66,6 +66,7 @@ fun HerdPortrait(
                     NewAction()
                 }
             }
+            PaletteBar(hint = null, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
             if (herd.stale && groups.isNotEmpty()) {
                 StaleHerdNote(connection, Modifier.padding(start = 20.dp, end = 20.dp, bottom = 11.dp))
             }
@@ -137,6 +138,7 @@ fun HerdLandscape(
                 MosaicAction(LANDSCAPE_TOUCH)
                 FleetAction(LANDSCAPE_TOUCH)
                 NewAction(target = LANDSCAPE_TOUCH)
+                PaletteAction(LANDSCAPE_TOUCH)
                 Box(Modifier.weight(1f))
                 if (triage.isNotEmpty()) {
                     StatusBadge(
@@ -284,6 +286,7 @@ fun HerdSidebar(
                     NewAction(target = LANDSCAPE_TOUCH)
                 }
             }
+            PaletteBar(hint = "ctrl K", modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp))
             if (herd.stale && groups.isNotEmpty()) {
                 StaleHerdNote(connection, Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp))
             }

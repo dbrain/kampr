@@ -17,8 +17,13 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.Composable
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.LocalTokens
+import dev.kampr.shared.ui.HerdLandscape
+import dev.kampr.shared.ui.HerdPortrait
+import dev.kampr.shared.ui.HerdSidebar
 import dev.kampr.shared.ui.KField
 import dev.kampr.shared.ui.PaletteHost
 import dev.kampr.shared.ui.PaletteTarget
@@ -40,6 +45,7 @@ private val KEY_HERD = Herd(
 
 private const val FIELD = "Search panes and places"
 private const val BEHIND = "something behind the palette"
+private const val SEARCH = "Search every pane and place"
 
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.host(picked: MutableList<PaletteTarget>) {
@@ -54,6 +60,17 @@ private fun ComposeUiTest.host(picked: MutableList<PaletteTarget>) {
     onNodeWithContentDescription(BEHIND).performKeyInput { ctrl(Key.K) }
     waitForIdle()
 }
+
+private val LIVE = ConnectionStatus.Live("admin")
+
+// Every herd list a person can be looking at without a keyboard: the phone's two, the desk's
+// sidebar open and folded.
+private val HERD_LISTS: Map<String, @Composable () -> Unit> = mapOf(
+    "portrait" to { HerdPortrait(KEY_HERD, LIVE, 0.0, null, emptyList(), {}, null) },
+    "landscape" to { HerdLandscape(KEY_HERD, LIVE, 0.0, null, emptyList(), {}, null) },
+    "sidebar" to { HerdSidebar(KEY_HERD, LIVE, 0.0, null, emptyList(), null, "desk", "admin", {}, {}) },
+    "rail" to { HerdSidebar(KEY_HERD, LIVE, 0.0, null, emptyList(), null, "desk", "admin", {}, {}, collapsed = true) },
+)
 
 @OptIn(ExperimentalTestApi::class)
 private fun KeyInjectionScope.ctrl(key: Key) = withKeyDown(Key.CtrlLeft) { pressKey(key) }
@@ -107,5 +124,23 @@ class PaletteKeysTest {
         host(picked)
         onNodeWithContentDescription("3: ", substring = true).performClick()
         assertEquals(listOf<PaletteTarget>(PaletteTarget.OpenPane("01JHUB/w1:p1")), picked)
+    }
+
+    @Test
+    fun everyHerdListOpensItWithoutAKeyboard() {
+        for ((name, list) in HERD_LISTS) {
+            runComposeUiTest {
+                setContent {
+                    CompositionLocalProvider(LocalTokens provides phoneTokens()) {
+                        PaletteHost({ paletteItems(KEY_HERD, mosaic = false, canCreate = false) }, {}, Modifier.size(900.dp, 700.dp)) {
+                            Box(Modifier.size(900.dp, 700.dp)) { list() }
+                        }
+                    }
+                }
+                onNodeWithContentDescription(SEARCH).performClick()
+                waitForIdle()
+                assertTrue(open(), "the $name herd list offered no way into the palette")
+            }
+        }
     }
 }

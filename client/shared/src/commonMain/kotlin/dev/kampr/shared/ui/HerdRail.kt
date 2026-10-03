@@ -86,6 +86,7 @@ fun HerdRail(
                 tokens.color.dim,
                 LANDSCAPE_TOUCH,
             ) { onExpand() }
+            PaletteAction(LANDSCAPE_TOUCH)
             NewAction(target = LANDSCAPE_TOUCH)
             MosaicAction(LANDSCAPE_TOUCH)
             FleetAction(LANDSCAPE_TOUCH)

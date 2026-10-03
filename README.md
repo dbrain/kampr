@@ -428,9 +428,10 @@ Installed as a Herdr plugin, the same actions appear in Herdr's own workspace me
 `ctrl+K` (`⌘K` on a Mac) opens a search over every pane on every host and the app's own places —
 a host name, a workspace, a tab, part of a path, an agent or a running command all find it, fuzzily.
 Results are numbered: press the digit to go there, or use the arrows and enter. With nothing typed
-it is the sidebar, numbered, which is the way out of a terminal without the mouse. Because the
-palette takes `ctrl+K`, readline's kill-to-end moved to `ctrl+shift+K`, in the terminal and in the
-reply box alike.
+it is the sidebar, numbered, which is the way out of a terminal without the mouse. Without a
+keyboard, the search bar at the top of the herd list and the sidebar opens the same thing. Because
+the palette takes `ctrl+K`, readline's kill-to-end moved to `ctrl+shift+K`, in the terminal and in
+the reply box alike.
 
 ### The terminal client
 

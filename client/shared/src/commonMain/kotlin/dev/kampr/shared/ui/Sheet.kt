@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
@@ -46,6 +47,11 @@ private const val SCRIM_ALPHA = 0.72f
 // The requester is refused until the sheet is placed and the focus owner is live, and how many
 // frames that takes is not something a caller can know.
 internal const val FOCUS_FRAMES = 8
+
+// True while something modal is drawn over the screen. A browser terminal's offscreen input renews
+// its claim on the page's one focus slot every frame, so a Compose field over it never receives the
+// keys unless the pane is told to stand down.
+val LocalCovered = compositionLocalOf { false }
 
 // The scrim is the theme's own ground at partial opacity rather than a colour of its own, so it
 // stays right on a black brutalist ground and on a light one.

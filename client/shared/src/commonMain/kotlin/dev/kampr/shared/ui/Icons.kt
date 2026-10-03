@@ -44,6 +44,7 @@ object KamprIcons {
         16f, 1.6f, Glyph.Round(8f, 8f, 2f),
         d("M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3"),
     )
+    val search = icon(16f, 1.7f, Glyph.Round(7f, 7f, 4.6f), d("M10.4 10.4 14 14"))
     val zoom = icon(14f, 1.6f, Glyph.Round(6f, 6f, 4.4f), d("M9.4 9.4 12.6 12.6M4.2 6h3.6M6 4.2v3.6"))
     val herd = icon(20f, 1.7f, Glyph.Frame(2f, 3f, 16f, 5f, 1.5f), Glyph.Frame(2f, 12f, 16f, 5f, 1.5f))
     val nodes = icon(
