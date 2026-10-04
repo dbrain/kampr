@@ -10,6 +10,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.KeyInjectionScope
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
@@ -97,6 +98,27 @@ class PaletteKeysTest {
         host(picked)
         onNodeWithContentDescription(FIELD).performKeyInput { pressKey(Key.Two) }
         assertEquals(listOf<PaletteTarget>(PaletteTarget.OpenPane("01JLAP/w2:p1")), picked)
+    }
+
+    // A browser hands a digit to the field as committed text from its own textarea, and so does
+    // any soft keyboard: the key event the jump listened for never arrives on either.
+    @Test
+    fun aDigitThatArrivesAsTextStillJumps() = runComposeUiTest {
+        val picked = mutableListOf<PaletteTarget>()
+        host(picked)
+        onNodeWithContentDescription(FIELD).performTextInput("magi")
+        onNodeWithContentDescription(FIELD).performTextInput("1")
+        assertEquals(listOf<PaletteTarget>(PaletteTarget.OpenPane("01JHUB/w1:p1")), picked)
+    }
+
+    @Test
+    fun aDigitWithNoRowBehindItIsSearchedFor() = runComposeUiTest {
+        val picked = mutableListOf<PaletteTarget>()
+        host(picked)
+        onNodeWithContentDescription(FIELD).performTextInput("magi")
+        onNodeWithContentDescription(FIELD).performTextInput("7")
+        assertTrue(picked.isEmpty(), "a digit with no seventh row picked something")
+        onNodeWithText("magi7", useUnmergedTree = true).assertExists()
     }
 
     @Test

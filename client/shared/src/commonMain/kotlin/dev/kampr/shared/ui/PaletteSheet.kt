@@ -162,9 +162,16 @@ fun CommandPalette(items: List<PaletteItem>, onPick: (PaletteTarget) -> Unit, on
                 style = tokens.type.body,
                 label = "Search panes and places",
                 onSubmit = { pick(selected) },
-                onText = {
-                    query = it
-                    selected = 0
+                // A browser's textarea and a soft keyboard deliver the digit as text, never as the
+                // key event the handler above listens for, so the jump is read off the edit too.
+                onText = { edited ->
+                    val digit = jumpDigit(query, edited)
+                    if (digit != null && digit < shown.size) {
+                        pick(digit)
+                    } else {
+                        query = edited
+                        selected = 0
+                    }
                 },
             )
             if (shown.isEmpty()) {
@@ -181,6 +188,12 @@ fun CommandPalette(items: List<PaletteItem>, onPick: (PaletteTarget) -> Unit, on
             )
         }
     }
+}
+
+private fun jumpDigit(before: String, after: String): Int? {
+    if (after.length != before.length + 1 || !after.startsWith(before)) return null
+    val typed = after.last()
+    return if (typed in '1'..'9') typed - '1' else null
 }
 
 @Composable
