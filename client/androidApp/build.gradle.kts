@@ -251,7 +251,7 @@ dependencies {
 // from ${rootDir}, which for this build is client/, not the repository root.
 val kobupHelper = configValue("kobupHelperPath", "KOBUP_HELPER")
     .map { file(it) }
-    .orElse(rootProject.layout.projectDirectory.dir("../../tinyfiddler/kob/kobup/gradle").file("publish-to-kobup.gradle").asFile)
+    .orElse(rootProject.layout.projectDirectory.dir("../../tinyfiddler/kob/kobup/gradle").file("publish-to-kobup.gradle.kts").asFile)
 if (kobupHelper.get().isFile) {
     apply(from = kobupHelper.get())
 } else {
@@ -259,7 +259,7 @@ if (kobupHelper.get().isFile) {
         val path = kobupHelper.get()
         doLast {
             throw GradleException(
-                "kobup helper not found at $path. Set -PkobupHelperPath=/path/to/kobup/gradle/publish-to-kobup.gradle",
+                "kobup helper not found at $path. Set -PkobupHelperPath=/path/to/kobup/gradle/publish-to-kobup.gradle.kts",
             )
         }
     }

@@ -44,54 +44,17 @@ which is [#233](03-probe-log.md) exactly. **Move the binary and the server toget
 Gradle 9.7.1 turns toolchain auto-provisioning without a declared repository into a **Gradle 10
 error**, so `settings.gradle.kts` carries `org.gradle.toolchains.foojay-resolver-convention`.
 
-### `.env`, and the plugin that used to read it
+### `.env`
 
 `co.uzzu.dotenv` 4.0.0 calls `Project.getProperties`, which errors under Gradle 10, and 4.0.0 is the
-last release — so there was nothing to bump to. **It is gone.** Nothing in this tree ever used it:
-release signing goes through `configValue` in `androidApp/build.gradle.kts`, which is
-`providers.gradleProperty(…).orElse(providers.environmentVariable(…))`, and `env.` appears in no
-`.kts` file here.
+last release. **It is gone**, and so is the stand-in `env` extension that briefly replaced it: its
+only consumer was the kobup publish helper, which is now a Kotlin script
+(`…/kob/kobup/gradle/publish-to-kobup.gradle.kts`) that reads `KOBUP_TOKEN` from the environment or
+`client/.env` on its own. Release signing never used it — it goes through `configValue` in
+`androidApp/build.gradle.kts`.
 
-The one real consumer is the **kobup publish helper**, which lives outside this repository
-(`…/kob/kobup/gradle/publish-to-kobup.gradle`) and is pulled in by `apply(from = …)` from
-`androidApp/build.gradle.kts`. It captures the token at configuration time:
-
-```groovy
-def capturedToken = null
-try { capturedToken = env.fetchOrNull("KOBUP_TOKEN") } catch (ignored) {}
-…
-def token = capturedToken ?: System.getenv("KOBUP_TOKEN")
-if (!token) throw new GradleException("KOBUP_TOKEN not set. Add it to .env or export it.")
-```
-
-Deleting the plugin alone would have degraded *quietly*: the `try` swallows the missing `env` and CI
-still works through `System.getenv`, but `client/.env` — the way this machine actually publishes —
-would have stopped being read, with no message anywhere.
-
-So the extension is now ours. `client/gradle/dotenv` is a small included build contributing the
-settings plugin `dev.kampr.dotenv`, applied from `client/settings.gradle.kts`. It registers an `env`
-extension on **every** project through `gradle.lifecycle.beforeProject` — the Isolated-Projects-safe
-hook, not `allprojects` — exposing exactly the one method the helper calls:
-
-| | |
-|---|---|
-| `env.fetchOrNull(String)` | `client/.env` first, then the environment variable of the same name, then `null` |
-
-Both reads go through `providers.fileContents(…)` and `providers.environmentVariable(…)`, so the
-configuration cache tracks them and nothing touches `Project.getProperties`. `.env` is absent on a
-fresh checkout and that is not an error: `fetchOrNull` returns `null`, and the helper's own
-`KOBUP_TOKEN not set. Add it to .env or export it.` is the message the operator sees. `.env.template`
-is the documented example, and `.env` is git-ignored (`.gitignore:20`) — a token has never been in
-this repository and must not be.
-
-`client/gradle/dotenv/src/test/kotlin/.../DotEnvPluginTest.kt` is five TestKit builds that reproduce
-the helper's call shape verbatim — a Groovy script `apply(from …)`'d into a subproject, calling
-`env.fetchOrNull("KOBUP_TOKEN")` inside the same `try`/`catch` — because the shape is the contract
-and the only thing that reads it is not in this tree. `client/build.gradle.kts` hangs the root
-`check` off that build, so `./gradlew build` runs them.
-
-**Gradle 10 status: no known blocker left.** `./gradlew help --warning-mode all` from `client/` and
-from `client/gradle/dotenv` both report nothing. What has *not* been exercised is a real
+**Gradle 10 status: no known blocker left.** `./gradlew help --warning-mode all` from `client/` reports
+nothing. What has *not* been exercised is a real
 `publishToKobup` against a real kobup server — see `docs/07-android-release.md`.
 
 ## Android

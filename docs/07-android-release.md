@@ -219,11 +219,10 @@ versionName=0.1.0
 `KOBUP_TOKEN` is the CI token from `kobup login`; the CLI leaves it in `~/.config/kobup/config.json`.
 It is never in the repository and never in a Gradle file. Two ways to supply it:
 
-- **`.env`** in `client/`, read by the `env` extension from `client/gradle/dotenv`, applied in
-  `client/settings.gradle.kts`. Copy `client/.env.template` to `client/.env` and fill it in. `.env`
-  is gitignored. This is the convenient local option, and the one the helper reads first.
-- **Environment variable** — `KOBUP_TOKEN=… make android-publish`. This is the CI option, and the
-  fallback when no `.env` exists.
+- **Environment variable** — `KOBUP_TOKEN=… make android-publish`. This is the CI option, and it
+  wins when set.
+- **`.env`** in `client/`, which the helper reads itself. Copy `client/.env.template` to
+  `client/.env` and fill it in. `.env` is gitignored. This is the convenient local option.
 
 ### What the task does
 
@@ -235,11 +234,14 @@ In order, in one Gradle task:
 2. Requires `KOBUP_TOKEN`.
 3. Bumps `version.properties`: `versionCode` +1, `versionName` patch +1, then suffixes
    `+<short git hash>` — `0.1.0 (1)` becomes `0.1.1+bd7e8ba (2)`. Both land in the APK manifest.
-4. Runs `client/gradlew :androidApp:assembleRelease` as a **nested** Gradle build, and restores
-   `version.properties` if it fails.
-5. `POST {server}/api/v1/admin/projects` to create the project if it does not exist (idempotent).
-6. `POST {server}/api/v1/ci/projects/kampr/release` — multipart `apk`, `channel`, `publish=true`.
-7. `POST {server}/api/v1/ci/projects/kampr/push-refresh` to wake the devices.
+4. Runs `client/gradlew :androidApp:assembleRelease` as a **nested** Gradle build. Any failure from
+   here to the upload restores `version.properties`.
+5. Refuses an unsigned APK, and anything but exactly one APK in `outputs/apk/release`.
+6. `POST {server}/api/v1/admin/projects` to create the project if it does not exist (idempotent).
+7. `POST {server}/api/v1/ci/projects/kampr/release` — multipart `apk`, `channel`, `publish=true`,
+   plus one `dm_<minApi>` per baseline profile AGP lists in `output-metadata.json`. Kobup stages
+   the matching one beside the APK, so ART compiles the app at install time.
+8. `POST {server}/api/v1/ci/projects/kampr/push-refresh` to wake the devices.
 
 So the normal sequence is: commit, then publish.
 
