@@ -226,7 +226,7 @@ pub fn active_since(stamp: Option<&str>, modified: SystemTime, since: SystemTime
 /// a pane refused its own transcript for as long as the process lives, which no later record can
 /// clear once the file is only ever appended to within the same second (#415). Every harness in
 /// tree writes the fraction (#285); throwing it away here was the whole of the miss.
-fn parse_rfc3339(stamp: &str) -> Option<SystemTime> {
+pub(crate) fn parse_rfc3339(stamp: &str) -> Option<SystemTime> {
     let at = time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).ok()?;
     let seconds = at.unix_timestamp();
     let whole = match seconds >= 0 {

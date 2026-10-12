@@ -6698,6 +6698,60 @@ async fn a_restarted_node_calls_a_quiet_conversation_as_old_as_its_transcript() 
     );
 }
 
+/// The operator's report: *"when i leave a claude instance open kampr marks it as modified
+/// randomly"*. An idle Claude keeps appending to its transcript with nothing said — a
+/// `bridge-session` each time Remote Control reconnects, a `cost-state`, a `last-prompt`, an
+/// `atis-latch` — measured on this machine at 36 `bridge-session` records on a session whose last
+/// turn was four days earlier, and an mtime from that morning. Stamped by mtime, every one of them
+/// moved `updated_at`, and every move re-raised a `done` the operator had already read.
+///
+/// The mutation that must fail: stamp off the file's mtime again and the pane is called touched
+/// the moment the bookkeeping lands.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_claude_writing_bookkeeping_into_its_transcript_has_not_moved_the_conversation() {
+    use std::io::Write as _;
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("bookkeeping", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+    let id = "77777777-7777-4777-8777-777777777777";
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, id);
+    fixture.transcript(id, "THE LAST THING ANYBODY SAID", -3 * 3600);
+    let said = (time::OffsetDateTime::now_utc() - time::Duration::seconds(3 * 3600))
+        .replace_nanosecond(0)
+        .unwrap();
+    let mut file = std::fs::File::options()
+        .append(true)
+        .open(fixture.project.join(format!("{id}.jsonl")))
+        .unwrap();
+    for record in [
+        json!({ "type": "bridge-session", "sessionId": id, "bridgeSessionId": "cse_0", "lastSequenceNum": 213 }),
+        json!({ "type": "cost-state", "sessionId": id, "totalCostUSD": 9.65 }),
+        json!({ "type": "last-prompt", "lastPrompt": "yes please", "sessionId": id }),
+        json!({ "type": "atis-latch", "sessionId": id }),
+    ] {
+        writeln!(file, "{record}").unwrap();
+    }
+    drop(file);
+
+    let stamp = conversation_stamp(&h.node, &local).await;
+    let at = time::OffsetDateTime::parse(&stamp, &time::format_description::well_known::Rfc3339).unwrap();
+    assert!(
+        (at - said).abs() <= time::Duration::seconds(2),
+        "a conversation nobody has spoken in for three hours was stamped {stamp}"
+    );
+}
+
 async fn conversation_stamp(node: &Arc<Node>, local: &str) -> String {
     let suffix = format!("/{local}");
     let mut saw = None;

@@ -11,7 +11,7 @@ use kampr_push::Vapid;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
@@ -616,21 +616,29 @@ struct Names {
     folds: Mutex<HashMap<PathBuf, Box<dyn FacetFold>>>,
 }
 
+struct Read {
+    title: Option<String>,
+    said: Option<SystemTime>,
+}
+
 impl Names {
-    fn title(
+    fn read(
         &self,
         journals: &Journals,
         agent: Option<&str>,
         transcript: &Path,
         marker: Option<&SessionMarker>,
         live: &mut HashSet<PathBuf>,
-    ) -> Option<String> {
+    ) -> Read {
         live.insert(transcript.to_path_buf());
         let mut folds = self.folds.lock().unwrap();
         let fold = folds
             .entry(transcript.to_path_buf())
             .or_insert_with(|| journals.folder(agent));
-        best_name(fold.titles(transcript, None), marker)
+        Read {
+            title: best_name(fold.titles(transcript, None), marker),
+            said: fold.said_at(transcript),
+        }
     }
 
     fn keep(&self, live: &HashSet<PathBuf>) {
@@ -705,9 +713,12 @@ async fn build_model(
             // And the name the session actually goes by, off the transcript the pane is already
             // known to be on — folded from the byte the last rebuild reached rather than read
             // whole. A pane with no transcript yet has only what the marker says.
-            let title = transcript
+            let read = transcript
                 .as_deref()
-                .and_then(|t| names.title(journals, info.agent.as_deref(), t, marker.as_ref(), &mut titled))
+                .map(|t| names.read(journals, info.agent.as_deref(), t, marker.as_ref(), &mut titled));
+            let spoken = read.as_ref().and_then(|r| r.said);
+            let title = read
+                .and_then(|r| r.title)
                 .or_else(|| marker.as_ref().and_then(chosen_name));
             let mut entry = PaneEntry::new(&session.node_id, &info, has_conversation)
                 // The cheap half, and the one that is true from the moment the harness opens: a
@@ -730,7 +741,7 @@ async fn build_model(
             // approval dialog — measured, with `agent explain` returning no rules ([#485](#)).
             let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
             entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
-            entry.updated_at = conversation_moved(transcript.as_deref(), marker.as_ref());
+            entry.updated_at = conversation_moved(spoken, marker.as_ref());
             panes.push(entry);
         }
     }
@@ -739,16 +750,16 @@ async fn build_model(
     HerdModel { nodes, panes }
 }
 
-/// When the conversation last moved: the transcript's last write, or the run starting if that is
+/// When the conversation last moved: the last thing said in it, or the run starting if that is
 /// later — a `--continue` is the operator touching the pane even before it says anything.
 ///
 /// Read off the harness's own files, so every node that looks — this one, the one that replaces it
-/// on a restart, a hub relaying either — gives the same answer. An idle Claude leaves its
-/// transcript alone: its mtime held for 270 s after a turn with nothing touching the pane.
-fn conversation_moved(transcript: Option<&Path>, marker: Option<&SessionMarker>) -> Option<String> {
-    let written = transcript.and_then(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+/// on a restart, a hub relaying either — gives the same answer. Not the transcript's mtime: an idle
+/// Claude leaves it alone for minutes (270 s measured) and then appends bookkeeping for days — a
+/// `bridge-session` per Remote Control reconnect among them — with nothing said.
+fn conversation_moved(said: Option<SystemTime>, marker: Option<&SessionMarker>) -> Option<String> {
     let started = marker.and_then(|m| m.started.at());
-    let at = time::OffsetDateTime::from(written.max(started)?);
+    let at = time::OffsetDateTime::from(said.max(started)?);
     at.replace_nanosecond(0)
         .ok()?
         .format(&time::format_description::well_known::Rfc3339)
@@ -1028,25 +1039,28 @@ mod tests {
         let journals = kampr_journal::registry_from_home(home.path(), Ledger::ephemeral());
 
         assert_eq!(
-            Names::default().title(
-                &journals,
-                Some("claude"),
-                &transcript,
-                Some(&named("kampr-44", Some("derived"))),
-                &mut HashSet::new(),
-            ),
+            Names::default()
+                .read(
+                    &journals,
+                    Some("claude"),
+                    &transcript,
+                    Some(&named("kampr-44", Some("derived"))),
+                    &mut HashSet::new(),
+                )
+                .title,
             None,
             "an untitled session is not called what the harness called itself"
         );
         assert_eq!(
             Names::default()
-                .title(
+                .read(
                     &journals,
                     Some("claude"),
                     &transcript,
                     Some(&named("the release", Some("user"))),
                     &mut HashSet::new(),
                 )
+                .title
                 .as_deref(),
             Some("the release"),
             "and a name a person set still lands, at the level the conversation puts it"
@@ -1074,7 +1088,8 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(
                 names
-                    .title(&journals, Some("claude"), &transcript, None, &mut live)
+                    .read(&journals, Some("claude"), &transcript, None, &mut live)
+                    .title
                     .as_deref(),
                 Some("the width inference rewrite")
             );

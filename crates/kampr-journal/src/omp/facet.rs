@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::SystemTime;
 
 use crate::facet::{Compaction, FacetFold, Facets, Mode, Running, Timing, Titles};
 use crate::marker::SessionMarker;
-use crate::process::Started;
+use crate::process::{Started, parse_rfc3339};
 use crate::scan::{Appended, Cursor};
 use crate::summary::one_line;
 
@@ -28,6 +29,7 @@ pub struct Fold {
     mode: Mode,
     watch: Watch,
     turns: Turns,
+    said: Option<SystemTime>,
 }
 
 impl FacetFold for Fold {
@@ -44,6 +46,11 @@ impl FacetFold for Fold {
     fn titles(&mut self, transcript: &Path, _marker: Option<&SessionMarker>) -> Titles {
         self.advance(transcript);
         self.titles.clone()
+    }
+
+    fn said_at(&mut self, transcript: &Path) -> Option<SystemTime> {
+        self.advance(transcript);
+        self.said
     }
 }
 
@@ -76,6 +83,7 @@ impl Fold {
                 ..Compaction::default()
             }),
             Record::Message(entry) => {
+                self.said = self.said.max(entry.timestamp.as_deref().and_then(parse_rfc3339));
                 if let Some(timing) = self.turns.record(&entry) {
                     self.accumulated.timings.push(timing);
                 }

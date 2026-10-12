@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +190,16 @@ pub trait FacetFold: Send {
             },
             None => Titles::default(),
         }
+    }
+
+    /// When something was last said in the conversation.
+    ///
+    /// **Not the file's mtime where a fold can do better.** An idle Claude appends records that
+    /// say nothing — a `bridge-session` per Remote Control reconnect, `cost-state`, `last-prompt`,
+    /// `atis-latch` — so an mtime moves on a conversation nobody has touched in days, and a client
+    /// re-raises a `done` it had read. The mtime is all a fold that keeps no stamps can say.
+    fn said_at(&mut self, transcript: &Path) -> Option<SystemTime> {
+        std::fs::metadata(transcript).and_then(|m| m.modified()).ok()
     }
 }
 

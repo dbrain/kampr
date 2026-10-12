@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::SystemTime;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -6,7 +7,7 @@ use serde_json::Value;
 use super::running::Watch;
 use crate::facet::{Compaction, FacetFold, Facets, Mode, Queued, Timing, Titles};
 use crate::marker::SessionMarker;
-use crate::process::Started;
+use crate::process::{Started, parse_rfc3339};
 use crate::scan::{Appended, Cursor};
 use crate::sub;
 
@@ -29,6 +30,7 @@ pub struct Fold {
     queue: Vec<Queued>,
     mode: Mode,
     watch: Watch,
+    said: Option<SystemTime>,
 }
 
 impl FacetFold for Fold {
@@ -46,6 +48,11 @@ impl FacetFold for Fold {
     fn titles(&mut self, transcript: &Path, marker: Option<&SessionMarker>) -> Titles {
         self.advance(transcript);
         self.levels(transcript, marker)
+    }
+
+    fn said_at(&mut self, transcript: &Path) -> Option<SystemTime> {
+        self.advance(transcript);
+        self.said
     }
 }
 
@@ -85,6 +92,7 @@ impl Fold {
                 self.watch.notified(record.content.as_ref());
             }
             "user" => {
+                self.spoke(record.timestamp.as_deref());
                 delivered(&mut self.queue, &record);
                 self.watch.record(
                     record.message.as_ref(),
@@ -92,11 +100,14 @@ impl Fold {
                     record.timestamp.as_deref(),
                 );
             }
-            "assistant" => self.watch.record(
-                record.message.as_ref(),
-                record.tool_use_result.as_ref(),
-                record.timestamp.as_deref(),
-            ),
+            "assistant" => {
+                self.spoke(record.timestamp.as_deref());
+                self.watch.record(
+                    record.message.as_ref(),
+                    record.tool_use_result.as_ref(),
+                    record.timestamp.as_deref(),
+                )
+            }
             "permission-mode" => {
                 self.mode.permission = record.permission_mode.or(self.mode.permission.take())
             }
@@ -108,6 +119,10 @@ impl Fold {
             },
             _ => {}
         }
+    }
+
+    fn spoke(&mut self, stamp: Option<&str>) {
+        self.said = self.said.max(stamp.and_then(parse_rfc3339));
     }
 }
 

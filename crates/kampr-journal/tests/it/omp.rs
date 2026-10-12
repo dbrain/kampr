@@ -552,3 +552,27 @@ fn the_name_a_pi_session_set_for_itself_is_published() {
     assert_eq!(title.text, "A pi session with a name");
     assert_eq!(title.source, kampr_journal::TitleSource::Generated);
 }
+
+/// A pane's "updated" time is when something was last said in it, and a record that says nothing
+/// is not that — the same rule Claude's bookkeeping records broke. The copy is written now, so a
+/// fold that answered with the file's mtime calls a session from September a moment old.
+#[test]
+fn a_session_was_last_spoken_in_at_its_newest_message_and_not_when_its_file_was_written() {
+    let scratch = scratch_dir("omp-said");
+    let path = scratch.join("copied.jsonl");
+    let mut body = std::fs::read_to_string(transcript()).expect("transcript");
+    body.push_str(
+        r#"{"type":"thinking_level_change","id":"f0000001","parentId":null,"timestamp":"2026-10-12T00:00:00.000Z","thinkingLevel":"high"}"#,
+    );
+    body.push('\n');
+    std::fs::write(&path, body).expect("write");
+
+    let said = adapter().fold().expect("a fold").said_at(&path).expect("a stamp");
+
+    let newest = time::OffsetDateTime::parse(
+        "2026-09-04T12:47:59.908Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .expect("a stamp");
+    assert_eq!(time::OffsetDateTime::from(said), newest);
+}

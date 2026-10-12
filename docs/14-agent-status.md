@@ -432,10 +432,13 @@ it — a timing change with no guard is how the next one gets re-tuned by accide
   and the node stamped `now` on every pane it had not seen — all of them, after a restart — and
   on a viewer arriving or leaving, a geometry change, a new scrollback row. Each re-raised a flag
   the operator had already put down, and a pane left `done` for good ranks at the top.
-  Now a pane with a transcript is stamped with the transcript's mtime or the run's `startedAt`,
-  whichever is later (`state.rs::conversation_moved`) — the same answer from every node that reads
-  it, a hub relaying a peer included. An idle Claude leaves its transcript alone (mtime unmoved
-  for 270 s after a turn). Everything else is stamped by `herd.rs::Stamps` on agent, status, cwd
+  Now a pane with a transcript is stamped with the newest thing said in it or the run's
+  `startedAt`, whichever is later (`state.rs::conversation_moved`, off `FacetFold::said_at`) — the
+  same answer from every node that reads it, a hub relaying a peer included. **Not the mtime**,
+  which was the first version of this fix: an idle Claude leaves its transcript alone for minutes
+  (270 s, #560) and then appends `cost-state`, `bridge-session`, `last-prompt` and `atis-latch`
+  for days with nothing said — 117 of 128 transcripts here end that way (#574) — and every one
+  re-raised a read `done`, which came back as *"marks it as modified randomly"*. Everything else is stamped by `herd.rs::Stamps` on agent, status, cwd
   or job changing only, remembered across a pane's brief absence, and not at all in the first herd
   a node builds. The client keeps a read `done` read when the node has no clock for the pane, and
   stops forgetting reads for panes whose node is missing from the herd — a hub serves its own
