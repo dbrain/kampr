@@ -9,8 +9,8 @@
 use crate::common;
 
 use kampr_journal::{
-    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, EDIT_KEYS, Frame, JournalAdapter,
-    OmpAdapter, TranscriptRoot,
+    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, EDIT_KEYS, Frame, GONE_AFTER,
+    JournalAdapter, OmpAdapter, TranscriptRoot,
 };
 
 /// A fixture's caret header and its grid. The caret has to travel with the screen: it is the only
@@ -196,8 +196,27 @@ fn an_unchanged_composer_is_not_a_frame_and_an_empty_one_opens_in_silence() {
         feed.moved(Some(said("push the branch"))),
         Some(Some(said("push the branch")))
     );
-    assert_eq!(feed.moved(None), Some(None));
+    let gone: Vec<_> = (0..GONE_AFTER).map(|_| feed.moved(None)).collect();
+    assert_eq!(gone.last(), Some(&Some(None)));
     assert_eq!(feed.moved(None), None);
+}
+
+/// **A box missing from one reading is a redraw, not a box that has gone** (#552: Claude's caret
+/// is off its composer for the frame it repaints in). Published, it told the reply box the pane
+/// had no line, and the next Send typed the whole message again on top of the copy the mirror
+/// had already typed.
+#[test]
+fn a_composer_missing_from_a_reading_or_two_is_not_published_as_gone() {
+    let mut feed = ComposerFeed::default();
+    assert_eq!(feed.moved(Some(said(TYPED))), Some(Some(said(TYPED))));
+    for _ in 1..GONE_AFTER {
+        assert_eq!(feed.moved(None), None);
+    }
+    assert_eq!(feed.moved(Some(said(TYPED))), None);
+    for _ in 1..GONE_AFTER {
+        assert_eq!(feed.moved(None), None);
+    }
+    assert_eq!(feed.moved(None), Some(None));
 }
 
 /// A pane whose agent is quit and a different one started in its place can be left holding the

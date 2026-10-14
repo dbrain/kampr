@@ -196,7 +196,13 @@ fn is_continuation(line: &str, indent: usize) -> bool {
 pub struct ComposerFeed {
     last: Option<Composed>,
     sent: bool,
+    missing: usize,
 }
+
+/// Consecutive readings without a composer before it is published as gone. Claude's caret is off
+/// its box for the frame it repaints in (#552), and at the node's 100 ms poll a reading can land on
+/// that frame; three in a row is a box that has gone, not one being drawn.
+pub const GONE_AFTER: usize = 3;
 
 impl ComposerFeed {
     /// The line as it is now, or `None` when nothing has moved since the last call. The inner
@@ -209,6 +215,13 @@ impl ComposerFeed {
     /// and takes one visual row of Claude's, and `ctrl+c` empties Claude's and arms an *exit* on
     /// agy. Comparing the text alone would leave the client holding the old harness's key.
     pub fn moved(&mut self, now: Option<Composed>) -> Option<Option<Composed>> {
+        self.missing = match now {
+            Some(_) => 0,
+            None => self.missing + 1,
+        };
+        if now.is_none() && self.last.is_some() && self.missing < GONE_AFTER {
+            return None;
+        }
         if now == self.last && self.sent {
             return None;
         }

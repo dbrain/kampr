@@ -128,4 +128,15 @@ class ComposerMirrorTest {
         val held = ComposerMirror().also { it.heard(drawn("push", caret = 1), box = "a reply", now = 0) }
         assertEquals(listOf(RIGHT.repeat(3), BACK.repeat(4), "a reply", "\r"), held.submit("a reply", now = 10))
     }
+
+    // **A box the node cannot see for a moment still holds what this one typed into it.** Claude
+    // repaints with its caret off the box (#552), and a send in that gap typed the whole line again
+    // after the copy already in the pane.
+    @Test
+    fun sendingWhileThePanesBoxCannotBeSeenIsStillOnlyTheEnter() {
+        val mirror = inStep()
+        mirror.typed("", "push", live = true, now = 0)
+        mirror.heard(null, box = "push", now = 50)
+        assertEquals(listOf("\r"), mirror.submit("push", now = 60))
+    }
 }

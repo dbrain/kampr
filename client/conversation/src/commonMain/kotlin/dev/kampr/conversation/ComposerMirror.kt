@@ -17,12 +17,17 @@ class ComposerMirror {
     private var line: String? = null
     private var caret = 0
     private var keys: EditKeys? = null
+
+    // A reading with no box is a pane that cannot be read this moment, not one that has forgotten
+    // what was typed into it: Claude repaints with its caret off the box (#552).
+    private var measured: EditKeys? = null
     private var quietUntil = 0L
     private var unheard: DeskLine? = null
 
     // What the box should now hold, or null to leave it alone.
     fun heard(desk: DeskLine?, box: String, now: Long = elapsed()): String? {
         keys = desk?.keys
+        desk?.keys?.let { measured = it }
         if (desk == null || desk.keys == null) return null
         if (now < quietUntil && desk.text != line) {
             unheard = desk
@@ -69,7 +74,7 @@ class ComposerMirror {
     // What the send button sends: the Enter alone for a pane already holding the line, and
     // otherwise the pane's line taken back a character at a time and this one typed in its place.
     fun submit(box: String, now: Long = elapsed()): List<String> {
-        val keys = keys
+        val keys = keys ?: measured
         val held = line
         val out = mutableListOf<String>()
         when {

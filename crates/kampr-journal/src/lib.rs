@@ -33,7 +33,7 @@ pub use attach::{Att, Fetched, FileRef, Locator, Origin, Source};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 pub use composer::{
-    Caret, Composed, ComposerFeed, ComposerReader, EDIT_KEYS, EditKeys, Frame, ListeningReader,
+    Caret, Composed, ComposerFeed, ComposerReader, EDIT_KEYS, EditKeys, Frame, GONE_AFTER, ListeningReader,
 };
 pub use error::JournalError;
 pub use facet::{
