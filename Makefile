@@ -55,7 +55,7 @@ ci-live-client:
 ci-bundle-guard:
 	scripts/bundle-guard-check.sh
 
-.PHONY: android-release android-bundle android-install android-test android-publish android-clean android-keystore
+.PHONY: android-release android-bundle android-install android-test android-publish android-attach android-clean android-keystore
 
 android-release:
 	cd $(CLIENT) && $(GRADLE) :androidApp:assembleRelease
@@ -79,6 +79,17 @@ android-test:
 
 android-publish:
 	cd $(CLIENT) && $(GRADLE) :androidApp:publishToKobup
+
+# The release workflow cannot sign an APK (the key is on this machine), so the tag's release gets
+# the one android-publish built — refused unless it is the version the tag names.
+android-attach:
+	@set -e; v=$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1); \
+	built=$$(aapt2 dump badging $(APK) | sed -n "s/.*versionName='\([^+']*\).*/\1/p"); \
+	if [ "$$built" != "$$v" ]; then echo "the APK is $$built, Cargo.toml is $$v"; exit 1; fi; \
+	out=$$(mktemp -d)/kampr-v$$v-android.apk; \
+	cp $(APK) $$out; \
+	gh release upload v$$v $$out; \
+	gh release view v$$v --json assets --jq '[.assets[].name]'
 
 android-clean:
 	cd $(CLIENT) && $(GRADLE) :androidApp:clean

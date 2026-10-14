@@ -147,21 +147,15 @@ only useful if Kampr ever goes to a store.
 The signed APK also goes on the tag's GitHub release, as `kampr-v<version>-android.apk`. The
 release workflow builds and signs the node binaries, but it cannot build the APK: the release
 signing key lives on the release machine, not in CI, so the APK is built here (`make
-android-release`) and uploaded by hand after the tag's publish job has created the release:
+android-release`) and attached after the tag's publish job has created the release.
 
-`gh release upload` names an asset after the file it is given and takes no `--name`, so the file is
-named first:
+`make android-attach` does it: it refuses an APK whose `versionName` is not the `Cargo.toml`
+version, names the file `kampr-v<version>-android.apk` (`gh release upload` takes no `--name`),
+uploads it and lists the release's assets, which have to include it.
 
-```bash
-cp client/androidApp/build/outputs/apk/release/androidApp-release.apk /tmp/kampr-v<version>-android.apk
-gh release upload v<version> /tmp/kampr-v<version>-android.apk
-gh release view v<version> --json assets --jq '[.assets[].name]'   # the apk has to be in the list
-```
-
-Upload it before `make android-publish`, which rebuilds the APK at the version the helper bumps to
-next: what reaches GitHub is then the build cut at the tag, and what reaches kobup is one
-`versionCode` further on with the same code in it. Uploading afterwards instead makes the two
-channels byte-identical at the cost of an asset named `v<version>` whose manifest says otherwise.
+Run it after `make android-publish`, which is what bumps `version.properties` to the tag's number:
+an APK built before it carries the previous release's `versionName`, and the target refuses it. Both
+channels then carry the same bytes.
 
 Every release since the first carries it; a release without the APK is an incomplete release.
 
