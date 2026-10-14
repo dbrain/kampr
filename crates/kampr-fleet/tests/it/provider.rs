@@ -559,3 +559,64 @@ async fn drain(supervisor: Supervisor) -> String {
     let _ = driver.await;
     text
 }
+
+/// **A run is finished once everything it printed has been read, not once its child has exited.**
+/// The exit is seen by a poll and the output by a reader thread, so a reader behind the child —
+/// a loaded CI runner, or here a slow consumer — published `Exited` with the end of the output
+/// still in the pty, and a transcript read at that moment was missing it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_run_has_everything_it_printed() {
+    let script =
+        "echo first; sleep 0.05; echo second; sleep 0.05; echo third; sleep 0.05; echo the-last-line";
+    let argv = ["sh", "-c", script].map(String::from).to_vec();
+    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
+    let (tx, mut events) = mpsc::channel(1);
+    let driver = tokio::spawn(supervisor.drive(tx));
+    let mut text = String::new();
+    let finished = tokio::time::timeout(PATIENCE, async {
+        let mut stalled = false;
+        while let Some(event) = events.recv().await {
+            match event {
+                RunEvent::Bytes(bytes) => text.push_str(&String::from_utf8_lossy(&bytes)),
+                RunEvent::State(state) if state.finished() => return,
+                _ => {}
+            }
+            if !stalled && !text.is_empty() {
+                stalled = true;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    })
+    .await;
+    driver.abort();
+    assert!(finished.is_ok(), "the run never finished");
+    assert!(text.contains("the-last-line"), "finished having printed {text:?}",);
+}
+
+/// The wait for the rest of the output is bounded: a child left behind that ignores the hangup
+/// holds the pty open, and the reader it keeps blocked would otherwise keep the run unfinished.
+#[tokio::test]
+async fn a_run_whose_leftover_child_holds_the_terminal_still_finishes() {
+    let provider = provider();
+    let pane_id = provider
+        .start(
+            "stubborn",
+            &sh("trap '' HUP; sleep 30 & echo left-behind $!"),
+            None,
+            Geometry::default(),
+        )
+        .expect("a run");
+    let started = tokio::time::Instant::now();
+    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let waited = started.elapsed();
+    let text = transcript(&provider, &pane_id).await;
+    let pid = text.split_whitespace().skip_while(|w| *w != "left-behind").nth(1);
+    if let Some(pid) = pid.and_then(|p| p.parse::<i32>().ok()) {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert!(
+        waited < Duration::from_secs(8),
+        "an exited run took {waited:?} to be published"
+    );
+    assert!(pid.is_some(), "{text:?}");
+}

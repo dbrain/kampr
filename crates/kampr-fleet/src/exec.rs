@@ -26,6 +26,9 @@ use tokio::sync::mpsc;
 /// read is one small file per process in a tree that is rarely more than three deep.
 const POLL: Duration = Duration::from_millis(250);
 
+/// How long an exited run waits for the reader to read what is still in the pty.
+const DRAIN: Duration = Duration::from_secs(3);
+
 /// How long a job with no readable state and no output must be silent before it is called quiet.
 ///
 /// This is the *fallback* rung, for the hosts probes #331/#332 describe — never the rung that
@@ -334,7 +337,10 @@ impl Supervisor {
         };
 
         self.killer().hangup();
-        reader.abort();
+        // The exit is seen by a poll and the output by the reader, so the end of the output can
+        // still be in the pty here; `Exited` published before it is a finished run missing its
+        // last lines. Bounded, because a grandchild that ignores the hangup holds the slave open.
+        let _ = tokio::time::timeout(DRAIN, reader).await;
         let _ = events.send(RunEvent::State(final_state.clone())).await;
         Ok(final_state)
     }
