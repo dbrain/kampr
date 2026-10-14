@@ -35,15 +35,40 @@ devices about the other.
 the operator's unread flag. Kampr reads it and never creates it; every read leaves it standing and
 only focus destroys it (#357, #396), which is the operator's press and never Kampr's (rule 3).
 
-It therefore comes down two ways, and they are not the same:
+It therefore comes down two ways, and they end in the same place:
 
 - **Focused at the desk.** herdr's `done` collapses, the pane leaves the herd's done set, and the
   node sends the falling edge — the `count: 0` payload that takes the notification down.
-- **Read in the app.** Nothing reaches the node at all: clearing herdr's marker would take a focus
-  op. The client holds this fact alone in `SeenDone`, and `AppState.reconcileNotifications` takes
-  its own notification down from `Herd.unreadDone`. `openPane` reconciles immediately rather than
-  waiting for the next herd update, because that update is up to a poll interval away and the
-  operator is looking at the pane now.
+- **Read on any Kampr client.** A pane on the screen is read: open full screen or in a mosaic
+  cell in the app (on a phone, only the mosaic cell showing), or anywhere in the TUI's visible tab.
+  The client sends `done.read` with the `updated_at` that client saw. herdr's marker is left alone — clearing it
+  would take a focus op — and the node keeps the read in its own ledger (`crates/kampr-node/src/reads.rs`,
+  `<state>/reads.json`) and publishes the pane as `idle` from then on. To the push watcher that is
+  the same falling edge as a focus at the desk, so the phone is sent the resync that takes the
+  pane off it; to every other client it is a pane with nothing to read.
+
+The read is keyed by `updated_at`, so the next finish is unread again. It is overlaid **after**
+`Stamps` on every rebuild: a pane no transcript stamps arrives with no `updated_at`, and a read
+matched against none is matched by id alone, so overlaid first it would stay read through every
+later finish. It is bounded by recency (256) rather than pruned against the herd, because a herd
+rebuilt while herdr is unreachable has no panes and forgetting every read then would buzz the
+phone about all of them when it came back.
+
+The ledger lives on the node the client is talking to, which is the hub for every client that goes
+through one — and the hub is what sends the pushes, over a herd that includes every peer's panes.
+A client connected straight to a peer tells that peer, and the peer's herd reaches the hub with
+the pane already `idle`, so the hub's pushes clear too. The other direction does not hold: a read
+told to the hub stays on the hub, and a client connected straight to the peer still sees `done`.
+
+The client still keeps its own copy in `SeenDone`. It is what a node too old for the verb gets,
+and it is how a read made offline reaches the node: a pane this device has read that the herd
+still calls `done` is told again, once per connection. `AppState.reconcileNotifications` takes its
+own notification down from `Herd.unreadDone` without waiting for the round trip.
+
+**A batch is newest first, and titled by its newest** — `Fix the push names and 2 others
+finished` — because the collapsed notification is its title, and "6 agents finished" is a title
+nobody opens. Each agent is named by its session title where it has one, then gets one line of the
+body: name, then where it ran.
 
 **The body is where it ran, and that is a deliberate ceiling.** The honest analogue of the
 question would be the agent's closing message, and resolving that means locating and parsing the

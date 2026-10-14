@@ -357,6 +357,10 @@ fn client() -> Vec<ClientMsg> {
         },
         ClientMsg::Unwatch { pane: pane() },
         ClientMsg::AnswerSubmit { pane: pane() },
+        ClientMsg::DoneRead {
+            pane: pane(),
+            at: Some("2026-10-14T09:00:00Z".into()),
+        },
         ClientMsg::Input {
             pane: pane(),
             text: Some("t".into()),

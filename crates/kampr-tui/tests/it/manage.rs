@@ -18,6 +18,7 @@ use kampr_tui::render::fit::{Chrome, Display, Need};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -1548,5 +1549,65 @@ async fn a_node_that_cannot_search_is_told_apart_from_one_that_found_nothing() {
     assert!(
         !said.contains("↵ search"),
         "and no prompt is opened at all:\n{said}"
+    );
+}
+
+/// A finish read at this desk is read everywhere: the node keeps it and publishes the pane as
+/// `idle`, which is what takes it off the phone. herdr's own `done` is not this client's to clear.
+#[tokio::test]
+async fn focusing_a_finished_pane_tells_the_node_which_finish_was_read() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut finished = pane("01JNODE/w1:p1", "herdr", Some("claude"), "done");
+    finished["updated_at"] = json!("2026-10-14T09:00:00Z");
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([finished]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+
+    let _app = app(&client);
+
+    let read = conn.frame("done.read").await;
+    assert_eq!(read["pane"], "01JNODE/w1:p1");
+    assert_eq!(read["at"], "2026-10-14T09:00:00Z");
+}
+
+/// The mosaic is the focused pane's whole tab, and a finish in any cell of it is on the screen.
+#[tokio::test]
+async fn every_finished_pane_on_the_screen_is_read_not_only_the_focused_one() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([
+            pane("01JNODE/w1:p1", "herdr", Some("claude"), "done"),
+            pane("01JNODE/w1:p2", "herdr", Some("claude"), "done"),
+        ]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+
+    let _app = app(&client);
+
+    let mut read = HashSet::new();
+    for _ in 0..2 {
+        read.insert(
+            conn.frame("done.read").await["pane"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    assert_eq!(
+        read,
+        HashSet::from(["01JNODE/w1:p1".to_string(), "01JNODE/w1:p2".to_string()])
     );
 }

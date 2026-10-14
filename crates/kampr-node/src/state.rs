@@ -64,6 +64,7 @@ pub struct Node {
     journals: watch::Sender<Arc<Journals>>,
     caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
+    reads: Arc<crate::reads::Reads>,
     /// Bumped whenever the fleet book changes, so a save made on the phone reaches the desktop
     /// that is looking at the same node right now rather than at its next connection.
     book: watch::Sender<u64>,
@@ -94,6 +95,7 @@ impl Node {
         });
 
         let (herd, _) = watch::channel(Arc::new(HerdModel::default()));
+        let reads = Arc::new(crate::reads::Reads::load(state_dir.join("reads.json")));
         let (book, _) = watch::channel(0u64);
         let home = config.journal_home();
         let ledger = Ledger::load(state_dir.join("sessions.json"));
@@ -104,7 +106,10 @@ impl Node {
             tokio::spawn(refresh_herd(
                 sessions.clone(),
                 peers.clone(),
-                herd.clone(),
+                HerdOut {
+                    herd: herd.clone(),
+                    reads: reads.clone(),
+                },
                 journals.clone(),
                 ledger,
                 home,
@@ -140,6 +145,7 @@ impl Node {
             journals,
             caps: crate::caps::Caps::default(),
             herd,
+            reads,
             book,
             identity: OnceLock::new(),
             tasks: Mutex::new(tasks),
@@ -197,7 +203,17 @@ impl Node {
     /// Test-visible: the model is built by [`refresh_herd`] from what a herdr reports, and a test
     /// that needs a *particular* herd — or one that moves at a particular moment — cannot make a
     /// herdr produce it.
-    pub fn publish_herd(&self, model: HerdModel) {
+    pub fn publish_herd(&self, mut model: HerdModel) {
+        self.reads.overlay(&mut model);
+        self.herd.send_replace(Arc::new(model));
+    }
+
+    /// Republished at once rather than at the next rebuild, which can be thirty seconds away: the
+    /// phone's notification is what is waiting on it.
+    pub fn mark_read(&self, pane: &str, at: Option<String>) {
+        self.reads.mark(pane, at);
+        let mut model = HerdModel::clone(&self.herd.borrow());
+        self.reads.overlay(&mut model);
         self.herd.send_replace(Arc::new(model));
     }
 
@@ -315,10 +331,16 @@ async fn build_auth(config: &Config, state_dir: &Path) -> Result<Auth> {
     )?)
 }
 
+/// Where a rebuilt herd goes, and what is laid over it on the way.
+struct HerdOut {
+    herd: watch::Sender<Arc<HerdModel>>,
+    reads: Arc<crate::reads::Reads>,
+}
+
 async fn refresh_herd(
     sessions: Arc<Sessions>,
     peers: Arc<Peers>,
-    herd: watch::Sender<Arc<HerdModel>>,
+    out: HerdOut,
     journals: watch::Sender<Arc<Journals>>,
     ledger: Arc<Ledger>,
     home: PathBuf,
@@ -359,8 +381,8 @@ async fn refresh_herd(
                 .filter(|p| !ours(&p.node_id) && !ours(&p.id))
                 .cloned(),
         );
-        stamps.stamp(&mut model);
-        herd.send_replace(Arc::new(model));
+        settle(&mut stamps, &out.reads, &mut model);
+        out.herd.send_replace(Arc::new(model));
 
         // A transcript appearing on disk is the one change nothing signals — no herdr event, no
         // provider revision, no watcher — so the sweep shortens to the retry floor for exactly as
@@ -378,6 +400,14 @@ async fn refresh_herd(
         // A harness installed after the node started should not need a restart to be seen.
         journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home, ledger.clone())));
     }
+}
+
+/// The reads go on after the stamps. A pane no transcript stamps arrives with no `updated_at`,
+/// and a read matched against none is matched by id alone — so overlaid first, it would stay read
+/// through every later finish.
+fn settle(stamps: &mut Stamps, reads: &crate::reads::Reads, model: &mut HerdModel) {
+    stamps.stamp(model);
+    reads.overlay(model);
 }
 
 /// Waits for the next value, and for ever once there can be no next value.
@@ -823,6 +853,45 @@ fn chosen_name(marker: &SessionMarker) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pane_no_transcript_stamps_is_unread_again_when_it_finishes_again() {
+        use kampr_core::provider::{AgentStatus, PaneInfo};
+        let dir = tempfile::tempdir().unwrap();
+        let reads = crate::reads::Reads::load(dir.path().join("reads.json"));
+        let mut stamps = super::Stamps::default();
+        let round = |stamps: &mut super::Stamps, status| {
+            let mut model = super::HerdModel {
+                nodes: Vec::new(),
+                panes: vec![kampr_core::wire::PaneEntry::new(
+                    "01J",
+                    &PaneInfo {
+                        pane_id: "w1:p1".into(),
+                        agent: Some("codex".into()),
+                        agent_status: status,
+                        ..PaneInfo::default()
+                    },
+                    false,
+                )],
+            };
+            super::settle(stamps, &reads, &mut model);
+            model.panes.remove(0)
+        };
+
+        let first = round(&mut stamps, AgentStatus::Done);
+        reads.mark(&first.id, first.updated_at.clone());
+        assert_eq!(
+            round(&mut stamps, AgentStatus::Done).agent_status,
+            AgentStatus::Idle
+        );
+        round(&mut stamps, AgentStatus::Working);
+
+        assert_eq!(
+            round(&mut stamps, AgentStatus::Done).agent_status,
+            AgentStatus::Done,
+            "it worked and finished again, and nobody has read that"
+        );
+    }
+
     use super::*;
     use crate::caps::SessionEntry;
 

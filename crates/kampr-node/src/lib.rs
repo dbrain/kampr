@@ -23,6 +23,7 @@ pub mod paste;
 pub mod pasted;
 pub mod pending;
 pub mod push;
+pub mod reads;
 pub mod relay;
 pub mod restore;
 pub mod session;

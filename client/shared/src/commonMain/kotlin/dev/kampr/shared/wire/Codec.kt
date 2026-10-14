@@ -177,6 +177,13 @@ object Wire {
         }
         is ClientMsg.Answer -> buildJsonObject { put("t", "answer"); put("pane", msg.pane); put("key", msg.key) }
         is ClientMsg.AnswerSubmit -> buildJsonObject { put("t", "answer.submit"); put("pane", msg.pane) }
+        is ClientMsg.DoneRead ->
+            buildJsonObject {
+                put("t", "done.read")
+                put("pane", msg.pane)
+                msg.at?.let { put("at", it) }
+            }
+
         is ClientMsg.ConvoLoad -> buildJsonObject {
             put("t", "convo.load"); put("pane", msg.pane); msg.before?.let { put("before", it) }
         }

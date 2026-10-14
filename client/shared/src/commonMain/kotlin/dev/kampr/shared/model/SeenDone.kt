@@ -7,10 +7,11 @@ import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.wire.PaneInfo
 
 // herdr's `done` is the operator's unread flag — a pane that finished `working`→`idle` while
-// nobody was looking at it. Marking one read has to stay a *client-side* fact: the only thing that
-// clears herdr's own marker is making the pane the session-focused pane, and `pane.focus`,
-// `tab.focus` and `workspace.focus` all do that. That is the operator's press, never a side effect
-// of opening a view (rule 3), so nothing here reaches the node.
+// nobody was looking at it. The only thing that clears herdr's own marker is making the pane the
+// session-focused pane, which is the operator's press and never a side effect of opening a view
+// (rule 3). So a read is kept here, and told to the node as `done.read`: the node keeps its own
+// ledger and publishes a read finish as `idle`, which is what takes it off every other device.
+// This copy is what a node too old for the verb still gets, and what is told to one that missed it.
 //
 // Read is keyed by the pane's `updatedAt` as well as its id, so the *next* time that pane finishes
 // the flag is raised again rather than the pane going quiet for good. A pane with no `updatedAt`
@@ -72,12 +73,15 @@ class SeenDone(private val prefs: Prefs? = null, private val key: String = "seen
 
 // The finished panes this device has not read yet — the set a `done` notification stands for.
 //
-// It is not `store.blocked()`'s twin, because the two empty for different reasons. A question
-// leaves the herd when anyone anywhere answers it; a finish leaves *this device's* screen when
-// this device reads it, which is a fact only `SeenDone` holds. Reconciling against herdr's own
-// `done` alone would leave the notification standing after the operator had read the pane here.
+// Not `store.blocked()`'s twin. The node takes a read finish out of the herd, but only once it has
+// been told, and this device's read is the fact it is waiting on — so reconciling against the
+// herd alone would leave the notification standing for the round trip, or for good on a node too
+// old to know the verb.
 fun Herd.unreadDone(seen: SeenDone): List<PaneInfo> =
     panes.filter { statusOf(it) == AgentStatus.Done && !seen.hasRead(it) }
+
+// Read here and still `done` on the node: the finishes the node has not been told about.
+fun Herd.readDone(seen: SeenDone): List<PaneInfo> = panes.filter { statusOf(it) == AgentStatus.Done && seen.hasRead(it) }
 
 // One transform, at the one place the UI reads the herd, so the mark, the spoken status, the
 // triage list and `paneOrder`'s rank all agree. Demoting only at the render site would leave a

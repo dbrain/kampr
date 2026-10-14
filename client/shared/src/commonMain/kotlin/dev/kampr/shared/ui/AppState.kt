@@ -26,6 +26,7 @@ import dev.kampr.shared.net.createInstallPrompt
 import dev.kampr.shared.net.defaultEndpoint
 import dev.kampr.shared.net.deviceName
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.readDone
 import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.platform.createPrefs
@@ -555,8 +556,9 @@ class AppState(
     // the same change for the same reason — the terminal is what a terminal client opens on.
     var compact: Boolean = false
 
-    // Opening the pane is what marks its `done` read. It is the only trigger, and it is local:
-    // clearing herdr's own marker would take a focus op, which is the operator's press.
+    // Opening the pane is what marks its `done` read. herdr's own marker is left alone, since
+    // clearing it would take a focus op, which is the operator's press; the node is told instead,
+    // and it is what takes the finish off every other device.
     val seenDone = SeenDone(prefs)
 
     fun openPane(paneId: String, prefer: PaneView? = null) {
@@ -681,8 +683,35 @@ class AppState(
         // had nothing to mark; and one already open when the agent in it finishes, which is
         // somebody watching it happen. herdr can say `done` for either (#399), and a notification
         // about the pane already filling the screen is the app talking to itself.
-        (screen as? Screen.Pane)?.let { seenDone.saw(store.paneInfo(it.paneId)) }
+        for (pane in onScreen()) seenDone.saw(store.paneInfo(pane))
+        tellNodeRead(herd)
         push.reconcile(store.blocked().isNotEmpty(), herd.unreadDone(seenDone).isNotEmpty())
+    }
+
+    private fun onScreen(): List<String> = when (val current = screen) {
+        is Screen.Pane -> listOf(current.paneId)
+        Screen.Mosaic -> mosaicShowing
+        else -> emptyList()
+    }
+
+    private var mosaicShowing: List<String> = emptyList()
+
+    fun showing(panes: List<String>) {
+        mosaicShowing = panes
+        reconcileNotifications(store.herd.value)
+    }
+
+    // Finishes told to the node on this socket. The node publishes a read finish as `idle`, so a
+    // pane still `done` here and read here is one it has not heard about — read while offline, or
+    // before it could be told — and saying so again on every herd frame until it answers would be
+    // a frame per pane per update to a node too old to know the verb.
+    private val toldNode = HashSet<Pair<String, String?>>()
+
+    private fun tellNodeRead(herd: Herd) {
+        if (store.status.value !is ConnectionStatus.Live) return
+        for (pane in herd.readDone(seenDone)) {
+            if (toldNode.add(pane.id to pane.updatedAt)) connection.send(ClientMsg.DoneRead(pane.id, pane.updatedAt))
+        }
     }
 
     // Last in the class on purpose: an Unconfined collector runs its first emission inside the
@@ -692,7 +721,12 @@ class AppState(
         // as it did. Going on believing they are held would mean the next view of one claiming
         // nothing at all.
         scope.launch {
-            store.status.collect { if (it !is ConnectionStatus.Live) matches.disconnected() }
+            store.status.collect {
+                if (it !is ConnectionStatus.Live) {
+                    matches.disconnected()
+                    toldNode.clear()
+                }
+            }
         }
         // A claim is believed when the node answers it and not before — see `MatchHolds`.
         scope.launch { store.acks.collect(matches::acked) }

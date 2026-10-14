@@ -1219,6 +1219,14 @@ the same path but is **not** an error and does not close anything — it arrives
 // writes are `manage` ops. See "The fleet book" below.
 { "t": "fleet.book", "recent": [ … ], "saved": [ … ] }
 
+// The operator read this pane's finish, on this device. `at` is the pane's `updated_at` as the
+// client saw it. The node keeps it (`<state>/reads.json`, the newest 256) and publishes a `done`
+// pane whose `updated_at` matches — or that has none — as `idle` from then on, so every other
+// client and the phone's notification see it read. No reply: the herd frame is the answer. A pane
+// this node is not serving is `unknown_pane`. herdr's own `done` is not touched; only focus clears
+// that, and Kampr does not focus (rule 3).
+{ "t": "done.read", "pane": "01J.../w3:p2", "at": "2026-10-14T09:00:00Z" }
+
 { "t": "resync" }                       // node replies with herd + grid.reset for every watched pane
 { "t": "ping", "n": 7 }                 // -> {"t":"pong","n":7}
 ```
@@ -2015,8 +2023,14 @@ worker outlives the page that registered it and may be older than the node sendi
   "count": 1,
   "pane": "01J.../w3:p2",                     // null on a batch — a tap opens the triage list
   "panes": [ { "pane": "01J.../w3:p2", "node": "01J...", "agent": "claude",
-               "label": "kampr", "question": "Do you want to make this edit?" } ] }
+               "label": "kampr", "title": "Fix the push names",
+               "detail": "Do you want to make this edit?" } ] }
 ```
+
+**A batch is newest first and titled by its newest**: `Fix the push names and 2 others finished`,
+then one line per agent in the body, at most six and then `and N more`. An agent is named by its
+session's `title` where it has one — the same title the herd carries — and by `agent · label`
+otherwise, because every pane opened from a home directory has `~` for a workspace.
 
 **Simultaneous blocks are one notification.** A 900 ms window opens at the first block; everything
 inside it lands in one payload, split per subscription so a device that muted one of three agents

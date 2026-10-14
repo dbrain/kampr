@@ -207,6 +207,10 @@ impl Client {
         }))
     }
 
+    pub fn done_read(&self, pane: &str, at: Option<&str>) -> bool {
+        self.send(json!({ "t": "done.read", "pane": pane, "at": at }))
+    }
+
     pub fn unwatch(&self, pane: &str) -> bool {
         self.inner.watched.lock().expect("watched").remove(pane);
         self.send(json!({ "t": "unwatch", "pane": pane }))

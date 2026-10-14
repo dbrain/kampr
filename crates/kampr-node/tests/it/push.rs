@@ -172,6 +172,7 @@ fn blocked(pane: &str, agent: &str, question: &str) -> Agent {
         node: "01J".into(),
         agent: Some(agent.into()),
         label: Some("kampr".into()),
+        title: None,
         detail: Some(question.into()),
     }
 }
@@ -504,6 +505,7 @@ fn finished(pane: &str, agent: &str, cwd: &str) -> Agent {
         node: "01J".into(),
         agent: Some(agent.into()),
         label: Some("kampr".into()),
+        title: None,
         detail: Some(cwd.into()),
     }
 }

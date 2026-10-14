@@ -51,6 +51,8 @@ pub struct Agent {
     pub agent: Option<String>,
     /// Workspace or pane label — what a human calls this agent.
     pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// The one line under the name, and what it says depends on the kind.
     ///
     /// **Blocked: the question itself.** Collie ships "which agent needs you" and makes you open
@@ -68,8 +70,13 @@ pub struct Agent {
 }
 
 impl Agent {
-    /// The agent's name for a human: its harness, then its label, then the raw id.
+    /// The session's own name when it has one; otherwise its harness, then its label, then the
+    /// raw id. A workspace label alone tells nothing apart: every pane opened from a home
+    /// directory is in `~`.
     fn who(&self) -> String {
+        if let Some(title) = &self.title {
+            return title.clone();
+        }
         match (&self.agent, &self.label) {
             (Some(agent), Some(label)) => format!("{agent} · {label}"),
             (Some(agent), None) => agent.clone(),
@@ -115,6 +122,10 @@ pub const VERSION: u32 = 3;
 /// stays far inside.
 const MAX_BODY: usize = 160;
 
+/// A batch is one line per agent, and a shade that clips at a handful of lines shows the rest as
+/// a count rather than a cut-off name.
+const MAX_LINES: usize = 6;
+
 impl Notification {
     /// **One notification for however many panes changed together.** Three agents finishing a
     /// batch of edits at once is one event to a human, and three notifications racing each other
@@ -157,26 +168,25 @@ impl Notification {
         let (title, body) = match (kind, panes.len()) {
             (Kind::Blocked, 1) => (
                 format!("{} needs you", first.who()),
-                first
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| "Waiting for an answer".to_string()),
+                trim(first.detail.as_deref().unwrap_or("Waiting for an answer")),
             ),
-            (Kind::Blocked, n) => (format!("{n} agents need you"), lines(&panes)),
+            (Kind::Blocked, n) => (format!("{} need you", newest_and_count(&panes, n)), lines(&panes)),
             (Kind::Done, 1) => (
                 format!("{} finished", first.who()),
-                first
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| "It finished while you were away".to_string()),
+                trim(
+                    first
+                        .detail
+                        .as_deref()
+                        .unwrap_or("It finished while you were away"),
+                ),
             ),
-            (Kind::Done, n) => (format!("{n} agents finished"), lines(&panes)),
+            (Kind::Done, n) => (format!("{} finished", newest_and_count(&panes, n)), lines(&panes)),
         };
         Some(Self {
             v: VERSION,
             kind,
             title,
-            body: trim(&body),
+            body,
             tag: kind.tag().to_string(),
             count: panes.len(),
             pane: (panes.len() == 1).then(|| first.pane.clone()),
@@ -186,16 +196,28 @@ impl Notification {
     }
 }
 
+fn newest_and_count(panes: &[Agent], n: usize) -> String {
+    let newest = names(panes).swap_remove(0);
+    match n - 1 {
+        1 => format!("{newest} and 1 other"),
+        rest => format!("{newest} and {rest} others"),
+    }
+}
+
 fn lines(panes: &[Agent]) -> String {
-    names(panes)
+    let mut lines: Vec<String> = names(panes)
         .into_iter()
         .zip(panes)
+        .take(MAX_LINES)
         .map(|(who, p)| match &p.detail {
-            Some(detail) => format!("{who} — {}", trim(detail)),
-            None => who,
+            Some(detail) => trim(&format!("{who} — {detail}")),
+            None => trim(&who),
         })
-        .collect::<Vec<_>>()
-        .join(" · ")
+        .collect();
+    if panes.len() > MAX_LINES {
+        lines.push(format!("and {} more", panes.len() - MAX_LINES));
+    }
+    lines.join("\n")
 }
 
 /// Two agents of the same harness in the same workspace render the same name, and a body that
@@ -246,8 +268,71 @@ mod tests {
             node: "01J".into(),
             agent: Some(harness.into()),
             label: Some("kampr".into()),
+            title: None,
             detail: detail.map(str::to_string),
         }
+    }
+
+    fn titled(pane: &str, title: &str, cwd: &str) -> Agent {
+        Agent {
+            title: Some(title.into()),
+            label: Some("~".into()),
+            ..agent(pane, "claude", Some(cwd))
+        }
+    }
+
+    /// The report: three finished sessions read `claude · ~ — ~ · claude · robie — ~/dev/robie`,
+    /// because every pane opened from a home directory has `~` for a workspace. The session's own
+    /// name is what the operator calls it everywhere else, so it is what the shade calls it too.
+    #[test]
+    fn a_session_with_a_title_is_named_by_it() {
+        let note = Notification::batch(
+            Kind::Done,
+            vec![titled("w1:p1", "Fix the push names", "~/dev/kampr")],
+        )
+        .unwrap();
+        assert_eq!(note.title, "Fix the push names finished");
+        assert_eq!(note.body, "~/dev/kampr");
+    }
+
+    /// "6 agents finished" says nothing worth opening the shade for. The collapsed notification is
+    /// its title, so the title names the newest and counts the rest.
+    #[test]
+    fn a_batch_is_titled_by_its_first_agent_and_counts_the_rest() {
+        let panes = vec![
+            titled("w1:p1", "Fix the push names", "~"),
+            titled("w2:p1", "Port the mesh", "~"),
+            titled("w3:p1", "Tidy the docs", "~"),
+        ];
+        let done = Notification::batch(Kind::Done, panes.clone()).unwrap();
+        assert_eq!(done.title, "Fix the push names and 2 others finished");
+        let blocked = Notification::batch(Kind::Blocked, panes[..2].to_vec()).unwrap();
+        assert_eq!(blocked.title, "Fix the push names and 1 other need you");
+    }
+
+    #[test]
+    fn a_batch_names_one_agent_per_line() {
+        let note = Notification::batch(
+            Kind::Done,
+            vec![
+                titled("w1:p1", "Fix the push names", "~"),
+                agent("w2:p1", "claude", Some("~/dev/robie")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(note.body, "Fix the push names — ~\nclaude · kampr — ~/dev/robie");
+    }
+
+    #[test]
+    fn a_batch_too_long_for_the_shade_says_how_many_it_left_out() {
+        let panes: Vec<Agent> = (0..MAX_LINES + 3)
+            .map(|i| titled(&format!("w{i}:p1"), &format!("Session {i}"), "~"))
+            .collect();
+        let note = Notification::batch(Kind::Done, panes).unwrap();
+        let lines: Vec<&str> = note.body.lines().collect();
+        assert_eq!(lines.len(), MAX_LINES + 1, "{}", note.body);
+        assert_eq!(lines[MAX_LINES], "and 3 more");
+        assert_eq!(note.count, MAX_LINES + 3);
     }
 
     /// The thing Collie's own architecture doc calls its known gap. The node already has the
@@ -322,7 +407,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(note.count, 3);
-        assert_eq!(note.title, "3 agents need you");
+        assert_eq!(note.title, "claude · kampr (w1:p1) and 2 others need you");
         assert!(note.body.contains("Run the tests?"), "{}", note.body);
         assert!(note.body.contains("Apply the patch?"), "{}", note.body);
         assert_eq!(note.panes.len(), 3);
@@ -342,7 +427,7 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(note.title, "2 agents finished");
+        assert_eq!(note.title, "claude · kampr and 1 other finished");
         assert!(note.body.contains("~/dev/kampr"), "{}", note.body);
         assert!(note.body.contains("~/dev/herdr"), "{}", note.body);
         assert_eq!(note.pane, None);
@@ -414,7 +499,7 @@ mod tests {
             ],
         );
         assert_eq!(note.count, 2);
-        assert_eq!(note.title, "2 agents need you");
+        assert_eq!(note.title, "codex · kampr and 1 other need you");
         assert!(note.body.contains("Apply the patch?"), "{}", note.body);
         assert!(!note.alert);
     }
@@ -458,6 +543,7 @@ mod tests {
                 node: "01J".into(),
                 agent: None,
                 label: None,
+                title: None,
                 detail: None,
             }],
         )

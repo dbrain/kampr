@@ -2,6 +2,7 @@ mod android_passkeys;
 mod attachment;
 mod attachment_mesh;
 mod backpressure;
+mod done_read;
 mod fleet_book;
 mod limits;
 mod live;

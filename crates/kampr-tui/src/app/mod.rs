@@ -158,6 +158,9 @@ pub struct App {
     /// attacker-influenceable, so nothing here is navigated on a click.
     offered: Option<String>,
     watching: HashSet<String>,
+    /// Finishes told to the node on this connection, so a node too old for `done.read` is not told
+    /// again on every herd frame.
+    told: HashSet<(String, Option<String>)>,
     /// The pane this client is holding at its own window's size, and the size it asked for.
     ///
     /// Set when the node *answers*, never when the ask goes out. A claim is `pane.size` and it can
@@ -226,6 +229,7 @@ impl App {
             noted: std::time::Instant::now(),
             offered: None,
             watching: HashSet::new(),
+            told: HashSet::new(),
             matching: None,
             asking: None,
             declined: None,
@@ -276,6 +280,7 @@ impl App {
                 // the pane at its own geometry, with the strip saying it was held and the menu
                 // offering to stop a hold nobody had.
                 self.matching = None;
+                self.told.clear();
                 self.asking = None;
                 self.declined = None;
                 self.settling = None;
@@ -614,6 +619,29 @@ impl App {
         self.sync_watches();
     }
 
+    /// A pane on the screen is a pane being read, so a finish in it is read. herdr's own `done` is
+    /// left standing — clearing it takes a focus op, which is the operator's press at the desk —
+    /// and the node is told instead, which is what takes it off every other device.
+    fn read_on_screen(&mut self) {
+        let on_screen = self.mosaic();
+        let finished: Vec<(String, Option<String>)> = {
+            let state = self.client.state();
+            on_screen
+                .into_iter()
+                .filter_map(|pane| {
+                    let entry = state.herd.pane(&pane)?;
+                    (entry.agent_status == kampr_core::provider::AgentStatus::Done)
+                        .then(|| (pane, entry.updated_at.clone()))
+                })
+                .collect()
+        };
+        for (pane, at) in finished {
+            if self.told.insert((pane.clone(), at.clone())) {
+                self.client.done_read(&pane, at.as_deref());
+            }
+        }
+    }
+
     /// A watch is stated once and re-issued by the client on every reconnection, so this only
     /// has to say what has changed.
     pub fn sync_watches(&mut self) {
@@ -626,6 +654,7 @@ impl App {
             self.client.unwatch(pane);
         }
         self.watching = want;
+        self.read_on_screen();
     }
 
     /// The fit ladder, climbed once per pane geometry and terminal size rather than per frame:

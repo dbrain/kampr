@@ -7,6 +7,8 @@ use kampr_core::wire::PaneEntry;
 use kampr_push::{Agent, Change, Kind, Outcome, Reach, Sender, Vapid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
@@ -261,9 +263,20 @@ async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Ses
                     node: pane.node_id.clone(),
                     agent: pane.agent.clone(),
                     label: pane.label.clone().or_else(|| pane.workspace.clone()),
+                    title: pane.title.clone(),
                     detail: detail_for(kind, pane, &sessions).await,
                 });
             }
+            // Newest first: a batch is titled by its first agent, and the one that just changed
+            // is the one the operator is being told about.
+            outstanding.sort_by_cached_key(|agent| {
+                std::cmp::Reverse(
+                    model
+                        .pane(&agent.pane)
+                        .and_then(|p| p.updated_at.as_deref())
+                        .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok()),
+                )
+            });
             // Bounded on purpose, and what a full queue costs is a *delay* rather than a
             // notification: this kind's baseline is left where it was, so the next herd update
             // re-derives the same change against the same baseline and offers it again. The
@@ -357,6 +370,10 @@ mod tests {
                         },
                         false,
                     )
+                })
+                .map(|pane| PaneEntry {
+                    title: Some(format!("Session {}", pane.id)),
+                    ..pane
                 })
                 .collect(),
         }
@@ -536,6 +553,34 @@ mod tests {
             Some("/srv/build/kampr"),
             "where it ran is what tells three finished agents apart"
         );
+        assert_eq!(
+            change.outstanding[0].title.as_deref(),
+            Some("Session 01J/w1:p1"),
+            "the session's name is what the operator calls it"
+        );
+    }
+
+    /// A batch is titled by its first agent, so the first has to be the one that just finished
+    /// rather than whichever pane herdr happens to list first.
+    #[tokio::test]
+    async fn a_batch_lists_the_newest_finish_first() {
+        let mut watched = watching(16);
+        let mut model = herd(AgentStatus::Done, &["w1:p1", "w1:p2", "w1:p3", "w1:p4"]);
+        for (pane, at) in model.panes.iter_mut().zip([
+            Some("2026-10-14T09:00:00Z"),
+            Some("2026-10-14T09:00:00.5Z"),
+            None,
+            Some("2026-10-14T08:00:00Z"),
+        ]) {
+            pane.updated_at = at.map(str::to_string);
+        }
+
+        watched.herd.send_replace(Arc::new(model));
+        let change = next(&mut watched.done, "four panes finished").await;
+        watched.task.abort();
+
+        let order: Vec<&str> = change.outstanding.iter().map(|a| a.pane.as_str()).collect();
+        assert_eq!(order, ["01J/w1:p2", "01J/w1:p1", "01J/w1:p4", "01J/w1:p3"]);
     }
 
     /// And it falls the same way. Focusing the pane at the desk is the one thing that destroys

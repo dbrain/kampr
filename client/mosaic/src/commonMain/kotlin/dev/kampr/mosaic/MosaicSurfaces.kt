@@ -47,8 +47,14 @@ class MosaicSurfaces : MosaicHost {
 
         DisposableEffect(mosaic) {
             mosaic.attach()
-            onDispose { mosaic.detach() }
+            onDispose {
+                mosaic.detach()
+                state.showing(emptyList())
+            }
         }
+        // A phone's mosaic shows one cell at a time, and a finish in a cell swiped past is unread.
+        val showing = if (breakpoint == Breakpoint.Desktop) mosaic.panes else listOfNotNull(mosaic.focused)
+        LaunchedEffect(showing) { state.showing(showing) }
         LaunchedEffect(herd) { mosaic.reconcile(herd) }
 
         if (breakpoint == Breakpoint.Desktop) {

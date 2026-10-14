@@ -104,7 +104,7 @@ const SUB_PAGE: usize = 200;
 /// reached by a narrower query rather than by a longer frame.
 const CONVO_MATCHES: usize = 50;
 
-const CLIENT_VERBS: [&str; 12] = [
+const CLIENT_VERBS: [&str; 13] = [
     "watch",
     "unwatch",
     "answer.submit",
@@ -115,6 +115,7 @@ const CLIENT_VERBS: [&str; 12] = [
     "convo.sub",
     "convo.find",
     "find",
+    "done.read",
     "resync",
     "ping",
 ];
@@ -742,6 +743,7 @@ impl Session {
             } => self.find(&pane, &query, backward, from).await,
             ClientMsg::ConvoFind { pane, query } => self.convo_find(&pane, &query),
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
+            ClientMsg::DoneRead { pane, at } => self.done_read(&pane, at),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
                 self.wire.send(&ServerMsg::Pong { n });
@@ -2000,6 +2002,15 @@ impl Session {
     /// So both bounds are on the write itself: the pane has to be one this node actually serves,
     /// and the blob has to fit. Otherwise any device, of any role, fills the disk one arbitrary
     /// pane id at a time.
+    fn done_read(&self, pane: &str, at: Option<String>) {
+        if self.node.herd().pane(pane).is_none() {
+            self.wire
+                .error(ErrorCode::UnknownPane, "no such pane", Some(pane));
+            return;
+        }
+        self.node.mark_read(pane, at);
+    }
+
     async fn prefs(&self, value: &Value) {
         if let (Some(pane), Some(Value::Object(incoming))) = (value["pane"].as_str(), value.get("prefs")) {
             if self.node.herd().pane(pane).is_none() {

@@ -23,7 +23,7 @@ pub struct Change {
     /// Which set moved. Each kind is collected, batched and delivered on its own pipeline, so a
     /// change never carries two — and a `done` can never absorb, or be absorbed by, a `blocked`.
     pub kind: Kind,
-    /// Every pane still in this kind's set, in the herd's own order.
+    /// Every pane still in this kind's set, newest first.
     pub outstanding: Vec<Agent>,
     /// Which of `outstanding` were not in the set last time. Non-empty is what makes a phone buzz.
     pub fresh: HashSet<String>,
@@ -171,6 +171,7 @@ mod tests {
             node: "01J".into(),
             agent: Some("claude".into()),
             label: None,
+            title: None,
             detail: detail.map(str::to_string),
         }
     }

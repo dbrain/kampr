@@ -273,6 +273,7 @@ mod tests {
                 node: "01J".into(),
                 agent: Some("claude".into()),
                 label: None,
+                title: None,
                 detail: Some("Run the tests?".into()),
             }],
         )

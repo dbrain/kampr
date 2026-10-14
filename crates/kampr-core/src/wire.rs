@@ -855,6 +855,20 @@ pub enum ClientMsg {
         #[serde(default)]
         from: Option<u32>,
     },
+    /// The operator has read this pane's finish, on this device.
+    ///
+    /// herdr's `done` falls only when the pane is focused at the desk, which Kampr may never do,
+    /// so without this a finish read on one device stayed unread on every other — and on the
+    /// phone's notification. The node keeps it and publishes the pane as `idle` from then on.
+    ///
+    /// `at` is the pane's `updated_at` as this client saw it, so a pane that finished again
+    /// before the frame arrived is not marked read for work nobody has looked at.
+    #[serde(rename = "done.read")]
+    DoneRead {
+        pane: String,
+        #[serde(default)]
+        at: Option<String>,
+    },
     #[serde(rename = "resync")]
     Resync,
     #[serde(rename = "ping")]

@@ -18,6 +18,10 @@ client convo.sub .id: string
 client convo.sub .pane: string
 client convo.sub .t: string
 client convo.sub : object
+client done.read .at: string
+client done.read .pane: string
+client done.read .t: string
+client done.read : object
 client find .backward: bool
 client find .from: integer
 client find .pane: string

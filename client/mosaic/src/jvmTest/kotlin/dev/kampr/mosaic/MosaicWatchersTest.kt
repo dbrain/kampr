@@ -46,7 +46,7 @@ private fun watchPane(id: String, watchers: Int?) = PaneInfo(
     watchers = watchers,
 )
 
-private object WatchSurfaces : PaneSurfaces {
+internal object WatchSurfaces : PaneSurfaces {
     @Composable
     override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
 
@@ -57,7 +57,7 @@ private object WatchSurfaces : PaneSurfaces {
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 }
 
-private fun watchTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
+internal fun watchTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
     .let { KamprTokens(SoftTheme, it, typography(it, SoftTheme.label, TypeScale.Phone)) }
 
 // A mosaic is four panes at once. The header of every cell carries the fact, because it is one

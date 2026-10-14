@@ -638,6 +638,10 @@ sealed interface ClientMsg {
 
     data class ConvoLoad(val pane: String, val before: String?) : ClientMsg
 
+    // The finish this device read, named by the `updatedAt` it saw, so a pane that finished again
+    // before the frame arrived is not marked read for work nobody has looked at.
+    data class DoneRead(val pane: String, val at: String?) : ClientMsg
+
     // Search the pane's whole scrollback. The node does the searching: this client holds a window
     // on the history and `pane.read recent` caps at 1000 rows with no offset, so a search here was
     // a search of what happened to be in hand. `from` is in rows from the live row, the one
