@@ -5,5 +5,9 @@ set -euo pipefail
 file=$(jq -r '.tool_input.file_path // empty')
 root=${CLAUDE_PROJECT_DIR:-$(pwd)}
 case "$file" in
-  "$root"/*.rs) [ -f "$file" ] && rustfmt --edition 2024 "$file" 2>/dev/null || true ;;
+  "$root"/*.rs)
+    if [ -f "$file" ]; then
+      rustfmt --edition 2024 "$file" 2>/dev/null || true
+    fi
+    ;;
 esac
