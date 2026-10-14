@@ -82,3 +82,4 @@ Nothing here restates what lives elsewhere; the point is the *reasoning*, once.
 | [0012](./0012-one-deliberate-resize-behind-a-panel.md) | One deliberate resize, behind a panel | Accepted, amended by 0013 |
 | [0013](./0013-a-standing-intent-to-match-the-view.md) | A standing intent to match the view | Accepted |
 | [0014](./0014-the-pane-width-is-read-not-inferred.md) | The pane's width is read, not inferred | Accepted |
+| [0015](./0015-what-may-write-to-a-pane.md) | What may write to a pane, and why it is never a side effect of looking | Accepted |

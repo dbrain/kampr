@@ -276,7 +276,6 @@ struct Inner {
     stream_fault: Mutex<Option<String>>,
 }
 
-/// One watched pane, for as long as its stream lives.
 struct Watching(Arc<Inner>);
 
 impl Watching {
@@ -292,7 +291,6 @@ impl Drop for Watching {
     }
 }
 
-/// What one agent pane's processes were found to be, and the harness they were looked up for.
 #[derive(Debug, Clone)]
 struct Running {
     agent: String,
@@ -1384,7 +1382,6 @@ pub fn subscriptions(agents: &[String]) -> Vec<Sub> {
         .collect()
 }
 
-/// Why the inner loop gave up its subscription.
 enum Ended {
     /// The socket closed or a refresh failed — reconnect, with backoff.
     Broken,

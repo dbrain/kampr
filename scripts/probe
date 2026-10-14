@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Search docs/03-probe-log.md without reading all 600 KB of it.
+#
+#   scripts/probe 233 331        the rows with those numbers, under their section
+#   scripts/probe observe blank  rows containing every word, case-insensitive
+#   scripts/probe --sections     the topic index: each section and the rows in it
+#   scripts/probe --cites 233    every file that cites the row
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+log="$root/docs/03-probe-log.md"
+
+usage() { sed -n '4,7s/^# \{0,1\}//p' "$0"; exit "$1"; }
+[ $# -gt 0 ] || usage 1
+
+case "$1" in
+  -h|--help) usage 0 ;;
+  --sections)
+    awk '/^## /{ if (name) print name " — " (n ? first "…" last " (" n " rows)" : "no rows"); name=substr($0,4); n=0; next }
+         /^\| *~*[0-9]+/{ split($0, c, "|"); gsub(/[ ~]/, "", c[2]); if (!n) first="#" c[2]; last="#" c[2]; n++ }
+         END { print name " — " (n ? first "…" last " (" n " rows)" : "no rows") }' "$log"
+    ;;
+  --cites)
+    shift
+    for n in "$@"; do
+      grep -rnE --include='*.rs' --include='*.kt' --include='*.md' "#${n}([^0-9]|$)" \
+        "$root/crates" "$root/client" "$root/docs" "$root"/*.md \
+        | grep -v '/build/' | sed "s|^$root/||"
+    done
+    ;;
+  *)
+    if [[ "$*" =~ ^[0-9\ ]+$ ]]; then
+      awk -v want=" $* " '/^## /{ section=$0; next }
+        /^\| *~*[0-9]+/{ split($0, c, "|"); n=c[2]; gsub(/[ ~]/, "", n); if (index(want, " " n " ")) print section "\n" $0 "\n" }' "$log"
+    else
+      awk -v words="$*" 'BEGIN { k = split(tolower(words), w, " ") }
+        /^## /{ section=$0; next }
+        /^\| *~*[0-9]+/{ line=tolower($0); for (i = 1; i <= k; i++) if (!index(line, w[i])) next; print section "\n" $0 "\n" }' "$log"
+    fi
+    ;;
+esac

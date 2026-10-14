@@ -16,7 +16,6 @@ use crate::prompt::{is_consecutive_from_one, numbered_run, strip_ansi};
 use crate::wire::PendingOption;
 use serde::{Deserialize, Serialize};
 
-/// How far above the prompt to look for a menu it is asking about.
 const MENU_LOOKBACK: usize = 12;
 
 /// The longest token inside a bracket that may still be a yes/no word. `[Y/n]`, `(yes/no)`,
@@ -101,7 +100,6 @@ impl Question {
         }
     }
 
-    /// Whether the answer must never be echoed back or retained.
     pub fn secret(&self) -> bool {
         matches!(self.shape, Shape::Secret)
     }

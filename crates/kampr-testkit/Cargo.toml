@@ -3,3 +3,9 @@ name = "kampr-testkit"
 version.workspace = true
 edition.workspace = true
 publish = false
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

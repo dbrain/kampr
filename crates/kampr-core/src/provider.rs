@@ -45,7 +45,6 @@ impl FleetState {
         }
     }
 
-    /// Whether the run has ended, however it ended.
     pub fn finished(&self) -> bool {
         matches!(self, Self::Exited { .. })
     }

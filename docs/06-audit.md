@@ -1,5 +1,9 @@
 # Completeness audit — re-decided 2026-08-21 (second pass)
 
+> **History, not status.** This is the record of the 2026-08-21 pass and its amendments up to the
+> first release on 2026-08-26, and it has not been maintained since. Read it for its method and its
+> reasoning; re-check any item against the code before acting on it.
+
 The first pass of this file was written on 2026-08-20 and went unmaintained until the morning of
 2026-08-21, when every item was re-decided against a running system. **Six fix passes landed that
 same day** (`2a31ff3`, `e6a3c7b`, `1bebb7f`, `0f545a9`, `8bde487`, `030a2c3`, `6f06234`) and this

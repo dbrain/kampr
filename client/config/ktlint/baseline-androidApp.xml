@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="build.gradle.kts">
+        <error line="108" column="75" source="standard:function-signature" />
+    </file>
+    <file name="src/androidTest/kotlin/dev/kampr/app/AgentNotificationTest.kt">
+        <error line="179" column="68" source="standard:function-signature" />
+    </file>
+    <file name="src/androidTest/kotlin/dev/kampr/app/LocalNetworkReachabilityTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/androidTest/kotlin/dev/kampr/app/PasskeyAndScannerTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/androidTest/kotlin/dev/kampr/app/PastingAFileTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="59" column="91" source="standard:function-signature" />
+        <error line="93" column="66" source="standard:function-signature" />
+    </file>
+    <file name="src/main/kotlin/dev/kampr/app/KamprPushService.kt">
+        <error line="62" column="56" source="standard:function-signature" />
+    </file>
+    <file name="src/main/kotlin/dev/kampr/app/MainActivity.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+</baseline>

@@ -23,6 +23,8 @@ unifiedpush = "3.3.4"
 androidx-credentials = "1.6.0"
 androidx-camera = "1.6.1"
 zxing = "3.5.4"
+ktlint-cli = "1.8.0"
+ktlint-gradle = "14.2.0"
 
 [libraries]
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
@@ -65,3 +67,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint-gradle" }

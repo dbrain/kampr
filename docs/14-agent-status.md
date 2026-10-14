@@ -383,7 +383,7 @@ it — a timing change with no guard is how the next one gets re-tuned by accide
   is asking a question would take the question off the phone. What takes it down is the operator
   focusing the pane at the desk (herdr's own marker collapsing) or reading it in the app
   (`SeenDone`, which never reaches the node — clearing herdr's marker would take a focus op).
-  [`docs/08-notifications.md`](./08-notifications.md) has the whole of it, including the payload
+  [`docs/16-notifications.md`](./16-notifications.md) has the whole of it, including the payload
   version an old client is gated on.
 - **Focus is now named in rule 3.** It is not a resize and not a read, but it is the **only** thing
   that destroys herdr's `done` marker; every read leaves it standing. Not `pane.focus` alone:

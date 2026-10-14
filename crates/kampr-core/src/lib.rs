@@ -9,6 +9,7 @@
 pub mod agent_view;
 pub mod backoff;
 pub mod herdr_provider;
+pub mod local_node;
 pub mod naming;
 pub mod procfs;
 pub mod prompt;

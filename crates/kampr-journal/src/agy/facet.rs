@@ -19,7 +19,6 @@ pub fn collect(transcript: &Path) -> Facets {
     Fold::default().facets(transcript, None)
 }
 
-/// The same fold, kept between reads.
 #[derive(Default)]
 pub struct Fold {
     cursor: Cursor,

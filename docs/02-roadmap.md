@@ -3,8 +3,9 @@
 Tick as you go. Derived from `01-implementation-findings.md`; every item traces to a finding there.
 
 > **Tick state is unreliable and was never maintained during the build.** Treat the per-phase
-> summaries below as the truth and `docs/06-audit.md` as the live gap list; the individual checkboxes
-> lag reality in both directions. Five ids were duplicated (P1.3, P1.4b, P1.6c, P4.5, P8.5) — a
+> summaries below as the truth as of 2026-08-28, the last time this file moved. `docs/06-audit.md`
+> is a dated record of the 2026-08-21 pass, not a live gap list — nothing has re-decided it since,
+> and no maintained gap list replaces it. The individual checkboxes lag reality in both directions. Five ids were duplicated (P1.3, P1.4b, P1.6c, P4.5, P8.5) — a
 > checkbox is a note to a human here, not an identifier to cite.
 
 ## Where each phase actually stands
@@ -18,7 +19,7 @@ Tick as you go. Derived from `01-implementation-findings.md`; every item traces 
 | **Phase 5** | ✅ Conversation view, both halves. Claude, Codex and `agy` adapters, markdown with real tables, turn revision by id. |
 | **Phase 7** | ✅ Setup ladder, plugin manifest, service supervision and `kampr doctor` are done and exercised, and the install path now runs: `install.sh` fetches, verifies and installs a published release, which is what the phase was waiting on. `herdr plugin install` has something to fetch too, and has not been driven end to end by anyone. |
 | **Phase 6** | ⚠️ Responsive layouts, themes and the light ground are done. Accessibility (P6.11) shipped with [ADR 0010](./adr/0010-the-grid-is-described-not-read-out.md) and the terminal now **has** a review mode (`terminal/review/`). PWA (P6.10) **is** built — manifest and service worker both ship, with no install prompt and no offline shell, deliberately — so `security.installable` is no longer overclaiming. Remaining: two controls under the 44 dp target (the column indicator at 26 dp, `Segmented` at the deliberate 36 dp `LANDSCAPE_TOUCH`), and no emulator has re-measured any of it. |
-| **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/08-notifications.md` |
+| **Phase 8** | ✅ **Built.** Per-pane status subscription (mean 2.33 s faster than the poll, probe #78), VAPID, service worker, warm prefetch, batching, the question in the body, deep link, snooze and mute, triage list. Proved against a real Firefox and Mozilla's push service. P8.6/P8.7 are the remainder. `docs/16-notifications.md` |
 | **Phase 8.5** | ➖ **Cut**, 2026-08-21. Kampr as an Android *provider*. The sandbox makes it a novelty — see below. |
 | **Phase 9** | ✅ **Running.** The workflow has published 21 releases, `v0.1.0` through `v0.1.21`, each one four tarballs (linux and macOS, x86_64 and aarch64), a `SHA256SUMS` signed keyless with cosign, and `install.sh`; a `smoke` job installs the real artefact on a clean runner and re-runs it against a tampered checksum to prove the refusal, and `verify-published` installs from the published URL after the release exists. macOS cross-compilation, cosign signing and `gh release create` are all exercised now. **The APK is not the workflow's** — `make android-publish` sends it to kobup and it is attached to the GitHub release by hand. Remaining: P9.6, the `herdr-plugin` topic, which the repository still does not carry. |
 | **Phase 4.5** | ✅ Server complete — all 13 `manage` ops, each driven against a real herd. Client complete: `client/mosaic` closes P4.5.8/P4.5.9. Remaining: P4.5.5/P4.5.6 have ops and wire but no list/remove and no stored named layouts, and P4.5.12 (`notification.show`) was never built. |
@@ -151,7 +152,7 @@ Herdr contributes nothing here and blocks nothing (findings §1.8, §3.1).
 - [~] P4.9 Per-node latency indicator in the UI (a 200 ms peer should look different from a local pane)
 
 - [x] P4.10 Enrolment and revocation: single-use join codes, a pinned hub key, a visible peer list
-- [x] P4.11 The deployment written down — one hub behind Nginx Proxy Manager (`docs/07-mesh-deployment.md`)
+- [x] P4.11 The deployment written down — one hub behind Nginx Proxy Manager (`docs/15-mesh-deployment.md`)
 
 **Gate:** two hosts, one hub, panes from both drivable from one phone. **Met on one machine**
 (`crates/kampr-node/tests/mesh.rs`: two nodes, two herdr sessions, one hub — a peer pane renders and

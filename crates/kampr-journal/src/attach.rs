@@ -233,7 +233,6 @@ impl FileRef {
     }
 }
 
-/// The things an attachment id can name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Record(Locator),
@@ -389,7 +388,6 @@ pub fn fetch(journals: &Registry, id: &str, transcript: &Path) -> Result<Fetched
     Ok(found)
 }
 
-/// The `index`th attachment of a record that has already been parsed, decoded.
 pub fn nth<'a>(found: Vec<Att<'a>>, index: u32) -> Result<Fetched, JournalError> {
     found
         .into_iter()

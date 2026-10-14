@@ -22,3 +22,9 @@ __pycache__/
 *.jks
 .env
 local.properties
+
+# Agent session state — per machine, never shared
+/.pi/
+/.gotchas/
+/.claude/settings.local.json
+/.claude/worktrees/

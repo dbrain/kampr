@@ -157,7 +157,6 @@ fn clock_ticks() -> Option<f64> {
 /// harness here, and a pane with no harness has no conversation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Harness {
-    /// The process the pane is running.
     Running(PaneProcess),
     /// The host looked and found no harness process in the pane.
     Absent,

@@ -8,7 +8,7 @@ import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
 
-// The Android half of the decision on record (docs/08-notifications.md): UnifiedPush, not FCM.
+// The Android half of the decision on record (docs/16-notifications.md): UnifiedPush, not FCM.
 // A distributor's endpoint is an RFC 8291 endpoint, so the node's sender is unchanged — no Google
 // project, no per-app secret, which is the whole point for somebody self-hosting a terminal bridge.
 class KamprPushService : PushService() {

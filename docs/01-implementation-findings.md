@@ -832,4 +832,4 @@ above that is an optional rung on §3.7's ladder, offered from the setup screen 
     settles Android. A Kampr node is already a server the user runs, and UnifiedPush 3.0 carries the
     same RFC 8291 encryption and VAPID the browser does — so one sender covers a browser, a Home
     Screen web app and an Android distributor, with no Apple developer account, no Google project
-    and no push relay to host. APNs stays off the critical path. `docs/08-notifications.md`.
+    and no push relay to host. APNs stays off the critical path. `docs/16-notifications.md`.

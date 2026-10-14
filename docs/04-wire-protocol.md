@@ -1960,7 +1960,7 @@ Additive to v1. Everything here is HTTP rather than socket messages, because a b
 push subscription to the page as JSON and a service worker — which has no socket — has to be able
 to re-register one on its own (`pushsubscriptionchange`).
 
-A client shows nothing at all unless `hello.caps.push` is true. See `docs/08-notifications.md`.
+A client shows nothing at all unless `hello.caps.push` is true. See `docs/16-notifications.md`.
 
 ```jsonc
 // What this device may do, and what it has already asked for.

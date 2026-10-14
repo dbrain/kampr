@@ -1,7 +1,7 @@
 use crate::profile::{ClientConfig, LocalDevice};
 use kampr_auth::store::{Role, Store};
 use kampr_auth::{AuditLog, Entry};
-use kampr_node::Config;
+use kampr_core::local_node::{self, LocalNode};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -72,7 +72,7 @@ pub enum ResolveError {
 /// A hub shows its peers because the herd already contains them; there is no second code path
 /// for "remote".
 pub async fn resolve(config_dir: &Path, state_dir: Option<&Path>) -> Result<Session, ResolveError> {
-    if let Ok(config) = Config::load(config_dir) {
+    if let Ok(config) = LocalNode::load(config_dir) {
         let origin = config.origin();
         if answers_healthz(&origin).await {
             return local_session(&config, config_dir, state_dir, origin).await;
@@ -113,13 +113,13 @@ pub async fn answers_healthz(origin: &str) -> bool {
 /// any role by other means — the boundary this crosses was crossed by having the file open.
 /// `08-threat-model.md` §5, "The CLI mints itself a device", carries the whole argument.
 async fn local_session(
-    config: &Config,
+    config: &LocalNode,
     config_dir: &Path,
     state_dir: Option<&Path>,
     origin: String,
 ) -> Result<Session, ResolveError> {
     let state_dir = config.resolve_state_dir(state_dir);
-    let db = Config::state_db(&state_dir);
+    let db = local_node::state_db(&state_dir);
     let store = Store::open(&db)
         .await
         .map_err(|e| ResolveError::Store(db.clone(), e))?;
@@ -184,11 +184,11 @@ async fn local_session(
 ///
 /// **Best effort, and the threat model says so**: auditing off, or a log that will not open,
 /// mints the device anyway rather than refusing to open a herd.
-fn audit(config: &Config, state_dir: &Path, device: &kampr_auth::Device) {
+fn audit(config: &LocalNode, state_dir: &Path, device: &kampr_auth::Device) {
     if !config.auth.audit {
         return;
     }
-    let Ok(log) = AuditLog::open(&Config::audit_path(state_dir)) else {
+    let Ok(log) = AuditLog::open(&local_node::audit_path(state_dir)) else {
         return;
     };
     log.record(

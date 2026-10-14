@@ -71,7 +71,6 @@ pub struct OmpAdapter {
     root: TranscriptRoot,
 }
 
-/// A session file and what the harness recorded beside it, however it was found.
 struct Found {
     transcript: Option<PathBuf>,
     session: String,
@@ -660,7 +659,6 @@ fn border_row(line: &str) -> bool {
     line.starts_with('─') && line.chars().filter(|c| *c == '─').count() >= 12
 }
 
-/// Whether a row carries one of the loader's frames.
 fn has_frame(line: &str) -> bool {
     line.chars().any(|c| SPINNER.contains(c))
 }
@@ -1171,7 +1169,6 @@ const RESULT_IS_THE_POINT: &[&str] = &["bash", "glob", "grep"];
 mod tests {
     use super::*;
 
-    /// A directory that goes away with the value that owns it.
     struct Scratch(PathBuf);
 
     impl Scratch {

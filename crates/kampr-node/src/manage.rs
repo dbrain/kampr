@@ -252,8 +252,9 @@ pub struct Manager<'a> {
     pub binary: &'a str,
     pub holds: &'a crate::holds::PaneHolds,
     pub fleet: &'a std::sync::Arc<kampr_fleet::FleetProvider>,
-    /// Told what `pane.size` put on a pane, so the streams stop reporting the width they inferred
-    /// before it. Nothing here reads a size back out of it and nothing here resizes through it.
+    /// Told what `pane.size` put on a pane, so every running width probe re-reads at once rather
+    /// than at its next interval (ADR 0014). Nothing here reads a size back out of it and nothing
+    /// here resizes through it.
     pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
 }
 

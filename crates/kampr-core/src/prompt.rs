@@ -42,7 +42,6 @@ pub fn numbered_option(line: &str) -> Option<PendingOption> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marked {
     pub focused: bool,
-    /// The column the label starts at, past the cursor and any radio glyph.
     pub at: usize,
     pub label: String,
     /// `Some` when the glyph in front of the label is a **checkbox** rather than a radio, and
@@ -52,10 +51,8 @@ pub struct Marked {
     pub ticked: Option<bool>,
 }
 
-/// The cursor a harness draws against the row it would commit.
 const CURSORS: [char; 3] = ['\u{276f}', '\u{27a4}', '\u{25b8}'];
 
-/// The radio glyph an option may carry between the cursor and its label.
 const RADIOS: [char; 4] = ['\u{25cb}', '\u{25cf}', '\u{25c9}', '\u{25ef}'];
 
 /// The checkbox glyphs, empty and ticked. A checkbox is the only thing on the screen that says a

@@ -77,7 +77,7 @@ kotlin {
             implementation(libs.androidx.camera.view)
             implementation(libs.zxing.core)
             // A distributor's endpoint is an RFC 8291 endpoint, so the node's sender is unchanged:
-            // no Google project, no `google-services.json`, no per-app secret (docs/08-notifications.md).
+            // no Google project, no `google-services.json`, no per-app secret (docs/16-notifications.md).
             api(libs.unifiedpush.connector)
         }
         jvmMain.dependencies {

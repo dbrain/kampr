@@ -16,7 +16,7 @@ impl Dirs {
     pub fn config(&self) -> PathBuf {
         self.config_dir
             .clone()
-            .unwrap_or_else(kampr_node::config::default_config_dir)
+            .unwrap_or_else(kampr_core::local_node::default_config_dir)
     }
 
     /// `None` when the caller did not say. The config records where the node actually keeps its
@@ -28,6 +28,6 @@ impl Dirs {
     pub fn state(&self) -> PathBuf {
         self.state_dir
             .clone()
-            .unwrap_or_else(kampr_node::config::default_state_dir)
+            .unwrap_or_else(kampr_core::local_node::default_state_dir)
     }
 }

@@ -162,7 +162,7 @@ pub fn bind_summary(config: &Config) -> String {
             config.server.bind,
             config
                 .bind_addr()
-                .map_or(kampr_node::config::DEFAULT_PORT, |a| a.port())
+                .map_or(kampr_core::local_node::DEFAULT_PORT, |a| a.port())
         )
     }
 }

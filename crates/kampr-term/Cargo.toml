@@ -13,4 +13,8 @@ unicode-width.workspace = true
 vte = "0.15"
 
 [dev-dependencies]
+kampr-testkit = { path = "../kampr-testkit" }
 serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,550 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/PaneSession.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/bench/BenchApp.kt">
+        <error line="96" column="17" source="standard:argument-list-wrapping" />
+        <error line="96" column="21" source="standard:argument-list-wrapping" />
+        <error line="96" column="35" source="standard:argument-list-wrapping" />
+        <error line="96" column="58" source="standard:argument-list-wrapping" />
+        <error line="96" column="74" source="standard:argument-list-wrapping" />
+        <error line="100" column="17" source="standard:argument-list-wrapping" />
+        <error line="100" column="21" source="standard:argument-list-wrapping" />
+        <error line="100" column="35" source="standard:argument-list-wrapping" />
+        <error line="100" column="56" source="standard:argument-list-wrapping" />
+        <error line="100" column="72" source="standard:argument-list-wrapping" />
+        <error line="151" column="72" source="standard:multiline-if-else" />
+        <error line="151" column="87" source="standard:multiline-if-else" />
+        <error line="347" column="18" source="standard:argument-list-wrapping" />
+        <error line="347" column="28" source="standard:argument-list-wrapping" />
+        <error line="347" column="36" source="standard:argument-list-wrapping" />
+        <error line="347" column="42" source="standard:argument-list-wrapping" />
+        <error line="347" column="54" source="standard:argument-list-wrapping" />
+        <error line="423" column="19" source="standard:multiline-if-else" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/bench/Workload.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="84" column="38" source="standard:argument-list-wrapping" />
+        <error line="85" column="47" source="standard:argument-list-wrapping" />
+        <error line="86" column="33" source="standard:argument-list-wrapping" />
+        <error line="91" column="22" source="standard:argument-list-wrapping" />
+        <error line="91" column="40" source="standard:argument-list-wrapping" />
+        <error line="91" column="59" source="standard:argument-list-wrapping" />
+        <error line="91" column="79" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/file/Handover.kt">
+        <error line="30" column="68" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/guard/Destructive.kt">
+        <error line="60" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="65" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="69" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="73" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="78" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="102" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="106" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="107" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="112" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="120" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="156" column="31" source="standard:multiline-if-else" />
+        <error line="157" column="10" source="standard:multiline-if-else" />
+        <error line="160" column="62" source="standard:function-signature" />
+        <error line="163" column="50" source="standard:function-signature" />
+        <error line="237" column="33" source="standard:multiline-if-else" />
+        <error line="238" column="18" source="standard:multiline-if-else" />
+        <error line="240" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="241" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="243" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="244" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="245" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="248" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="249" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="251" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="253" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="276" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="277" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="278" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/Escapes.kt">
+        <error line="1" column="1" source="standard:filename" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/FieldTextInput.kt">
+        <error line="130" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="137" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="141" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/InputSink.kt">
+        <error line="144" column="27" source="standard:argument-list-wrapping" />
+        <error line="144" column="50" source="standard:argument-list-wrapping" />
+        <error line="144" column="72" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/KeyCaps.kt">
+        <error line="24" column="83" source="standard:function-signature" />
+        <error line="34" column="12" source="standard:argument-list-wrapping" />
+        <error line="34" column="26" source="standard:argument-list-wrapping" />
+        <error line="35" column="28" source="standard:argument-list-wrapping" />
+        <error line="35" column="40" source="standard:argument-list-wrapping" />
+        <error line="35" column="57" source="standard:argument-list-wrapping" />
+        <error line="38" column="70" source="standard:function-signature" />
+        <error line="110" column="39" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/KeyRow.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="246" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="247" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="248" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="262" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="263" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="264" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/Latches.kt">
+        <error line="49" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/LocalEcho.kt">
+        <error line="54" column="40" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/PaneMouse.kt">
+        <error line="20" column="61" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/input/PaneScroll.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="71" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/render/Selection.kt">
+        <error line="10" column="52" source="standard:function-signature" />
+        <error line="77" column="39" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/render/TextCache.kt">
+        <error line="76" column="62" source="standard:function-signature" />
+        <error line="94" column="64" source="standard:function-signature" />
+        <error line="110" column="20" source="standard:argument-list-wrapping" />
+        <error line="110" column="30" source="standard:argument-list-wrapping" />
+        <error line="110" column="48" source="standard:argument-list-wrapping" />
+        <error line="111" column="42" source="standard:argument-list-wrapping" />
+        <error line="124" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="125" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="126" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="138" column="48" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/review/Review.kt">
+        <error line="44" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="45" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="46" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="47" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="52" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="55" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="56" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="59" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="68" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="71" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="74" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="90" column="46" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/review/ReviewState.kt">
+        <error line="87" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="92" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="96" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="100" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="110" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="161" column="34" source="standard:multiline-if-else" />
+        <error line="162" column="18" source="standard:multiline-if-else" />
+        <error line="194" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="195" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ColumnIndicator.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ConfirmSheet.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="111" column="44" source="standard:argument-list-wrapping" />
+        <error line="111" column="52" source="standard:argument-list-wrapping" />
+        <error line="111" column="73" source="standard:argument-list-wrapping" />
+        <error line="115" column="38" source="standard:argument-list-wrapping" />
+        <error line="115" column="45" source="standard:argument-list-wrapping" />
+        <error line="115" column="66" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/FileSheet.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="94" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="95" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="96" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="102" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="128" column="58" source="standard:function-signature" />
+        <error line="129" column="30" source="standard:multiline-if-else" />
+        <error line="130" column="10" source="standard:multiline-if-else" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/HandoverLine.kt">
+        <error line="21" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="22" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="24" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ResizePanel.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalGestures.kt">
+        <error line="119" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalView.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="163" column="72" source="standard:function-signature" />
+        <error line="295" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="628" column="20" source="standard:argument-list-wrapping" />
+        <error line="628" column="32" source="standard:argument-list-wrapping" />
+        <error line="628" column="59" source="standard:argument-list-wrapping" />
+        <error line="628" column="86" source="standard:argument-list-wrapping" />
+        <error line="629" column="28" source="standard:argument-list-wrapping" />
+        <error line="682" column="20" source="standard:argument-list-wrapping" />
+        <error line="682" column="26" source="standard:argument-list-wrapping" />
+        <error line="682" column="38" source="standard:argument-list-wrapping" />
+        <error line="682" column="53" source="standard:argument-list-wrapping" />
+        <error line="682" column="69" source="standard:argument-list-wrapping" />
+        <error line="682" column="80" source="standard:argument-list-wrapping" />
+        <error line="723" column="36" source="standard:argument-list-wrapping" />
+        <error line="723" column="54" source="standard:argument-list-wrapping" />
+        <error line="723" column="71" source="standard:argument-list-wrapping" />
+        <error line="723" column="86" source="standard:argument-list-wrapping" />
+        <error line="724" column="22" source="standard:trailing-comma-on-call-site" />
+        <error line="870" column="18" source="standard:trailing-comma-on-call-site" />
+        <error line="890" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="925" column="68" source="standard:statement-wrapping" />
+        <error line="925" column="92" source="standard:statement-wrapping" />
+        <error line="925" column="123" source="standard:statement-wrapping" />
+        <error line="1148" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="1155" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalViewState.kt">
+        <error line="55" column="5" source="standard:spacing-between-declarations-with-comments" />
+        <error line="212" column="1" source="standard:no-consecutive-blank-lines" />
+        <error line="272" column="51" source="standard:function-signature" />
+        <error line="286" column="70" source="standard:multiline-if-else" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalWheel.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ZoomSheet.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="181" column="45" source="standard:argument-list-wrapping" />
+        <error line="181" column="56" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ZoomSlider.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/GeometryTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="20" column="71" source="standard:function-signature" />
+        <error line="23" column="66" source="standard:function-signature" />
+        <error line="171" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="171" column="5" source="standard:spacing-between-declarations-with-comments" />
+        <error line="248" column="5" source="standard:comment-spacing" />
+        <error line="249" column="5" source="standard:comment-spacing" />
+        <error line="250" column="5" source="standard:comment-spacing" />
+        <error line="251" column="5" source="standard:comment-spacing" />
+        <error line="252" column="5" source="standard:comment-spacing" />
+        <error line="253" column="5" source="standard:comment-spacing" />
+        <error line="254" column="5" source="standard:comment-spacing" />
+        <error line="255" column="5" source="standard:comment-spacing" />
+        <error line="256" column="5" source="standard:comment-spacing" />
+        <error line="257" column="5" source="standard:comment-spacing" />
+        <error line="258" column="5" source="standard:comment-spacing" />
+        <error line="259" column="5" source="standard:comment-spacing" />
+        <error line="260" column="5" source="standard:comment-spacing" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/InputTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="48" column="26" source="standard:wrapping" />
+        <error line="49" column="26" source="standard:wrapping" />
+        <error line="473" column="84" source="standard:function-signature" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/RenderTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/ResizePanelTest.kt">
+        <error line="16" column="55" source="standard:function-signature" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/ReviewTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/SelectionTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/SubmitGuardTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/commonTest/kotlin/dev/kampr/terminal/TargetSpanTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="18" column="67" source="standard:function-signature" />
+        <error line="21" column="63" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/APaneResizedUnderTheViewTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="58" column="90" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/AQuestionArrivingOnAPaneTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/AShellFillingItsOwnScreenTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="129" column="80" source="standard:function-signature" />
+        <error line="144" column="87" source="standard:function-signature" />
+        <error line="175" column="95" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/AnsiArtboardTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="58" column="1" source="standard:no-consecutive-blank-lines" />
+        <error line="83" column="63" source="standard:function-signature" />
+        <error line="127" column="86" source="standard:function-signature" />
+        <error line="137" column="1" source="standard:no-consecutive-blank-lines" />
+        <error line="148" column="51" source="standard:argument-list-wrapping" />
+        <error line="149" column="51" source="standard:argument-list-wrapping" />
+        <error line="152" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="153" column="55" source="standard:argument-list-wrapping" />
+        <error line="156" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="157" column="57" source="standard:argument-list-wrapping" />
+        <error line="160" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="161" column="58" source="standard:argument-list-wrapping" />
+        <error line="164" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="165" column="51" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/Artboard.kt">
+        <error line="34" column="51" source="standard:argument-list-wrapping" />
+        <error line="35" column="51" source="standard:argument-list-wrapping" />
+        <error line="38" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="39" column="55" source="standard:argument-list-wrapping" />
+        <error line="42" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="43" column="57" source="standard:argument-list-wrapping" />
+        <error line="46" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="47" column="58" source="standard:argument-list-wrapping" />
+        <error line="50" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="51" column="51" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/CaretVisibilityTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="24" column="80" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ClaudeStartingInANewDirectoryTest.kt">
+        <error line="44" column="69" source="standard:function-signature" />
+        <error line="70" column="36" source="standard:argument-list-wrapping" />
+        <error line="70" column="48" source="standard:argument-list-wrapping" />
+        <error line="72" column="46" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ClickingIntoAPaneTest.kt">
+        <error line="33" column="40" source="standard:function-signature" />
+        <error line="63" column="85" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ColumnBarTest.kt">
+        <error line="113" column="47" source="standard:string-template" />
+        <error line="114" column="50" source="standard:string-template" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ConfirmArtboardTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="101" column="82" source="standard:function-signature" />
+        <error line="111" column="22" source="standard:argument-list-wrapping" />
+        <error line="111" column="28" source="standard:argument-list-wrapping" />
+        <error line="111" column="37" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ContentBelowTheCaretTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="175" column="1" source="standard:final-newline" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/DeskFootTest.kt">
+        <error line="47" column="82" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/DeskKeyRowArtboardTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="75" column="82" source="standard:function-signature" />
+        <error line="85" column="22" source="standard:argument-list-wrapping" />
+        <error line="85" column="28" source="standard:argument-list-wrapping" />
+        <error line="85" column="37" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/DeskSelectionTest.kt">
+        <error line="131" column="20" source="standard:wrapping" />
+        <error line="131" column="20" source="standard:argument-list-wrapping" />
+        <error line="132" column="97" source="standard:wrapping" />
+        <error line="132" column="98" source="standard:argument-list-wrapping" />
+        <error line="132" column="98" source="standard:trailing-comma-on-call-site" />
+        <error line="133" column="20" source="standard:wrapping" />
+        <error line="133" column="20" source="standard:argument-list-wrapping" />
+        <error line="134" column="90" source="standard:wrapping" />
+        <error line="134" column="91" source="standard:argument-list-wrapping" />
+        <error line="134" column="91" source="standard:trailing-comma-on-call-site" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/FieldTextInputTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="98" column="45" source="standard:function-signature" />
+        <error line="320" column="91" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/FileHarness.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="128" column="105" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/FingerScrollPacingTest.kt">
+        <error line="65" column="17" source="standard:mixed-condition-operators" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/FollowingTheOutputTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="71" column="88" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/GridAccessibilityTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="75" column="41" source="standard:statement-wrapping" />
+        <error line="75" column="53" source="standard:statement-wrapping" />
+        <error line="83" column="61" source="standard:statement-wrapping" />
+        <error line="83" column="74" source="standard:statement-wrapping" />
+        <error line="285" column="38" source="standard:argument-list-wrapping" />
+        <error line="286" column="39" source="standard:argument-list-wrapping" />
+        <error line="287" column="36" source="standard:argument-list-wrapping" />
+        <error line="287" column="63" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/HandPanTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/HoldingAKeyCapTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/HoverChain.kt">
+        <error line="16" column="70" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/KeyRowColumnsTest.kt">
+        <error line="54" column="54" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/KeyRowSafeAreaTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/LeavingAFullScreenProgramTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/LiveScrollbackTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/MatchingTheViewTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="114" column="48" source="standard:function-signature" />
+        <error line="117" column="53" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/OpeningAFileFromTheGridTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/OpeningAPaneOnTheDesktopTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneChromeTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneHarness.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="151" column="82" source="standard:function-signature" />
+        <error line="162" column="92" source="standard:function-signature" />
+        <error line="166" column="44" source="standard:function-signature" />
+        <error line="181" column="96" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneHoverCursorTest.kt">
+        <error line="27" column="71" source="standard:function-signature" />
+        <error line="96" column="1" source="standard:no-consecutive-blank-lines" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneWheelTest.kt">
+        <error line="41" column="40" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PastingIntoAPaneTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="141" column="88" source="standard:string-template" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/QuittingAnAgentTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="166" column="87" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ReachingTheBottomOfAPaneTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ReadingAFileTheGridOpenedTest.kt">
+        <error line="51" column="51" source="standard:string-template" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ResizedPaneTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/RowsBackTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="67" column="54" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/SearchingTheShellsHistoryTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ShowingWhatWasClickedTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/StayingWithTheOutputTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/WheelScrollTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="83" column="20" source="standard:string-template" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/WhenACommandIsDoneTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/WideGlyphArtboardTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="62" column="86" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ZoomSheetRoomTest.kt">
+        <error line="70" column="86" source="standard:function-signature" />
+        <error line="80" column="19" source="standard:argument-list-wrapping" />
+        <error line="105" column="72" source="standard:function-signature" />
+    </file>
+    <file name="src/jvmTest/kotlin/dev/kampr/terminal/ZoomSlotArtboardTest.kt">
+        <error line="53" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="54" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="55" column="1" source="standard:spacing-between-declarations-with-annotations" />
+        <error line="85" column="34" source="standard:argument-list-wrapping" />
+        <error line="85" column="48" source="standard:argument-list-wrapping" />
+        <error line="85" column="59" source="standard:argument-list-wrapping" />
+        <error line="86" column="61" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/wasmJsMain/kotlin/dev/kampr/terminal/bench/Platform.wasmJs.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="18" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="68" column="8" source="standard:trailing-comma-on-call-site" />
+    </file>
+    <file name="src/wasmJsMain/kotlin/dev/kampr/terminal/input/PaneTextInput.wasmJs.kt">
+        <error line="174" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="179" column="36" source="standard:function-signature" />
+        <error line="255" column="93" source="standard:function-signature" />
+        <error line="291" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="325" column="12" source="standard:trailing-comma-on-call-site" />
+    </file>
+    <file name="src/wasmJsTest/kotlin/dev/kampr/terminal/BrowserDom.kt">
+        <error line="6" column="39" source="standard:function-signature" />
+        <error line="31" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="46" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="58" column="92" source="standard:function-signature" />
+        <error line="70" column="12" source="standard:trailing-comma-on-call-site" />
+    </file>
+    <file name="src/wasmJsTest/kotlin/dev/kampr/terminal/BrowserFollowingTest.kt">
+        <error line="43" column="32" source="standard:statement-wrapping" />
+        <error line="43" column="51" source="standard:statement-wrapping" />
+        <error line="43" column="73" source="standard:statement-wrapping" />
+        <error line="116" column="80" source="standard:function-signature" />
+        <error line="121" column="81" source="standard:function-signature" />
+    </file>
+    <file name="src/wasmJsTest/kotlin/dev/kampr/terminal/BrowserHarness.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="src/wasmJsTest/kotlin/dev/kampr/terminal/BrowserInputTest.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="31" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="49" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="65" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="77" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="99" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="115" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="122" column="1" source="standard:no-consecutive-blank-lines" />
+        <error line="139" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="154" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="158" column="1" source="standard:no-consecutive-blank-lines" />
+        <error line="254" column="1" source="standard:no-consecutive-blank-lines" />
+    </file>
+    <file name="src/wasmJsTest/kotlin/dev/kampr/terminal/BrowserWheelTest.kt">
+        <error line="24" column="40" source="standard:function-signature" />
+        <error line="42" column="69" source="standard:function-signature" />
+    </file>
+</baseline>

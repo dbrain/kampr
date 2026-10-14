@@ -3,225 +3,41 @@
 Remote access to your herd: a Rust node beside [herdr](https://herdr.dev/) on each machine, and a
 Compose Multiplatform client that reaches it from a phone or a browser.
 
-This file is the front door, for any agent or any person. The documentation behind it is thorough
-and worth trusting — the point of this page is to tell you which part to read for the question you
-have, and to name the handful of rules that are not negotiable. `CLAUDE.md` is a symlink to this
-file; there is one brief, not two.
+`CLAUDE.md` is a symlink to this file. `client/` and the crates with traps of their own (`kampr-core`,
+`-node`, `-herdr`, `-fleet`, `-journal`) carry an `AGENTS.md` beside their code. **Reviewing rather
+than building? Read [`.claude/skills/kampr-review/SKILL.md`](./.claude/skills/kampr-review/SKILL.md)
+first.** Several deliberate conventions here look like defects without it.
 
-**If you are here to review rather than to build, read "Reviewing this codebase" at the bottom
-first.** Several deliberate conventions here look like defects if you do not know they are
-deliberate, and the fastest way to be useless is to file thirty findings about missing docstrings.
+## Check your work
 
-## Read this much before you change anything
+- `make test-fast` runs the ~1,500 tests that need no herdr, in about 20 s. Use it as the inner loop.
+- `make check` is the gate: fmt, clippy, every test including the live herdr suites, the client
+  and packaging. CI runs the same targets, so green here means green there.
+
+## Where to look
 
 | Question | Read |
 |---|---|
-| What is this and how do I run it? | [`README.md`](./README.md) |
-| How does it work, and why that way? | [`ARCHITECTURE.md`](./ARCHITECTURE.md), then [`docs/adr/`](./docs/adr/) |
-| What does herdr actually do? | [`docs/03-probe-log.md`](./docs/03-probe-log.md) — **read this before assuming anything** |
-| What goes over the wire? | [`docs/04-wire-protocol.md`](./docs/04-wire-protocol.md) |
-| Why is my build broken? | [`docs/09-toolchain.md`](./docs/09-toolchain.md) |
-| How do I ship it? | [`docs/07-android-release.md`](./docs/07-android-release.md) |
-| Why won't passkeys work on my host? | [`docs/10-passkeys.md`](./docs/10-passkeys.md) — the Android asset-links constraint is structural |
-| How does the terminal client work? | [`docs/11-cli-briefs.md`](./docs/11-cli-briefs.md) — the workstreams, and the probes that reshaped three of them |
-| How does one command run on every host? | [`docs/13-fleet-runs.md`](./docs/13-fleet-runs.md) — and why a fleet run is not a herdr pane |
-| What does the agent in a pane write down, and what do we read? | [`docs/12-harness-briefs.md`](./docs/12-harness-briefs.md) — session markers, subagent transcripts, and the procfs walk three workstreams share |
-| How do we know an agent is working, and how do we avoid guessing? | [`docs/14-agent-status.md`](./docs/14-agent-status.md) — the transparent signals, and the label drop that makes herdr say `idle` |
+| How does it work, and why that way? | [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`docs/adr/`](./docs/adr/) |
+| What does herdr actually do? | `scripts/probe <words or #>`. The [probe log](./docs/03-probe-log.md) is 600 KB; search it, never read it whole |
+| Wire protocol / threat model | [`docs/04`](./docs/04-wire-protocol.md) / [`docs/08`](./docs/08-threat-model.md) |
+| Build broken? Shipping? | [`docs/09-toolchain.md`](./docs/09-toolchain.md) / [`docs/07-android-release.md`](./docs/07-android-release.md) |
+| Mesh, notifications, passkeys | [`docs/15`](./docs/15-mesh-deployment.md), [`docs/16`](./docs/16-notifications.md), [`docs/10`](./docs/10-passkeys.md) |
+| Terminal client, harness transcripts, fleet runs, agent status | [`docs/11`](./docs/11-cli-briefs.md), [`docs/12`](./docs/12-harness-briefs.md), [`docs/13`](./docs/13-fleet-runs.md), [`docs/14`](./docs/14-agent-status.md) |
+
+`docs/01`, `02`, `05` and `06` are history, not status.
 
 ## The rules
 
-1. **The probe log is the source of truth about herdr.** If you need a fact about herdr that is not
-   in [`docs/03-probe-log.md`](./docs/03-probe-log.md), *probe it and add a row*. Do not assume, do
-   not reason from another terminal multiplexer, and do not trust a memory. Numbers are permanent
-   identifiers that code and docs cite: **append, never renumber**, and supersede by striking through
-   with a cross-reference. If two tasks are appending at once, propose rows unnumbered and let one
-   writer assign.
-
-2. **Measure, do not reason.** Nearly every defect in this project's history had a mechanism unlike
-   its symptom. Reproduce it in a harness first; then prove the fix is load-bearing by reverting it
-   and watching the test fail. A test that still passes with the defect restored is a harness that
-   was never the app (#191) — delete it rather than keep it green.
-
-3. **Nothing reshapes a pane because somebody looked at it.** The rule turns on *whose* pane it is
-   and *why* the write happens. It is not a ban on the op.
-
-   A pane Kampr **found** belongs to the operator. It may have a desk attached on the machine
-   itself, and `control` takes the PTY with no way to decline (#17), overrides that desk while held
-   (#18) and leaves it rendering wrong without being told (#298). So nothing may claim one — no
-   watch, zoom, pan, fit, reconnect or layout — and exactly one path reshapes it on purpose: the
-   `pane.size` op, with an 80x24 floor
-   ([ADR 0012](./docs/adr/0012-one-deliberate-resize-behind-a-panel.md)). There are **two ways to
-   ask for that one path, and no third**: the panel, which resizes once and lets go; and a standing
-   intent to match the view for as long as a desk-sized terminal is open, owned by the socket that
-   claimed it and put back on release
-   ([ADR 0013](./docs/adr/0013-a-standing-intent-to-match-the-view.md)). The second is defaulted on
-   — above a desk threshold as the view's exact size, and below it, by the operator's call, as
-   **enlarge only**: each dimension the pane is short of the view is raised to it, neither is ever
-   shrunk, and a pane already at least the view both ways is not claimed at all. So it pays for its
-   silence three ways — the pane goes back to the
-   geometry it was found at unless something else moved it meanwhile, a dropped socket releases it
-   without the client having to remember anything (#298 is what happens when it does not), and the
-   hold is visible with an off switch wherever it is held. A small screen never takes a pane down
-   to its own size — narrower than the pane is handled by rendering: zoom, pan, and the
-   conversation view.
-
-   **Nor may Kampr focus one.** Focus is not a resize, and it is not a read: it is what destroys
-   herdr's `done` marker — the state herdr synthesises for a pane that finished `working`→`idle`
-   while *unfocused*, which is the operator's unread flag. `pane.focus`, `tab.focus` and
-   `workspace.focus` all clear it, because the rule is "whatever makes the pane the session-focused
-   pane", and Kampr's `focus` manage op routes all three. **`pane.zoom` clears it too**, for the
-   whole tab and even when the zoom is a no-op, because herdr routes it through focus before it
-   decides whether anything changed (#515) — so "only the focus ops" was never the whole list, and
-   any new op has to be measured rather than assumed. Every read leaves it standing, including
-   every one herdr 0.9 added. So focus is a thing the operator presses, told what it costs, never a
-   side effect of opening a view, and every create op passes `focus: false`.
-
-   A pane Kampr **created for a job of its own** is Kampr's: a short-lived TTY it spawned, ran a
-   command in, and will tear down. It may be given a geometry at creation and while Kampr holds it,
-   because there is no operator desk to trample and no other viewer's geometry to lose. Ownership
-   is a property of the pane and it ends: the moment the operator adopts one, it is a found pane
-   and the paragraph above governs it.
-
-   The same distinction governs writes that are not geometry. `convo.composer`'s takeover empties
-   the pane's own composer, behind a control, with the words moved into the reply box first and the
-   keystroke measured per harness — that is the operator pressing a thing. What the rule forbids is
-   the write that happens on a view switch, a reconnect, a fit or a layout: *because somebody
-   looked*.
-
-4. **Bug fixes and logic changes are TDD**, at integration level where one exists. `live.rs` drives a
-   real herdr end to end and is usually the honest level.
-
-5. **Zero comments by default.** Names and types are the documentation. Comment only a non-obvious
-   *why* — a constraint, a workaround, an invariant a reader cannot guess. The existing crates show
-   the intended density; match it rather than adding docstrings that restate the code.
-
-## Traps that have cost real time
-
-- **`env -u GRADLE_HOME ./gradlew`**, always, from `client/`. A `GRADLE_HOME` on this machine
-  silently overrides the wrapper (#67). The `Makefile` does this for you.
-- **A pane's state can only be read by its own parent, at its own privilege.** `/proc/<pid>/syscall`
-  is EPERM to anything that did not fork the job (#331), and a job running as root refuses `wchan`
-  and `fd/0` too (#332) — so the node can see *nothing* about a `sudo` command in a herdr pane.
-  This is why a fleet run is a pty the node forked rather than a pane it asked herdr for.
-- **ble.sh leaves an idle pane's tty with ECHO already off** (#333), so the termios bit that looks
-  like a definitive password signal means nothing on a shell pane. It is honest on a pty with no
-  shell on it (#337) — and on a fleet run's, which does have one: ble.sh declines to load into any
-  `-c` invocation, so the confound needs a shell that is reading a line and a fleet run never has
-  one. `docs/13-fleet-runs.md` §"The shell, and the three things it was not allowed to break".
-- **A node reaches herdr two ways** — a socket, and a spawned `herdr terminal session observe`. They
-  fail independently, and every surface a person can see is served by the socket, so a node whose
-  binary half is broken looks completely healthy with every pane blank (#233). `kampr doctor`'s
-  `observe` check answers this directly.
-- **Live tests need a real herdr on PATH** and are sensitive to machine load and to stray sessions —
-  a node serves *every* herdr session it can find (#97). Use a throwaway named session and tear it
-  down. Re-run a failure alone before calling it a regression.
-- **The layout rect is not the PTY.** Neither its width (#68, #84) nor its height (#205) — it is the
-  pane's outer box, and the column it keeps back is the scrollbar's (#230). `viewport_rows` is
-  honest; the width has to be inferred and that machinery is `ARCHITECTURE.md` §4.2.
-- **The wire is additive only.** Older clients are installed on real phones. Unknown `t` values and
-  unknown fields are ignored by rule; an unrecognised `error.code` must still render its `message`.
-- **A login shell's `PATH` is not where `kampr` is installed**, on two of the four machines here.
-  A fleet run gets the operator's login `PATH` rather than the service manager's (#392) and that is
-  still not enough: the profile that adds `~/.local/bin` is `.bashrc`, which `-l` does not read
-  (#419). The directory `current_exe()` is in is appended for exactly this, and `kampr doctor`
-  refuses to say `ok` about a fleet `PATH` it cannot resolve `kampr` and `herdr` on.
-- **herdr labels a pane it has no rules for, and then says `idle` for ever.** The label is the
-  foreground process's name with no verification (#75); the *state* comes from per-agent manifests,
-  and there is no `omp` manifest — so an omp pane reports `idle` through a whole working turn and
-  through an open approval dialog (#485). What omp publishes instead is its terminal title, whose
-  separator is the run state (#486), and `kampr_journal::title_status` is where that is read. A
-  harness nobody has measured a title for leaves herdr's answer alone.
-- **A digit does not answer every dialog.** On Claude's single-answer question it answers and the
-  dialog closes (#413); on a multiple-answer one the same digit *ticks a box*, `\r` toggles the
-  focused row, and only right-arrow then Enter commits (#421). `pending.multi` is what tells the
-  two apart, and a client that ignores it offers a press that looks like an answer and is not.
-  **omp draws no digits at all** (#487): its dialogs are a `❯` on one row, moved with the arrows
-  and committed with Enter, so the node turns the key a client pressed into that many moves —
-  counted from a screen read taken at the moment of the press. **Claude's trust prompt lost its
-  digits in 2.1.282** (#550), and a dialog the node cannot read is a harness held as booting for
-  8 s a keystroke — so Claude is read for numbers and then for a cursor, and answered with
-  whichever the screen shows. `pending::cursor_dialogs` is the per-harness list, and a harness not
-  on it is read for numbers only.
-- **`pi` is not `omp`.** They share a record grammar and a session path; the held descriptor, the
-  tty breadcrumb, the subagents, the title slot and the run state in the title are all oh-my-pi's
-  own (#490). One adapter serves both, and every handle above the working directory answers
-  nothing on a `pi` pane rather than answering wrongly.
-- **A `FontFamily` of loaded fonts draws everything from its first font.** A second face in it
-  supplies no glyph the first is missing, either way round (#416) — so a codepoint the terminal
-  face lacks is tofu in the browser and nothing else can answer for it. `tools/terminalmono.py`
-  merges glyphs into the four faces; adding a font beside them fixes nothing.
-
-## Where the code lives
-
-| Path | What |
-|---|---|
-| `crates/kampr-herdr` | The socket RPC, the snapshot model, the `observe` supervisor, binary resolution |
-| `crates/kampr-term` | The `vte` emulator: bytes → cell grid, clustering, dirty rows |
-| `crates/kampr-core` | Providers, pane registry, stream supervision, width inference, the wire encoder |
-| `crates/kampr-node` | HTTP/websocket server, herd model, sessions, manage ops |
-| `crates/kampr-client` | The client half of the wire: dial, token, greeting, herd state, per-pane grids, reconnect. No TUI |
-| `crates/kampr-tui` | The terminal client: the chrome, the keymap, the grid, the fit ladder, manage, mouse, images, the conversation |
-| `crates/kampr-fleet` | One command across the herd: the pty supervisor, the waiting ladder, the fleet provider |
-| `crates/kampr-auth`, `-mesh`, `-push`, `-journal`, `-cli`, `-spike` | Pairing and tokens; hub/peer links; web push; agent transcripts; the `kampr` binary; the fidelity canary |
-| `client/shared` | Model, wire, theme, and the screens that are not a pane |
-| `client/terminal`, `client/conversation`, `client/mosaic` | The three pane surfaces |
-| `client/androidApp`, `client/webApp`, `client/desktopApp` | The composition roots. Android and web are the two that ship |
-
-`docs/05-agent-briefs.md` is the original build plan and is kept for its reasoning; treat its
-"what already exists" table as history, not as the current state.
-
-## Reviewing this codebase
-
-Written for a reviewer arriving cold, human or otherwise. Several conventions here are deliberate
-and read as defects if you do not know that.
-
-### Do not flag these — they are the house style
-
-- **Absent docstrings and absent comments.** Rule 5 is real: names and types are the documentation,
-  and a comment that restates its code is a defect here, not a virtue. A function with no doc
-  comment is finished, not undocumented.
-- **`#123` inside a comment.** That is a citation into
-  [`docs/03-probe-log.md`](./docs/03-probe-log.md), not a ticket and not a TODO. Every row there is
-  a measurement with the command that produced it. If a comment cites one, the claim above it was
-  measured — go and read the row before disagreeing with it.
-- **Constants that look arbitrary.** Most trace to a measurement: a 40-row grid, a 20-reading proof
-  lifetime, a 4-cell margin, a 22 dp strip. Search the probe log before calling one magic.
-- **Long prose comments explaining *why*.** They exist where a reader could not otherwise guess a
-  constraint, and they are usually the only record of an expensive lesson.
-- **Prose commit messages and test names that read as sentences.** Deliberate. A test named
-  `a_node_that_cannot_run_herdr_says_so_instead_of_promising_a_grid` is naming the defect it guards.
-- **Allocation-free paths in the terminal renderer and emulator.** Text shaping is the entire cost
-  of a frame (#58–#62) and run-layout caching is required, not an optimisation. A refactor that adds
-  an allocation per cell or per frame is a regression however much cleaner it reads.
-
-### Worth flagging, and this project will thank you
-
-- **A wire change that is not additive.** Old clients are on real phones. New optional fields and
-  new `t` values are fine; reinterpreting an existing field is not.
-- **Anything that resizes a pane outside `pane.size`** — see rule 3. One deliberate, confirmed
-  path exists; a second one, or an implicit one, is the thing Kampr must never do.
-- **A claim about herdr's behaviour with no probe row behind it**, in code or in a comment.
-- **A citation pointing at a probe number that does not exist.** This has happened; the log is
-  append-only and gap-free, so `grep -c` the number before trusting it.
-- **A test that would still pass with the defect restored.** The strongest review finding available
-  here: name the mutation and say what should have failed.
-- **Dead code** — defined but never called outside its own tests. A component that exists and is not
-  wired to anything is not finished.
-- **A `catch`/`unwrap_or` that turns a failure into a plausible-looking success.** The most
-  expensive bug in this project's history was a node that answered every question correctly while
-  one of its two paths to herdr was dead (#233).
-
-### Running it yourself
-
-```
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cd client && env -u GRADLE_HOME ./gradlew check
-```
-
-All four must be clean. The Rust suite includes live tests that drive a **real** `herdr` binary, and
-they **require** one: with no `herdr` on PATH the suite fails, and it fails differently again for a
-herdr that is on PATH and never opens a socket, because a herdr that is present and broken is
-[#233](docs/03-probe-log.md) and must never read as "not installed". They are sensitive to machine
-load — re-run a failure alone before reporting it.
+1. **The probe log is the only source of facts about herdr.** If a fact isn't there, probe it and
+   append a row ([`probe-herdr` skill](./.claude/skills/probe-herdr/SKILL.md)). Never renumber a
+   row. A guard test enforces this.
+2. **Measure, don't reason.** Reproduce in a harness first, then revert the fix and watch the test
+   fail. If a test still passes with the defect restored, delete it (#191).
+3. **Nothing reshapes or focuses a pane because somebody looked at it.** Only a person's explicit
+   request may take a found pane's PTY. [ADR 0015](./docs/adr/0015-what-may-write-to-a-pane.md) is
+   the whole rule, and a guard test fails on a new `Controller::claim` caller.
+4. **Bug fixes and logic changes are TDD**, at integration level where one exists
+   (`crates/kampr-node/tests/it/live.rs` drives a real herdr).
+5. **Zero comments by default.** Comment only a non-obvious *why*: a constraint, a workaround, an
+   invariant or a probe citation. Don't add docstrings that restate the code.

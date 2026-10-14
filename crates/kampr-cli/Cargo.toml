@@ -20,6 +20,7 @@ base64.workspace = true
 clap.workspace = true
 kampr-auth = { path = "../kampr-auth" }
 kampr-client = { path = "../kampr-client" }
+kampr-core = { path = "../kampr-core" }
 kampr-fleet = { path = "../kampr-fleet" }
 kampr-herdr = { path = "../kampr-herdr" }
 kampr-mesh = { path = "../kampr-mesh" }
@@ -42,3 +43,6 @@ tracing-subscriber.workspace = true
 kampr-testkit = { path = "../kampr-testkit" }
 rcgen.workspace = true
 sqlx.workspace = true
+
+[lints]
+workspace = true

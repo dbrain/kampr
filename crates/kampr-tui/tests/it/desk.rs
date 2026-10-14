@@ -38,7 +38,7 @@ impl fit::Display for Headless {
 #[tokio::test]
 #[ignore = "needs a kampr node on this machine"]
 async fn the_shell_draws_this_machines_own_herd() {
-    let config = kampr_node::config::default_config_dir();
+    let config = kampr_core::local_node::default_config_dir();
     let session = match kampr_client::resolve(&config, None).await {
         Ok(session) => session,
         Err(e) => panic!("no herd to open — this test needs a node on this machine: {e}"),

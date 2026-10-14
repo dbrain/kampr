@@ -87,7 +87,6 @@ impl Watch {
         }
     }
 
-    /// One `assistant` or `user` record: its launches, and its endings.
     pub fn record(&mut self, message: Option<&Value>, result: Option<&Value>, at: Option<&str>) {
         let Some(blocks) = message.and_then(|m| m.get("content")).and_then(Value::as_array) else {
             return;

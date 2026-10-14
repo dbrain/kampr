@@ -383,7 +383,6 @@ impl PaneRegistry {
         })
     }
 
-    /// What cadence the pane's history poller has settled on, and the row rate it measured.
     pub fn history_status(&self, pane_id: &str) -> Option<HistoryStatus> {
         self.lookup(pane_id).map(|e| *e.status.lock().unwrap())
     }

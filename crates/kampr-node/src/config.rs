@@ -1,8 +1,7 @@
+use kampr_core::local_node::{self, Auth, Server, default_config_dir, lan_address};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-
-pub const DEFAULT_PORT: u16 = 8790;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -42,7 +41,6 @@ pub struct Config {
     pub fleet: Fleet,
 }
 
-/// One command across the herd.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Fleet {
@@ -55,7 +53,6 @@ pub struct Fleet {
     pub path: String,
 }
 
-/// What a pane is called, and whether that name is written into herdr.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Naming {
@@ -270,41 +267,6 @@ pub struct Mesh {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Server {
-    /// Loopback by default (P3.11). Kampr access is unrestricted code execution on this host, so
-    /// reaching the LAN is a decision the operator makes with `kampr init --bind`, not one the
-    /// default makes for them.
-    pub bind: String,
-    /// The one URL clients are expected to use. Empty means "work it out from the bind address"
-    /// — fine for Tier 0, but a passkey is registered against an origin and a changed origin
-    /// invalidates it, so anything above Tier 0 must set this explicitly.
-    pub origin: String,
-    pub extra_origins: Vec<String>,
-    /// **Opt-in, never inferred.** A proxy's `X-Forwarded-*` headers are trivially forgeable by
-    /// anyone who can reach the node directly.
-    pub trust_proxy: bool,
-    pub tls: Tls,
-}
-
-impl Server {
-    /// Whether this bind is reachable from anywhere but this machine.
-    pub fn exposed(&self) -> bool {
-        self.bind
-            .parse::<SocketAddr>()
-            .is_ok_and(|addr| !addr.ip().is_loopback())
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Tls {
-    pub enabled: bool,
-    pub cert: String,
-    pub key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Herdr {
     /// A path with a separator in it is used verbatim; a bare name is resolved by
     /// `kampr_herdr::locate` — which looks past `PATH`, because a service manager's is not the
@@ -321,18 +283,6 @@ pub struct Herdr {
     pub sessions: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Auth {
-    /// Overrides the RP ID derived from the origin — for a node behind a proxy whose public
-    /// hostname differs from the one it binds. Ignored when the origin cannot do passkeys at all.
-    pub rp_id: String,
-    pub token_days: u64,
-    pub pairing_ttl_secs: u64,
-    pub audit: bool,
-}
-
-/// Notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Push {
@@ -354,7 +304,6 @@ impl Default for Push {
     }
 }
 
-/// Where the harnesses keep their transcripts.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Journals {
@@ -383,35 +332,12 @@ pub struct Limits {
     pub client_keepalive_secs: u64,
 }
 
-impl Default for Server {
-    fn default() -> Self {
-        Self {
-            bind: format!("127.0.0.1:{DEFAULT_PORT}"),
-            origin: String::new(),
-            extra_origins: Vec::new(),
-            trust_proxy: false,
-            tls: Tls::default(),
-        }
-    }
-}
-
 impl Default for Herdr {
     fn default() -> Self {
         Self {
             binary: "herdr".into(),
             socket: String::new(),
             sessions: None,
-        }
-    }
-}
-
-impl Default for Auth {
-    fn default() -> Self {
-        Self {
-            rp_id: String::new(),
-            token_days: 30,
-            pairing_ttl_secs: 600,
-            audit: true,
         }
     }
 }
@@ -444,7 +370,7 @@ pub enum ConfigError {
 
 impl Config {
     pub fn path(config_dir: &Path) -> PathBuf {
-        config_dir.join("config.toml")
+        local_node::config_path(config_dir)
     }
 
     pub fn bootstrap(node_name: &str) -> Self {
@@ -507,22 +433,11 @@ impl Config {
     }
 
     pub fn bind_addr(&self) -> Result<SocketAddr, std::net::AddrParseError> {
-        self.server.bind.parse()
+        self.server.bind_addr()
     }
 
-    /// The origin clients are told to use. Explicit configuration wins; otherwise the scheme
-    /// comes from whether the node terminates TLS itself and the host from the bind address,
-    /// with a wildcard bind resolved to this machine's LAN address rather than `0.0.0.0`.
     pub fn origin(&self) -> String {
-        if !self.server.origin.is_empty() {
-            return self.server.origin.trim_end_matches('/').to_string();
-        }
-        let scheme = if self.server.tls.enabled { "https" } else { "http" };
-        let (host, port) = match self.bind_addr() {
-            Ok(addr) => (visible_host(addr.ip()), addr.port()),
-            Err(_) => ("127.0.0.1".to_string(), DEFAULT_PORT),
-        };
-        format!("{scheme}://{host}:{port}")
+        self.server.origin()
     }
 
     /// Every origin a browser may legitimately present.
@@ -533,7 +448,7 @@ impl Config {
     pub fn allowed_origins(&self) -> Vec<String> {
         let mut origins = vec![self.origin()];
         origins.extend(self.server.extra_origins.iter().cloned());
-        let scheme = if self.server.tls.enabled { "https" } else { "http" };
+        let scheme = self.server.scheme();
         if let Ok(addr) = self.bind_addr() {
             let port = addr.port();
             let mut hosts = Vec::new();
@@ -556,16 +471,12 @@ impl Config {
         origins
     }
 
-    /// The explicit argument wins, then what `kampr init` recorded, then the XDG default.
     pub fn resolve_state_dir(&self, explicit: Option<&Path>) -> PathBuf {
-        explicit
-            .map(Path::to_path_buf)
-            .or_else(|| (!self.state_dir.is_empty()).then(|| PathBuf::from(&self.state_dir)))
-            .unwrap_or_else(default_state_dir)
+        local_node::resolve_state_dir(&self.state_dir, explicit)
     }
 
     pub fn state_db(state_dir: &Path) -> PathBuf {
-        state_dir.join("kampr.db")
+        local_node::state_db(state_dir)
     }
 
     /// The VAPID keypair. In the state directory beside the device database, because it is the
@@ -575,7 +486,7 @@ impl Config {
     }
 
     pub fn audit_path(state_dir: &Path) -> PathBuf {
-        state_dir.join("audit.jsonl")
+        local_node::audit_path(state_dir)
     }
 
     pub fn node_key_path(config_dir: &Path) -> PathBuf {
@@ -592,42 +503,10 @@ impl Config {
     }
 }
 
-pub fn default_config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("kampr")
-}
-
-pub fn default_state_dir() -> PathBuf {
-    xdg("XDG_STATE_HOME", ".local/state").join("kampr")
-}
-
-fn xdg(variable: &str, fallback: &str) -> PathBuf {
-    std::env::var_os(variable).map(PathBuf::from).unwrap_or_else(|| {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join(fallback)
-    })
-}
-
-fn visible_host(ip: IpAddr) -> String {
-    if !ip.is_unspecified() {
-        return ip.to_string();
-    }
-    lan_address().map_or_else(|| "127.0.0.1".to_string(), |ip| ip.to_string())
-}
-
-/// The address this machine would use to reach the outside world. `connect` on a UDP socket only
-/// picks a route — it sends nothing and needs nothing to be reachable — which is the one portable
-/// way to ask "which of my interfaces would a phone on the LAN find me on".
-pub fn lan_address() -> Option<IpAddr> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("192.0.2.1:9").ok()?;
-    socket.local_addr().ok().map(|a| a.ip())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kampr_core::local_node::{DEFAULT_PORT, LocalNode, default_state_dir};
 
     /// The two halves of writing into somebody else's herdr are separately consented to, and the
     /// smaller one cannot turn the larger one on for them. Sorting a desk needs a token reported,
@@ -694,6 +573,29 @@ mod tests {
         assert_eq!(loaded.node_name, "comingclean");
         assert_eq!(loaded.server.bind, config.server.bind);
         assert!(!loaded.server.trust_proxy, "proxy trust is never inferred");
+    }
+
+    /// `kampr` on the node's own machine reads this file through `LocalNode`, not through
+    /// `Config`, so a field renamed here would leave the client minting devices into the wrong
+    /// database while the node reads the right one.
+    #[test]
+    fn what_the_node_writes_is_what_a_local_client_reads() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("config");
+        let mut config = Config::bootstrap("comingclean");
+        config.state_dir = "/var/lib/kampr".into();
+        config.server.origin = "https://kampr.example.com".into();
+        config.auth.token_days = 7;
+        config.auth.audit = false;
+        config.save(&dir).unwrap();
+
+        let local = LocalNode::load(&dir).unwrap();
+        assert_eq!(local.node_id, config.node_id);
+        assert_eq!(local.node_name, config.node_name);
+        assert_eq!(local.origin(), config.origin());
+        assert_eq!(local.resolve_state_dir(None), config.resolve_state_dir(None));
+        assert_eq!(local.auth.token_days, 7);
+        assert!(!local.auth.audit);
     }
 
     #[test]

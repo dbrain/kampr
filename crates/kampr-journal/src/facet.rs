@@ -64,9 +64,7 @@ pub struct Running {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TitleSource {
-    /// A person typed it.
     Manual,
-    /// The harness made it up, however good it is.
     Generated,
 }
 

@@ -67,9 +67,8 @@ jobs:
         with:
           name: client-bundle
           path: crates/kampr-node/dist
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # The toolchain is `rust-toolchain.toml`'s; the target is added to that one, not to stable.
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

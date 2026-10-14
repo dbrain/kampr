@@ -7,3 +7,4 @@ mod reporting;
 mod scrollback;
 mod subscription;
 mod wire;
+mod wire_shapes;

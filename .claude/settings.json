@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo check *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo test *)",
+      "Bash(cargo nextest *)",
+      "Bash(cargo metadata *)",
+      "Bash(cargo tree *)",
+      "Bash(env -u GRADLE_HOME ./gradlew *)",
+      "Bash(cd client && env -u GRADLE_HOME ./gradlew *)",
+      "Bash(make check)",
+      "Bash(make check-rust)",
+      "Bash(make check-client)",
+      "Bash(make check-packaging)",
+      "Bash(make fmt)",
+      "Bash(make lint)",
+      "Bash(make test)",
+      "Bash(make test-fast)",
+      "Bash(scripts/probe *)"
+    ],
+    "deny": [
+      "Read(./target/**)",
+      "Read(./client/build/**)",
+      "Read(./client/*/build/**)",
+      "Read(./client/kotlin-js-store/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gradle-home.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/rustfmt.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

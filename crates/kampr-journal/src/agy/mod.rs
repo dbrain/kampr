@@ -113,7 +113,6 @@ impl JournalAdapter for AgyAdapter {
     }
 }
 
-/// A tool call waiting for the record that answers it.
 #[derive(Debug)]
 struct Pending {
     turn: String,

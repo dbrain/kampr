@@ -1,0 +1,12 @@
+# Build output: gigabytes, regenerated, never the answer.
+target/
+**/build/
+crates/kampr-node/dist/
+client/.gradle/
+client/.kotlin/
+client/kotlin-js-store/
+
+# Large captured data that drowns a search. Read a file here by name when a probe row cites it.
+research/*.json
+research/probe/**/*.jsonl
+docs/design/kampr-design-directions.html

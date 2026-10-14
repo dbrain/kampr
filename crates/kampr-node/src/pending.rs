@@ -204,7 +204,6 @@ fn indented_past(line: &str, at: usize) -> bool {
     line.chars().take_while(|c| *c == ' ').count() > at
 }
 
-/// Where the dialog's own box opens.
 fn box_top(lines: &[&str], options_at: usize) -> Option<usize> {
     let floor = options_at.saturating_sub(MAX_LOOKBACK);
     (floor..options_at)

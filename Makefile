@@ -6,6 +6,55 @@ AAB := $(CLIENT)/androidApp/build/outputs/bundle/release/androidApp-release.aab
 # be regenerated: lose it and no device that has installed Kampr can ever be updated again.
 KEYSTORE := $(CURDIR)/../kampr-android-keys/kampr-release.jks
 
+# `make check` is the gate, and `.github/workflows/ci.yml` runs these same targets, so the two
+# cannot drift. `make test-fast` is the inner loop: everything but the tests that need a real
+# herdr (see `.config/nextest.toml`), in about twenty seconds.
+.PHONY: check check-rust check-client check-packaging fmt lint test test-fast check-darwin \
+  ci-live-client ci-bundle-guard
+
+check: check-rust check-client check-packaging
+
+check-rust: fmt lint test
+
+fmt:
+	cargo fmt --all -- --check
+
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
+
+test-fast:
+	cargo nextest run --workspace
+
+test:
+	cargo nextest run --workspace --profile full
+
+check-client:
+	scripts/client-check.sh
+
+check-packaging:
+	@command -v shellcheck >/dev/null || { echo "check-packaging needs shellcheck on PATH"; exit 1; }
+	for f in packaging/*.sh; do sh -n "$$f"; done
+	shellcheck --shell=sh packaging/*.sh
+	shellcheck scripts/*.sh scripts/probe .claude/hooks/*.sh
+	sh packaging/selftest.sh
+	sh packaging/kamprctl-selftest.sh
+	python3 scripts/check-plugin-manifest.py
+
+# The release builds two Apple targets, and a Linux-only libc constant once compiled clean here
+# and failed both of them with the tag already pushed. CI runs this on macOS; on Linux it proves
+# nothing `lint` has not.
+check-darwin:
+	cargo check --workspace --all-targets
+
+# CI only. Each starts from a state a workstation is not in — a fresh runner's empty dist/, a
+# herdr server in the default session — and says why in its script.
+ci-live-client:
+	cargo build -p kampr-cli
+	scripts/live-client-check.sh
+
+ci-bundle-guard:
+	scripts/bundle-guard-check.sh
+
 .PHONY: android-release android-bundle android-install android-test android-publish android-clean android-keystore
 
 android-release:

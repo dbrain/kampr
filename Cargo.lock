@@ -2362,6 +2362,7 @@ dependencies = [
  "clap",
  "kampr-auth",
  "kampr-client",
+ "kampr-core",
  "kampr-fleet",
  "kampr-herdr",
  "kampr-mesh",
@@ -2425,6 +2426,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2574,6 +2576,7 @@ name = "kampr-term"
 version = "0.1.109"
 dependencies = [
  "anyhow",
+ "kampr-testkit",
  "serde",
  "serde_json",
  "unicode-segmentation",
@@ -2584,6 +2587,9 @@ dependencies = [
 [[package]]
 name = "kampr-testkit"
 version = "0.1.109"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "kampr-tui"
@@ -2600,6 +2606,7 @@ dependencies = [
  "kampr-mesh",
  "kampr-node",
  "kampr-term",
+ "kampr-testkit",
  "pulldown-cmark",
  "ratatui",
  "reqwest",

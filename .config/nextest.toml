@@ -1,0 +1,18 @@
+[store]
+dir = "target/nextest"
+
+# Every test in these modules spawns or drives a real `herdr`. Keep the list in step with
+# `crates/kampr-testkit/tests/guards/herdr_tests.rs`, which fails when a test outside it calls
+# `kampr_testkit::herdr_on_path`.
+[profile.default]
+default-filter = """
+not (
+    (binary_id(kampr-node::it) & test(/^(live|mesh)::/))
+  | (binary_id(kampr-core::it) & test(/^events::/))
+  | (binary_id(kampr-cli::it) & test(/^doctor_live::/))
+)
+"""
+
+[profile.full]
+default-filter = "all()"
+slow-timeout = { period = "60s", terminate-after = 5 }

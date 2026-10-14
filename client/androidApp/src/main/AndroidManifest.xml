@@ -52,7 +52,7 @@
             </intent-filter>
         </activity>
         <!-- UnifiedPush: a distributor the user already runs delivers the same RFC 8291 payload
-             the browser gets, so the node's sender is unchanged (docs/08-notifications.md). -->
+             the browser gets, so the node's sender is unchanged (docs/16-notifications.md). -->
         <service android:name=".KamprPushService" android:exported="false">
             <intent-filter>
                 <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />

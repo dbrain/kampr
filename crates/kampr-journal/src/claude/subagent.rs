@@ -7,8 +7,6 @@ use crate::sub;
 
 const META: &str = ".meta.json";
 
-/// One conversation an `Agent` call launched: where its transcript is, and what the harness wrote
-/// beside it about the agent it started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launched {
     pub transcript: PathBuf,

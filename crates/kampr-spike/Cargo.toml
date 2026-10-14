@@ -10,3 +10,6 @@ kampr-herdr = { path = "../kampr-herdr" }
 kampr-term = { path = "../kampr-term" }
 serde_json.workspace = true
 tokio.workspace = true
+
+[lints]
+workspace = true

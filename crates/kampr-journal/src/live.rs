@@ -197,14 +197,12 @@ fn dedent(line: &str, indent: usize) -> &str {
     &line[strip..]
 }
 
-/// What one poll of the screen decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     /// Nothing to send. Either the screen has not moved, or the block under it has not yet earned
     /// a preview.
     Held,
     Show(Turn),
-    /// Withdraw the preview currently on the client: a turn under the live id carrying nothing.
     Retire,
 }
 

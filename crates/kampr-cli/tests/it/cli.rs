@@ -4,19 +4,19 @@
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-struct Cli {
+pub(crate) struct Cli {
     config: std::path::PathBuf,
     state: std::path::PathBuf,
     socket: std::path::PathBuf,
     xdg: std::path::PathBuf,
-    nowhere: std::path::PathBuf,
+    pub(crate) nowhere: std::path::PathBuf,
     binary: std::path::PathBuf,
     env: Vec<(String, String)>,
     _dir: tempfile::TempDir,
 }
 
 impl Cli {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         Self {
             config: dir.path().join("config"),
@@ -37,17 +37,17 @@ impl Cli {
         self
     }
 
-    fn with_env(mut self, key: &str, value: &str) -> Self {
+    pub(crate) fn with_env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
         self
     }
 
-    fn against(mut self, socket: &Path) -> Self {
+    pub(crate) fn against(mut self, socket: &Path) -> Self {
         self.socket = socket.to_path_buf();
         self
     }
 
-    fn run(&self, args: &[&str]) -> Output {
+    pub(crate) fn run(&self, args: &[&str]) -> Output {
         self.run_with_stdin(args, "")
     }
 
@@ -104,7 +104,7 @@ impl Cli {
         child.wait_with_output().expect("kampr output")
     }
 
-    fn init(&self) -> String {
+    pub(crate) fn init(&self) -> String {
         let out = self.run(&["init"]);
         assert!(out.status.success(), "{}", stderr(&out));
         stdout(&out)
@@ -119,7 +119,7 @@ impl Cli {
     }
 
     /// The binary half of herdr, pinned in config the way `kampr service install` pins it.
-    fn pin_herdr(&self, binary: &Path) {
+    pub(crate) fn pin_herdr(&self, binary: &Path) {
         let text = self.config_text();
         let pinned: String = text
             .lines()
@@ -142,7 +142,7 @@ impl Cli {
     }
 }
 
-fn stdout(out: &Output) -> String {
+pub(crate) fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -163,7 +163,7 @@ fn devices(cli: &Cli) -> String {
     stdout(&out)
 }
 
-fn check<'a>(json: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+pub(crate) fn check<'a>(json: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
     json["checks"]
         .as_array()
         .expect("checks")
@@ -222,184 +222,6 @@ fn a_lost_paper_record_can_be_replaced_from_the_console() {
 
     let old = cli.run_with_stdin(&["recover"], &format!("{code}\n"));
     assert!(!old.status.success(), "reissuing must retire the old code");
-}
-
-/// A throwaway named session, stopped and deleted by the test that made it. `default` is never
-/// touched, and a machine with no herdr skips rather than fails.
-struct Herd {
-    socket: std::path::PathBuf,
-}
-
-/// How long a spawned herdr is given to open its socket before the wait is called a defect.
-const LISTENS_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
-
-impl Herd {
-    // `herdr server` *is* the server: it runs until the socket is told to stop, which is what
-    // `Drop` does. Waiting on it here would block for the life of the session.
-    #[allow(clippy::zombie_processes)]
-    fn start(tag: &str) -> Self {
-        let herdr = kampr_testkit::herdr_on_path();
-        let name = format!("kampr-doctor-{tag}-{}", std::process::id());
-        assert_ne!(name, "default");
-        let socket = herdr_home().join("sessions").join(&name).join("herdr.sock");
-        Command::new("herdr")
-            .args(["server", "--session", &name])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap_or_else(|e| panic!("spawning `{} server --session {name}`: {e}", herdr.display()));
-        for _ in 0..100 {
-            if socket.exists() {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                return Self { socket };
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        kampr_testkit::herdr_never_listened(&name, &socket, LISTENS_WITHIN)
-    }
-}
-
-impl Herd {
-    /// A new named session is running within milliseconds and holds no panes at all (#240), and
-    /// `terminal session observe` needs one.
-    fn with_a_pane(self) -> Self {
-        let made = Command::new("herdr")
-            .args(["workspace", "create", "--label", "kampr-doctor", "--cwd"])
-            .arg(std::env::temp_dir())
-            .env("HERDR_SOCKET_PATH", &self.socket)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("herdr workspace create");
-        assert!(made.success(), "could not make a pane to observe");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        self
-    }
-}
-
-impl Drop for Herd {
-    fn drop(&mut self) {
-        let _ = Command::new("herdr")
-            .args(["--session", session_name(&self.socket), "server", "stop"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        if let Some(dir) = self.socket.parent() {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-}
-
-fn session_name(socket: &Path) -> &str {
-    socket
-        .parent()
-        .and_then(|d| d.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("default")
-}
-
-fn herdr_home() -> std::path::PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var("HOME").expect("HOME")).join(".config"))
-        .join("herdr")
-}
-
-/// The manifest declares a floor and nothing enforced it. This is that floor, against a herdr
-/// that is actually running.
-#[test]
-fn doctor_reads_the_version_off_a_live_herdr_and_checks_it_against_the_floor() {
-    let herd = Herd::start("live");
-    let cli = Cli::new().against(&herd.socket);
-    cli.init();
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
-    let herdr = check(&json, "herdr");
-    assert_eq!(herdr["status"], "ok", "{herdr:#}");
-    let detail = herdr["detail"].as_str().unwrap();
-    assert!(detail.contains("protocol"), "{detail}");
-    assert!(detail.contains("floor"), "{detail}");
-}
-
-/// **The answer to "why does Kampr say this agent is idle".**
-///
-/// A harness with no screen-detection manifest can only report its state through an integration,
-/// and herdr 0.9 still ships no `omp` manifest (#511) — so an omp pane reads `idle` through a whole
-/// working turn (#485) and nothing on the pane says why. `integration.list` is the one place that
-/// does, and it is a pure read.
-///
-/// It reports and does not nag. `not_installed` is never a warning, which is the line herdr draws
-/// for its own attention badge, and Kampr installs nothing either way.
-#[test]
-fn doctor_says_which_agents_can_tell_herdr_their_state_and_does_not_nag_about_the_rest() {
-    let herd = Herd::start("integrations");
-    let cli = Cli::new().against(&herd.socket);
-    cli.init();
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
-    let check = check(&json, "integrations");
-    assert_eq!(
-        check["status"], "ok",
-        "an integration nobody installed is not a fault: {check:#}"
-    );
-    let detail = check["detail"].as_str().unwrap();
-    assert!(detail.contains("installed"), "{detail}");
-    assert!(detail.contains("without one"), "{detail}");
-    assert!(
-        !detail.contains("out of date"),
-        "nothing was outdated, so nothing may say so: {detail}"
-    );
-}
-
-/// #233: the node that served a correct herd, accepted input, reported green, and showed a
-/// blank grid in every client, because the half of herdr that streams is a spawned binary and
-/// nothing had ever run it. `--version` answering is not that half.
-#[test]
-fn doctor_fails_a_herdr_that_answers_version_and_cannot_observe() {
-    let herd = Herd::start("blind").with_a_pane();
-    let cli = Cli::new().against(&herd.socket);
-    cli.init();
-    let shim = cli.nowhere.join("herdr");
-    std::fs::create_dir_all(&cli.nowhere).expect("a directory for the shim");
-    std::fs::write(
-        &shim,
-        "#!/bin/sh\ncase \"$1\" in --version) echo 'herdr 0.9.0' ;; *) exit 1 ;; esac\n",
-    )
-    .expect("a shim herdr");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    cli.pin_herdr(&shim);
-
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
-    let observe = check(&json, "observe");
-    assert_eq!(observe["status"], "fail", "{observe:#}");
-    let detail = observe["detail"].as_str().unwrap();
-    assert!(detail.contains("does not stream"), "{detail}");
-    assert!(
-        detail.contains("herdr 0.9.0"),
-        "the version it did answer: {detail}"
-    );
-}
-
-/// And the other side of it: against a real herdr the check is only green because a frame came
-/// back off a real `terminal session observe`.
-#[test]
-fn doctor_proves_the_stream_against_a_live_herdr_rather_than_asking_its_version() {
-    let herd = Herd::start("stream").with_a_pane();
-    let cli = Cli::new().against(&herd.socket);
-    cli.init();
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout(&cli.run(&["doctor", "--json"]))).expect("json");
-    let observe = check(&json, "observe");
-    assert_eq!(observe["status"], "ok", "{observe:#}");
-    let detail = observe["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("streamed a"),
-        "no frame was ever asked for: {detail}"
-    );
 }
 
 #[test]
@@ -560,7 +382,7 @@ fn field(config: &str, key: &str) -> String {
         .to_string()
 }
 
-/// The hub configuration `docs/07-mesh-deployment.md` §1 tells the operator to hand-edit in.
+/// The hub configuration `docs/15-mesh-deployment.md` §1 tells the operator to hand-edit in.
 /// None of it has a CLI flag, so `--force` is the only command that can throw it away.
 fn make_it_a_proxied_hub(cli: &Cli) {
     set_config(cli, "origin = \"\"", "origin = \"https://kampr.example.com\"");
@@ -1132,12 +954,12 @@ fn doctor_is_quiet_about_asset_links_on_a_node_that_cannot_do_passkeys_at_all() 
 
 /// A herdr installed where a service manager cannot see it. Both binaries land in the same
 /// prefix, which is the whole of what makes the fallback work.
-struct Prefix {
+pub(crate) struct Prefix {
     dir: tempfile::TempDir,
 }
 
 impl Prefix {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().expect("a prefix");
         std::fs::create_dir_all(dir.path().join("bin")).expect("a bin dir");
         Self { dir }
@@ -1163,7 +985,7 @@ impl Prefix {
         path
     }
 
-    fn home(&self) -> String {
+    pub(crate) fn home(&self) -> String {
         self.dir.path().display().to_string()
     }
 }
@@ -1175,49 +997,10 @@ fn chmod_x(path: &Path) {
 
 /// A herdr installed for everyone would be found by the prefix search and make these tests say
 /// nothing, so they skip rather than pass for the wrong reason.
-fn system_herdr() -> bool {
+pub(crate) fn system_herdr() -> bool {
     ["/usr/local/bin/herdr", "/opt/homebrew/bin/herdr"]
         .iter()
         .any(|p| Path::new(p).exists())
-}
-
-/// The machine this came from: the socket answers, so the `herdr` line was green and the node
-/// passed `kampr doctor` — while the binary that streams every grid was nowhere the node could
-/// find it, and every pane was blank for ever.
-#[test]
-fn doctor_fails_when_the_binary_that_streams_every_grid_is_nowhere_to_be_found() {
-    if system_herdr() {
-        eprintln!("skipped: this host has a herdr installed system-wide");
-        return;
-    }
-    let herd = Herd::start("observe");
-    let empty = Prefix::new();
-    let cli = Cli::new()
-        .against(&herd.socket)
-        .with_env("PATH", "")
-        .with_env("HOME", &empty.home());
-    cli.init();
-
-    let out = cli.run(&["doctor", "--json"]);
-    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
-    assert_eq!(
-        check(&json, "herdr")["status"],
-        "ok",
-        "the socket is the half that was never broken: {json:#}"
-    );
-    let observe = check(&json, "observe");
-    assert_eq!(observe["status"], "fail", "{json:#}");
-    let detail = observe["detail"].as_str().unwrap();
-    assert!(detail.contains("herdr"), "{detail}");
-    assert!(detail.contains("blank") || detail.contains("stream"), "{detail}");
-    assert!(
-        observe["fix"].as_str().unwrap().contains("install herdr"),
-        "{observe:#}"
-    );
-    assert!(
-        !out.status.success(),
-        "a node that can never show a pane is not a healthy node"
-    );
 }
 
 /// The operator whose node broke months ago and who does nothing but update: their `config.toml`

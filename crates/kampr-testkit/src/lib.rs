@@ -10,6 +10,8 @@
 //! [#233](../../../docs/03-probe-log.md) — the defect where every socket answer is correct and
 //! every pane is blank — and reporting it as "not installed" is how that defect hides.
 
+pub mod alloc;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

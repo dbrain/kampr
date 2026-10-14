@@ -24,7 +24,11 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+kampr-testkit = { path = "../kampr-testkit" }
 futures-util.workspace = true
 kampr-mesh = { path = "../kampr-mesh" }
 kampr-node = { path = "../kampr-node" }
 tokio-tungstenite.workspace = true
+
+[lints]
+workspace = true

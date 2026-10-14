@@ -324,7 +324,7 @@ Two things bite people here:
    would append to it, and replacing is what makes it un-forgeable. Note also that a custom
    `location` bypasses NPM's Block-Common-Exploits include and any access list you set on the Proxy
    Host, for exactly those two endpoints. The full block is in
-   [`docs/07-mesh-deployment.md`](docs/07-mesh-deployment.md).
+   [`docs/15-mesh-deployment.md`](docs/15-mesh-deployment.md).
 
 ### 5. Join the peers to the hub
 
@@ -459,11 +459,14 @@ code block you are looking at; `ctrl+b shift+O` reads the conversation a subagen
 `ctrl+b shift+C` takes the half-typed line somebody left at the pane's own keyboard, because a
 reply sent from here would otherwise join onto it.
 
-A pane wider than your terminal is cropped and panned rather than reflowed, because Kampr never
-resizes a pane ([ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md)). It will ask *your
-terminal* to grow instead, where your terminal supports that — ghostty and kitty do not, konsole
-does ([#291](./docs/03-probe-log.md)) — and the status line always says which rung of that ladder
-it used and why.
+Looking at a pane never reshapes it ([ADR 0002](./docs/adr/0002-kampr-never-resizes-a-pane.md)).
+The one exception is deliberate: while a terminal at least desk-sized has a pane open, `kampr`
+holds that pane at the view's size through `pane.size` and puts it back when it lets go
+([ADR 0013](./docs/adr/0013-a-standing-intent-to-match-the-view.md)), and the pane's size menu
+stops it. A pane wider than a smaller terminal is cropped and panned rather than reflowed, and
+Kampr asks *your terminal* to grow instead, where your terminal supports that — ghostty and kitty
+do not, konsole does ([#291](./docs/03-probe-log.md)) — with the status line saying which rung of
+that ladder it used and why.
 
 ### Staying current
 
@@ -574,10 +577,10 @@ Reconstructs the pane's grid from the frame stream alone and diffs it against He
 | [`docs/03-probe-log.md`](docs/03-probe-log.md) | Every claim about Herdr, traced to the command that proved it |
 | [`docs/04-wire-protocol.md`](docs/04-wire-protocol.md) | The node ↔ client contract |
 | [`docs/06-audit.md`](docs/06-audit.md) | **What is broken, incomplete and missing** |
-| [`docs/07-mesh-deployment.md`](docs/07-mesh-deployment.md) | One hostname, every host — the full proxy and mesh guide |
+| [`docs/15-mesh-deployment.md`](docs/15-mesh-deployment.md) | One hostname, every host — the full proxy and mesh guide |
 | [`docs/09-toolchain.md`](docs/09-toolchain.md) | Every version this builds with, and which ones bite |
 | [`docs/07-android-release.md`](docs/07-android-release.md) | Signing, release and kobup publish |
-| [`docs/08-notifications.md`](docs/08-notifications.md) | Push, from `agent_status` to a phone |
+| [`docs/16-notifications.md`](docs/16-notifications.md) | Push, from `agent_status` to a phone |
 | [`docs/08-threat-model.md`](docs/08-threat-model.md) | Assets, adversaries and the residual risks |
 | [`docs/10-passkeys.md`](docs/10-passkeys.md) | What passkeys need, what Android needs on top, and what you keep without them |
 | [`docs/02-roadmap.md`](docs/02-roadmap.md) | The plan, and where each phase actually stands |

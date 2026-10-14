@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="build/generated/compose/resourceGenerator/kotlin/androidMainResourceCollectors/dev/kampr/terminal/spike/res/ActualResourceCollectors.kt">
+        <error line="5" column="1" source="standard:import-ordering" />
+        <error line="15" column="1" source="standard:indent" />
+        <error line="16" column="1" source="standard:indent" />
+        <error line="20" column="1" source="standard:indent" />
+        <error line="21" column="1" source="standard:indent" />
+        <error line="25" column="1" source="standard:indent" />
+        <error line="26" column="1" source="standard:indent" />
+        <error line="30" column="1" source="standard:indent" />
+        <error line="31" column="1" source="standard:indent" />
+        <error line="35" column="1" source="standard:indent" />
+        <error line="36" column="1" source="standard:indent" />
+        <error line="37" column="1" source="standard:indent" />
+    </file>
+    <file name="build/generated/compose/resourceGenerator/kotlin/commonMainResourceAccessors/dev/kampr/terminal/spike/res/Font0.commonMain.kt">
+        <error line="5" column="1" source="standard:import-ordering" />
+        <error line="17" column="1" source="standard:indent" />
+        <error line="17" column="20" source="standard:wrapping" />
+        <error line="17" column="48" source="standard:wrapping" />
+        <error line="19" column="1" source="standard:indent" />
+        <error line="19" column="7" source="standard:wrapping" />
+        <error line="20" column="1" source="standard:indent" />
+        <error line="24" column="1" source="standard:indent" />
+        <error line="24" column="20" source="standard:wrapping" />
+        <error line="24" column="54" source="standard:wrapping" />
+        <error line="26" column="1" source="standard:indent" />
+        <error line="26" column="7" source="standard:wrapping" />
+        <error line="27" column="1" source="standard:indent" />
+        <error line="31" column="1" source="standard:indent" />
+        <error line="31" column="20" source="standard:wrapping" />
+        <error line="31" column="50" source="standard:wrapping" />
+        <error line="33" column="1" source="standard:indent" />
+        <error line="33" column="7" source="standard:wrapping" />
+        <error line="34" column="1" source="standard:indent" />
+        <error line="38" column="1" source="standard:indent" />
+        <error line="38" column="20" source="standard:wrapping" />
+        <error line="38" column="51" source="standard:wrapping" />
+        <error line="40" column="1" source="standard:indent" />
+        <error line="40" column="7" source="standard:wrapping" />
+        <error line="41" column="1" source="standard:indent" />
+        <error line="44" column="14" source="standard:function-naming" />
+        <error line="45" column="1" source="standard:indent" />
+        <error line="46" column="1" source="standard:indent" />
+        <error line="47" column="1" source="standard:indent" />
+        <error line="48" column="1" source="standard:indent" />
+    </file>
+    <file name="build/generated/compose/resourceGenerator/kotlin/commonMainResourceCollectors/dev/kampr/terminal/spike/res/ExpectResourceCollectors.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+    </file>
+    <file name="build/generated/compose/resourceGenerator/kotlin/commonResClass/dev/kampr/terminal/spike/res/Res.kt">
+        <error line="3" column="1" source="standard:indent" />
+        <error line="4" column="1" source="standard:indent" />
+        <error line="9" column="1" source="standard:import-ordering" />
+        <error line="18" column="1" source="standard:indent" />
+        <error line="19" column="1" source="standard:indent" />
+        <error line="20" column="1" source="standard:indent" />
+        <error line="21" column="1" source="standard:indent" />
+        <error line="22" column="1" source="standard:indent" />
+        <error line="23" column="1" source="standard:indent" />
+        <error line="24" column="1" source="standard:indent" />
+        <error line="25" column="1" source="standard:indent" />
+        <error line="26" column="1" source="standard:indent" />
+        <error line="28" column="1" source="standard:indent" />
+        <error line="29" column="1" source="standard:indent" />
+        <error line="30" column="1" source="standard:indent" />
+        <error line="31" column="1" source="standard:indent" />
+        <error line="32" column="1" source="standard:indent" />
+        <error line="33" column="1" source="standard:indent" />
+        <error line="34" column="1" source="standard:indent" />
+        <error line="35" column="1" source="standard:indent" />
+        <error line="36" column="1" source="standard:indent" />
+        <error line="38" column="1" source="standard:indent" />
+        <error line="38" column="17" source="standard:class-naming" />
+        <error line="40" column="1" source="standard:indent" />
+        <error line="40" column="17" source="standard:class-naming" />
+        <error line="42" column="1" source="standard:indent" />
+        <error line="42" column="17" source="standard:class-naming" />
+        <error line="44" column="1" source="standard:indent" />
+        <error line="44" column="17" source="standard:class-naming" />
+        <error line="46" column="1" source="standard:indent" />
+        <error line="46" column="17" source="standard:class-naming" />
+    </file>
+    <file name="build/generated/compose/resourceGenerator/kotlin/jvmMainResourceCollectors/dev/kampr/terminal/spike/res/ActualResourceCollectors.kt">
+        <error line="5" column="1" source="standard:import-ordering" />
+        <error line="15" column="1" source="standard:indent" />
+        <error line="16" column="1" source="standard:indent" />
+        <error line="20" column="1" source="standard:indent" />
+        <error line="21" column="1" source="standard:indent" />
+        <error line="25" column="1" source="standard:indent" />
+        <error line="26" column="1" source="standard:indent" />
+        <error line="30" column="1" source="standard:indent" />
+        <error line="31" column="1" source="standard:indent" />
+        <error line="35" column="1" source="standard:indent" />
+        <error line="36" column="1" source="standard:indent" />
+        <error line="37" column="1" source="standard:indent" />
+    </file>
+    <file name="build/generated/compose/resourceGenerator/kotlin/wasmJsMainResourceCollectors/dev/kampr/terminal/spike/res/ActualResourceCollectors.kt">
+        <error line="5" column="1" source="standard:import-ordering" />
+        <error line="15" column="1" source="standard:indent" />
+        <error line="16" column="1" source="standard:indent" />
+        <error line="20" column="1" source="standard:indent" />
+        <error line="21" column="1" source="standard:indent" />
+        <error line="25" column="1" source="standard:indent" />
+        <error line="26" column="1" source="standard:indent" />
+        <error line="30" column="1" source="standard:indent" />
+        <error line="31" column="1" source="standard:indent" />
+        <error line="35" column="1" source="standard:indent" />
+        <error line="36" column="1" source="standard:indent" />
+        <error line="37" column="1" source="standard:indent" />
+    </file>
+    <file name="src/androidMain/kotlin/dev/kampr/terminal/spike/Platform.android.kt">
+        <error line="13" column="39" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/Bench.kt">
+        <error line="93" column="69" source="standard:multiline-if-else" />
+        <error line="93" column="83" source="standard:multiline-if-else" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/FrameStats.kt">
+        <error line="15" column="15" source="standard:statement-wrapping" />
+        <error line="24" column="1" source="standard:no-blank-line-before-rbrace" />
+        <error line="60" column="26" source="standard:statement-wrapping" />
+        <error line="60" column="40" source="standard:statement-wrapping" />
+        <error line="60" column="55" source="standard:statement-wrapping" />
+        <error line="77" column="68" source="standard:statement-wrapping" />
+        <error line="77" column="74" source="standard:statement-wrapping" />
+        <error line="77" column="81" source="standard:statement-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/GridRenderer.kt">
+        <error line="178" column="55" source="standard:multiline-if-else" />
+        <error line="179" column="26" source="standard:multiline-if-else" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/Palette.kt">
+        <error line="18" column="30" source="standard:multiline-loop" />
+        <error line="18" column="51" source="standard:multiline-loop" />
+        <error line="27" column="44" source="standard:function-signature" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/SpikeApp.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="110" column="1" source="standard:blank-line-between-when-conditions" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/StyleTable.kt">
+        <error line="45" column="23" source="standard:statement-wrapping" />
+        <error line="45" column="30" source="standard:statement-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/TextCache.kt">
+        <error line="64" column="62" source="standard:function-signature" />
+        <error line="119" column="20" source="standard:argument-list-wrapping" />
+        <error line="119" column="30" source="standard:argument-list-wrapping" />
+        <error line="119" column="48" source="standard:argument-list-wrapping" />
+        <error line="120" column="42" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/commonMain/kotlin/dev/kampr/terminal/spike/Workload.kt">
+        <error line="79" column="38" source="standard:argument-list-wrapping" />
+        <error line="80" column="41" source="standard:argument-list-wrapping" />
+        <error line="81" column="33" source="standard:argument-list-wrapping" />
+        <error line="86" column="22" source="standard:argument-list-wrapping" />
+        <error line="86" column="40" source="standard:argument-list-wrapping" />
+        <error line="86" column="59" source="standard:argument-list-wrapping" />
+        <error line="86" column="79" source="standard:argument-list-wrapping" />
+    </file>
+    <file name="src/jvmMain/kotlin/dev/kampr/terminal/spike/Platform.jvm.kt">
+        <error line="10" column="39" source="standard:function-signature" />
+    </file>
+    <file name="src/wasmJsMain/kotlin/dev/kampr/terminal/spike/Platform.wasmJs.kt">
+        <error line="3" column="1" source="standard:import-ordering" />
+        <error line="18" column="12" source="standard:trailing-comma-on-call-site" />
+        <error line="82" column="8" source="standard:trailing-comma-on-call-site" />
+    </file>
+</baseline>

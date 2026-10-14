@@ -309,7 +309,6 @@ pub struct PaneEntry {
     pub title: Option<String>,
 }
 
-/// A fleet run's own state, beside the pane it is served as.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FleetEntry {
     pub cohort: String,
@@ -752,7 +751,7 @@ pub enum ErrorCode {
     WorkspaceGroupCloseRequired,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum ClientMsg {
     #[serde(rename = "watch")]
