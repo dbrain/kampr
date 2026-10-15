@@ -111,9 +111,14 @@ class LivenessTest {
     // all" by the very sleep it is trying to measure, and would leave a dead socket alone. Here the
     // silence deadline is set out of reach on purpose, so the only thing that can drop this socket
     // is the resume reading a clock that counted the sleep.
+    //
+    // Deaf from the start rather than from after a round trip: any frame heard is a socket that is
+    // alive and cancels the probe, and a pong already on its way when the node went deaf landed
+    // after the sleep on a loaded runner.
     @Test
     fun aResumeMeasuresTheBackgroundOnAClockThatCountedTheSleep() {
         val node = StubNode()
+        node.deaf = true
         node.start()
         val clocks = SleepyClocks()
         val scope = CoroutineScope(SupervisorJob())
@@ -135,9 +140,8 @@ class LivenessTest {
             runBlocking {
                 connection.connect(Endpoint("http://127.0.0.1:${node.port}"))
                 until("hello") { store.hello.value != null }
-                until("a round trip") { node.received.any { it.contains("\"ping\"") } }
+                until("the heartbeat") { node.received.any { it.contains("\"ping\"") } }
 
-                node.deaf = true
                 clocks.sleepFor(300_000)
                 connection.onForeground()
 
