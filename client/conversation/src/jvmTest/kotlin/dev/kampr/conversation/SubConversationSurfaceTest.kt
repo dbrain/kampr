@@ -107,10 +107,16 @@ class SubConversationSurfaceTest {
     // Re-asking is free by the rule the open path already relies on: the page is `fresh`, so a
     // second ask is how a running subagent's latest step arrives.
     //
-    // The mutation that must fail: drop the re-announce, and the second ask never goes.
+    // It waits for the new pump's first page, though. The ask rides in behind the re-watch, and the
+    // node refuses a sub until that pump has confirmed the transcript it is contained in
+    // (`Warm::confirmed`) — so asking the moment the socket is back is refused as "this pane has
+    // no conversation" and sets up no follow, which is the dead panel again by another road.
+    //
+    // The mutations that must fail: drop the re-announce, and the second ask never goes; send it
+    // on the socket alone, and it goes before the page.
     @Test
     fun aSubagentTheReaderHadOpenIsFollowedAgainAfterAReconnect() = runComposeUiTest {
-        val (_, pane) = pane(LAUNCHING, LAUNCHED)
+        val (store, pane) = pane(LAUNCHING, LAUNCHED)
         val io = SubIo()
         var status: ConnectionStatus by mutableStateOf(ConnectionStatus.Live("full"))
         setContent { Screen(pane, io, status) }
@@ -123,16 +129,51 @@ class SubConversationSurfaceTest {
             "opening a subagent did not ask the node to follow it: ${io.sent}",
         )
 
+        store.markStale()
         status = ConnectionStatus.Offline("the wifi went", 1_000)
         waitForIdle()
         status = ConnectionStatus.Live("full")
         waitForIdle()
+        assertEquals(
+            1,
+            io.sent.count { it is ClientMsg.ConvoSub },
+            "the follow was asked for before the node had confirmed the transcript: ${io.sent}",
+        )
 
+        store.accept(requireNotNull(Wire.decode(LAUNCHING)))
+        waitForIdle()
         assertEquals(
             2,
             io.sent.count { it is ClientMsg.ConvoSub },
             "the follow died with the socket and nothing asked for it again, so this panel would " +
                 "never take another turn: ${io.sent}",
+        )
+    }
+
+    // A card is on screen before the pane is confirmed — a reopened pane draws what it kept — so a
+    // tap in that window is the same early ask. The panel opens; the ask waits for the page.
+    @Test
+    fun aSubagentOpenedBeforeTheFirstPageIsAskedForOnceItLands() = runComposeUiTest {
+        val (store, pane) = pane(LAUNCHING)
+        store.releaseConversation(PANE_ID)
+        val io = SubIo()
+        setContent { Screen(pane, io, ConnectionStatus.Live("full")) }
+        waitForIdle()
+        onNodeWithContentDescription(CARD).performClick()
+        waitForIdle()
+        onNodeWithContentDescription(BACK).assertExists()
+        assertEquals(
+            emptyList(),
+            io.sent.filterIsInstance<ClientMsg.ConvoSub>(),
+            "the subagent was asked for before the node had confirmed the transcript",
+        )
+
+        store.accept(requireNotNull(Wire.decode(LAUNCHING)))
+        waitForIdle()
+        assertEquals(
+            listOf(ClientMsg.ConvoSub(PANE_ID, HANDLE, null)),
+            io.sent.filterIsInstance<ClientMsg.ConvoSub>(),
+            "the first page landed and the subagent the reader opened was never asked for",
         )
     }
 

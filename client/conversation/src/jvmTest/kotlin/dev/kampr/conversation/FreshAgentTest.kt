@@ -183,6 +183,43 @@ class FreshAgentTest {
         )
     }
 
+    // The same refusal from a pane that never changed session: open it, leave, come back. Leaving
+    // keeps the newest turns and the cursor above them, so the view mounts at the top of a list it
+    // can page and asks at once — riding in behind the `watch`, ahead of the new pump's first tick,
+    // which is the only thing that lets the node page its warm parse (`Warm::confirmed`). Whether
+    // the refusal lands is whichever of the two the node gets to first.
+    //
+    // The mutation that must fail: drop `convoConfirmed` from what makes the pane pageable, and
+    // the reopened pane asks before the node has sent it anything.
+    @Test
+    fun aReopenedPaneWaitsForItsFirstPageBeforeAskingForAnOlderOne() = runComposeUiTest {
+        val store = KamprStore()
+        val page = ServerMsg.Convo(
+            pane = PANE_ID,
+            cursor = "a-1",
+            more = true,
+            turns = listOf(proseTurn("a-1", "an answer read before the pane was left")),
+        )
+        store.accept(page)
+        store.releaseConversation(PANE_ID)
+
+        val io = conversation(demoInfo(status = "idle"), store)
+        onNodeWithText("an answer read before the pane was left", substring = true).assertIsDisplayed()
+        assertEquals(
+            emptyList(),
+            io.sent.filterIsInstance<ClientMsg.ConvoLoad>().toList(),
+            "the reopened pane paged a transcript the node has not confirmed yet",
+        )
+
+        store.accept(page)
+        waitForIdle()
+        assertEquals(
+            listOf(ClientMsg.ConvoLoad(PANE_ID, "a-1")),
+            io.sent.filterIsInstance<ClientMsg.ConvoLoad>().toList(),
+            "the first page came and the pane still did not ask for the one above it",
+        )
+    }
+
     // The two panes that genuinely have nothing to read are still told so, and told which of the
     // two reasons it is.
     @Test

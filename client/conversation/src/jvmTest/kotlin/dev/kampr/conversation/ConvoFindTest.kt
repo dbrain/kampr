@@ -203,6 +203,57 @@ class ConvoFindTest {
         assertTrue(shows("the deep one:"), "pressing a result did not put its turn on the screen")
     }
 
+    // `convo.find` is refused under the same gate as `convo.load` — the node will not search a
+    // warm parse its new pump has not confirmed — so a search typed into a pane just reopened is
+    // the same "no conversation open for this pane" by another road. It waits for the page.
+    //
+    // The mutation that must fail: drop `convoConfirmed` from the search's ask.
+    @Test
+    fun aSearchInAReopenedPaneWaitsForItsFirstPage() = runComposeUiTest {
+        val store = storeOfAPage()
+        store.releaseConversation(PANE_ID)
+        val io = SearchingIo(store)
+        search(store, io, answered = false)
+        mainClock.advanceTimeBy(2_000)
+        waitForIdle()
+        assertEquals(
+            emptyList(),
+            io.sent.filter { it is ClientMsg.ConvoFind || it is ClientMsg.ConvoLoad },
+            "the reopened pane asked the node about a transcript it has not confirmed yet",
+        )
+
+        store.accept(ServerMsg.Convo(pane = PANE_ID, cursor = "u-0", more = true, turns = held()))
+        waitUntil(timeoutMillis = 4_000) { store.pane(PANE_ID).convoFound != null }
+        assertEquals(
+            listOf(ClientMsg.ConvoFind(PANE_ID, NEEDLE)),
+            io.sent.filterIsInstance<ClientMsg.ConvoFind>(),
+            "the first page came and the search was never asked",
+        )
+    }
+
+    // The answer to a search run before the pane was left outlives the leaving, so the same query
+    // typed on return lists its hits at once — and stepping to one this device no longer holds is
+    // the `convo.load` walk, under the same gate as the scroll's.
+    //
+    // The mutation that must fail: walk on `convoMore` alone.
+    @Test
+    fun steppingToAHitInAReopenedPaneWaitsForItsFirstPage() = runComposeUiTest {
+        val store = storeOfAPage()
+        val io = SearchingIo(store)
+        io.send(ClientMsg.ConvoFind(PANE_ID, NEEDLE))
+        store.releaseConversation(PANE_ID)
+        io.sent.clear()
+        search(store, io, answered = false)
+        onNodeWithContentDescription("Previous match").performClick()
+        mainClock.advanceTimeBy(2_000)
+        waitForIdle()
+        assertEquals(
+            emptyList(),
+            io.sent.filterIsInstance<ClientMsg.ConvoLoad>(),
+            "the reopened pane paged for a hit before the node had confirmed the transcript",
+        )
+    }
+
     // A node too old for the verb promises nothing, and the client says what it searched instead of
     // asking for a frame that is never coming.
     @Test

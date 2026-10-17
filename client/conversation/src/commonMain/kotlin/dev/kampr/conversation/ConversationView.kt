@@ -217,7 +217,9 @@ fun ConversationView(
     // whether `convo.load` will answer with anything. Offering to page across it put a press on
     // the screen the node had already said it would refuse, and drew the refusal over the
     // conversation: *"other times it shows a 404 ... recovers when session started properly"*.
-    val pageable = pane.convoMore && info?.hasConversation != false
+    // `convoConfirmed` is the same refusal from a reopened pane: the node pages nothing until the
+    // new pump's first tick, and that tick's page is what sets it.
+    val pageable = pane.convoMore && info?.hasConversation != false && pane.convoConfirmed
     val leading = if (pageable) 1 else 0
 
     val scope = rememberCoroutineScope()
@@ -235,8 +237,8 @@ fun ConversationView(
     // Debounced because the node's walk is not free — 6-9 ms on a long session and 28 ms for a
     // query that is not in it, with the pane's conversation lock held (#541) — and because a frame
     // per keystroke is still a frame per keystroke on a phone link.
-    LaunchedEffect(pane.id, query, io.searchesTranscript) {
-        if (!io.searchesTranscript || query.length < 2) return@LaunchedEffect
+    LaunchedEffect(pane.id, query, io.searchesTranscript, pane.convoConfirmed) {
+        if (!io.searchesTranscript || query.length < 2 || !pane.convoConfirmed) return@LaunchedEffect
         delay(ASK_AFTER_MS)
         io.send(ClientMsg.ConvoFind(pane.id, query))
     }
@@ -308,7 +310,7 @@ fun ConversationView(
         reaching = true
         try {
             var pages = 0
-            while (pane.turns.none { it.id == id } && pane.convoMore && pages < MOST_PAGES_TO_REACH) {
+            while (pane.turns.none { it.id == id } && offering && pages < MOST_PAGES_TO_REACH) {
                 pages++
                 val cursor = pane.convoCursor ?: break
                 // Kept in step with the scroll-driven paging beside this, which asks once per
@@ -421,12 +423,15 @@ fun ConversationView(
     // A stack, not a flag: `depth` says a launched conversation can launch one of its own, so
     // going in twice and coming back once has to mean something. Dropped with the pane.
     val opened = remember(pane.id) { mutableStateListOf<Block.Sub>() }
+    // Owed rather than sent while the pane is unconfirmed: the node refuses a sub until its pump
+    // has confirmed the transcript the sub is contained in, and a refused ask sets up no follow.
+    var owed by remember(pane.id) { mutableStateOf(false) }
     val openSub: (Block.Sub) -> Unit = { sub ->
         // Asked for every time it is opened rather than only the first: the file is appended to
         // while the agent runs, and the page is `fresh` by rule, so a second ask is how a running
         // subagent's latest step arrives.
-        io.send(ClientMsg.ConvoSub(pane.id, sub.id))
         opened.add(sub)
+        if (pane.convoConfirmed) io.send(ClientMsg.ConvoSub(pane.id, sub.id)) else owed = true
     }
     // **And again when the socket comes back**, because the follow is per-socket: the node holds
     // it on the pane handle the watch built and a reconnect builds a new one empty. Nothing else
@@ -437,10 +442,13 @@ fun ConversationView(
     val live = LocalConnectionStatus.current is ConnectionStatus.Live
     var wasLive by remember(pane.id) { mutableStateOf(live) }
     LaunchedEffect(live) {
-        if (live && !wasLive) {
-            opened.lastOrNull()?.let { io.send(ClientMsg.ConvoSub(pane.id, it.id)) }
-        }
+        if (live && !wasLive && opened.isNotEmpty()) owed = true
         wasLive = live
+    }
+    LaunchedEffect(owed, pane.convoConfirmed) {
+        if (!owed || !pane.convoConfirmed) return@LaunchedEffect
+        owed = false
+        opened.lastOrNull()?.let { io.send(ClientMsg.ConvoSub(pane.id, it.id)) }
     }
 
     CompositionLocalProvider(LocalOpenSub provides openSub) {
