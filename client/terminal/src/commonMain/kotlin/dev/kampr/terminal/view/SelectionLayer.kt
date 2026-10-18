@@ -25,6 +25,7 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.render.Selection
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val HANDLE = 22.dp
@@ -37,16 +38,28 @@ private const val MARGIN = 4f
 // buttons: unclamped it hung 182 dp of itself past a 411 dp phone, so the one affordance a long
 // press exists to offer was off the screen exactly where a right thumb lands. The handles are held
 // by the same arithmetic — one that cannot be touched cannot be dragged.
-internal fun Modifier.atPixels(x: Float, y: Float) = layout { measurable, constraints ->
+//
+// The box runs under the header and the key row, so a caller that knows where the visible band is
+// hands it over, and a placement with no room below it goes to `above` instead: a long press on
+// claude's composer, the last rows of a phone, drew Paste under the key row.
+internal fun Modifier.atPixels(
+    x: Float,
+    y: Float,
+    above: Float = y,
+    top: Float = 0f,
+    bottom: Float = Float.POSITIVE_INFINITY,
+) = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
-    fun hold(at: Float, size: Int, room: Int, bounded: Boolean): Int {
-        if (!bounded) return at.roundToInt()
-        return at.coerceIn(MARGIN, (room - size - MARGIN).coerceAtLeast(MARGIN)).roundToInt()
+    fun hold(at: Float, size: Int, room: Float, floor: Float = 0f): Int {
+        val least = floor + MARGIN
+        return at.coerceIn(least, (room - size - MARGIN).coerceAtLeast(least)).roundToInt()
     }
-    val left = hold(x, placeable.width, constraints.maxWidth, constraints.hasBoundedWidth)
-    val top = hold(y, placeable.height, constraints.maxHeight, constraints.hasBoundedHeight)
+    val left = if (constraints.hasBoundedWidth) hold(x, placeable.width, constraints.maxWidth.toFloat()) else x.roundToInt()
+    val room = if (constraints.hasBoundedHeight) min(bottom, constraints.maxHeight.toFloat()) else bottom
+    val wanted = if (y + placeable.height + MARGIN > room && above - placeable.height - MARGIN >= top) above - placeable.height else y
+    val placed = if (room.isFinite()) hold(wanted, placeable.height, room, top) else wanted.roundToInt()
     layout(placeable.width, placeable.height) {
-        placeable.place(left, top)
+        placeable.place(left, placed)
     }
 }
 
@@ -64,6 +77,8 @@ fun SelectionLayer(
     onPaste: (() -> Unit)?,
     onBlock: () -> Unit,
     block: Boolean,
+    visibleTop: Float = 0f,
+    visibleBottom: Float = Float.POSITIVE_INFINITY,
 ) {
     val tokens = Kampr.tokens
     val start = selection.start
@@ -80,11 +95,11 @@ fun SelectionLayer(
 
     // The pill sits below the selection, not above it: above is where the text the operator is
     // reading lives, and a three-button pill over it is the selection covering itself. Below is
-    // the end of the record, and `atPixels` holds the pill inside the box when the selection is
-    // low enough that there is no below.
+    // the end of the record, and the pill goes above only when the selection is low enough that
+    // there is no below.
     Row(
         Modifier
-            .atPixels(startX, endY + 8f)
+            .atPixels(startX, endY + 8f, above = startY - 8f, top = visibleTop, bottom = visibleBottom)
             .background(tokens.color.raise, RoundedCornerShape(tokens.radii.md))
             .edge(tokens.card, RoundedCornerShape(tokens.radii.md)),
         horizontalArrangement = Arrangement.spacedBy(2.dp),

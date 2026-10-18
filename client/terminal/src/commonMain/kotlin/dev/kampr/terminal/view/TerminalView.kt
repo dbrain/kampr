@@ -581,7 +581,10 @@ fun TerminalView(
         var settledContent by remember(pane.id, pane.painted) {
             mutableIntStateOf(rows.contentBelow(pane.cursor.row))
         }
-        LaunchedEffect(pane, rows) {
+        // Keyed on everything the holder above is keyed on: an effect that outlives its holder
+        // writes to the one the first frame replaced, and the floor freezes at that frame — a
+        // tab born 40 rows tall and grown to 53 left claude's mode line under the column bar.
+        LaunchedEffect(pane, rows, pane.painted) {
             snapshotFlow { pane.revision }.collectLatest {
                 // **The wait is one-way here, and only here.** The record ending *further down*
                 // the grid is output — a repaint can blank rows and shorten it, and that is the
@@ -1214,6 +1217,8 @@ fun TerminalView(
                     view.selection = selection.copy(block = view.blockSelect)
                 },
                 block = view.blockSelect,
+                visibleTop = stage.insetTop,
+                visibleBottom = stage.contentBottom,
             )
         }
 
