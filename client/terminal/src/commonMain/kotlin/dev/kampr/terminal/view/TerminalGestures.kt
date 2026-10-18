@@ -60,13 +60,7 @@ internal suspend fun PointerInputScope.terminalGestures(
             val (start, end) = wordAt(rows, anchor)
             view.selection = Selection(GridPoint(anchor.row, start), GridPoint(anchor.row, end), view.blockSelect)
             view.aimOff()
-            var event: PointerEvent
-            do {
-                event = awaitPointerEvent()
-                val moving = event.changes.firstOrNull { it.pressed } ?: break
-                view.selection = view.selection?.copy(head = probe.cellAt(moving.position))
-                event.changes.forEach { if (it.positionChanged()) it.consume() }
-            } while (event.changes.any { it.pressed })
+            extendSelection(view, probe, held.position)
             return@awaitEachGesture
         }
 
@@ -116,6 +110,7 @@ internal suspend fun PointerInputScope.terminalGestures(
         val dragged = travel > viewConfiguration.touchSlop
         when {
             !dragged && !multi -> if (!braking) onTap(down.position)
+
             !multi -> {
                 val velocity = tracker.calculateVelocity()
                 view.velocityX = velocity.x
@@ -183,24 +178,20 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
     var event: PointerEvent
     do {
         event = awaitPointerEvent()
-        val moving = event.changes.firstOrNull { it.pressed }
-        if (moving != null) {
-            if (!selecting) {
-                travel += moving.positionChange().getDistance()
-                if (travel > viewConfiguration.touchSlop) {
-                    val anchor = probe.cellAt(down.position)
-                    view.selection = Selection(anchor, anchor, view.blockSelect)
-                    view.aimOff()
-                    selecting = true
-                    view.lastClickUptime = 0L
-                }
-            }
-            if (selecting) {
-                view.selection = view.selection?.copy(head = probe.cellAt(moving.position))
-                event.changes.forEach { if (it.positionChanged()) it.consume() }
-            }
+        val moving = event.changes.firstOrNull { it.pressed } ?: continue
+        travel += moving.positionChange().getDistance()
+        if (travel > viewConfiguration.touchSlop) {
+            val anchor = probe.cellAt(down.position)
+            view.selection = Selection(anchor, probe.cellAt(moving.position), view.blockSelect)
+            view.aimOff()
+            selecting = true
+            view.lastClickUptime = 0L
+            event.changes.forEach { if (it.positionChanged()) it.consume() }
+            extendSelection(view, probe, moving.position)
+            break
         }
     } while (event.changes.any { it.pressed })
+    if (selecting) view.mouseSelections++
     if (!selecting && !braking) click(view, probe, rows, down.position, down.uptimeMillis, onTap)
     session.reclaimKeyboard()
 }
@@ -233,6 +224,7 @@ private fun AwaitPointerEventScope.click(
         view.selection = Selection(GridPoint(cell.row, start), GridPoint(cell.row, end), view.blockSelect)
         view.aimOff()
         view.lastClickUptime = 0L
+        view.mouseSelections++
     } else {
         view.lastClickUptime = now
         view.lastClickPos = position
@@ -240,5 +232,28 @@ private fun AwaitPointerEventScope.click(
     }
 }
 
+// The head follows the pointer, and a pointer held past the top or bottom of the content keeps the
+// surface scrolling under it: the frame clock gives no event while a hand waits there, so the wait
+// is timed here. The cell is read again on each tick because the scroll moved the grid under a
+// pointer that did not move.
+private suspend fun AwaitPointerEventScope.extendSelection(view: TerminalViewState, probe: GridProbe, from: Offset) {
+    var at = from
+    while (true) {
+        val past = probe.pastEdge(at.y)
+        val event = if (past == 0f) awaitPointerEvent() else withTimeoutOrNull(EDGE_TICK_MS) { awaitPointerEvent() }
+        if (event == null) {
+            val step = abs(past).coerceIn(probe.cellHeight, EDGE_ROWS_PER_TICK * probe.cellHeight)
+            view.scrollBy(0f, if (past > 0f) step else -step)
+        } else {
+            val moving = event.changes.firstOrNull { it.pressed } ?: return
+            at = moving.position
+            event.changes.forEach { if (it.positionChanged()) it.consume() }
+        }
+        view.selection = view.selection?.copy(head = probe.cellAt(at))
+    }
+}
+
+private const val EDGE_TICK_MS = 50L
+private const val EDGE_ROWS_PER_TICK = 4f
 private const val DOUBLE_CLICK_MS = 300L
 private const val CLICK_SLOP_SQ = 100f

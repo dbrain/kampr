@@ -52,6 +52,8 @@ class TerminalViewState {
     val holdsPane: Boolean get() = matchHeld || sizeHeld
     var selection by mutableStateOf<Selection?>(null)
     var blockSelect by mutableStateOf(false)
+    var mouseSelections by mutableIntStateOf(0)
+
     // The three halves of one gesture, set together because they are read together: what was hit,
     // where it sits on the grid so it can be washed, and where the pointer was so the affordance
     // can be put beside it rather than a screen away. Kept private-set for that reason — a target
@@ -209,7 +211,6 @@ class TerminalViewState {
         reanchor = true
     }
 
-
     // Rows leaving the live grid extend the surface *below* a reader parked in history, and
     // scrollY is measured from that bottom — so standing still means moving with it. A reader
     // pinned to the bottom is pinned deliberately and must not be carried off it.
@@ -269,8 +270,7 @@ class TerminalViewState {
     // `maxScroll` rather than trusted against it because the two are written from different points
     // of one composition, and a frame in which the content floor is a rectangle old is a frame in
     // which it can be the larger of the two.
-    private fun clampScroll(value: Float): Float =
-        value.coerceIn(min(contentFloor, maxScroll), max(maxScroll, 0f))
+    private fun clampScroll(value: Float): Float = value.coerceIn(min(contentFloor, maxScroll), max(maxScroll, 0f))
 
     // The horizontal half of `following`, and it was missing. `followCursorPan` puts the caret a
     // margin in from the left, and a caret inside that margin lands the surface on `panX = 0` —
@@ -283,7 +283,11 @@ class TerminalViewState {
 
     fun chaseCursor(wanted: Float?) {
         panX = panX.coerceIn(minPanX, 0f)
-        if (wanted == null) pannedAway = false else if (!pannedAway) panX = wanted
+        if (wanted == null) {
+            pannedAway = false
+        } else if (!pannedAway) {
+            panX = wanted
+        }
     }
 
     // The desk's double-click, and the two things it has to remember between the two presses:

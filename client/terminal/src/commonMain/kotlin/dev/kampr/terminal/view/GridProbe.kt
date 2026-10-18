@@ -17,6 +17,14 @@ class GridProbe {
     var cellHeight = 1f
     var cols = 1
     var totalRows = 1
+    var contentTop = 0f
+    var contentBottom = 0f
+
+    fun pastEdge(y: Float): Float = when {
+        y < contentTop -> contentTop - y
+        y > contentBottom -> contentBottom - y
+        else -> 0f
+    }
 
     fun cellAt(position: Offset): GridPoint {
         val col = floor((position.x - originX) / cellWidth).toInt().coerceIn(0, cols - 1)

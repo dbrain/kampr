@@ -1,77 +1,81 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.platform.LocalReduceMotion
-import dev.kampr.shared.platform.filePickAvailable
 import dev.kampr.shared.platform.PastedFiles
+import dev.kampr.shared.platform.filePickAvailable
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
-import dev.kampr.shared.model.ConnectionStatus
-import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.Breakpoint
+import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalConnectionStatus
+import dev.kampr.shared.ui.LocalCovered
 import dev.kampr.shared.ui.LocalMosaicCell
+import dev.kampr.shared.ui.LocalPalette
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
-import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.breakpointOf
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
-import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.MIN_PANE_COLS
 import dev.kampr.shared.wire.MIN_PANE_ROWS
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.talks
 import dev.kampr.terminal.PaneSession
@@ -81,37 +85,34 @@ import dev.kampr.terminal.file.handoverAfter
 import dev.kampr.terminal.file.handoverName
 import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
-import dev.kampr.shared.ui.LocalCovered
-import dev.kampr.shared.ui.LocalPalette
 import dev.kampr.terminal.input.ImeDismissal
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneChord
+import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.input.PaneTextInput
-import dev.kampr.terminal.render.GridRenderer
-import dev.kampr.terminal.render.ModeSelector
-import dev.kampr.terminal.render.LogicalText
-import dev.kampr.terminal.render.ResolvedStyles
+import dev.kampr.terminal.input.clickReports
+import dev.kampr.terminal.input.paneScrollKeys
+import dev.kampr.terminal.input.paneTakesClicks
+import dev.kampr.terminal.input.scrollTracing
 import dev.kampr.terminal.render.GridPoint
+import dev.kampr.terminal.render.GridRenderer
+import dev.kampr.terminal.render.LogicalText
+import dev.kampr.terminal.render.ModeSelector
+import dev.kampr.terminal.render.ResolvedStyles
+import dev.kampr.terminal.render.SelectedText
 import dev.kampr.terminal.render.Selection
+import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.Target
 import dev.kampr.terminal.render.TargetKind
-import dev.kampr.terminal.render.detectTarget
-import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.render.TextCache
+import dev.kampr.terminal.render.detectTarget
 import dev.kampr.terminal.review.ReviewSurface
 import dev.kampr.terminal.review.historyEdgeLabel
 import dev.kampr.terminal.review.historyEdgeSpoken
-import dev.kampr.terminal.input.PaneScroll
-import dev.kampr.terminal.input.scrollTracing
-import dev.kampr.terminal.input.clickReports
-import dev.kampr.terminal.input.paneTakesClicks
-import dev.kampr.terminal.input.paneScrollKeys
 import dev.kampr.terminal.review.historyWarning
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -160,12 +161,11 @@ private const val CARD_NUDGE = 10f
 // in the accessibility text too. The operator read **448 rows back** off a pane they had never
 // scrolled and reported, reasonably, that it *"never stayed with the live edge"*; the number was the
 // ring, and it had been the ring since the strip was written.
-private fun rowsBack(view: TerminalViewState, cellHeight: Float): Int =
-    if (cellHeight <= 0f) {
-        0
-    } else {
-        ((view.scrollY - view.band.floor) / cellHeight).roundToInt().coerceAtLeast(0)
-    }
+private fun rowsBack(view: TerminalViewState, cellHeight: Float): Int = if (cellHeight <= 0f) {
+    0
+} else {
+    ((view.scrollY - view.band.floor) / cellHeight).roundToInt().coerceAtLeast(0)
+}
 
 private fun headerInsetDp(breakpoint: Breakpoint): Float = when (breakpoint) {
     Breakpoint.Desktop -> 56f
@@ -292,6 +292,7 @@ fun TerminalView(
     val probe = session.grid
     val review = session.review
     val peek = session.peek
+
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
     @Suppress("DEPRECATION")
@@ -625,8 +626,13 @@ fun TerminalView(
         // already theirs rather than pushing the pane down a screen.
         val reserved = (deepestRing - rows.historyRows).coerceAtLeast(0) * metrics.height
         val band = caretBand(
-            stage, rows.total, rows.total - settledBelow, rows.total - contentBelow, metrics.height,
-            rows.liveRows, reserved,
+            stage,
+            rows.total,
+            rows.total - settledBelow,
+            rows.total - contentBelow,
+            metrics.height,
+            rows.liveRows,
+            reserved,
         )
         view.band = band
         view.viewportHeight = stage.contentHeight
@@ -680,7 +686,7 @@ fun TerminalView(
         val edgePad = if (edgeLabel == null) 0f else with(density) { HISTORY_EDGE_DP.toPx() }
         val geometry = terminalGeometry(
             stage, cols, rows.total, metrics.width, metrics.height, view.panX, view.scrollY,
-            edgePad + reserved,
+            edgePad, reserved,
         )
         view.minPanX = geometry.minPanX
         view.maxScroll = geometry.maxScroll
@@ -692,7 +698,7 @@ fun TerminalView(
             val top = geometry.originY + review.row * metrics.height
             // Row 0 reveals the mark that says where the record stops, rather than stopping flush
             // against the header with it still above the fold.
-            val wanted = stage.insetTop + if (review.row == 0) edgePad else 0f
+            val wanted = stage.insetTop + if (review.row == 0) geometry.originY - geometry.edgeTop else 0f
             val shift = when {
                 top < wanted -> wanted - top
                 top + metrics.height > stage.contentBottom -> stage.contentBottom - top - metrics.height
@@ -720,8 +726,12 @@ fun TerminalView(
             if (view.followCursor && view.following && !view.pinching) {
                 view.chaseCursor(
                     followCursorPan(
-                        view.panX, geometry.minPanX, pane.cursor.col, metrics.width, stage.width,
-                    )
+                        view.panX,
+                        geometry.minPanX,
+                        pane.cursor.col,
+                        metrics.width,
+                        stage.width,
+                    ),
                 )
             }
         }
@@ -756,6 +766,8 @@ fun TerminalView(
         probe.cellHeight = metrics.height
         probe.cols = cols.coerceAtLeast(1)
         probe.totalRows = rows.total.coerceAtLeast(1)
+        probe.contentTop = stage.insetTop
+        probe.contentBottom = stage.contentBottom
 
         // One copy and one paste on this surface, reached three ways: the selection pill, the
         // keyboard chord, and the grid's own context menu. A second implementation of either is
@@ -765,6 +777,26 @@ fun TerminalView(
             val selection = view.selection ?: return
             clipboard.setText(AnnotatedString(logical.copy(selection)))
             view.selection = null
+        }
+
+        // A desk's convention, and only a desk's: Android announces every clipboard write, and a
+        // finger already has the pill. The selection stays up so the pill can still be used.
+        LaunchedEffect(view, logical) {
+            snapshotFlow { view.mouseSelections }.drop(1).collect {
+                view.selection?.let { clipboard.setText(AnnotatedString(logical.copy(it))) }
+            }
+        }
+
+        LaunchedEffect(pane, logical) {
+            var held: SelectedText? = null
+            snapshotFlow { view.selection to pane.revision }.collect { (selection, _) ->
+                val was = held
+                held = when {
+                    selection == null -> null
+                    was == null || was.selection != selection -> SelectedText.capture(selection, logical::rowAt)
+                    else -> was.follow(logical::rowAt, rows.total).also { view.selection = it.selection }
+                }
+            }
         }
 
         val openPalette = LocalPalette.current
@@ -867,7 +899,7 @@ fun TerminalView(
                         "ordinary text and is the surface to read it on."
                 } else {
                     ". Only the line under the cursor is spoken."
-                }
+                },
             )
         }
 
@@ -887,6 +919,7 @@ fun TerminalView(
         val scrollToPane = remember(pane.id, io.readOnly, keptScroll, info?.agent, info?.cmd) {
             when {
                 io.readOnly || keptScroll -> null
+
                 else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
                     PaneScroll(keys, session.scrollTrace, scope, session.clock) { report ->
                         io.send(ClientMsg.InputText(pane.id, report, typed = true))
@@ -922,7 +955,12 @@ fun TerminalView(
                         if (review.active) {
                             add("Leave review" to { review.leave() })
                         } else {
-                            add("Review this pane row by row" to { session.closeKeyboard(); review.enter(reviewSurface()) })
+                            add(
+                                "Review this pane row by row" to {
+                                    session.closeKeyboard()
+                                    review.enter(reviewSurface())
+                                },
+                            )
                         }
                         if (transcript) add("Open the Conversation view" to { io.show(PaneView.Conversation) })
                     },
@@ -1053,7 +1091,7 @@ fun TerminalView(
                     .layout { measurable, constraints ->
                         val placeable = measurable.measure(constraints)
                         layout(placeable.width, placeable.height) {
-                            placeable.place(IntOffset(0, (geometry.originY - edgePad).toInt()))
+                            placeable.place(IntOffset(0, geometry.edgeTop.toInt()))
                         }
                     },
             )
@@ -1145,6 +1183,7 @@ fun TerminalView(
                     session.closeKeyboard()
                     review.enter(reviewSurface())
                 }
+
                 PaneTool.Attach -> if (session.attachable) {
                     scope.launch {
                         val picked = pickFile() ?: return@launch
@@ -1152,6 +1191,7 @@ fun TerminalView(
                         session.handover = handoverOf(pane, io, picked)
                     }
                 }
+
                 null -> return@LaunchedEffect
             }
             session.asked = null

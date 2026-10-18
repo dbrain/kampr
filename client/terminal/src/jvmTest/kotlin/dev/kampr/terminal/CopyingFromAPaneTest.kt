@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
@@ -22,7 +21,6 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.theme.LocalTokens
@@ -55,16 +53,6 @@ private class Watching(override val readOnly: Boolean = false) : PaneIo {
     override fun prefs(paneId: String) = PanePrefs()
 
     val typed: String get() = sent.filterIsInstance<ClientMsg.InputText>().joinToString("") { it.text }
-}
-
-@Suppress("DEPRECATION")
-private class Slate : ClipboardManager {
-    var held: AnnotatedString? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        held = annotatedString
-    }
-    override fun getText(): AnnotatedString? = held
-    override fun hasText(): Boolean = held != null
 }
 
 // A mosaic cell, as far as this gesture is concerned: `MosaicCell` puts `Modifier.paneActions` on

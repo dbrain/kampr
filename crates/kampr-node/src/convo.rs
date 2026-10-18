@@ -412,6 +412,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // in the handle.
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
             let elsewhere = moved(named.as_ref(), now.identity.announced.as_ref());
+            let unnamed = named.is_none() && now.identity.announced.is_some();
             if let Some(session) = now.identity.announced.clone() {
                 named = Some(session);
             }
@@ -419,6 +420,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             opened = None;
             inherited = false;
             release(&journal, &held);
+            // A transcript found by directory was opened under no name, so a pane that then names
+            // a session has nothing to disagree with, and the run before it in the same directory
+            // stayed on the screen. Retiring it costs at worst a re-page of the same transcript.
+            let elsewhere = elsewhere || unnamed && held.lock().unwrap().is_some();
             {
                 let mut warm = warm.lock().unwrap();
                 warm.handle = handle.clone();

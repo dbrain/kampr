@@ -7,22 +7,24 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalPaneIo
@@ -34,11 +36,21 @@ import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.BOTTOM_CHROME_TAG
 import dev.kampr.terminal.view.TerminalView
+
+@Suppress("DEPRECATION")
+internal class Slate : ClipboardManager {
+    var held: AnnotatedString? = null
+    override fun setText(annotatedString: AnnotatedString) {
+        held = annotatedString
+    }
+    override fun getText(): AnnotatedString? = held
+    override fun hasText(): Boolean = held != null
+}
 
 internal object HushIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit
@@ -148,8 +160,7 @@ internal fun ComposeUiTest.phoneTerminal(
 // under both — the surface paints the whole viewport — so "on screen" means inside the content
 // rectangle, not inside the window.
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.caretLeft(pane: PaneState, session: PaneSession): Dp =
-    with(density) { (session.grid.originX + pane.cursor.col * session.grid.cellWidth).toDp() }
+internal fun ComposeUiTest.caretLeft(pane: PaneState, session: PaneSession): Dp = with(density) { (session.grid.originX + pane.cursor.col * session.grid.cellWidth).toDp() }
 
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.rowTop(pane: PaneState, session: PaneSession, row: Int): Dp {
@@ -159,12 +170,10 @@ internal fun ComposeUiTest.rowTop(pane: PaneState, session: PaneSession, row: In
 }
 
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.rowBottom(pane: PaneState, session: PaneSession, row: Int): Dp =
-    rowTop(pane, session, row) + with(density) { session.grid.cellHeight.toDp() }
+internal fun ComposeUiTest.rowBottom(pane: PaneState, session: PaneSession, row: Int): Dp = rowTop(pane, session, row) + with(density) { session.grid.cellHeight.toDp() }
 
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.stripTop(): Dp =
-    onNodeWithTag(BOTTOM_CHROME_TAG).getUnclippedBoundsInRoot().top
+internal fun ComposeUiTest.stripTop(): Dp = onNodeWithTag(BOTTOM_CHROME_TAG).getUnclippedBoundsInRoot().top
 
 internal val columnBar = hasContentDescription("Showing columns", substring = true)
 
@@ -178,5 +187,4 @@ internal fun ComposeUiTest.visibleBottom(): Dp {
 }
 
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.onScreen(pane: PaneState, session: PaneSession, row: Int): Boolean =
-    rowTop(pane, session, row) >= Phone.HEADER && rowBottom(pane, session, row) <= visibleBottom()
+internal fun ComposeUiTest.onScreen(pane: PaneState, session: PaneSession, row: Int): Boolean = rowTop(pane, session, row) >= Phone.HEADER && rowBottom(pane, session, row) <= visibleBottom()

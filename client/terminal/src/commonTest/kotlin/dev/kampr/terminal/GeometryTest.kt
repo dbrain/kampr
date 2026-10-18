@@ -42,6 +42,24 @@ class GeometryTest {
         close(top.originY, paint.insetTop)
     }
 
+    // The operator, on a fresh `claude` they had not touched: *"i can see the bottom half of the
+    // message 'this program keeps its own history'"*. A grid that fits leaves less than a row of
+    // the content rectangle above it, and the mark sat in that sliver with the rest under the
+    // header.
+    @Test
+    fun theHistoryEdgeIsWhollyOnScreenOrWhollyAboveItAtRest() {
+        val paint = phone()
+        val edge = 18f
+        for (rows in 30..40) {
+            val rest = terminalGeometry(paint, 94, rows, CELL_W, CELL_H, 0f, 0f, edge)
+            val onScreen = rest.edgeTop >= paint.insetTop - 0.01f
+            val above = rest.edgeTop + edge <= paint.insetTop + 0.01f
+            assertTrue(onScreen || above, "rows=$rows: the mark straddles the top at ${rest.edgeTop}")
+            val top = terminalGeometry(paint, 94, rows, CELL_W, CELL_H, 0f, 1e9f, edge)
+            assertTrue(top.edgeTop >= paint.insetTop - 0.01f, "rows=$rows: the mark cannot be reached")
+        }
+    }
+
     @Test
     fun scrollIsClampedAtBothEnds() {
         val paint = phone()
@@ -168,6 +186,7 @@ class GeometryTest {
         assertTrue(presets.minimum < presets.fitWidth)
         assertTrue(presets.maximum > presets.closeUp)
     }
+
     // Picking a preset is the same move as finishing a pinch, and only one of the two used to
     // carry the viewport with it: pan and scroll are distances across the surface, so they scale
     // with the cell or the viewport lands on a different row than the one the operator was reading.
@@ -245,19 +264,19 @@ class GeometryTest {
         close(view.scrollY, view.band.floor)
     }
 
-    /// The operator, on 0.1.60, after a command printed: *"it never corrected without me manually
-    /// scrolling, the second jump took me further up"* — twice, once per batch of rows that
-    /// scrolled off the live grid.
-    ///
-    /// **The test above passes for the wrong reason and always has.** `following` starts true, so
-    /// it returns at the first line of `carryHistory` and never reaches the position its name is
-    /// about. This is the same claim asked of a reader whose hand is what put them there.
-    ///
-    /// A hand may travel *below* the live edge, down to the end of the record (#428), so the whole
-    /// span between the two is somewhere a wheel lands — three rows a notch, and nothing about
-    /// stopping there says "take me back to history". A reader inside it is watching the newest
-    /// output, and rows scrolling off must not walk them backwards away from it, for ever, with
-    /// nothing to bring them back.
+    // The operator, on 0.1.60, after a command printed: *"it never corrected without me manually
+    // scrolling, the second jump took me further up"* — twice, once per batch of rows that
+    // scrolled off the live grid.
+    //
+    // **The test above passes for the wrong reason and always has.** `following` starts true, so
+    // it returns at the first line of `carryHistory` and never reaches the position its name is
+    // about. This is the same claim asked of a reader whose hand is what put them there.
+    //
+    // A hand may travel *below* the live edge, down to the end of the record (#428), so the whole
+    // span between the two is somewhere a wheel lands — three rows a notch, and nothing about
+    // stopping there says "take me back to history". A reader inside it is watching the newest
+    // output, and rows scrolling off must not walk them backwards away from it, for ever, with
+    // nothing to bring them back.
     @Test
     fun aHandThatStoppedBelowTheLiveEdgeIsNotCarriedByHistoryArriving() {
         val view = TerminalViewState()

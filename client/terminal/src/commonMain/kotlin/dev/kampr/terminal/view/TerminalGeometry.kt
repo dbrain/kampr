@@ -52,6 +52,7 @@ data class TerminalGeometry(
     val minPanX: Float,
     val surfaceHeight: Float,
     val gridWidth: Float,
+    val edgeTop: Float,
 )
 
 fun terminalGeometry(
@@ -64,23 +65,30 @@ fun terminalGeometry(
     scrollY: Float,
     // Room above row 0 for the mark that says where the record stops. Without it the top row sits
     // flush under the header at full scroll and there is nowhere for the mark to be.
-    topPad: Float = 0f,
+    edgePad: Float = 0f,
+    reserved: Float = 0f,
 ): TerminalGeometry {
     val gridWidth = cols * cellWidth
     val surfaceHeight = totalRows * cellHeight
     val minPanX = min(0f, paint.width - gridWidth)
     val clampedPan = panX.coerceIn(minPanX, 0f)
-    val maxScroll = max(0f, surfaceHeight - paint.contentHeight + topPad)
+    // A grid that fits leaves less than a row of the rectangle above it, and a mark that does not
+    // fit in that sliver is lifted clear of it rather than shown cut in half by the header.
+    val sliver = paint.contentHeight - surfaceHeight
+    val lift = if (sliver > 0f && sliver < edgePad) sliver else 0f
+    val maxScroll = max(0f, surfaceHeight - paint.contentHeight + edgePad + lift + reserved)
     val clampedScroll = scrollY.coerceIn(0f, maxScroll)
+    val originY = paint.contentBottom - surfaceHeight + clampedScroll
     return TerminalGeometry(
         originX = clampedPan,
-        originY = paint.contentBottom - surfaceHeight + clampedScroll,
+        originY = originY,
         panX = clampedPan,
         scrollY = clampedScroll,
         maxScroll = maxScroll,
         minPanX = minPanX,
         surfaceHeight = surfaceHeight,
         gridWidth = gridWidth,
+        edgeTop = originY - edgePad - lift,
     )
 }
 

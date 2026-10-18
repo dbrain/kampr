@@ -6062,7 +6062,7 @@ impl Harnessed {
     }
 
     async fn stop(&self, session: &Session, local: &str, pid: u32) {
-        std::fs::remove_file(self.session_file(pid)).unwrap();
+        let _ = std::fs::remove_file(self.session_file(pid));
         session
             .call("pane.send_keys", json!({ "pane_id": local, "keys": ["ctrl+c"] }))
             .await;
@@ -6958,6 +6958,77 @@ async fn an_agent_quit_and_run_again_takes_the_previous_conversation_off_the_cli
     let second = fixture.start(&h._session, &local).await;
     assert_ne!(second, first);
     fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+
+    retired(&mut socket, &pane, &stale).await;
+}
+
+/// **A conversation found by working directory has no session name to disagree with.**
+///
+/// The operator's report: a fresh `claude` in a pane that had run one before, in the same
+/// directory, and the conversation screen showed the run before. The node's own log had the
+/// earlier transcript opened on the `cwd` handle — the pane named no session at that moment — and
+/// nothing opened for the new one until its first message was written. The withdrawal waits for
+/// two names that disagree, and a pane last seen under *no* name met a pane naming one and saw no
+/// disagreement at all, so the conversation of the run before stayed on the screen.
+///
+/// Reached both ways: the marker appearing under the same process, and the reader leaving the pane
+/// across a quit and a fresh run, which is how the report was reached — the warm handle the
+/// re-watch inherits is the `cwd` one.
+///
+/// The mutation that must fail: drop the unnamed case from the withdrawal and both hang.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_found_by_directory_is_taken_off_when_the_pane_names_a_new_session() {
+    for rewatch in [false, true] {
+        a_directory_conversation_is_retired_by_a_named_session(rewatch).await;
+    }
+}
+
+async fn a_directory_conversation_is_retired_by_a_named_session(rewatch: bool) {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("unnamed", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&h._session, &local).await;
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", 2);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let watch = json!({ "t": "watch", "pane": pane, "conversation": true });
+    send(&mut socket, watch.clone()).await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    let turns = opening["turns"].as_array().expect("turns").clone();
+    assert_eq!(turns[0]["blocks"][0]["text"], "FIRST SESSION", "{opening}");
+    let stale: Vec<String> = turns
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    if rewatch {
+        send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
+        fixture.stop(&h._session, &local, first).await;
+        let second = fixture.start(&h._session, &local).await;
+        fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+        send(&mut socket, watch).await;
+    } else {
+        fixture.announce(first, "22222222-2222-4222-8222-222222222222");
+    }
 
     retired(&mut socket, &pane, &stale).await;
 }

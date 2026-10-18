@@ -182,43 +182,6 @@
     <file name="src/commonMain/kotlin/dev/kampr/terminal/view/ResizePanel.kt">
         <error line="3" column="1" source="standard:import-ordering" />
     </file>
-    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalGestures.kt">
-        <error line="119" column="1" source="standard:blank-line-between-when-conditions" />
-    </file>
-    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalView.kt">
-        <error line="3" column="1" source="standard:import-ordering" />
-        <error line="163" column="72" source="standard:function-signature" />
-        <error line="295" column="1" source="standard:spacing-between-declarations-with-annotations" />
-        <error line="628" column="20" source="standard:argument-list-wrapping" />
-        <error line="628" column="32" source="standard:argument-list-wrapping" />
-        <error line="628" column="59" source="standard:argument-list-wrapping" />
-        <error line="628" column="86" source="standard:argument-list-wrapping" />
-        <error line="629" column="28" source="standard:argument-list-wrapping" />
-        <error line="682" column="20" source="standard:argument-list-wrapping" />
-        <error line="682" column="26" source="standard:argument-list-wrapping" />
-        <error line="682" column="38" source="standard:argument-list-wrapping" />
-        <error line="682" column="53" source="standard:argument-list-wrapping" />
-        <error line="682" column="69" source="standard:argument-list-wrapping" />
-        <error line="682" column="80" source="standard:argument-list-wrapping" />
-        <error line="723" column="36" source="standard:argument-list-wrapping" />
-        <error line="723" column="54" source="standard:argument-list-wrapping" />
-        <error line="723" column="71" source="standard:argument-list-wrapping" />
-        <error line="723" column="86" source="standard:argument-list-wrapping" />
-        <error line="724" column="22" source="standard:trailing-comma-on-call-site" />
-        <error line="870" column="18" source="standard:trailing-comma-on-call-site" />
-        <error line="890" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="925" column="68" source="standard:statement-wrapping" />
-        <error line="925" column="92" source="standard:statement-wrapping" />
-        <error line="925" column="123" source="standard:statement-wrapping" />
-        <error line="1148" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="1155" column="1" source="standard:blank-line-between-when-conditions" />
-    </file>
-    <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalViewState.kt">
-        <error line="55" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="212" column="1" source="standard:no-consecutive-blank-lines" />
-        <error line="272" column="51" source="standard:function-signature" />
-        <error line="286" column="70" source="standard:multiline-if-else" />
-    </file>
     <file name="src/commonMain/kotlin/dev/kampr/terminal/view/TerminalWheel.kt">
         <error line="3" column="1" source="standard:import-ordering" />
     </file>
@@ -234,21 +197,6 @@
         <error line="3" column="1" source="standard:import-ordering" />
         <error line="20" column="71" source="standard:function-signature" />
         <error line="23" column="66" source="standard:function-signature" />
-        <error line="171" column="1" source="standard:spacing-between-declarations-with-annotations" />
-        <error line="171" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="248" column="5" source="standard:comment-spacing" />
-        <error line="249" column="5" source="standard:comment-spacing" />
-        <error line="250" column="5" source="standard:comment-spacing" />
-        <error line="251" column="5" source="standard:comment-spacing" />
-        <error line="252" column="5" source="standard:comment-spacing" />
-        <error line="253" column="5" source="standard:comment-spacing" />
-        <error line="254" column="5" source="standard:comment-spacing" />
-        <error line="255" column="5" source="standard:comment-spacing" />
-        <error line="256" column="5" source="standard:comment-spacing" />
-        <error line="257" column="5" source="standard:comment-spacing" />
-        <error line="258" column="5" source="standard:comment-spacing" />
-        <error line="259" column="5" source="standard:comment-spacing" />
-        <error line="260" column="5" source="standard:comment-spacing" />
     </file>
     <file name="src/commonTest/kotlin/dev/kampr/terminal/InputTest.kt">
         <error line="3" column="1" source="standard:import-ordering" />
@@ -430,13 +378,6 @@
     </file>
     <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneChromeTest.kt">
         <error line="3" column="1" source="standard:import-ordering" />
-    </file>
-    <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneHarness.kt">
-        <error line="3" column="1" source="standard:import-ordering" />
-        <error line="151" column="82" source="standard:function-signature" />
-        <error line="162" column="92" source="standard:function-signature" />
-        <error line="166" column="44" source="standard:function-signature" />
-        <error line="181" column="96" source="standard:function-signature" />
     </file>
     <file name="src/jvmTest/kotlin/dev/kampr/terminal/PaneHoverCursorTest.kt">
         <error line="27" column="71" source="standard:function-signature" />
