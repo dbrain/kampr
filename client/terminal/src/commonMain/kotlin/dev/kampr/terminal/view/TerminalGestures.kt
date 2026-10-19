@@ -175,10 +175,11 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
     val view = session.view
     var travel = 0f
     var selecting = false
-    var event: PointerEvent
-    do {
-        event = awaitPointerEvent()
-        val moving = event.changes.firstOrNull { it.pressed } ?: continue
+    // No `continue` in here: on Kotlin/Wasm a `continue` in a do-while never reached the condition,
+    // so the release was missed and every later click in Chrome joined the first press's gesture.
+    while (true) {
+        val event = awaitPointerEvent()
+        val moving = event.changes.firstOrNull { it.pressed } ?: break
         travel += moving.positionChange().getDistance()
         if (travel > viewConfiguration.touchSlop) {
             val anchor = probe.cellAt(down.position)
@@ -190,7 +191,7 @@ private suspend fun AwaitPointerEventScope.mouseGesture(
             extendSelection(view, probe, moving.position)
             break
         }
-    } while (event.changes.any { it.pressed })
+    }
     if (selecting) view.mouseSelections++
     if (!selecting && !braking) click(view, probe, rows, down.position, down.uptimeMillis, onTap)
     session.reclaimKeyboard()
