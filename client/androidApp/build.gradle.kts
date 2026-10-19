@@ -239,6 +239,7 @@ dependencies {
     implementation(libs.compose.foundation)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.espresso.core)
     // The one question about a paste on Android that no host test can reach: whether the platform
     // routes a real clipboard image to `contentReceiver` (#369). It needs a device and a Compose
     // tree, so it needs the instrumented harness.

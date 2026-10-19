@@ -143,6 +143,17 @@ impl FileRef {
         URL_SAFE_NO_PAD.encode(format!("{tag}{SEP}{}", self.path.display()))
     }
 
+    pub fn header(&self) -> Attachment {
+        let mime = image_mime(&self.path);
+        Attachment {
+            id: self.encode(),
+            kind: if mime.is_some() { IMAGE } else { FILE }.to_string(),
+            mime: mime.map(str::to_string),
+            bytes: None,
+            name: self.path.file_name().map(|n| n.to_string_lossy().into_owned()),
+        }
+    }
+
     /// The path this id names, resolved against `home` and proved to be an absolute regular file
     /// — the same checks [`Self::fetch`] makes before it reads a byte, without reading one.
     pub fn resolve(&self, home: &Path) -> Result<PathBuf, JournalError> {

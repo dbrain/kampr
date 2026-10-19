@@ -39,6 +39,7 @@ import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.gestureAction
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private const val SMALLEST = 1f
 private const val LARGEST = 8f
@@ -130,6 +131,7 @@ fun ImageViewer(
                     label = "$headline, pinch to zoom, double tap to fit",
                     onClick = { reset() },
                     role = Role.Image,
+                    state = if (zoom <= SMALLEST) "fitted" else "zoomed ${(zoom * 100).roundToInt()}%",
                     clickLabel = "Fit to the screen",
                 )
                 .pointerInput(Unit) { detectTapGestures(onDoubleTap = { reset() }) },

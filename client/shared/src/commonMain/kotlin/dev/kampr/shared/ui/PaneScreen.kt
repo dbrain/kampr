@@ -189,11 +189,10 @@ fun PaneScreenMobile(
         val inset = guessed.coerceAtMost((maxHeight - REPLY_ROOM).coerceAtLeast(0.dp))
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let(::PaneChrome)) {
             when (shown) {
-                PaneView.Conversation -> surfaces.Conversation(
-                    pane,
-                    info,
-                    Modifier.fillMaxSize().padding(top = inset),
-                )
+                PaneView.Conversation -> TopEdgeHeldAbove {
+                    surfaces.Conversation(pane, info, Modifier.fillMaxSize().padding(top = inset))
+                }
+
                 else -> surfaces.Terminal(pane, info, Modifier.fillMaxSize())
             }
         }
@@ -334,7 +333,7 @@ private fun QuietBadge() {
         Modifier.announce(
             "Quiet — this node says the pane is active but has sent no frames; what is shown may be out of date",
             urgent = true,
-        )
+        ),
     ) {
         StatusBadge("Quiet", tokens.color.working, tokens.color.surface)
     }
@@ -350,7 +349,7 @@ private fun UnsentBadge(count: Int) {
         Modifier.announce(
             "$what did not reach this pane — nothing you type is being delivered",
             urgent = true,
-        )
+        ),
     ) {
         StatusBadge("Not sent · $count", tokens.color.blocked, tokens.color.blockedBg)
     }
@@ -359,8 +358,7 @@ private fun UnsentBadge(count: Int) {
 // Never the raw id. `pane.id` is a node ULID and a herdr coordinate, and a header that falls back
 // to it has told the operator their pane is gone in the one vocabulary that reads as a fault in
 // the app. The name a pane had outlives the herd entry; what says it is over is the strip.
-private fun paneName(info: PaneInfo?, pane: PaneState): String =
-    info?.let(::paneTitle) ?: pane.id.substringAfter('/')
+private fun paneName(info: PaneInfo?, pane: PaneState): String = info?.let(::paneTitle) ?: pane.id.substringAfter('/')
 
 @Composable
 fun PaneScreenDesktop(
@@ -389,11 +387,13 @@ fun PaneScreenDesktop(
                     surfaces.Terminal(pane, info, Modifier.weight(1f).fillMaxHeight())
                 }
                 if (shown != PaneView.Terminal) {
-                    surfaces.Conversation(
-                        pane,
-                        info,
-                        Modifier.weight(1f).fillMaxHeight().padding(top = chrome ?: DESK_HEADER),
-                    )
+                    TopEdgeHeldAbove {
+                        surfaces.Conversation(
+                            pane,
+                            info,
+                            Modifier.weight(1f).fillMaxHeight().padding(top = chrome ?: DESK_HEADER),
+                        )
+                    }
                 }
             }
         }

@@ -32,6 +32,7 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.ui)
+            implementation(libs.compose.ui.backhandler)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -39,6 +40,7 @@ kotlin {
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.ui.test)
+            implementation(libs.navigationevent)
         }
     }
 }

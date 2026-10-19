@@ -729,10 +729,6 @@
         <error line="75" column="69" source="standard:function-signature" />
         <error line="150" column="26" source="standard:argument-list-wrapping" />
         <error line="150" column="44" source="standard:argument-list-wrapping" />
-        <error line="197" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="337" column="10" source="standard:trailing-comma-on-call-site" />
-        <error line="353" column="10" source="standard:trailing-comma-on-call-site" />
-        <error line="362" column="65" source="standard:function-signature" />
         <error line="408" column="1" source="standard:indent" />
         <error line="409" column="1" source="standard:indent" />
         <error line="410" column="1" source="standard:indent" />

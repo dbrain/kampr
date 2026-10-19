@@ -16,6 +16,7 @@ mod probe_search;
 mod registry;
 mod scratch;
 mod search;
+mod sent_files;
 mod subagents;
 mod tail;
 mod tool_output;

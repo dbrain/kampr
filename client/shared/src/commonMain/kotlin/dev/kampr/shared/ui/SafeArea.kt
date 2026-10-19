@@ -116,3 +116,11 @@ fun BottomEdgeHeldBelow(held: Boolean, content: @Composable () -> Unit) {
         content = content,
     )
 }
+
+// The same rule at the other edge: chrome standing above a surface has paid the status bar, so a
+// viewer the surface opens over its whole box must not pay it again.
+@Composable
+fun TopEdgeHeldAbove(content: @Composable () -> Unit) {
+    val safe = LocalSafeArea.current
+    CompositionLocalProvider(LocalSafeArea provides safe.copy(top = 0.dp), content = content)
+}

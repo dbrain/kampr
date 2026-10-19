@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
-use crate::attach::{self, Fetched, Origin};
+use crate::attach::{self, Fetched, FileRef, Origin};
 use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, ListeningReader, Measured};
 use crate::discover;
 use crate::envelope::push_text;
@@ -315,6 +315,7 @@ impl ClaudeParser {
         };
 
         let id = record.uuid.take().unwrap_or_else(|| format!("c{seq}"));
+        let cwd = record.cwd.take();
         let mut turn = Turn::new(id.clone(), role, record.timestamp);
         // `/compact` files the harness's summary as a user record and leaves this flag as the only
         // thing separating it from a prompt (#259). Dropping it would take the operator's own
@@ -329,7 +330,14 @@ impl ClaudeParser {
             Content::Text(text) => push_text(&mut turn, text),
             Content::Blocks(blocks) => {
                 for block in blocks {
-                    self.ingest_block(block, &id, &mut turn, record.tool_use_result.as_ref(), &mut atts);
+                    self.ingest_block(
+                        block,
+                        &id,
+                        &mut turn,
+                        record.tool_use_result.as_ref(),
+                        cwd.as_deref(),
+                        &mut atts,
+                    );
                 }
             }
         }
@@ -345,6 +353,7 @@ impl ClaudeParser {
         turn_id: &str,
         turn: &mut Turn,
         tool_use_result: Option<&Value>,
+        cwd: Option<&str>,
         atts: &mut impl Iterator<Item = Attachment>,
     ) {
         match block {
@@ -353,6 +362,9 @@ impl ClaudeParser {
                 text: image_marker(image_subtype(&source)),
                 att: image(&source).and_then(|_| atts.next()),
             }),
+            ContentBlock::ToolUse { name, input, .. } if name == SEND_USER_FILE => {
+                push_sent(turn, &input, cwd)
+            }
             ContentBlock::ToolUse { id, name, input } => {
                 let at = turn.blocks.len();
                 let calling = self.calling(&id, &input);
@@ -492,6 +504,32 @@ impl ClaudeParser {
                 }
             }
         }
+    }
+}
+
+const SEND_USER_FILE: &str = "SendUserFile";
+
+/// Its result names uploads (`file_uuid`) that only the harness's own client can reach, so the
+/// paths in the call are what this node hands over, and they are a reply rather than a step.
+fn push_sent(turn: &mut Turn, input: &Value, cwd: Option<&str>) {
+    if let Some(caption) = input
+        .get("caption")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+    {
+        push_text(turn, caption.to_string());
+    }
+    let files = input.get("files").and_then(Value::as_array).into_iter().flatten();
+    for path in files.filter_map(Value::as_str) {
+        let path = match cwd {
+            Some(cwd) if !path.starts_with('~') => Path::new(cwd).join(path),
+            _ => PathBuf::from(path),
+        };
+        let file = FileRef::new(path);
+        turn.blocks.push(Block::Md {
+            text: file.path.display().to_string(),
+            att: Some(file.header()),
+        });
     }
 }
 

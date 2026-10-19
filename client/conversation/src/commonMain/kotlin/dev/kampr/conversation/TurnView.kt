@@ -4,18 +4,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.selection.DisableSelection
 import dev.kampr.conversation.md.Breaks
 import dev.kampr.conversation.md.Markdown
+import dev.kampr.shared.model.LIVE_TURN_ID
+import dev.kampr.shared.net.filePathOf
+import dev.kampr.shared.net.pathOfAttachmentId
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
-import dev.kampr.shared.model.LIVE_TURN_ID
-import dev.kampr.shared.net.filePathOf
-import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.wire.Attachment
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
@@ -43,13 +44,16 @@ sealed interface Piece {
         val output: Block.Code? = null,
     ) : Piece
     data class Attach(val att: Attachment) : Piece
+
     // A picture the operator handed over, shown where they named it. The node writes the bytes on
     // the pane's own machine and types the path in, so the transcript carries a path string and
     // nothing else says a picture was ever handed over.
     data class Picture(val att: Attachment) : Piece
+
     // A recording a message named, offered where it named it. A row and not a fetch, which is what
     // makes it safe in an agent's reply as well as in the operator's own.
     data class Sound(val path: String) : Piece
+
     // A launched conversation with no call in front of it. The node writes the two together, so
     // this is the shape a page that opened between them arrives in rather than the ordinary one.
     data class Launch(val sub: Block.Sub) : Piece
@@ -134,13 +138,22 @@ fun groupBlocks(blocks: List<Block>, pictures: Boolean = false): List<Piece> {
                 }
                 out += Piece.Call(block, detail, launched, result)
             }
+
             is Block.Md -> {
                 // The marker the node writes beside a header — `[image · png]` — is a fallback for
                 // a client that cannot fetch, and this one can: the card says the same thing and
                 // presses.
                 val att = block.att
                 if (att != null) {
-                    out += Piece.Attach(att)
+                    // A path-shaped id is a file the agent sent, and the kind the node guessed for
+                    // it reads no further than an image extension: this client's own table is what
+                    // decides that a `.md` is read here rather than saved.
+                    val sent = pathOfAttachmentId(att.id)?.let(::fileTarget)
+                    out += when {
+                        sent == null -> Piece.Attach(att)
+                        offerFor(sent) == AttachmentOffer.Image -> Piece.Picture(sent)
+                        else -> Piece.Attach(sent)
+                    }
                 } else {
                     // The prose stays whatever it was. A picture is added *beside* the path rather
                     // than in place of it, which is what makes a fetch that fails degrade to what
@@ -151,9 +164,22 @@ fun groupBlocks(blocks: List<Block>, pictures: Boolean = false): List<Piece> {
                 }
                 index++
             }
-            is Block.Code -> { out += Piece.Fence(block.lang, block.text); index++ }
-            is Block.Diff -> { out += Piece.Patch(block.path, block.text); index++ }
-            is Block.Sub -> { out += Piece.Launch(block); index++ }
+
+            is Block.Code -> {
+                out += Piece.Fence(block.lang, block.text)
+                index++
+            }
+
+            is Block.Diff -> {
+                out += Piece.Patch(block.path, block.text)
+                index++
+            }
+
+            is Block.Sub -> {
+                out += Piece.Launch(block)
+                index++
+            }
+
             is Block.Unknown -> index++
         }
     }
@@ -204,7 +230,9 @@ fun TurnView(
                 folded = folded,
                 onToggle = fold?.let { key -> { onToggle(key) } },
             )
+
             is TurnHead.Stamp -> StepStamp(head.text)
+
             TurnHead.None -> Unit
         }
         if (head !is TurnHead.Full || !folded) Body(turn, pieces, query, expanded, onToggle, attachments, hand)
@@ -254,16 +282,23 @@ private fun PieceView(
             Modifier.fillMaxWidth(),
             breaks = if (hand) Breaks.Hard else Breaks.Soft,
         )
+
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
+
         is Piece.Picture -> InlinePicture(piece.att, attachments, Modifier.fillMaxWidth())
+
         is Piece.Sound -> FileAffordance(piece.path, attachments, Modifier.fillMaxWidth())
+
         is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
+
         is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
+
         is Piece.Launch -> Surface(
             Modifier.fitContent(),
             background = Kampr.tokens.color.raise,
             radius = Kampr.tokens.radii.md,
         ) { SubCard(piece.sub) }
+
         is Piece.Call -> {
             val key = "$turnId#$index"
             ToolCard(

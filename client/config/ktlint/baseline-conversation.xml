@@ -41,74 +41,74 @@
     </file>
     <file name="src/commonMain/kotlin/dev/kampr/conversation/ConversationView.kt">
         <error line="3" column="1" source="standard:import-ordering" />
-        <error line="294" column="24" source="standard:multiline-if-else" />
-        <error line="295" column="14" source="standard:multiline-if-else" />
-        <error line="403" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="415" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="487" column="33" source="standard:statement-wrapping" />
-        <error line="487" column="44" source="standard:statement-wrapping" />
-        <error line="487" column="63" source="standard:statement-wrapping" />
-        <error line="488" column="37" source="standard:statement-wrapping" />
-        <error line="488" column="52" source="standard:statement-wrapping" />
-        <error line="488" column="64" source="standard:statement-wrapping" />
-        <error line="488" column="75" source="standard:statement-wrapping" />
-        <error line="488" column="92" source="standard:statement-wrapping" />
-        <error line="488" column="94" source="standard:statement-wrapping" />
-        <error line="506" column="1" source="standard:indent" />
-        <error line="519" column="38" source="standard:statement-wrapping" />
-        <error line="519" column="68" source="standard:statement-wrapping" />
-        <error line="519" column="85" source="standard:statement-wrapping" />
-        <error line="523" column="1" source="standard:indent" />
-        <error line="547" column="44" source="standard:argument-list-wrapping" />
-        <error line="547" column="57" source="standard:argument-list-wrapping" />
-        <error line="547" column="70" source="standard:argument-list-wrapping" />
-        <error line="629" column="1" source="standard:no-blank-line-before-rbrace" />
-        <error line="648" column="67" source="standard:multiline-if-else" />
-        <error line="691" column="87" source="standard:function-signature" />
-        <error line="699" column="22" source="standard:trailing-comma-on-call-site" />
-        <error line="711" column="30" source="standard:statement-wrapping" />
-        <error line="711" column="45" source="standard:statement-wrapping" />
-        <error line="711" column="61" source="standard:statement-wrapping" />
-        <error line="712" column="28" source="standard:statement-wrapping" />
-        <error line="712" column="43" source="standard:statement-wrapping" />
-        <error line="712" column="59" source="standard:statement-wrapping" />
-        <error line="713" column="32" source="standard:statement-wrapping" />
-        <error line="713" column="47" source="standard:statement-wrapping" />
-        <error line="713" column="63" source="standard:statement-wrapping" />
-        <error line="736" column="63" source="standard:function-signature" />
-        <error line="739" column="77" source="standard:function-signature" />
-        <error line="817" column="46" source="standard:argument-list-wrapping" />
-        <error line="817" column="81" source="standard:argument-list-wrapping" />
-        <error line="818" column="28" source="standard:argument-list-wrapping" />
-        <error line="818" column="54" source="standard:argument-list-wrapping" />
-        <error line="822" column="43" source="standard:argument-list-wrapping" />
-        <error line="822" column="68" source="standard:argument-list-wrapping" />
-        <error line="823" column="40" source="standard:argument-list-wrapping" />
-        <error line="823" column="66" source="standard:argument-list-wrapping" />
-        <error line="846" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="847" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="848" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="849" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="849" column="27" source="standard:wrapping" />
-        <error line="862" column="42" source="standard:argument-list-wrapping" />
-        <error line="862" column="68" source="standard:argument-list-wrapping" />
-        <error line="866" column="35" source="standard:argument-list-wrapping" />
-        <error line="866" column="53" source="standard:argument-list-wrapping" />
-        <error line="867" column="29" source="standard:argument-list-wrapping" />
-        <error line="867" column="55" source="standard:argument-list-wrapping" />
-        <error line="870" column="37" source="standard:argument-list-wrapping" />
-        <error line="870" column="51" source="standard:argument-list-wrapping" />
-        <error line="871" column="28" source="standard:argument-list-wrapping" />
-        <error line="871" column="54" source="standard:argument-list-wrapping" />
-        <error line="874" column="38" source="standard:argument-list-wrapping" />
-        <error line="874" column="54" source="standard:argument-list-wrapping" />
-        <error line="875" column="37" source="standard:argument-list-wrapping" />
-        <error line="875" column="63" source="standard:argument-list-wrapping" />
-        <error line="894" column="31" source="standard:statement-wrapping" />
-        <error line="894" column="42" source="standard:statement-wrapping" />
-        <error line="894" column="60" source="standard:statement-wrapping" />
-        <error line="932" column="47" source="standard:argument-list-wrapping" />
-        <error line="932" column="59" source="standard:argument-list-wrapping" />
+        <error line="297" column="24" source="standard:multiline-if-else" />
+        <error line="298" column="14" source="standard:multiline-if-else" />
+        <error line="409" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="421" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="493" column="33" source="standard:statement-wrapping" />
+        <error line="493" column="44" source="standard:statement-wrapping" />
+        <error line="493" column="63" source="standard:statement-wrapping" />
+        <error line="494" column="37" source="standard:statement-wrapping" />
+        <error line="494" column="52" source="standard:statement-wrapping" />
+        <error line="494" column="64" source="standard:statement-wrapping" />
+        <error line="494" column="75" source="standard:statement-wrapping" />
+        <error line="494" column="92" source="standard:statement-wrapping" />
+        <error line="494" column="94" source="standard:statement-wrapping" />
+        <error line="512" column="1" source="standard:indent" />
+        <error line="525" column="38" source="standard:statement-wrapping" />
+        <error line="525" column="68" source="standard:statement-wrapping" />
+        <error line="525" column="85" source="standard:statement-wrapping" />
+        <error line="529" column="1" source="standard:indent" />
+        <error line="553" column="44" source="standard:argument-list-wrapping" />
+        <error line="553" column="57" source="standard:argument-list-wrapping" />
+        <error line="553" column="70" source="standard:argument-list-wrapping" />
+        <error line="635" column="1" source="standard:no-blank-line-before-rbrace" />
+        <error line="654" column="67" source="standard:multiline-if-else" />
+        <error line="697" column="87" source="standard:function-signature" />
+        <error line="705" column="22" source="standard:trailing-comma-on-call-site" />
+        <error line="717" column="30" source="standard:statement-wrapping" />
+        <error line="717" column="45" source="standard:statement-wrapping" />
+        <error line="717" column="61" source="standard:statement-wrapping" />
+        <error line="718" column="28" source="standard:statement-wrapping" />
+        <error line="718" column="43" source="standard:statement-wrapping" />
+        <error line="718" column="59" source="standard:statement-wrapping" />
+        <error line="719" column="32" source="standard:statement-wrapping" />
+        <error line="719" column="47" source="standard:statement-wrapping" />
+        <error line="719" column="63" source="standard:statement-wrapping" />
+        <error line="742" column="63" source="standard:function-signature" />
+        <error line="745" column="77" source="standard:function-signature" />
+        <error line="823" column="46" source="standard:argument-list-wrapping" />
+        <error line="823" column="81" source="standard:argument-list-wrapping" />
+        <error line="824" column="28" source="standard:argument-list-wrapping" />
+        <error line="824" column="54" source="standard:argument-list-wrapping" />
+        <error line="828" column="43" source="standard:argument-list-wrapping" />
+        <error line="828" column="68" source="standard:argument-list-wrapping" />
+        <error line="829" column="40" source="standard:argument-list-wrapping" />
+        <error line="829" column="66" source="standard:argument-list-wrapping" />
+        <error line="852" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="853" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="854" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="855" column="1" source="standard:blank-line-between-when-conditions" />
+        <error line="855" column="27" source="standard:wrapping" />
+        <error line="868" column="42" source="standard:argument-list-wrapping" />
+        <error line="868" column="68" source="standard:argument-list-wrapping" />
+        <error line="872" column="35" source="standard:argument-list-wrapping" />
+        <error line="872" column="53" source="standard:argument-list-wrapping" />
+        <error line="873" column="29" source="standard:argument-list-wrapping" />
+        <error line="873" column="55" source="standard:argument-list-wrapping" />
+        <error line="876" column="37" source="standard:argument-list-wrapping" />
+        <error line="876" column="51" source="standard:argument-list-wrapping" />
+        <error line="877" column="28" source="standard:argument-list-wrapping" />
+        <error line="877" column="54" source="standard:argument-list-wrapping" />
+        <error line="880" column="38" source="standard:argument-list-wrapping" />
+        <error line="880" column="54" source="standard:argument-list-wrapping" />
+        <error line="881" column="37" source="standard:argument-list-wrapping" />
+        <error line="881" column="63" source="standard:argument-list-wrapping" />
+        <error line="900" column="31" source="standard:statement-wrapping" />
+        <error line="900" column="42" source="standard:statement-wrapping" />
+        <error line="900" column="60" source="standard:statement-wrapping" />
+        <error line="938" column="47" source="standard:argument-list-wrapping" />
+        <error line="938" column="59" source="standard:argument-list-wrapping" />
     </file>
     <file name="src/commonMain/kotlin/dev/kampr/conversation/CopyAction.kt">
         <error line="31" column="1" source="standard:spacing-between-declarations-with-annotations" />
@@ -164,10 +164,10 @@
     </file>
     <file name="src/commonMain/kotlin/dev/kampr/conversation/ImageViewer.kt">
         <error line="3" column="1" source="standard:import-ordering" />
-        <error line="158" column="46" source="standard:argument-list-wrapping" />
-        <error line="158" column="65" source="standard:argument-list-wrapping" />
-        <error line="159" column="30" source="standard:argument-list-wrapping" />
-        <error line="159" column="56" source="standard:argument-list-wrapping" />
+        <error line="160" column="46" source="standard:argument-list-wrapping" />
+        <error line="160" column="65" source="standard:argument-list-wrapping" />
+        <error line="161" column="30" source="standard:argument-list-wrapping" />
+        <error line="161" column="56" source="standard:argument-list-wrapping" />
     </file>
     <file name="src/commonMain/kotlin/dev/kampr/conversation/ReplyPanel.kt">
         <error line="3" column="1" source="standard:import-ordering" />
@@ -240,35 +240,6 @@
         <error line="71" column="1" source="standard:blank-line-between-when-conditions" />
         <error line="72" column="1" source="standard:blank-line-between-when-conditions" />
         <error line="173" column="1" source="standard:no-consecutive-blank-lines" />
-    </file>
-    <file name="src/commonMain/kotlin/dev/kampr/conversation/TurnView.kt">
-        <error line="3" column="1" source="standard:import-ordering" />
-        <error line="46" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="50" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="53" column="5" source="standard:spacing-between-declarations-with-comments" />
-        <error line="137" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="154" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="154" column="32" source="standard:statement-wrapping" />
-        <error line="154" column="75" source="standard:statement-wrapping" />
-        <error line="154" column="84" source="standard:statement-wrapping" />
-        <error line="155" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="155" column="32" source="standard:statement-wrapping" />
-        <error line="155" column="75" source="standard:statement-wrapping" />
-        <error line="155" column="84" source="standard:statement-wrapping" />
-        <error line="156" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="156" column="31" source="standard:statement-wrapping" />
-        <error line="156" column="58" source="standard:statement-wrapping" />
-        <error line="156" column="67" source="standard:statement-wrapping" />
-        <error line="157" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="207" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="208" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="257" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="258" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="259" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="260" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="261" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="262" column="1" source="standard:blank-line-between-when-conditions" />
-        <error line="267" column="1" source="standard:blank-line-between-when-conditions" />
     </file>
     <file name="src/commonMain/kotlin/dev/kampr/conversation/md/Blocks.kt">
         <error line="18" column="81" source="standard:function-signature" />
@@ -554,12 +525,6 @@
         <error line="127" column="37" source="standard:argument-list-wrapping" />
         <error line="166" column="33" source="standard:argument-list-wrapping" />
         <error line="166" column="49" source="standard:argument-list-wrapping" />
-    </file>
-    <file name="src/jvmTest/kotlin/dev/kampr/conversation/ImageViewerTest.kt">
-        <error line="34" column="29" source="standard:argument-list-wrapping" />
-        <error line="34" column="45" source="standard:argument-list-wrapping" />
-        <error line="38" column="28" source="standard:argument-list-wrapping" />
-        <error line="38" column="41" source="standard:argument-list-wrapping" />
     </file>
     <file name="src/jvmTest/kotlin/dev/kampr/conversation/InlinePictureTest.kt">
         <error line="43" column="29" source="standard:argument-list-wrapping" />

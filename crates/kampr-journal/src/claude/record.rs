@@ -9,6 +9,7 @@ pub struct Record {
     pub kind: String,
     pub uuid: Option<String>,
     pub timestamp: Option<String>,
+    pub cwd: Option<String>,
     #[serde(rename = "isSidechain")]
     pub is_sidechain: Option<bool>,
     #[serde(rename = "isMeta")]

@@ -31,7 +31,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.Layout
@@ -97,6 +99,7 @@ private const val ASK_AFTER_MS = 260L
 private const val MOST_PAGES_TO_REACH = 26
 private const val PAGE_WITHIN_MS = 6_000L
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ConversationView(
     pane: PaneState,
@@ -387,6 +390,9 @@ fun ConversationView(
     // opened to be looked at needs — and because the card that opened it is inside a lazy list,
     // which composes it away the moment it scrolls off.
     attachments.viewing?.let { att ->
+        // Registered after the app's own back, so it is asked first: a viewer covers the pane, and
+        // back that left the pane would take the reader two screens back for one press.
+        BackHandler { attachments.close() }
         when (val open = attachments.state(att.id)) {
             is AttachmentState.Shown -> {
                 ImageViewer(
