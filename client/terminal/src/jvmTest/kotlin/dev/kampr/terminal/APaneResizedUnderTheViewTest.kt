@@ -7,8 +7,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.CARET_SETTLE_MS
 import kotlin.test.Test
@@ -55,24 +55,23 @@ private fun ComposeUiTest.reflowed(pane: PaneState, cols: Int) {
 @OptIn(ExperimentalTestApi::class)
 class APaneResizedUnderTheViewTest {
     @Test
-    fun a_pane_made_wider_without_its_caret_moving_is_painted_at_the_width_it_now_has() =
-        runComposeUiTest {
-            val pane = PaneState(Phone.PANE, StyleTable())
-            val session = PaneSession(Phone.PANE)
-            reflowed(pane, WAS)
-            phoneTerminal(pane, session, width = DESK.first, height = DESK.second)
-            mainClock.advanceTimeBy(CARET_SETTLE_MS * 2)
-            waitForIdle()
-            assertEquals(WAS, session.grid.cols, "the pane has to open at its own width")
+    fun a_pane_made_wider_without_its_caret_moving_is_painted_at_the_width_it_now_has() = runComposeUiTest {
+        val pane = PaneState(Phone.PANE, StyleTable())
+        val session = PaneSession(Phone.PANE)
+        reflowed(pane, WAS)
+        phoneTerminal(pane, session, width = DESK.first, height = DESK.second)
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 2)
+        waitForIdle()
+        assertEquals(WAS, session.grid.cols, "the pane has to open at its own width")
 
-            reflowed(pane, NOW)
+        reflowed(pane, NOW)
 
-            assertEquals(
-                NOW,
-                session.grid.cols,
-                "the pane is $NOW columns and the surface is still laid out as $WAS — the pan " +
-                    "stops ${NOW - WAS} columns short of the right edge, the strip prints the old " +
-                    "count, and a click reports the wrong cell",
-            )
-        }
+        assertEquals(
+            NOW,
+            session.grid.cols,
+            "the pane is $NOW columns and the surface is still laid out as $WAS — the pan " +
+                "stops ${NOW - WAS} columns short of the right edge, the strip prints the old " +
+                "count, and a click reports the wrong cell",
+        )
+    }
 }

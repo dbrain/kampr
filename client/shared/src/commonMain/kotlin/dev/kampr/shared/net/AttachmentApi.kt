@@ -24,7 +24,7 @@ class AttachmentApi(private val client: HttpClient, private val endpoint: Endpoi
             client.get(url) { endpoint.token?.let { header("Authorization", "Bearer $it") } }
         }.getOrElse { failure ->
             return AttachmentBytes.Failed(
-                "Could not reach the node: ${failure.message ?: "the request went nowhere"}."
+                "Could not reach the node: ${failure.message ?: "the request went nowhere"}.",
             )
         }
         return when (response.status) {
@@ -36,10 +36,13 @@ class AttachmentApi(private val client: HttpClient, private val endpoint: Endpoi
                     AttachmentBytes.Ok(bytes, response.headers["Content-Type"]?.substringBefore(';')?.trim())
                 }
             }
+
             HttpStatusCode.NotFound ->
                 AttachmentBytes.Failed("The node no longer has this attachment.")
+
             HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden ->
                 AttachmentBytes.Failed("This node would not hand it over to this device.")
+
             else ->
                 AttachmentBytes.Failed("The node answered ${response.status.value} ${response.status.description}.")
         }

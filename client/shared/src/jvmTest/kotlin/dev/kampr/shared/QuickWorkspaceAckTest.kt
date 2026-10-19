@@ -69,7 +69,7 @@ class QuickWorkspaceAckTest {
             AppManage(state).quickWorkspace("01JHUB")
             store.take(
                 """{"t":"managed","op":"workspace.create","ok":false,"id":null,""" +
-                    """"code":"herdr_unavailable","message":"herdr would not start"}"""
+                    """"code":"herdr_unavailable","message":"herdr would not start"}""",
             )
             val failure = assertNotNull(store.failure.value, "a refused quick workspace said nothing at all")
             assertEquals("herdr would not start", failure.message)

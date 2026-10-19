@@ -16,27 +16,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.remember
-import androidx.compose.ui.text.AnnotatedString
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.GlyphGaps
-import dev.kampr.shared.theme.withGlyphFallback
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.theme.withGlyphFallback
 
 @Composable
 fun KText(
@@ -92,8 +92,7 @@ fun LabelText(text: String, style: TextStyle, color: Color, modifier: Modifier =
     KText(if (label.uppercase) text.uppercase() else text, style, color, modifier)
 }
 
-fun Modifier.edge(spec: BorderSpec, shape: Shape): Modifier =
-    if (spec.visible) border(spec.width, spec.color, shape) else this
+fun Modifier.edge(spec: BorderSpec, shape: Shape): Modifier = if (spec.visible) border(spec.width, spec.color, shape) else this
 
 private fun Modifier.chromeEdge(spec: BorderSpec, side: Side): Modifier {
     if (!spec.visible) return this
@@ -164,8 +163,11 @@ fun Mark(color: Color, shape: MarkShape, size: Dp = 8.dp, modifier: Modifier = M
     val box = modifier.size(size)
     when (shape) {
         MarkShape.Square -> Box(box.background(color, RoundedCornerShape(size * 0.16f)))
+
         MarkShape.Circle -> Box(box.background(color, round))
+
         MarkShape.Ring -> Box(box.border(size * 0.18f, color, round))
+
         MarkShape.Bar -> Box(box, contentAlignment = Alignment.Center) {
             Box(Modifier.fillMaxWidth().height(size * 0.38f).background(color, round))
         }

@@ -9,17 +9,17 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.ui.Answering
+import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PendingOption
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
+import java.io.ByteArrayInputStream
+import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import javax.imageio.ImageIO
-import java.io.ByteArrayInputStream
 
 private fun centreOf(scene: ImageComposeScene, target: Color): Offset {
     val png = requireNotNull(scene.render().encodeToData()).bytes
@@ -32,7 +32,9 @@ private fun centreOf(scene: ImageComposeScene, target: Color): Offset {
     for (y in 0 until image.height) {
         for (x in 0 until image.width) {
             if (image.getRGB(x, y) and 0xFFFFFF == want) {
-                sx += x; sy += y; n++
+                sx += x
+                sy += y
+                n++
             }
         }
     }
@@ -55,7 +57,10 @@ class InteractionTest {
     fun tappingAnOptionAnswersWithTheKeyItWasOffered() {
         var answered: String? = null
         withScene(
-            390.dp, 240.dp, SoftTheme, TypeScale.Phone,
+            390.dp,
+            240.dp,
+            SoftTheme,
+            TypeScale.Phone,
             content = { PendingStrip(pending, Answering.Ready, { answered = it }, Modifier.fillMaxWidth()) },
             body = { scene ->
                 scene.render()
@@ -84,7 +89,10 @@ class InteractionTest {
         val (_, pane) = demoPane(RICH_PAGE_TAIL)
         assertEquals("a-0003", pane.convoCursor)
         withScene(
-            PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
+            PORTRAIT.first,
+            PORTRAIT.second,
+            SoftTheme,
+            TypeScale.Phone,
             content = { ConversationView(pane, demoInfo(), Modifier.fillMaxWidth()) },
             body = { scene -> repeat(3) { scene.render() } },
         )
@@ -97,7 +105,10 @@ class InteractionTest {
     fun tappingSearchOpensTheFieldOverTheWholeTranscript() {
         val (_, pane) = demoPane(RICH_CONVO)
         withScene(
-            PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
+            PORTRAIT.first,
+            PORTRAIT.second,
+            SoftTheme,
+            TypeScale.Phone,
             content = { ConversationView(pane, demoInfo(), Modifier.fillMaxWidth()) },
             body = { scene ->
                 scene.render()

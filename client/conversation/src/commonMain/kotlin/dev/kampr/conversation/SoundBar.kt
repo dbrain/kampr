@@ -81,6 +81,7 @@ fun SoundBar(
             KText(name, tokens.type.micro, tokens.color.dim, Modifier.weight(1f), maxLines = 1)
             when {
                 saved != null -> KText("saved to $saved", tokens.type.micro, tokens.color.done, maxLines = 2)
+
                 // The bytes are already in hand and a second press would be a second authorised
                 // round trip for bytes that never left.
                 else -> GlyphTarget(

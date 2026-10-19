@@ -18,8 +18,8 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.Esc
@@ -98,8 +98,7 @@ private val HISTORY = listOf(
 
 private class ArtboardSurfaces(private val session: PaneSession) : PaneSurfaces {
     @Composable
-    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        TerminalView(pane, session, ArtboardIo, modifier)
+    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = TerminalView(pane, session, ArtboardIo, modifier)
 
     @Composable
     override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Unit
@@ -108,7 +107,10 @@ private class ArtboardSurfaces(private val session: PaneSession) : PaneSurfaces 
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val sink = InputSink(pane.id, ArtboardIo, session.latches)
         PaneKeyRow(
-            session, sink, compact, enabled = true,
+            session,
+            sink,
+            compact,
+            enabled = true,
             modifier = modifier.onSizeChanged { session.keyRowHeight = it.height.toFloat() },
         )
     }

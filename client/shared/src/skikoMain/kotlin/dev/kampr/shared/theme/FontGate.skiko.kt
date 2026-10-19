@@ -15,7 +15,7 @@ actual fun rememberFamily(faces: List<FontFace>): FontFamily? {
         value = FontFamily(
             faces.map { face ->
                 Font(face.id, getFontResourceBytes(environment, face.resource), face.weight, face.style)
-            }
+            },
         )
     }
     return family

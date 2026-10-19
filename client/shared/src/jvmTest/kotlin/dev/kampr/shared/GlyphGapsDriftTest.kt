@@ -68,6 +68,7 @@ class GlyphGapsDriftTest {
         Character.FINAL_QUOTE_PUNCTUATION, Character.OTHER_PUNCTUATION,
         Character.CONNECTOR_PUNCTUATION, Character.OTHER_NUMBER,
         -> true
+
         else -> false
     }
 }

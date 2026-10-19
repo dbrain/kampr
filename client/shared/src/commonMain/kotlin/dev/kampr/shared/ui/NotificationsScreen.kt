@@ -36,7 +36,6 @@ import kotlinx.coroutines.launch
 
 private const val SNOOZE_MINUTES = 60
 
-
 // Everything about notifications on this device, and — where they cannot work — what would make
 // them work instead of a control that fails at the last step.
 @Composable
@@ -221,7 +220,9 @@ private fun RuleRow(
             }
             if (!muted && !snoozing) {
                 QuietAction(
-                    "Snooze ${SNOOZE_MINUTES}m", onSnooze, Modifier.widthIn(min = 96.dp),
+                    "Snooze ${SNOOZE_MINUTES}m",
+                    onSnooze,
+                    Modifier.widthIn(min = 96.dp),
                     label = "Snooze $title for $SNOOZE_MINUTES minutes",
                 )
             }
@@ -248,31 +249,38 @@ private fun blocker(capability: PushCapability, server: PushState?): Pair<String
         "iOS grants notifications only to a Home Screen web app. Tap Share, then Add to Home " +
             "Screen, and open Kampr from the icon — notifications appear here once it is installed.",
     )
+
     capability is PushCapability.InsecureContext || server?.secureContext == false -> Pair(
         "This address cannot do notifications",
         "Notifications need a secure context, and plain HTTP on an IP address is not one. Point a " +
             "hostname at this machine and give it a certificate — the same step that unlocks passkeys.",
     )
+
     capability is PushCapability.NeedsDistributor -> Pair(
         "Install a UnifiedPush distributor",
         "Android has no push service that does not go through Google, so Kampr uses UnifiedPush: " +
             "a small app you install once and point wherever you like — ntfy is the usual choice, " +
             "and it can talk to your own ntfy server. Install one, then come back.",
     )
+
     capability is PushCapability.Unsupported -> Pair(
         "This build has no notification channel",
         "The desktop app is always on screen, and the Android app uses UnifiedPush rather than the " +
             "browser's push service.",
     )
+
     server == null -> Pair("Asking the node…", "Waiting for this node to say what it can do.")
+
     !server.available -> Pair(
         "This node is not sending notifications",
         "It has no VAPID key, or push is switched off in its configuration.",
     )
+
     capability is PushCapability.Ready && capability.permission == PushPermission.Denied -> Pair(
         "Notifications are blocked for this site",
         "The browser is refusing them. Allow notifications for this address in its site settings, " +
             "then come back.",
     )
+
     else -> null
 }

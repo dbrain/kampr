@@ -2,10 +2,10 @@ package dev.kampr.web
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.window.ComposeViewport
-import dev.kampr.shared.ui.DeepLink
-import dev.kampr.shared.ui.KamprApp
 import dev.kampr.conversation.ConversationSurfaces
 import dev.kampr.mosaic.MosaicSurfaces
+import dev.kampr.shared.ui.DeepLink
+import dev.kampr.shared.ui.KamprApp
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
 import dev.kampr.terminal.input.keyTracing
@@ -45,7 +45,11 @@ fun main() {
     val bench = query("bench") != null
     keyTracing = query("keytrace") != null
     val deepLink = DeepLink(
-        query("theme"), query("mode"), query("screen"), query("view"), query("pane"),
+        query("theme"),
+        query("mode"),
+        query("screen"),
+        query("view"),
+        query("pane"),
         fragment("pair"),
     )
     forgetFragment()

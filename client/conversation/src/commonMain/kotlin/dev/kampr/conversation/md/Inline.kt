@@ -38,21 +38,56 @@ private class Inline(
             val c = src[at]
             when {
                 c == '\\' && at + 1 < src.length && !src[at + 1].isLetterOrDigit() -> {
-                    pending.append(src[at + 1]); at += 2
+                    pending.append(src[at + 1])
+                    at += 2
                 }
-                c == '`' -> { flush(); if (!code()) pending.append(src[at++]) }
-                c == '!' && src.startsWith("![", at) -> { flush(); if (!image()) pending.append(src[at++]) }
-                c == '[' -> { flush(); if (!link()) pending.append(src[at++]) }
-                c == '<' -> { flush(); if (!autolink()) pending.append(src[at++]) }
+
+                c == '`' -> {
+                    flush()
+                    if (!code()) pending.append(src[at++])
+                }
+
+                c == '!' && src.startsWith("![", at) -> {
+                    flush()
+                    if (!image()) pending.append(src[at++])
+                }
+
+                c == '[' -> {
+                    flush()
+                    if (!link()) pending.append(src[at++])
+                }
+
+                c == '<' -> {
+                    flush()
+                    if (!autolink()) pending.append(src[at++])
+                }
+
                 c == '~' && src.startsWith("~~", at) -> {
-                    flush(); if (!wrap("~~", SpanStyle(textDecoration = TextDecoration.LineThrough))) pending.append(src[at++])
+                    flush()
+                    if (!wrap("~~", SpanStyle(textDecoration = TextDecoration.LineThrough))) pending.append(src[at++])
                 }
-                c == '*' || c == '_' -> { flush(); if (!emphasis(c)) pending.append(src[at++]) }
+
+                c == '*' || c == '_' -> {
+                    flush()
+                    if (!emphasis(c)) pending.append(src[at++])
+                }
+
                 c == 'h' || c == 'H' || c == 'm' || c == 'M' -> {
                     val url = if (linkify) urlAt(src, at) else null
-                    if (url == null) { pending.append(c); at++ } else { flush(); target(url); at += url.length }
+                    if (url == null) {
+                        pending.append(c)
+                        at++
+                    } else {
+                        flush()
+                        target(url)
+                        at += url.length
+                    }
                 }
-                else -> { pending.append(c); at++ }
+
+                else -> {
+                    pending.append(c)
+                    at++
+                }
             }
         }
         flush()
@@ -164,7 +199,10 @@ private class Inline(
     private fun wrap(token: String, style: SpanStyle, closes: (Int) -> Boolean = { true }): Boolean {
         var probe = at + token.length
         while (probe < src.length) {
-            if (src[probe] == '\\') { probe += 2; continue }
+            if (src[probe] == '\\') {
+                probe += 2
+                continue
+            }
             if (src.startsWith(token, probe) && closes(probe)) break
             probe++
         }
@@ -184,7 +222,9 @@ private class Inline(
         while (probe < src.length) {
             when {
                 src[probe] == '\\' -> probe++
+
                 src[probe] == open -> depth++
+
                 src[probe] == close -> {
                     depth--
                     if (depth == 0) return probe

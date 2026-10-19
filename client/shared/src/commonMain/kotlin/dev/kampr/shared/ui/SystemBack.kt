@@ -16,9 +16,13 @@ internal fun backTarget(screen: Screen, breakpoint: Breakpoint, paired: Boolean)
     // would be undone in the frame after it — and the sidebar means the pane was never covering
     // anything to get back to.
     is Screen.Pane -> Screen.Herd.takeIf { breakpoint != Breakpoint.Desktop }
+
     Screen.Mosaic, Screen.Fleet -> Screen.Herd
+
     Screen.Devices, Screen.Appearance, Screen.Notifications -> Screen.Setup
+
     Screen.Setup -> Screen.Herd.takeIf { paired }
+
     Screen.Herd -> null
 }
 

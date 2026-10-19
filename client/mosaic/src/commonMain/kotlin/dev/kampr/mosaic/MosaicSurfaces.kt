@@ -19,11 +19,10 @@ class MosaicSurfaces : MosaicHost {
     internal var held: MosaicState? = null
         private set
 
-    private fun stateFor(app: AppState): MosaicState =
-        held ?: MosaicState(app.prefs, app.connection).also {
-            it.restore()
-            held = it
-        }
+    private fun stateFor(app: AppState): MosaicState = held ?: MosaicState(app.prefs, app.connection).also {
+        it.restore()
+        held = it
+    }
 
     @Composable
     override fun Mosaic(

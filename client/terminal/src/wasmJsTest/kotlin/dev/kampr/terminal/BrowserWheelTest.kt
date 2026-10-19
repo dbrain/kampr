@@ -21,8 +21,7 @@ private class ClaudeIo : PaneIo {
         if (msg is ClientMsg.InputText) typed += msg.text
     }
     override fun prefs(paneId: String) = PanePrefs()
-    override fun info(paneId: String) =
-        PaneInfo(paneId, "node", agent = "claude", cmd = "claude", cols = 94, rows = 60)
+    override fun info(paneId: String) = PaneInfo(paneId, "node", agent = "claude", cmd = "claude", cols = 94, rows = 60)
 }
 
 // What Chrome hands a page for one notch of a mouse wheel, and CMP's web backend passes the DOM's
@@ -39,8 +38,7 @@ private fun ComposeUiTest.notchIntoHistory() {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.conversationRows(cellHeight: Float): Int =
-    floor(CHROME_NOTCH * density.density / cellHeight).toInt()
+private fun ComposeUiTest.conversationRows(cellHeight: Float): Int = floor(CHROME_NOTCH * density.density / cellHeight).toInt()
 
 // The report, on 0.1.99: "scroll in terminal on desktop wasm ... scrolls much slower than the
 // conversation pane". One notch moved the terminal three rows and a Claude pane one report —

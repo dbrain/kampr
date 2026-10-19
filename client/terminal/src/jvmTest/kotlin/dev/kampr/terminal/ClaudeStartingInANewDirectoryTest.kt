@@ -41,8 +41,7 @@ class ClaudeStartingInANewDirectoryTest {
         return (0 until GRID).map { row -> RowDiff(row, written[row]?.let { listOf(Run(0, it)) } ?: emptyList()) }
     }
 
-    private fun PaneState.draw(rows: List<RowDiff>, caret: Cursor) =
-        applyPatch(ServerMsg.GridPatch(pane = Phone.PANE, rows = rows, cursor = caret, links = emptyList()))
+    private fun PaneState.draw(rows: List<RowDiff>, caret: Cursor) = applyPatch(ServerMsg.GridPatch(pane = Phone.PANE, rows = rows, cursor = caret, links = emptyList()))
 
     private fun ComposeUiTest.settle(ms: Long) {
         mainClock.advanceTimeBy(ms)
@@ -67,9 +66,12 @@ class ClaudeStartingInANewDirectoryTest {
         val pane = PaneState(Phone.PANE, StyleTable())
         pane.applyReset(
             ServerMsg.GridReset(
-                pane = Phone.PANE, cols = 120, rows = GRID,
+                pane = Phone.PANE,
+                cols = 120,
+                rows = GRID,
                 rowsData = rows(0 to "[09:05:31 dbrain@comingclean kampr-cstart]$ claude"),
-                cursor = Cursor(0, 1, true), links = emptyList(),
+                cursor = Cursor(0, 1, true),
+                links = emptyList(),
             ),
         )
         val session = PaneSession(Phone.PANE)

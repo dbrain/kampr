@@ -9,9 +9,9 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -45,12 +45,10 @@ private const val NOW = 1787821571000.0
 // covering nothing proves nothing.
 private const val LAST_LINE = "That paragraph is the end of the newest thing the agent said."
 
-private fun tallAnswer(): String =
-    (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
-        "\n\n" + LAST_LINE
+private fun tallAnswer(): String = (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
+    "\n\n" + LAST_LINE
 
-private fun running(vararg entries: Running, tall: Boolean = false): PaneState =
-    paneWithStore(*entries, tall = tall).second
+private fun running(vararg entries: Running, tall: Boolean = false): PaneState = paneWithStore(*entries, tall = tall).second
 
 private fun paneWithStore(vararg entries: Running, tall: Boolean = false): Pair<KamprStore, PaneState> {
     val store = KamprStore()
@@ -63,7 +61,7 @@ private fun paneWithStore(vararg entries: Running, tall: Boolean = false): Pair<
                 Turn("c-1", "user", null, listOf(Block.Md("start the build"))),
                 if (tall) Turn("a-1", "assistant", null, listOf(Block.Md(tallAnswer()))) else null,
             ),
-        )
+        ),
     )
     store.accept(ServerMsg.ConvoFacets(PANE_ID, Facets(running = entries.toList())))
     return store to store.pane(PANE_ID)
@@ -98,9 +96,8 @@ private const val SHUT = "Hide what is running"
 // running'"*.
 @OptIn(ExperimentalTestApi::class)
 class RunningStripTest {
-    private fun ComposeUiTest.spoken(): String =
-        onNodeWithContentDescription("still running", substring = true)
-            .fetchSemanticsNode().config[SemanticsProperties.ContentDescription].first()
+    private fun ComposeUiTest.spoken(): String = onNodeWithContentDescription("still running", substring = true)
+        .fetchSemanticsNode().config[SemanticsProperties.ContentDescription].first()
 
     @Test
     fun whatIsStillRunningIsNamedWithAStopwatchRatherThanAnAge() {
@@ -289,7 +286,7 @@ class RunningStripTest {
     @Test
     fun aNodeThatSendsNoRunningFieldIsReadAsNothingRunning() {
         val frame = Wire.decode(
-            """{"t":"convo.facets","pane":"$PANE_ID","facets":{"queued":[{"text":"next"}]}}"""
+            """{"t":"convo.facets","pane":"$PANE_ID","facets":{"queued":[{"text":"next"}]}}""",
         ) as ServerMsg.ConvoFacets
         assertEquals(emptyList(), frame.facets.running)
         assertEquals(1, frame.facets.queued.size)
@@ -297,7 +294,7 @@ class RunningStripTest {
         val full = Wire.decode(
             """{"t":"convo.facets","pane":"$PANE_ID","facets":{"running":[
                {"call":"toolu_1","kind":"shell","name":"Bash","title":"the build","since":"$LAUNCHED"},
-               {"call":"toolu_2","kind":"agent"}]}}"""
+               {"call":"toolu_2","kind":"agent"}]}}""",
         ) as ServerMsg.ConvoFacets
         assertEquals(listOf("toolu_1", "toolu_2"), full.facets.running.map { it.call })
         assertEquals("the build", full.facets.running[0].title)

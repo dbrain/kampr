@@ -13,16 +13,20 @@ fun parseArgs(typed: String): List<String> {
             quote != null && ch == quote -> {
                 quote = null
             }
+
             quote != null -> current.append(ch)
+
             ch == '"' || ch == '\'' -> {
                 quote = ch
                 open = true
             }
+
             ch.isWhitespace() -> {
                 if (current.isNotEmpty() || open) args += current.toString()
                 current.clear()
                 open = false
             }
+
             else -> current.append(ch)
         }
     }
@@ -30,8 +34,7 @@ fun parseArgs(typed: String): List<String> {
     return args
 }
 
-fun commandLine(kind: String, args: List<String>): String =
-    (listOf(kind) + args.map { if (it.any(Char::isWhitespace)) "\"$it\"" else it }).joinToString(" ")
+fun commandLine(kind: String, args: List<String>): String = (listOf(kind) + args.map { if (it.any(Char::isWhitespace)) "\"$it\"" else it }).joinToString(" ")
 
 // Named, not guessed at: every one of these is a flag some harness ships that removes the
 // confirmation an operator would otherwise get. A remembered flag is invisible by the second

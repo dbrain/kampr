@@ -5,6 +5,7 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.KamprConnection
+import dev.kampr.shared.net.Pairing
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
@@ -18,7 +19,6 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import dev.kampr.shared.net.Pairing
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue

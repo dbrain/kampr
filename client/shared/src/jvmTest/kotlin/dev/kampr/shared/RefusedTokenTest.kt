@@ -54,7 +54,7 @@ private class RefusingNode {
         val body = "this device is not authorised".toByteArray()
         val out = it.getOutputStream()
         out.write(
-            "HTTP/1.1 401 Unauthorized\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray(),
         )
         out.write(body)
         out.flush()

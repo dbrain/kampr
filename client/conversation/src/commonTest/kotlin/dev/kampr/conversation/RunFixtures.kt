@@ -10,13 +10,11 @@ fun bashTurn(id: String, command: String, state: String, lines: Int?): Turn = Tu
     blocks = listOf(Block.Tool("Bash", command, lines, state), Block.Code("bash", command)),
 )
 
-fun proseTurn(id: String, text: String, role: String = "assistant"): Turn =
-    Turn(id, role, null, listOf(Block.Md(text)))
+fun proseTurn(id: String, text: String, role: String = "assistant"): Turn = Turn(id, role, null, listOf(Block.Md(text)))
 
 // What `/compact` writes back into a transcript: a user record nobody typed, carrying the
 // harness's own summary of everything it then dropped (#259).
-fun summaryTurn(id: String, text: String = COMPACTED_TEXT): Turn =
-    Turn(id, "user", null, listOf(Block.Md(text)), kind = COMPACT)
+fun summaryTurn(id: String, text: String = COMPACTED_TEXT): Turn = Turn(id, "user", null, listOf(Block.Md(text)), kind = COMPACT)
 
 const val COMPACTED_TEXT =
     "This session is being continued from a previous conversation that ran out of context. " +

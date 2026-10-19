@@ -21,12 +21,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.ConversationPalette
@@ -34,8 +34,8 @@ import dev.kampr.conversation.markMatches
 import dev.kampr.conversation.rememberConversationPalette
 import dev.kampr.conversation.rememberInlineStyles
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.edge
+import dev.kampr.shared.ui.glyphFallback
 
 private val CELL_PAD_X = 10.dp
 private val CELL_PAD_Y = 9.dp

@@ -1,18 +1,18 @@
 package dev.kampr.terminal
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipe
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.CARET_SETTLE_MS
 import kotlin.test.Test
@@ -21,8 +21,7 @@ import kotlin.test.assertTrue
 private val PHONE_WIDTH = 411.dp
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.caretTop(pane: PaneState, session: PaneSession): Dp =
-    rowTop(pane, session, pane.cursor.row)
+private fun ComposeUiTest.caretTop(pane: PaneState, session: PaneSession): Dp = rowTop(pane, session, pane.cursor.row)
 
 // The report, verbatim: "still can't see what im typing on the terminal (but i can see letters
 // show up on the desktop looking at the terminal)". The keystrokes reach the PTY; the row they

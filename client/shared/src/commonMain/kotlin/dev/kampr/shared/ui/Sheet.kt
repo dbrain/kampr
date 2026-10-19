@@ -2,6 +2,7 @@ package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,36 +10,36 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.foundation.focusable
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 
 private val SHEET_MAX_WIDTH = 420.dp
+
 // A 844x390 landscape viewport is wide and short, so the sheet spends the width it has rather
 // than scrolling a phone-shaped column through a letterbox.
 private val SHEET_WIDE_WIDTH = 720.dp
@@ -63,13 +64,12 @@ fun Scrim(onDismiss: () -> Unit, label: String = "Close", modifier: Modifier = M
             .fillMaxSize()
             .background(tokens.color.bg.copy(alpha = SCRIM_ALPHA))
             .gestureAction(label, onClick = onDismiss)
-            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
+            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
     )
 }
 
 @Composable
-fun selectedEdge(): BorderSpec =
-    BorderSpec(if (Kampr.tokens.card.visible) Kampr.tokens.card.width else Kampr.tokens.chrome.width, Kampr.tokens.color.accent)
+fun selectedEdge(): BorderSpec = BorderSpec(if (Kampr.tokens.card.visible) Kampr.tokens.card.width else Kampr.tokens.chrome.width, Kampr.tokens.color.accent)
 
 // Escape closes it and focus moves into it on open, so the sheet is operable from a keyboard.
 // What holds the reader inside it is not this composable: the screen underneath drops out of the
@@ -107,7 +107,7 @@ fun BottomSheet(
     Box(modifier.fillMaxSize()) {
         Scrim(onDismiss)
         BoxWithConstraints(
-            Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center)
+            Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center),
         ) {
             val wanted = if (breakpoint == Breakpoint.Portrait) SHEET_MAX_WIDTH else SHEET_WIDE_WIDTH
             val width = if (maxWidth < wanted) maxWidth else wanted
@@ -228,16 +228,22 @@ fun SheetCard(
             .background(tokens.color.surface, shape)
             .edge(if (selected) selectedEdge() else tokens.card, shape)
             .let {
-                if (onClick == null) it.named(listOf(title, subtitle).joinToString(", "))
-                else it.touchable().action(label ?: "$title, $subtitle", onClick, shape, selected = selected)
+                if (onClick == null) {
+                    it.named(listOf(title, subtitle).joinToString(", "))
+                } else {
+                    it.touchable().action(label ?: "$title, $subtitle", onClick, shape, selected = selected)
+                }
             }
             .padding(horizontal = 15.dp, vertical = if (compact) 9.dp else 13.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (icon != null) {
-            if (compact) Badge(28.dp, 14.dp, icon, iconTint ?: tokens.color.accent)
-            else Badge(36.dp, 17.dp, icon, iconTint ?: tokens.color.accent)
+            if (compact) {
+                Badge(28.dp, 14.dp, icon, iconTint ?: tokens.color.accent)
+            } else {
+                Badge(36.dp, 17.dp, icon, iconTint ?: tokens.color.accent)
+            }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             KText(title, tokens.type.bodyStrong, tokens.color.text)
@@ -248,7 +254,9 @@ fun SheetCard(
                 maxLines = 2,
             )
         }
-        if (trailing != null) trailing() else if (onClick != null) {
+        if (trailing != null) {
+            trailing()
+        } else if (onClick != null) {
             IconGlyph(KamprIcons.chevronRight, 13.dp, tokens.color.mute)
         }
     }

@@ -40,7 +40,9 @@ private fun paneNaming(text: String, role: String = "user"): PaneState {
     val store = KamprStore()
     store.accept(
         ServerMsg.Convo(
-            pane = PANE_ID, cursor = "u-1", more = false,
+            pane = PANE_ID,
+            cursor = "u-1",
+            more = false,
             turns = listOf(Turn("u-1", role, "2026-08-24T09:00:00.000Z", listOf(Block.Md(text)))),
         ),
     )

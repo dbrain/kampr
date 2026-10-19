@@ -6,8 +6,8 @@ import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val AT = "2026-08-23T09:00:00.000Z"

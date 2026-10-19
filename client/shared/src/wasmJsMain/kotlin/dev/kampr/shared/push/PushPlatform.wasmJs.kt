@@ -27,7 +27,7 @@ private fun jsCapability(): String = js(
       if (ios && !standalone) return 'homescreen';
       return Notification.permission;
     })()
-    """
+    """,
 )
 
 // Registration and the token hand-off are one call: the worker is useless without the token and
@@ -46,7 +46,7 @@ private fun jsPrepare(token: String): Unit = js(
         navigator.serviceWorker.ready.then(post);
       }).catch(function () {});
     })()
-    """
+    """,
 )
 
 // The permission prompt and the subscription in one round trip, because a browser only honours
@@ -77,7 +77,7 @@ private fun jsSubscribe(key: String): Promise<JsString?> = js(
       });
       return JSON.stringify(subscription.toJSON());
     })()
-    """
+    """,
 )
 
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -93,7 +93,7 @@ private fun jsUnsubscribe(): Promise<JsString?> = js(
       try { await subscription.unsubscribe(); } catch (e) {}
       return endpoint;
     })()
-    """
+    """,
 )
 
 // Deliberately does not register the worker, request permission or subscribe: it reports what is
@@ -108,7 +108,7 @@ private fun jsSubscription(): Promise<JsString?> = js(
       var subscription = await registration.pushManager.getSubscription();
       return subscription ? JSON.stringify(subscription.toJSON()) : null;
     })()
-    """
+    """,
 )
 
 // The page and the worker post under the same tags, so the page can take down what the worker put
@@ -126,7 +126,7 @@ private fun jsClearTag(tag: String): Unit = js(
         }).catch(function () {});
       }).catch(function () {});
     })()
-    """
+    """,
 )
 
 private class BrowserPush : PushPlatform {
@@ -145,11 +145,9 @@ private class BrowserPush : PushPlatform {
         jsPrepare(token.orEmpty())
     }
 
-    override suspend fun subscribe(vapidKey: String): PushEnrolment? =
-        enrolmentOf(runCatching { jsSubscribe(vapidKey).await() }.getOrNull()?.toString())
+    override suspend fun subscribe(vapidKey: String): PushEnrolment? = enrolmentOf(runCatching { jsSubscribe(vapidKey).await() }.getOrNull()?.toString())
 
-    override suspend fun enrolment(): PushEnrolment? =
-        enrolmentOf(runCatching { jsSubscription().await() }.getOrNull()?.toString())
+    override suspend fun enrolment(): PushEnrolment? = enrolmentOf(runCatching { jsSubscription().await() }.getOrNull()?.toString())
 
     private fun enrolmentOf(raw: String?): PushEnrolment? {
         val body = runCatching { json.parseToJsonElement(raw ?: return null).jsonObject }.getOrNull()
@@ -162,8 +160,7 @@ private class BrowserPush : PushPlatform {
         )
     }
 
-    override suspend fun unsubscribe(): String? =
-        runCatching { jsUnsubscribe().await() }.getOrNull()?.toString()
+    override suspend fun unsubscribe(): String? = runCatching { jsUnsubscribe().await() }.getOrNull()?.toString()
 
     override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
         if (!anyBlocked) jsClearTag(TAG_BLOCKED)
@@ -171,7 +168,6 @@ private class BrowserPush : PushPlatform {
     }
 }
 
-private fun kotlinx.serialization.json.JsonPrimitive.contentOrNull(): String? =
-    content.takeIf { it.isNotEmpty() && it != "null" }
+private fun kotlinx.serialization.json.JsonPrimitive.contentOrNull(): String? = content.takeIf { it.isNotEmpty() && it != "null" }
 
 actual fun createPushPlatform(): PushPlatform = BrowserPush()

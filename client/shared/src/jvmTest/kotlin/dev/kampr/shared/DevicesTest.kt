@@ -40,20 +40,23 @@ private fun Themed(content: @Composable () -> Unit) {
 }
 
 private const val NOW = 1_760_000_000_000.0
-private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+private val json = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+}
 
 private fun device(body: String) = json.decodeFromString(DeviceRecord.serializer(), body)
 
 // The rows the node serves, verbatim: it returns revoked and expired ones too, and `active` is
 // its own answer about its own clock.
 private val PHONE = device(
-    """{"id":"d1","name":"pixel","role":"full","expires_at":1762000000,"active":true}"""
+    """{"id":"d1","name":"pixel","role":"full","expires_at":1762000000,"active":true}""",
 )
 private val LAPSED = device(
-    """{"id":"d2","name":"old tablet","role":"readonly","expires_at":1759000000,"active":false}"""
+    """{"id":"d2","name":"old tablet","role":"readonly","expires_at":1759000000,"active":false}""",
 )
 private val GONE = device(
-    """{"id":"d3","name":"stolen laptop","role":"full","revoked_at":1759500000,"active":false}"""
+    """{"id":"d3","name":"stolen laptop","role":"full","revoked_at":1759500000,"active":false}""",
 )
 
 private fun screen(

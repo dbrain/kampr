@@ -11,9 +11,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
@@ -32,15 +33,14 @@ import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.keyboardInset
-import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.MIN_PANE_COLS
 import dev.kampr.shared.wire.MIN_PANE_ROWS
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.terminal.view.TerminalView
@@ -111,11 +111,9 @@ private val SAYS_HELD = SemanticsMatcher("says the pane is held") {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.saysHeld(): Boolean =
-    onAllNodes(SAYS_HELD).fetchSemanticsNodes().isNotEmpty()
+private fun ComposeUiTest.saysHeld(): Boolean = onAllNodes(SAYS_HELD).fetchSemanticsNodes().isNotEmpty()
 
-private fun ClientMsg.sizing(): ManageOp.PaneSize? =
-    ((this as? ClientMsg.Manage)?.request as? ManageOp.PaneSize)
+private fun ClientMsg.sizing(): ManageOp.PaneSize? = ((this as? ClientMsg.Manage)?.request as? ManageOp.PaneSize)
 
 private fun List<ClientMsg>.sizings() = mapNotNull { it.sizing() }
 

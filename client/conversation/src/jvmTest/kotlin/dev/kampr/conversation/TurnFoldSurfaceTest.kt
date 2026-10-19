@@ -45,6 +45,7 @@ private const val BURIED = "And the scrollbar column"
 private const val ASKED = "what did the width inference land on?"
 private const val OPEN = "Put away the reply of"
 private const val SHUT = "Show the reply of"
+
 // A clock face is drawn in the runner's own zone and against the runner's own today, so what is
 // pinned here is the *shape* of the row — who spoke, when, how much of it there is, and the line
 // it shows of itself. `TimeTest` owns what a face reads.
@@ -53,7 +54,9 @@ private val AGED = Regex("$SHUT claude, [^,]+, 1 step, $GIST\\.")
 
 private val ASK = Turn("u-1", "user", AT, listOf(Block.Md(ASKED)))
 private val ANSWER = Turn(
-    "a-2", "assistant", AT,
+    "a-2",
+    "assistant",
+    AT,
     listOf(Block.Md("$GIST.\n\nIt comes from the pane rect.\n\n$BURIED.")),
 )
 
@@ -143,7 +146,10 @@ class TurnFoldSurfaceTest {
         val toolbar = SelectionToolbar()
         val clipboard = HeldClipboard()
         withScene(
-            PORTRAIT.first, 300.dp, SoftTheme, TypeScale.Phone,
+            PORTRAIT.first,
+            300.dp,
+            SoftTheme,
+            TypeScale.Phone,
             content = {
                 CompositionLocalProvider(
                     LocalTextToolbar provides toolbar,
@@ -173,7 +179,10 @@ class TurnFoldSurfaceTest {
                 touch(PointerEventType.Release, 700f, 220f)
                 scene.render()
                 toolbar.copy?.invoke()
-                repeat(4) { scene.render(); Thread.sleep(60) }
+                repeat(4) {
+                    scene.render()
+                    Thread.sleep(60)
+                }
             },
         )
         val pasted = clipboard.pasted

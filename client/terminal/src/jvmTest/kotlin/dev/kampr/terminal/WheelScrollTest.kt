@@ -1,13 +1,13 @@
 package dev.kampr.terminal
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.ScrollWheel
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performMultiModalInput
 import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performMultiModalInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.terminal.view.WHEEL_ROWS
 import kotlin.test.Test
@@ -80,7 +80,7 @@ class WheelScrollTest {
                 kotlin.math.round(rows),
                 rows,
                 0.001f,
-                "a quarter click left the surface ${rows} rows off the floor, part way through a row",
+                "a quarter click left the surface $rows rows off the floor, part way through a row",
             )
         }
         assertEquals(

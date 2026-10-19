@@ -57,8 +57,7 @@ fun runningLabel(run: Running): String {
 // opened it.
 const val RUNNING_OPEN = "running:open"
 
-fun runningSince(run: Running, nowMillis: Double): String? =
-    parseIsoMillis(run.since)?.let { elapsedSpan(nowMillis - it) }
+fun runningSince(run: Running, nowMillis: Double): String? = parseIsoMillis(run.since)?.let { elapsedSpan(nowMillis - it) }
 
 // What a reader with no eyes on the strip is told, and it is never less than the eye is shown. A
 // folded strip draws a count and the names are behind it, so the line names them anyway — losing

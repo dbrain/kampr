@@ -35,7 +35,7 @@ private fun oskCssPx(): Double = js(
         }
         return s.px;
     })()
-    """
+    """,
 )
 
 // Polled rather than pushed: the listeners above fire on a thread of the browser's choosing and

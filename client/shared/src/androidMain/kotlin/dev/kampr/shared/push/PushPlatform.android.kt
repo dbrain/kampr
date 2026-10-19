@@ -5,19 +5,19 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import dev.kampr.shared.platform.KamprAndroid
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.PushApi
 import dev.kampr.shared.net.createHttpClient
+import dev.kampr.shared.platform.KamprAndroid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.unifiedpush.android.connector.UnifiedPush
 
@@ -92,8 +92,7 @@ object UnifiedPushEndpoints {
         latest.value = null
     }
 
-    internal suspend fun next(): PushEnrolment? =
-        withTimeoutOrNull(ENDPOINT_TIMEOUT_MS) { latest.filterNotNull().first() }
+    internal suspend fun next(): PushEnrolment? = withTimeoutOrNull(ENDPOINT_TIMEOUT_MS) { latest.filterNotNull().first() }
 
     private fun store(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
@@ -143,11 +142,9 @@ private class UnifiedPushPlatform(private val context: Context) : PushPlatform {
         if (!anyDone) manager.cancel(DONE_NOTIFICATION_ID)
     }
 
-    private fun notificationsAllowed(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
+    private fun notificationsAllowed(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
 }
 
-actual fun createPushPlatform(): PushPlatform =
-    KamprAndroid.context?.let(::UnifiedPushPlatform) ?: NoPush()
+actual fun createPushPlatform(): PushPlatform = KamprAndroid.context?.let(::UnifiedPushPlatform) ?: NoPush()

@@ -12,8 +12,7 @@ data class LangSpec(
     val meta: Char? = null,
 )
 
-private fun words(vararg groups: String): Set<String> =
-    groups.flatMap { it.trim().split(Regex("\\s+")) }.toSet()
+private fun words(vararg groups: String): Set<String> = groups.flatMap { it.trim().split(Regex("\\s+")) }.toSet()
 
 private val CLIKE = words(
     "as async await break case catch class const continue crate default defer do dyn else enum export",
@@ -76,10 +75,9 @@ private val PLAIN = LangSpec("text", emptySet(), emptySet(), lineComment = empty
 
 // The only thing a path says about its contents. Every name here is one of the specs above, and
 // an extension with no spec is plain text rather than a guess.
-fun langOf(name: String): String? =
-    name.substringAfterLast('.', "").lowercase().takeIf { extension ->
-        extension.isNotEmpty() && SPECS.any { it.name == extension }
-    }
+fun langOf(name: String): String? = name.substringAfterLast('.', "").lowercase().takeIf { extension ->
+    extension.isNotEmpty() && SPECS.any { it.name == extension }
+}
 
 fun langSpec(lang: String?): LangSpec {
     val key = lang?.trim()?.lowercase()?.substringBefore(' ') ?: return PLAIN

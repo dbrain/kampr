@@ -42,7 +42,9 @@ private fun cellPane(detail: String?) = PaneInfo(
 
 private object Blank : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 }
 
@@ -60,8 +62,13 @@ class MosaicStreamFaultTest {
             CompositionLocalProvider(LocalTokens provides cellTokens(), LocalPaneIo provides ArtboardIo) {
                 val info = cellPane(DETAIL)
                 MosaicCell(
-                    PaneState(info.id, StyleTable()), info, NODE, focused = true,
-                    surfaces = Blank, onFocus = {}, onRemove = {},
+                    PaneState(info.id, StyleTable()),
+                    info,
+                    NODE,
+                    focused = true,
+                    surfaces = Blank,
+                    onFocus = {},
+                    onRemove = {},
                     modifier = Modifier.size(420.dp, 300.dp),
                 )
             }
@@ -76,8 +83,13 @@ class MosaicStreamFaultTest {
             CompositionLocalProvider(LocalTokens provides cellTokens(), LocalPaneIo provides ArtboardIo) {
                 val info = cellPane(null)
                 MosaicCell(
-                    PaneState(info.id, StyleTable()), info, NODE, focused = true,
-                    surfaces = Blank, onFocus = {}, onRemove = {},
+                    PaneState(info.id, StyleTable()),
+                    info,
+                    NODE,
+                    focused = true,
+                    surfaces = Blank,
+                    onFocus = {},
+                    onRemove = {},
                     modifier = Modifier.size(420.dp, 300.dp),
                 )
             }

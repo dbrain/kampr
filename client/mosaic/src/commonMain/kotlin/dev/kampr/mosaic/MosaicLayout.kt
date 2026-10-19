@@ -38,5 +38,4 @@ private const val SEPARATOR = ' '
 // a saved layout that also pinned a geometry would be wrong on the next screen it opened on.
 fun encodeArrangement(panes: List<String>): String = panes.joinToString(SEPARATOR.toString())
 
-fun decodeArrangement(saved: String?): List<String> =
-    saved?.split(SEPARATOR)?.filter { it.isNotBlank() }?.take(MAX_CELLS).orEmpty()
+fun decodeArrangement(saved: String?): List<String> = saved?.split(SEPARATOR)?.filter { it.isNotBlank() }?.take(MAX_CELLS).orEmpty()

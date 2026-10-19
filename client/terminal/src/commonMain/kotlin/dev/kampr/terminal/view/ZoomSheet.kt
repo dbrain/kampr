@@ -1,11 +1,9 @@
 package dev.kampr.terminal.view
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,7 +16,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -27,26 +27,26 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.Divider
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
-import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.gestureAction
+import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.touchable
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import kotlin.math.abs
 
 // A key step is a wheel click, so the two agree; an arrow is the fine one, which is the whole
@@ -178,7 +178,9 @@ fun ZoomSheet(
                         ) {
                             Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Minimap(
-                                    window, totalRows, visibleRows,
+                                    window,
+                                    totalRows,
+                                    visibleRows,
                                     Modifier
                                         .fillMaxWidth()
                                         .height(74.dp)

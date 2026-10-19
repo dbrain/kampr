@@ -33,9 +33,8 @@ private const val PICTURE = "Open shot.png"
 
 private const val ANCHOR_LINE = "The last thing the agent said before the screenshot went up."
 
-private fun tallAnswerEndingOnTheAnchor(): String =
-    (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
-        "\n\n" + ANCHOR_LINE
+private fun tallAnswerEndingOnTheAnchor(): String = (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
+    "\n\n" + ANCHOR_LINE
 
 private fun paneEndingOnAnAttachment(): PaneState {
     val store = KamprStore()
@@ -48,7 +47,7 @@ private fun paneEndingOnAnAttachment(): PaneState {
                 Turn("a-1", "assistant", "2026-08-24T09:00:00.000Z", listOf(Block.Md(tallAnswerEndingOnTheAnchor()))),
                 Turn("u-2", "user", "2026-08-24T09:00:06.000Z", listOf(Block.Md(MARKER, SHOT))),
             ),
-        )
+        ),
     )
     return store.pane(PANE_ID)
 }

@@ -15,8 +15,12 @@ object Palette {
         for (i in 0 until 16) p[i] = ansi16[i]
         val steps = intArrayOf(0, 95, 135, 175, 215, 255)
         var i = 16
-        for (r in 0 until 6) for (g in 0 until 6) for (b in 0 until 6) {
-            p[i++] = argb(steps[r], steps[g], steps[b])
+        for (r in 0 until 6) {
+            for (g in 0 until 6) {
+                for (b in 0 until 6) {
+                    p[i++] = argb(steps[r], steps[g], steps[b])
+                }
+            }
         }
         for (n in 0 until 24) {
             val v = 8 + n * 10
@@ -24,8 +28,7 @@ object Palette {
         }
     }
 
-    fun argb(r: Int, g: Int, b: Int): Int =
-        (0xFF shl 24) or ((r and 0xFF) shl 16) or ((g and 0xFF) shl 8) or (b and 0xFF)
+    fun argb(r: Int, g: Int, b: Int): Int = (0xFF shl 24) or ((r and 0xFF) shl 16) or ((g and 0xFF) shl 8) or (b and 0xFF)
 
     fun dim(c: Int): Int {
         val r = ((c shr 16 and 0xFF) * 6) / 10

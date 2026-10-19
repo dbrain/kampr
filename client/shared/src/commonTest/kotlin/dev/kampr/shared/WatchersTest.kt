@@ -61,8 +61,8 @@ class WatchersTest {
                 """{"t":"herd.patch",
                     "added":{"nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],
                              "panes":[{"id":"01JNODE/w3:p2","node_id":"01JNODE","rows":24}]},
-                    "changed":{},"removed_ids":[]}"""
-            ) as ServerMsg.HerdPatch
+                    "changed":{},"removed_ids":[]}""",
+            ) as ServerMsg.HerdPatch,
         )
         assertEquals(0, othersWatching(herd.panes.single()))
 
@@ -70,8 +70,8 @@ class WatchersTest {
             Wire.decode(
                 """{"t":"herd.patch","added":{},
                     "changed":{"panes":[{"id":"01JNODE/w3:p2","node_id":"01JNODE","rows":24,"watchers":3}]},
-                    "removed_ids":[]}"""
-            ) as ServerMsg.HerdPatch
+                    "removed_ids":[]}""",
+            ) as ServerMsg.HerdPatch,
         )
         assertEquals(2, othersWatching(joined.panes.single()))
 
@@ -79,8 +79,8 @@ class WatchersTest {
             Wire.decode(
                 """{"t":"herd.patch","added":{},
                     "changed":{"panes":[{"id":"01JNODE/w3:p2","node_id":"01JNODE","rows":24}]},
-                    "removed_ids":[]}"""
-            ) as ServerMsg.HerdPatch
+                    "removed_ids":[]}""",
+            ) as ServerMsg.HerdPatch,
         )
         assertEquals(0, othersWatching(left.panes.single()), "dropping the key must drop the count")
     }

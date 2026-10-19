@@ -62,13 +62,16 @@ fun speakerSkin(tokens: KamprTokens, speaker: Speaker, agent: String?): SpeakerS
             ground = color.accent.copy(alpha = 0.07f).compositeOver(color.raise),
             label = "you",
         )
+
         // A person's message the harness has not reached. The rail keeps the accent because
         // somebody typed it; the ground drops to the quiet one and the label says outright that it
         // is still waiting, because a card that reads exactly like a turn the agent has taken up
         // moves the disagreement between the two surfaces rather than ending it. Not "you": the
         // queue is the pane's, and a prompt in it may have been sent from the desk.
         Speaker.Queued -> SpeakerSkin(color.accent, color.raise, "queued")
+
         Speaker.Agent -> SpeakerSkin(color.dim, color.surface, agent ?: "agent")
+
         // Quieter than either speaker in every theme, because it is the one row on the screen that
         // nobody said — and `raise` separates it from a reply's ground without a hue that would
         // read as a status somewhere.
@@ -169,4 +172,3 @@ fun BlockFrame(
         )
     }
 }
-

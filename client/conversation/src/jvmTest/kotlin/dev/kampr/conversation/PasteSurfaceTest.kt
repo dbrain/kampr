@@ -150,7 +150,7 @@ class PasteSurfaceTest {
     fun theNodesRefusalReachesThePaneItNames() {
         val (store, pane) = emptyPane()
         store.accept(
-            ServerMsg.Failure("bad_request", "that is larger than this node will take", PANE_ID)
+            ServerMsg.Failure("bad_request", "that is larger than this node will take", PANE_ID),
         )
         assertEquals("that is larger than this node will take", pane.refusal)
     }

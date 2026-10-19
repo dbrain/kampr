@@ -34,14 +34,14 @@ private fun pasteFiles(names: String, mime: String, body: String): Boolean = js(
       document.body.dispatchEvent(event);
       return event.defaultPrevented;
     })()
-    """
+    """,
 )
 
 // Real milliseconds, not the virtual ones `runTest` runs on: what has to elapse here is a
 // browser finishing a `FileReader`, and no test scheduler can advance that.
 @OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSettle(ms: Int): Promise<JsString?> = js(
-    "new Promise(function (resolve) { setTimeout(function () { resolve(null); }, ms); })"
+    "new Promise(function (resolve) { setTimeout(function () { resolve(null); }, ms); })",
 )
 
 private suspend fun settle(ms: Int) {
@@ -58,7 +58,7 @@ private fun pasteText(text: String): Boolean = js(
       document.body.dispatchEvent(event);
       return event.defaultPrevented;
     })()
-    """
+    """,
 )
 
 // There was no way to put a screenshot in front of an agent from a browser: the attach button

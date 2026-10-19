@@ -7,8 +7,8 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.Esc

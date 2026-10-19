@@ -42,7 +42,9 @@ class StyleTable {
         }
         if (s.dim) f = Palette.dim(f)
         if (s.reverse) {
-            val t = f; f = b; b = t
+            val t = f
+            f = b
+            b = t
         }
         if (s.hidden) f = b
         fg[id] = f

@@ -25,17 +25,17 @@ import dev.kampr.shared.model.Cohort
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.Matching
 import dev.kampr.shared.model.cohorts
-import dev.kampr.shared.model.matching
 import dev.kampr.shared.model.fleetTargets
+import dev.kampr.shared.model.matching
 import dev.kampr.shared.model.recipients
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.Palette
 import dev.kampr.shared.wire.FleetCommand
 import dev.kampr.shared.wire.FleetInfo
 import dev.kampr.shared.wire.ManageOp
-import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Question
+import dev.kampr.shared.wire.ServerMsg
 
 // The fleet board: every run, grouped by the fan-out that produced it, with what needs somebody at
 // the top.
@@ -456,12 +456,19 @@ private fun BroadcastConfirm(
 
 private fun describe(fleet: FleetInfo, color: Palette): Pair<String, androidx.compose.ui.graphics.Color> = when {
     fleet.state == "waiting" -> "needs you" to color.blocked
+
     fleet.state == "running" -> "running" to color.working
+
     fleet.state == "quiet" -> (fleet.quietSeconds?.let { "quiet ${it}s" } ?: "quiet") to color.idle
+
     fleet.succeeded -> "done" to color.done
+
     // A run the kernel killed has no exit code, and showing one would call a death a clean finish.
     fleet.signal != null -> "killed · signal ${fleet.signal}" to color.blocked
+
     fleet.exitCode != null -> "failed · exit ${fleet.exitCode}" to color.blocked
+
     fleet.isFinished -> "ended · no status" to color.blocked
+
     else -> fleet.state to color.idle
 }

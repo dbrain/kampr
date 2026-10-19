@@ -76,6 +76,7 @@ fun PaneMenu(
                 MenuItem("Rename…", "Rename $title") { step = MenuStep.Rename }
                 MenuItem("Close", "Close $title", danger = true) { step = MenuStep.Close }
             }
+
             MenuStep.Rename -> {
                 MenuNote("Rename pane")
                 Row(
@@ -96,6 +97,7 @@ fun PaneMenu(
                     )
                 }
             }
+
             MenuStep.Close -> {
                 // Herdr names the thing and counts it before it will act — `Close workspace?` over
                 // `bravo — 1 pane` (#426). One pane is one pane, so the count is the name.
@@ -149,7 +151,7 @@ private fun AnchoredMenu(
             Modifier
                 .fillMaxSize()
                 .gestureAction("Close the menu", onClick = onDismiss)
-                .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss)
+                .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
         )
         BoxWithConstraints {
             var size by remember { mutableStateOf(IntSize.Zero) }
@@ -159,8 +161,11 @@ private fun AnchoredMenu(
             // The box flips upward rather than off the bottom (#426). Zero on the first frame,
             // which places it at the pointer and corrects once it has been measured.
             val y =
-                if (anchor.y + tall + MENU_EDGE > maxHeight) (anchor.y - tall).coerceAtLeast(MENU_EDGE)
-                else anchor.y
+                if (anchor.y + tall + MENU_EDGE > maxHeight) {
+                    (anchor.y - tall).coerceAtLeast(MENU_EDGE)
+                } else {
+                    anchor.y
+                }
             Column(
                 Modifier
                     .offset(x, y)

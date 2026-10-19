@@ -10,10 +10,9 @@ import kotlin.test.assertEquals
 private const val PANE = "01JKAMPRNODE0000000000000/w1:p1"
 private const val LIVE = "live"
 
-private fun prose(id: String, text: String) =
-    Turn(id = id, role = "assistant", blocks = listOf(Block.Md(text)))
+private fun prose(id: String, text: String) = Turn(id = id, role = "assistant", blocks = listOf(Block.Md(text)))
 
-private fun ConvoTurn(vararg turns: Turn) = ServerMsg.ConvoTurn(pane = PANE, sub = null, turns = turns.toList())
+private fun convoTurn(vararg turns: Turn) = ServerMsg.ConvoTurn(pane = PANE, sub = null, turns = turns.toList())
 
 // The operator, watching a message arrive: *"the conversation pane when a message is being streamed
 // — it seems to bounce all around the shop, editing parts of the message in the middle of the
@@ -34,16 +33,16 @@ class LivePreviewPlacementTest {
     @Test
     fun aSecondMessagesPreviewIsDrawnAtTheEndRatherThanInTheSlotTheFirstOneLeft() {
         val store = KamprStore()
-        store.accept(ConvoTurn(prose("a-1", "the first answer")))
-        store.accept(ConvoTurn(prose(LIVE, "the second answer, half written")))
+        store.accept(convoTurn(prose("a-1", "the first answer")))
+        store.accept(convoTurn(prose(LIVE, "the second answer, half written")))
         assertEquals(listOf("a-1", LIVE), visible(store), "a preview opens at the end of the transcript")
 
         // The record lands and the preview is withdrawn, which is the shape a client is sent.
-        store.accept(ConvoTurn(Turn(id = LIVE, role = "assistant")))
-        store.accept(ConvoTurn(prose("a-2", "the second answer")))
+        store.accept(convoTurn(Turn(id = LIVE, role = "assistant")))
+        store.accept(convoTurn(prose("a-2", "the second answer")))
         assertEquals(listOf("a-1", "a-2"), visible(store))
 
-        store.accept(ConvoTurn(prose(LIVE, "the third answer, half written")))
+        store.accept(convoTurn(prose(LIVE, "the third answer, half written")))
         assertEquals(
             listOf("a-1", "a-2", LIVE),
             visible(store),
@@ -57,10 +56,10 @@ class LivePreviewPlacementTest {
     @Test
     fun aPreviewFollowsTheMessageItIsAnAnswerTo() {
         val store = KamprStore()
-        store.accept(ConvoTurn(prose(LIVE, "an answer being written")))
-        store.accept(ConvoTurn(Turn(id = LIVE, role = "assistant")))
-        store.accept(ConvoTurn(Turn(id = "u-1", role = "user", blocks = listOf(Block.Md("and now this")))))
-        store.accept(ConvoTurn(prose(LIVE, "answering the new one")))
+        store.accept(convoTurn(prose(LIVE, "an answer being written")))
+        store.accept(convoTurn(Turn(id = LIVE, role = "assistant")))
+        store.accept(convoTurn(Turn(id = "u-1", role = "user", blocks = listOf(Block.Md("and now this")))))
+        store.accept(convoTurn(prose(LIVE, "answering the new one")))
         assertEquals(
             listOf("u-1", LIVE),
             visible(store),

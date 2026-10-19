@@ -95,10 +95,9 @@ private const val MIXED = """
 // whether or not it holds a row.
 private const val NO_PREFS = """{"t":"prefs","panes":{}}"""
 
-private fun remembering(vararg views: Pair<String, PaneView>): String =
-    views.joinToString(",", """{"t":"prefs","panes":{""", "}}") { (pane, view) ->
-        """"$pane":{"view":"${view.key}"}"""
-    }
+private fun remembering(vararg views: Pair<String, PaneView>): String = views.joinToString(",", """{"t":"prefs","panes":{""", "}}") { (pane, view) ->
+    """"$pane":{"view":"${view.key}"}"""
+}
 
 private fun KamprStore.feed(frame: String) = accept(Wire.decode(frame) ?: error("undecodable: $frame"))
 
@@ -114,8 +113,7 @@ private fun state(vararg greeting: String): Pair<AppState, CoroutineScope> {
     return AppState(scope, store, paired(), null) to scope
 }
 
-private fun opened(app: AppState): Pair<String, PaneView>? =
-    (app.screen as? Screen.Pane)?.let { it.paneId to it.view }
+private fun opened(app: AppState): Pair<String, PaneView>? = (app.screen as? Screen.Pane)?.let { it.paneId to it.view }
 
 private fun tokens(scale: TypeScale) = themeOf("soft").on(Ground.Dark).let { spec ->
     val fonts = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
@@ -396,10 +394,7 @@ class PaneSwitchOrderTest {
         assertTrue(conversation < split, "Split is not last: $terminal, $conversation, $split")
     }
 
-    private fun ComposeUiTest.leftEdgeOf(label: String): Float =
-        onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot.left
-
-
+    private fun ComposeUiTest.leftEdgeOf(label: String): Float = onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot.left
 }
 
 private const val NOW = 1_787_000_000_000.0

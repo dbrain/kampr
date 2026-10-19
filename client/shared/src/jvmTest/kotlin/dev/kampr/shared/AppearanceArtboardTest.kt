@@ -20,7 +20,10 @@ class AppearanceArtboardTest {
     fun theThemeGridRendersAtEveryWidthItsColumnCountChangesAt() {
         for (width in BODIES) {
             render(
-                width.dp, 900.dp, themeOf("soft"), TypeScale.Desk,
+                width.dp,
+                900.dp,
+                themeOf("soft"),
+                TypeScale.Desk,
                 File("build/artboards/appearance-$width.png"),
                 ground = Ground.Dark,
                 density = Density(1.5f),
@@ -35,7 +38,10 @@ class AppearanceArtboardTest {
     @Test
     fun theThemeGridRendersOnAnUltrawide() {
         render(
-            3440.dp, 900.dp, themeOf("soft"), TypeScale.Desk,
+            3440.dp,
+            900.dp,
+            themeOf("soft"),
+            TypeScale.Desk,
             File("build/artboards/appearance-3440.png"),
             ground = Ground.Dark,
             density = Density(1f),

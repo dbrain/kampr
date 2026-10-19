@@ -82,7 +82,9 @@ private fun paneItem(pane: PaneInfo, node: String): PaletteItem {
 }
 
 private fun place(title: String, detail: String, screen: Screen, words: String) = PaletteItem(
-    title, detail, PaletteTarget.Go(screen),
+    title,
+    detail,
+    PaletteTarget.Go(screen),
     listOf(PaletteField(title, 3), PaletteField(words, 1)),
 )
 
@@ -98,8 +100,7 @@ fun paletteSearch(items: List<PaletteItem>, query: String): List<PaletteItem> {
         .map { it.first }
 }
 
-private fun bestScore(item: PaletteItem, word: String): Int? =
-    item.fields.maxOfOrNull { field -> fuzzy(field.text.lowercase(), word) * field.weight }?.takeIf { it > 0 }
+private fun bestScore(item: PaletteItem, word: String): Int? = item.fields.maxOfOrNull { field -> fuzzy(field.text.lowercase(), word) * field.weight }?.takeIf { it > 0 }
 
 internal fun fuzzy(text: String, word: String): Int {
     if (word.isEmpty() || text.isEmpty()) return 0

@@ -5,8 +5,8 @@ import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.render.ModeSelector
 import dev.kampr.terminal.render.RenderMode

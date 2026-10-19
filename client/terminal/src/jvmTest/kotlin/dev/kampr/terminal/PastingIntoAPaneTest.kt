@@ -9,8 +9,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
@@ -138,7 +138,7 @@ class PastingIntoAPaneTest {
         longPressTheGrid(across = 0.97f)
 
         val pill = onNodeWithContentDescription(BLOCK).getUnclippedBoundsInRoot()
-        assertTrue(pill.right <= WIDTH, "the pill's last button ends at ${pill.right}, past the ${WIDTH} screen")
+        assertTrue(pill.right <= WIDTH, "the pill's last button ends at ${pill.right}, past the $WIDTH screen")
         assertTrue(pill.left >= 0.dp, "and the pill was pushed off the other edge instead")
     }
 

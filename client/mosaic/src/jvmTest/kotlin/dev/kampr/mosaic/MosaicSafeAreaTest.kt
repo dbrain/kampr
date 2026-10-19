@@ -56,12 +56,10 @@ private class ChromeProbe(private val inner: PaneSurfaces = TerminalSurfaces()) 
     }
 
     @Composable
-    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        inner.Conversation(pane, info, modifier)
+    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = inner.Conversation(pane, info, modifier)
 
     @Composable
-    override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) =
-        inner.KeyRow(pane, compact, modifier)
+    override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = inner.KeyRow(pane, compact, modifier)
 
     @Composable
     override fun Zoom(pane: PaneState, modifier: Modifier) = inner.Zoom(pane, modifier)

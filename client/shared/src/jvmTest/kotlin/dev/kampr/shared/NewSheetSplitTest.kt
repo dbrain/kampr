@@ -36,10 +36,9 @@ private const val MANAGER_HELLO =
     """{"t":"hello","protocol":1,"node_id":"01JNODE","node_name":"comingclean","build":"test",""" +
         """"role":"full","caps":{"manage":true},"security":{"tier":0,"passkeys":false}}"""
 
-private fun herdOf(vararg ids: String) =
-    """{"t":"herd","nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],"panes":[""" +
-        ids.joinToString(",") { """{"id":"$it","node_id":"01JNODE","workspace_id":"01JNODE/w1","workspace":"kampr"}""" } +
-        "]}"
+private fun herdOf(vararg ids: String) = """{"t":"herd","nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],"panes":[""" +
+    ids.joinToString(",") { """{"id":"$it","node_id":"01JNODE","workspace_id":"01JNODE/w1","workspace":"kampr"}""" } +
+    "]}"
 
 private fun KamprStore.take(frame: String) = accept(Wire.decode(frame) ?: error("undecodable: $frame"))
 

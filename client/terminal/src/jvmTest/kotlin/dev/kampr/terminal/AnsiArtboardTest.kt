@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
@@ -17,33 +18,32 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.CompositionLocalProvider
+import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.StyleTable
+import dev.kampr.shared.theme.AllThemes
 import dev.kampr.shared.theme.FamilyId
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
 import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalGround
 import dev.kampr.shared.theme.LocalTokens
+import dev.kampr.shared.theme.TerminalPalette
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.on
+import dev.kampr.shared.theme.terminalSkin
 import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.wire.ClientMsg
-import dev.kampr.shared.wire.PaneInfo
-import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.model.PaneState
-import dev.kampr.shared.model.StyleTable
-import dev.kampr.shared.theme.AllThemes
-import dev.kampr.shared.theme.TerminalPalette
-import dev.kampr.shared.theme.terminalSkin
 import dev.kampr.shared.wire.ColorSpec
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
+import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Style
 import dev.kampr.terminal.render.GridRenderer
@@ -54,7 +54,6 @@ import dev.kampr.terminal.render.TextCache
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
-
 
 private fun rgb(hex: Int) = ColorSpec.Rgb((hex shr 16) and 0xFF, (hex shr 8) and 0xFF, hex and 0xFF)
 
@@ -80,8 +79,7 @@ private val styles = listOf(
     Style(fg = ColorSpec.Indexed(7), underline = true),
 )
 
-private fun row(index: Int, vararg cells: Pair<Int, String>) =
-    RowDiff(index, cells.map { Run(it.first, it.second) })
+private fun row(index: Int, vararg cells: Pair<Int, String>) = RowDiff(index, cells.map { Run(it.first, it.second) })
 
 private val transcript = listOf(
     row(0, 4 to "✻ Welcome to Claude Code", 0 to "  ", 3 to "v2.4.1"),
@@ -124,8 +122,7 @@ private fun pane(): PaneState {
 
 private fun terminalFamily(): FontFamily {
     val dir = File("../shared/src/commonMain/composeResources/font")
-    fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) =
-        Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
+    fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) = Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
     return FontFamily(
         face("terminalmono_regular", FontWeight.W400),
         face("terminalmono_bold", FontWeight.W700),
@@ -133,7 +130,6 @@ private fun terminalFamily(): FontFamily {
         face("terminalmono_bolditalic", FontWeight.W700, FontStyle.Italic),
     )
 }
-
 
 private object NoIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit
@@ -145,24 +141,34 @@ private fun uiFamily(id: FamilyId): FontFamily {
     fun face(name: String, weight: FontWeight) = Font(name, File(dir, "$name.ttf").readBytes(), weight)
     return when (id) {
         FamilyId.Manrope -> FontFamily(
-            face("manrope_400", FontWeight.W400), face("manrope_500", FontWeight.W500),
-            face("manrope_600", FontWeight.W600), face("manrope_700", FontWeight.W700),
+            face("manrope_400", FontWeight.W400),
+            face("manrope_500", FontWeight.W500),
+            face("manrope_600", FontWeight.W600),
+            face("manrope_700", FontWeight.W700),
             face("manrope_800", FontWeight.W800),
         )
+
         FamilyId.IbmPlexMono -> FontFamily(
-            face("ibmplexmono_400", FontWeight.W400), face("ibmplexmono_500", FontWeight.W500),
+            face("ibmplexmono_400", FontWeight.W400),
+            face("ibmplexmono_500", FontWeight.W500),
             face("ibmplexmono_600", FontWeight.W600),
         )
+
         FamilyId.JetBrainsMono -> FontFamily(
-            face("jetbrainsmono_400", FontWeight.W400), face("jetbrainsmono_500", FontWeight.W500),
+            face("jetbrainsmono_400", FontWeight.W400),
+            face("jetbrainsmono_500", FontWeight.W500),
             face("jetbrainsmono_700", FontWeight.W700),
         )
+
         FamilyId.InstrumentSans -> FontFamily(
-            face("instrumentsans_400", FontWeight.W400), face("instrumentsans_500", FontWeight.W500),
+            face("instrumentsans_400", FontWeight.W400),
+            face("instrumentsans_500", FontWeight.W500),
             face("instrumentsans_600", FontWeight.W600),
         )
+
         FamilyId.Archivo -> FontFamily(
-            face("archivo_500", FontWeight.W500), face("archivo_700", FontWeight.W700),
+            face("archivo_500", FontWeight.W500),
+            face("archivo_700", FontWeight.W700),
             face("archivo_900", FontWeight.W900),
         )
     }

@@ -18,11 +18,9 @@ import kotlin.test.assertTrue
 private const val AA_BODY = 4.5f
 private const val AA_LARGE = 3.0f
 
-private fun linear(c: Float): Float =
-    if (c <= 0.04045f) c / 12.92f else ((c + 0.055f) / 1.055f).pow(2.4f)
+private fun linear(c: Float): Float = if (c <= 0.04045f) c / 12.92f else ((c + 0.055f) / 1.055f).pow(2.4f)
 
-private fun luminance(c: Color): Float =
-    0.2126f * linear(c.red) + 0.7152f * linear(c.green) + 0.0722f * linear(c.blue)
+private fun luminance(c: Color): Float = 0.2126f * linear(c.red) + 0.7152f * linear(c.green) + 0.0722f * linear(c.blue)
 
 private fun contrast(a: Color, b: Color): Float {
     val la = luminance(a)

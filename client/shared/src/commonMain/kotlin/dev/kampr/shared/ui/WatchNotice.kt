@@ -10,12 +10,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
 import dev.kampr.shared.model.WatchPresence
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
+import kotlinx.coroutines.delay
 
 private const val SETTLE_TICK_MS = 200L
 

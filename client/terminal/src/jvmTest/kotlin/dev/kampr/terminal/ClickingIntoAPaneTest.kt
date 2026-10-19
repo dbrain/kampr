@@ -30,8 +30,7 @@ private class ClickIo(
         if (msg is ClientMsg.InputText) typed += msg.text
     }
     override fun prefs(paneId: String) = PanePrefs()
-    override fun info(paneId: String) =
-        PaneInfo(paneId, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)
+    override fun info(paneId: String) = PaneInfo(paneId, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)
 }
 
 // A harness holding the whole screen: rows of its own chrome, nothing under the tap that reads as a
@@ -60,8 +59,7 @@ private fun withRing(pane: PaneState): PaneState {
 // `deskTerminal`'s 1440x900 is laid out inside a 1024x768 root and the rows below the fold are
 // painted at negative offsets — real geometry, unreachable pointer.
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.desk(pane: PaneState, session: PaneSession, io: ClickIo) =
-    gridTerminal(pane, session, io, width = 1000.dp, height = 740.dp, bars = SafeArea.None)
+private fun ComposeUiTest.desk(pane: PaneState, session: PaneSession, io: ClickIo) = gridTerminal(pane, session, io, width = 1000.dp, height = 740.dp, bars = SafeArea.None)
 
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.tapped(io: ClickIo, pane: PaneState = panel(), above: Int = 0): List<String> {

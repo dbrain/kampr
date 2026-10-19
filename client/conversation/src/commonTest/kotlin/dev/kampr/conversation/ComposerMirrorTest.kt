@@ -14,8 +14,7 @@ private const val RIGHT = "\u001b[C"
 private fun drawn(text: String, caret: Int = text.length) = DeskLine(text, "\u0003", caret, KEYS)
 
 // A mirror that has heard the pane's box drawn and holding `pane`, with the reply box in step.
-private fun inStep(pane: String = ""): ComposerMirror =
-    ComposerMirror().also { it.heard(drawn(pane), box = pane, now = 0) }
+private fun inStep(pane: String = ""): ComposerMirror = ComposerMirror().also { it.heard(drawn(pane), box = pane, now = 0) }
 
 class ComposerMirrorTest {
     private data class Edit(val name: String, val pane: String, val caret: Int, val after: String, val keys: List<String>)

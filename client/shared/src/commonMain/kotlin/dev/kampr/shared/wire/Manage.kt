@@ -18,9 +18,11 @@ enum class ZoomMode(val wire: String) { Toggle("toggle"), On("on"), Off("off") }
 enum class SizeMode(val wire: String) {
     Once("once"),
     Hold("hold"),
+
     // `Hold` with an owner and an undo: the node ties it to this websocket, so it ends when
     // the socket does however it ends, and letting go puts the pane back (ADR 0013).
     Match("match"),
+
     // `Match` for a view smaller than a desk: the node enlarges only the dimensions the pane is
     // short of, and holds nothing when it is short of none.
     Grow("grow"),
@@ -212,21 +214,25 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
                 put("env", buildJsonObject { env.forEach { (k, v) -> put(k, v) } })
             }
         }
+
         is ManageOp.TabCreate -> {
             put("at", at)
             opt("label", label)
             opt("cwd", cwd)
         }
+
         is ManageOp.PaneSplit -> {
             put("at", at)
             put("direction", direction.wire)
             if (ratio != null) put("ratio", JsonPrimitive(ratio))
             opt("cwd", cwd)
         }
+
         is ManageOp.PaneZoom -> {
             put("at", at)
             put("mode", mode.wire)
         }
+
         is ManageOp.PaneSize -> {
             put("at", at)
             if (cols != null) put("cols", JsonPrimitive(cols))
@@ -234,21 +240,26 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             // Omitted when it is the default, matching the fixture's plain `pane.size` case.
             if (mode != SizeMode.Once) put("mode", mode.wire)
         }
+
         is ManageOp.Rename -> {
             put("at", at)
             put("label", label?.let(::JsonPrimitive) ?: JsonNull)
         }
+
         is ManageOp.Close -> {
             put("at", at)
             if (group) put("group", true)
         }
+
         is ManageOp.Focus -> put("at", at)
+
         is ManageOp.AgentStart -> {
             put("at", at)
             put("kind", kind)
             opt("name", name)
             put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
         }
+
         is ManageOp.WorktreeCreate -> {
             put("node", node)
             put("branch", branch)
@@ -256,29 +267,37 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             opt("cwd", cwd)
             opt("label", label)
         }
+
         is ManageOp.WorktreeOpen -> {
             put("node", node)
             put("path", path)
             opt("cwd", cwd)
             opt("label", label)
         }
+
         is ManageOp.LayoutExport -> put("at", at)
+
         is ManageOp.LayoutApply -> {
             put("at", at)
             put("layout", layout)
         }
+
         is ManageOp.SessionCreate -> {
             put("node", node)
             put("name", name)
         }
+
         is ManageOp.FleetRun -> {
             put("node", node)
             put("cohort", cohort)
             put("command", command)
             opt("cwd", cwd)
         }
+
         is ManageOp.FleetStop -> put("at", at)
+
         is ManageOp.FleetForget -> put("at", at)
+
         is ManageOp.FleetSave -> {
             // `entry` and not `at`: `at` is routed, and a book entry names no host, so putting one
             // there would send this op down a mesh link looking for the node that owns it.
@@ -287,7 +306,9 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             opt("cwd", cwd)
             opt("label", label)
         }
+
         is ManageOp.FleetDrop -> put("entry", entry)
+
         is ManageOp.SessionStop -> {
             put("node", node)
             put("name", name)

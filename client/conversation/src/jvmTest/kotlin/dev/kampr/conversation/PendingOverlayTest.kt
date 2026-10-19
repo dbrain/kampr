@@ -8,8 +8,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.ComposeUiTest
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -83,8 +83,11 @@ private val SHORT = ServerMsg.Convo(
 
 private fun asked(convo: ServerMsg.Convo?): PaneState {
     val store = KamprStore()
-    if (convo == null) store.accept(requireNotNull(Wire.decode(RICH_CONVO)) { "undecodable frame" })
-    else store.accept(convo)
+    if (convo == null) {
+        store.accept(requireNotNull(Wire.decode(RICH_CONVO)) { "undecodable frame" })
+    } else {
+        store.accept(convo)
+    }
     store.accept(ASKED)
     return store.pane(PANE_ID)
 }
@@ -243,8 +246,7 @@ private fun ComposeUiTest.endOfTheTranscript(): Dp {
 
 // Clipped bounds, so a turn scrolled behind the card reports the sliver of itself that is still
 // painted. A node clipped away entirely comes back with no area rather than absent.
-private fun Rect.overlapsVisibly(other: Rect): Boolean =
-    width > 0.5f && height > 0.5f && overlaps(other)
+private fun Rect.overlapsVisibly(other: Rect): Boolean = width > 0.5f && height > 0.5f && overlaps(other)
 
 // The card's own answer chips merge their labels and so match a search for text as readily as a
 // turn does — they are the card, not something under it.

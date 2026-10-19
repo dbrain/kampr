@@ -40,7 +40,10 @@ private fun ComposeUiTest.sweepsNothing(size: Pair<Dp, Dp>) {
         // again finishes where it started, and the round trip is the flash the operator reported.
         assertEquals(
             steps.map { resting },
-            steps.map { row -> caretTo(pane, row); session.view.scrollY },
+            steps.map { row ->
+                caretTo(pane, row)
+                session.view.scrollY
+            },
             "the caret's round trip across the grid took the surface with it",
         )
     }
@@ -113,13 +116,11 @@ private fun ComposeUiTest.stopsAtTheRecord(size: Pair<Dp, Dp>) {
 @OptIn(ExperimentalTestApi::class)
 class BrowserFollowingTest {
     @Test
-    fun aRepaintThatSweepsTheCaretAcrossATallGridMovesNothingOnABrowserDesk() =
-        runComposeUiTest { sweepsNothing(DESK) }
+    fun aRepaintThatSweepsTheCaretAcrossATallGridMovesNothingOnABrowserDesk() = runComposeUiTest { sweepsNothing(DESK) }
 
     // "mobile is similarly zoomed in a lot" — the same grid in a phone browser's rectangle.
     @Test
-    fun aRepaintThatSweepsTheCaretAcrossATallGridMovesNothingOnABrowserPhone() =
-        runComposeUiTest { sweepsNothing(PHONE) }
+    fun aRepaintThatSweepsTheCaretAcrossATallGridMovesNothingOnABrowserPhone() = runComposeUiTest { sweepsNothing(PHONE) }
 
     // The other half of the same report, and the one that needs a hand: the wheel on a browser
     // desk. The band's floor used to be the drag's own clamp, so everything below the caret's

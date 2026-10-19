@@ -10,15 +10,13 @@ plugins {
     alias(libs.plugins.ktlint) apply false
 }
 
-// The baseline holds every finding that predates the lint, so `check` is green on the code as it
-// stands and fails on anything new. Shrink it by fixing a file and regenerating with
-// `./gradlew ktlintGenerateBaseline`; never grow it to make a change pass.
 val ktlintVersion = libs.versions.ktlint.cli.get()
 
 subprojects {
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
     extensions.configure<org.jlleitschuh.gradle.ktlint.KtlintExtension> {
         version.set(ktlintVersion)
-        baseline.set(rootProject.file("config/ktlint/baseline-${path.removePrefix(":").replace(':', '-')}.xml"))
+        // Compose's resource generator registers its output as a source set, and it is not ours to style.
+        filter { exclude { it.file.path.contains("/build/generated/") } }
     }
 }

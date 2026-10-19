@@ -29,8 +29,8 @@ import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.TerminalView
 import kotlin.test.assertTrue
@@ -125,8 +125,7 @@ internal val DESK_WIDTH = 1440.dp
 internal val DESK_HEIGHT = 900.dp
 
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.deskTerminal(pane: PaneState, session: PaneSession, io: PaneIo): Pasteboard =
-    gridTerminal(pane, session, io, DESK_WIDTH, DESK_HEIGHT, SafeArea.None)
+internal fun ComposeUiTest.deskTerminal(pane: PaneState, session: PaneSession, io: PaneIo): Pasteboard = gridTerminal(pane, session, io, DESK_WIDTH, DESK_HEIGHT, SafeArea.None)
 
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.tapCell(session: PaneSession, row: Int, col: Int): Offset {

@@ -38,8 +38,7 @@ private const val NOTES = "/home/u/demo/notes.md"
 // The shape the report arrived in: an agent produced audio with a `Bash` call — whose `summary` is
 // the tool's `description`, not its output path — and then typed the paths into its reply. There
 // is no `att` on any of it and no tool card that names it, so prose is the only thing the pane has.
-private fun said(text: String, role: String = "assistant") =
-    """{"t":"convo","pane":"$PANE_ID","cursor":"s1","more":false,"turns":[
+private fun said(text: String, role: String = "assistant") = """{"t":"convo","pane":"$PANE_ID","cursor":"s1","more":false,"turns":[
         {"id":"s1","role":"$role","blocks":[{"b":"md","text":"$text"}]}]}"""
 
 private val SPOKEN = said("rendered it to $CLIP \\u2014 my notes are in $NOTES")
@@ -55,8 +54,7 @@ private class Decoder(
 
     override fun canPlay(mime: String?): Boolean = audioType(mime) in types
 
-    override fun open(bytes: ByteArray, mime: String?): Voice? =
-        if (deaf) null else Sounding().also { latest = it }
+    override fun open(bytes: ByteArray, mime: String?): Voice? = if (deaf) null else Sounding().also { latest = it }
 }
 
 private class Sounding : Voice {

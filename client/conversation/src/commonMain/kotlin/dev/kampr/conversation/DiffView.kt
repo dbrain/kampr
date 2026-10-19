@@ -21,10 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.md.markUrls
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.glyphFallback
 
 enum class DiffKind { Added, Removed, Context, Hunk, Meta }
 
@@ -37,9 +37,13 @@ fun parseDiff(text: String): List<DiffLine> = text.split('\n').map { line ->
     when {
         line.startsWith("***") || line.startsWith("+++") || line.startsWith("---") ->
             DiffLine(DiffKind.Meta, line)
+
         line.startsWith("@@") -> DiffLine(DiffKind.Hunk, line)
+
         line.startsWith("+") -> DiffLine(DiffKind.Added, line)
+
         line.startsWith("-") -> DiffLine(DiffKind.Removed, line)
+
         else -> DiffLine(DiffKind.Context, line)
     }
 }

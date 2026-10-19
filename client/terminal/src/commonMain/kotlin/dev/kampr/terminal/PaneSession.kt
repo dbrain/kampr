@@ -8,8 +8,8 @@ import androidx.compose.runtime.setValue
 import dev.kampr.terminal.file.FilePeek
 import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.guard.ConfirmState
-import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.KeyTrace
+import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.LocalEcho
 import dev.kampr.terminal.input.ScrollTrace
 import dev.kampr.terminal.review.ReviewState

@@ -29,24 +29,34 @@ internal fun family(id: FamilyId): FontFamily {
     fun face(name: String, weight: FontWeight) = Font(name, File(dir, "$name.ttf").readBytes(), weight)
     return when (id) {
         FamilyId.Manrope -> FontFamily(
-            face("manrope_400", FontWeight.W400), face("manrope_500", FontWeight.W500),
-            face("manrope_600", FontWeight.W600), face("manrope_700", FontWeight.W700),
+            face("manrope_400", FontWeight.W400),
+            face("manrope_500", FontWeight.W500),
+            face("manrope_600", FontWeight.W600),
+            face("manrope_700", FontWeight.W700),
             face("manrope_800", FontWeight.W800),
         )
+
         FamilyId.IbmPlexMono -> FontFamily(
-            face("ibmplexmono_400", FontWeight.W400), face("ibmplexmono_500", FontWeight.W500),
+            face("ibmplexmono_400", FontWeight.W400),
+            face("ibmplexmono_500", FontWeight.W500),
             face("ibmplexmono_600", FontWeight.W600),
         )
+
         FamilyId.JetBrainsMono -> FontFamily(
-            face("jetbrainsmono_400", FontWeight.W400), face("jetbrainsmono_500", FontWeight.W500),
+            face("jetbrainsmono_400", FontWeight.W400),
+            face("jetbrainsmono_500", FontWeight.W500),
             face("jetbrainsmono_700", FontWeight.W700),
         )
+
         FamilyId.InstrumentSans -> FontFamily(
-            face("instrumentsans_400", FontWeight.W400), face("instrumentsans_500", FontWeight.W500),
+            face("instrumentsans_400", FontWeight.W400),
+            face("instrumentsans_500", FontWeight.W500),
             face("instrumentsans_600", FontWeight.W600),
         )
+
         FamilyId.Archivo -> FontFamily(
-            face("archivo_500", FontWeight.W500), face("archivo_700", FontWeight.W700),
+            face("archivo_500", FontWeight.W500),
+            face("archivo_700", FontWeight.W700),
             face("archivo_900", FontWeight.W900),
         )
     }

@@ -8,9 +8,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -32,7 +32,9 @@ private const val PIN = "Put away the reply you are inside"
 // Taller than the phone it is read on, which is the whole condition for pinning anything: the
 // header of a message this long is off the top of the screen by the time its end is on it.
 private val LONG = Turn(
-    "a-2", "assistant", "2026-08-23T09:00:00.000Z",
+    "a-2",
+    "assistant",
+    "2026-08-23T09:00:00.000Z",
     listOf(
         Block.Md(
             (listOf(OPENS) + (1..60).map { "Line $it of the answer, long enough to hold the column." } + ENDS)

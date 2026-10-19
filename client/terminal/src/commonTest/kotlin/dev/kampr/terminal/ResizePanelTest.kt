@@ -13,8 +13,7 @@ import kotlin.test.assertTrue
 // controller lets go (#219), so "fit this pane to my screen" from a phone would leave that pane at
 // phone width for every other client, with nothing but another resize to undo it.
 class ResizePanelTest {
-    private fun sizing(viewCols: Int, viewRows: Int) =
-        PaneSizing(cols = 94, rows = 40, viewCols = viewCols, viewRows = viewRows, held = false)
+    private fun sizing(viewCols: Int, viewRows: Int) = PaneSizing(cols = 94, rows = 40, viewCols = viewCols, viewRows = viewRows, held = false)
 
     @Test
     fun aViewTooNarrowToGiveAPaneIsRefused() {

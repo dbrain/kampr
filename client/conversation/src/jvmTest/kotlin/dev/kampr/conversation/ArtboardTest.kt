@@ -1,40 +1,39 @@
 package dev.kampr.conversation
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.net.AttachmentBytes
-import androidx.compose.runtime.CompositionLocalProvider
-import dev.kampr.shared.ui.LocalPaneIo
-import kotlinx.coroutines.runBlocking
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.theme.PhosphorTheme
+import dev.kampr.shared.theme.SoftTheme
+import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.PaneScreenDesktop
+import dev.kampr.shared.ui.PaneScreenMobile
+import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
-import dev.kampr.shared.theme.SoftTheme
-import dev.kampr.shared.theme.PhosphorTheme
-import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.ui.PaneScreenDesktop
-import dev.kampr.shared.ui.PaneScreenMobile
-import dev.kampr.shared.ui.PaneView
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 private val OUT = File("build/artboards")
 
-private fun spoken(id: String, role: String, at: String, text: String) =
-    Turn(id, role, at, listOf(Block.Md(text)))
+private fun spoken(id: String, role: String, at: String, text: String) = Turn(id, role, at, listOf(Block.Md(text)))
 
 class ArtboardTest {
     private fun mobile(landscape: Boolean): @Composable () -> Unit = {
@@ -54,8 +53,12 @@ class ArtboardTest {
     @Test
     fun portraitArtboardRenders() {
         val image = renderArtboard(
-            PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
-            File(OUT, "conversation-portrait.png"), content = mobile(landscape = false),
+            PORTRAIT.first,
+            PORTRAIT.second,
+            SoftTheme,
+            TypeScale.Phone,
+            File(OUT, "conversation-portrait.png"),
+            content = mobile(landscape = false),
         )
         assertTrue(image.width == 780 && image.height == 1688, "${image.width}x${image.height}")
     }
@@ -68,18 +71,26 @@ class ArtboardTest {
             val store = KamprStore()
             store.accept(
                 ServerMsg.Convo(
-                    pane = PANE_ID, cursor = "u-1", more = false,
+                    pane = PANE_ID,
+                    cursor = "u-1",
+                    more = false,
                     turns = listOf(
                         spoken(
-                            "u-1", "user", "2026-08-20T09:00:01Z",
+                            "u-1",
+                            "user",
+                            "2026-08-20T09:00:01Z",
                             "which keys does the grammar accept, and does the review strip already draw them?",
                         ),
                         spoken(
-                            "a-2", "assistant", "2026-08-20T09:00:22Z",
+                            "a-2",
+                            "assistant",
+                            "2026-08-20T09:00:22Z",
                             "Six.\n\nThey are in the probe log beside the measurement that established each one.",
                         ),
                         Turn(
-                            "a-3", "assistant", "2026-08-20T09:02:41Z",
+                            "a-3",
+                            "assistant",
+                            "2026-08-20T09:02:41Z",
                             listOf(Block.Tool("Read", "docs/03-probe-log.md", 74, "done")),
                         ),
                         spoken("a-4", "assistant", "2026-08-20T09:04:22Z", "The strip draws four of them."),
@@ -99,12 +110,16 @@ class ArtboardTest {
             val store = KamprStore()
             store.accept(
                 ServerMsg.Convo(
-                    pane = PANE_ID, cursor = "u-1", more = false,
+                    pane = PANE_ID,
+                    cursor = "u-1",
+                    more = false,
                     turns = listOf(
                         spoken("u-1", "user", "2026-08-20T09:00:01Z", "run the whole gate please"),
                         spoken("a-2", "assistant", "2026-08-20T09:00:04Z", "Running it now."),
                         Turn(
-                            "a-3", "assistant", "2026-08-20T09:00:09Z",
+                            "a-3",
+                            "assistant",
+                            "2026-08-20T09:00:09Z",
                             listOf(Block.Tool("Bash", "cargo test --workspace", null, "running")),
                         ),
                     ),
@@ -113,7 +128,9 @@ class ArtboardTest {
             // Fixed, or the stopwatch in the picture reads a different number every render.
             val at = requireNotNull(parseIsoMillis("2026-08-20T09:02:20Z"))
             ConversationView(
-                store.pane(PANE_ID), demoInfo(status = "working"), Modifier.fillMaxSize(),
+                store.pane(PANE_ID),
+                demoInfo(status = "working"),
+                Modifier.fillMaxSize(),
             ) { at }
         }
     }
@@ -127,7 +144,9 @@ class ArtboardTest {
                 listOf(
                     spoken("a-2", "assistant", "2026-08-20T09:00:04Z", "Running it now."),
                     Turn(
-                        "a-3", "assistant", "2026-08-20T09:04:09Z",
+                        "a-3",
+                        "assistant",
+                        "2026-08-20T09:04:09Z",
                         listOf(Block.Tool("Bash", "cargo test --workspace", 812, "done")),
                     ),
                     spoken("a-4", "assistant", "2026-08-20T09:06:20Z", "All green."),
@@ -186,7 +205,13 @@ class ArtboardTest {
                         info: dev.kampr.shared.wire.PaneInfo?,
                         modifier: Modifier,
                     ) = ImageViewer(
-                        shown.image, headlineOf(SHOT), detailOf(SHOT), {}, {}, null, modifier,
+                        shown.image,
+                        headlineOf(SHOT),
+                        detailOf(SHOT),
+                        {},
+                        {},
+                        null,
+                        modifier,
                     )
                 },
                 landscape = false,
@@ -200,8 +225,12 @@ class ArtboardTest {
     @Test
     fun landscapeArtboardRenders() {
         renderArtboard(
-            LANDSCAPE.first, LANDSCAPE.second, SoftTheme, TypeScale.Phone,
-            File(OUT, "conversation-landscape.png"), content = mobile(landscape = true),
+            LANDSCAPE.first,
+            LANDSCAPE.second,
+            SoftTheme,
+            TypeScale.Phone,
+            File(OUT, "conversation-landscape.png"),
+            content = mobile(landscape = true),
         )
     }
 
@@ -224,8 +253,12 @@ class ArtboardTest {
     @Test
     fun portraitRendersInASecondTheme() {
         renderArtboard(
-            PORTRAIT.first, PORTRAIT.second, PhosphorTheme, TypeScale.Phone,
-            File(OUT, "conversation-portrait-phosphor.png"), content = mobile(landscape = false),
+            PORTRAIT.first,
+            PORTRAIT.second,
+            PhosphorTheme,
+            TypeScale.Phone,
+            File(OUT, "conversation-portrait-phosphor.png"),
+            content = mobile(landscape = false),
         )
     }
 
@@ -295,8 +328,12 @@ class ArtboardTest {
                         // own card is the frame, and an artboard that draws a second one inside it
                         // is a picture of a screen nobody has.
                         TurnView(
-                            turn, "", listOf("${row.turns.first().id}#0"), {},
-                            Modifier.fillMaxWidth(), framed = false,
+                            turn,
+                            "",
+                            listOf("${row.turns.first().id}#0"),
+                            {},
+                            Modifier.fillMaxWidth(),
+                            framed = false,
                         )
                     }
                 }
@@ -314,7 +351,9 @@ class ArtboardTest {
             val now = requireNotNull(parseIsoMillis(at)) + 12 * 60_000
             val ask = Turn("u-1", "user", at, listOf(Block.Md("what did the width inference land on?")))
             val put = Turn(
-                "a-2", "assistant", at,
+                "a-2",
+                "assistant",
+                at,
                 listOf(
                     Block.Md(
                         "## Where the 74 comes from\n\nThe layout rect is not the PTY: it is the pane's " +
@@ -324,7 +363,9 @@ class ArtboardTest {
                 ),
             )
             val open = Turn(
-                "a-3", "assistant", at,
+                "a-3",
+                "assistant",
+                at,
                 listOf(Block.Md("Two panes agreed on 74, and the third\n\ndisagreed until the margin was paid.")),
             )
             Box(Modifier.fillMaxSize().background(Kampr.tokens.color.bg).padding(16.dp)) {

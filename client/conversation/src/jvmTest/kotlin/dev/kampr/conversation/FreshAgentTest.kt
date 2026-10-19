@@ -12,11 +12,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
@@ -50,7 +50,7 @@ private fun ComposeUiTest.conversation(info: PaneInfo, store: KamprStore = Kampr
         CompositionLocalProvider(
             LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
             LocalConnectionStatus provides ConnectionStatus.Live("full"),
-                LocalPaneIo provides io,
+            LocalPaneIo provides io,
             LocalSafeArea provides SafeArea(top = 0.dp, bottom = 0.dp),
         ) {
             ConversationView(pane, info, Modifier.fillMaxSize())
@@ -105,40 +105,42 @@ class FreshAgentTest {
     // The mutation that must fail: keep the cursor across a withdrawal, and the offer stands with
     // another `convo.load` behind it.
     @Test
-    fun aWithdrawnConversationLeavesThePaneReadyToStartANewOneRatherThanPagingTheOldOne() =
-        runComposeUiTest {
-            val store = KamprStore()
-            store.accept(
-                ServerMsg.Convo(
-                    pane = PANE_ID, cursor = "a-1", more = true,
-                    turns = listOf(proseTurn("a-1", "an answer from the run before")),
-                ),
-            )
-            val io = conversation(
-                demoInfo(conversation = false, converses = true, status = "idle"),
-                store,
-            )
-            onNodeWithText("an answer from the run before", substring = true).assertIsDisplayed()
-            val askedWhileItWasOpen = io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size
+    fun aWithdrawnConversationLeavesThePaneReadyToStartANewOneRatherThanPagingTheOldOne() = runComposeUiTest {
+        val store = KamprStore()
+        store.accept(
+            ServerMsg.Convo(
+                pane = PANE_ID,
+                cursor = "a-1",
+                more = true,
+                turns = listOf(proseTurn("a-1", "an answer from the run before")),
+            ),
+        )
+        val io = conversation(
+            demoInfo(conversation = false, converses = true, status = "idle"),
+            store,
+        )
+        onNodeWithText("an answer from the run before", substring = true).assertIsDisplayed()
+        val askedWhileItWasOpen = io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size
 
-            // The withdrawal: every turn back under its own id, carrying nothing.
-            store.accept(
-                ServerMsg.ConvoTurn(
-                    pane = PANE_ID, sub = null,
-                    turns = listOf(Turn("a-1", "assistant", null, emptyList())),
-                ),
-            )
-            waitForIdle()
+        // The withdrawal: every turn back under its own id, carrying nothing.
+        store.accept(
+            ServerMsg.ConvoTurn(
+                pane = PANE_ID,
+                sub = null,
+                turns = listOf(Turn("a-1", "assistant", null, emptyList())),
+            ),
+        )
+        waitForIdle()
 
-            onNodeWithText("nothing written down yet", substring = true).assertIsDisplayed()
-            onNodeWithContentDescription(REPLY).assertIsDisplayed()
-            onNodeWithText("loading earlier turns").assertDoesNotExist()
-            assertEquals(
-                askedWhileItWasOpen,
-                io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size,
-                "the pane asked for an older page of a conversation it has been told to let go of",
-            )
-        }
+        onNodeWithText("nothing written down yet", substring = true).assertIsDisplayed()
+        onNodeWithContentDescription(REPLY).assertIsDisplayed()
+        onNodeWithText("loading earlier turns").assertDoesNotExist()
+        assertEquals(
+            askedWhileItWasOpen,
+            io.sent.filterIsInstance<ClientMsg.ConvoLoad>().size,
+            "the pane asked for an older page of a conversation it has been told to let go of",
+        )
+    }
 
     // The same report again, from the window the withdrawal has not reached yet: *"conversation
     // screen sometimes shows the new conversation pane other times it shows a 404 ... when reusing
@@ -163,7 +165,9 @@ class FreshAgentTest {
         val store = KamprStore()
         store.accept(
             ServerMsg.Convo(
-                pane = PANE_ID, cursor = "a-1", more = true,
+                pane = PANE_ID,
+                cursor = "a-1",
+                more = true,
                 turns = listOf(proseTurn("a-1", "an answer from the run before")),
             ),
         )

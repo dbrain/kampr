@@ -27,7 +27,7 @@ private fun jsSave(name: String, mime: String, base64: String): Boolean = js(
         return false;
       }
     })()
-    """
+    """,
 )
 
 actual fun saveToDevice(name: String, mime: String?, bytes: ByteArray): String? {

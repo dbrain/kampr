@@ -175,8 +175,11 @@ class GridRenderer(private val cache: TextCache) {
                 for (i in c until end) sb.append(chars[base + i])
                 val text = sb.toString()
                 val layout =
-                    if (mode == RenderMode.RUN_CACHE) cache.cachedRun(text, fk)
-                    else cache.shape(text, fk)
+                    if (mode == RenderMode.RUN_CACHE) {
+                        cache.cachedRun(text, fk)
+                    } else {
+                        cache.shape(text, fk)
+                    }
                 ds.drawText(layout, Color(fg), Offset(ox + c * m.cellW, y))
             }
             c = e

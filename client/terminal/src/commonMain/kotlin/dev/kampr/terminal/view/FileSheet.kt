@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -91,14 +91,18 @@ fun FileSheet(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (state) {
                 Peeked.Fetching -> Note("asking the node for $path", tokens.color.working)
+
                 is Peeked.Failed -> Note(state.reason, tokens.color.blocked)
+
                 is Peeked.Saved -> Note("saved to ${state.where}", tokens.color.done)
+
                 is Peeked.Picture -> Image(
                     bitmap = state.image,
                     contentDescription = fileName(path),
                     modifier = Modifier.fillMaxSize().padding(12.dp),
                     contentScale = ContentScale.Fit,
                 )
+
                 is Peeked.Words -> Words(state.text, chromeBottom)
             }
         }
@@ -125,9 +129,11 @@ private fun CopyAll(path: String, text: String, onCopy: (String) -> Unit) {
     }
 }
 
-private fun copyLabel(path: String, lines: Int): String =
-    if (lines > LINES_SHOWN) "Copy all $lines lines of $path, including the ones not shown"
-    else "Copy $path"
+private fun copyLabel(path: String, lines: Int): String = if (lines > LINES_SHOWN) {
+    "Copy all $lines lines of $path, including the ones not shown"
+} else {
+    "Copy $path"
+}
 
 @Composable
 private fun Note(words: String, tint: Color) {

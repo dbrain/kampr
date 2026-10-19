@@ -50,11 +50,16 @@ private fun older(page: Int): List<Turn> = (0 until 6).flatMap { n ->
     listOf(
         Turn("u-p$page-$n", "user", AT, listOf(Block.Md("an older question, $page.$n"))),
         Turn(
-            "a-p$page-$n", "assistant", AT,
+            "a-p$page-$n",
+            "assistant",
+            AT,
             listOf(
                 Block.Md(
-                    if (page == 2 && n == 3) "the deep one: the $NEEDLE column keeps a column back"
-                    else "an older answer, $page.$n",
+                    if (page == 2 && n == 3) {
+                        "the deep one: the $NEEDLE column keeps a column back"
+                    } else {
+                        "an older answer, $page.$n"
+                    },
                 ),
             ),
         ),
@@ -86,6 +91,7 @@ private class SearchingIo(private val store: KamprStore, private val total: Int 
                     total = total,
                 ),
             )
+
             is ClientMsg.ConvoLoad -> {
                 val page = if (msg.before == "u-0") 1 else 2
                 store.accept(
@@ -97,6 +103,7 @@ private class SearchingIo(private val store: KamprStore, private val total: Int 
                     ),
                 )
             }
+
             else -> Unit
         }
     }
@@ -128,8 +135,7 @@ private fun Transcript(store: KamprStore, io: PaneIo) {
 
 @OptIn(ExperimentalTestApi::class)
 class ConvoFindTest {
-    private fun ComposeUiTest.shows(text: String) =
-        onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    private fun ComposeUiTest.shows(text: String) = onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     private fun ComposeUiTest.search(store: KamprStore, io: PaneIo, answered: Boolean = true) {
         setContent { Transcript(store, io) }

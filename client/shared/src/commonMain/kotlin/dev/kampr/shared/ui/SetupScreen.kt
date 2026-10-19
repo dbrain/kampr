@@ -79,7 +79,7 @@ private fun ladderFor(
                 "It opens without browser chrome, and on iOS it is the only way notifications work.",
                 lead = true,
                 onClick = onInstall,
-            )
+            ),
         )
     }
     // `onPasskeys` is the effective answer: the socket may not be up yet, and `/api/node` says the
@@ -93,7 +93,7 @@ private fun ladderFor(
                 "This node is reachable at a name with a certificate, so WebAuthn works here.",
                 lead = true,
                 onClick = onPasskeys,
-            )
+            ),
         )
     } else {
         add(
@@ -103,7 +103,7 @@ private fun ladderFor(
                 "Point your reverse proxy at this port. Nginx Proxy Manager, Caddy, Traefik — anything.",
                 security.unlocks.mapNotNull(unlockCopy::get),
                 lead = true,
-            )
+            ),
         )
     }
     // Whether this node is reachable from outside the house is a deployment posture nothing on
@@ -115,7 +115,7 @@ private fun ladderFor(
                 KamprIcons.globe,
                 "Reach it from anywhere",
                 "Tailscale, or your own domain. Kampr does not care which — it never assumes a tailnet.",
-            )
+            ),
         )
     }
     add(
@@ -123,7 +123,7 @@ private fun ladderFor(
             KamprIcons.nodes,
             "Add another machine",
             "Run Kampr there, paste one join code. It dials out, so it needs no open port.",
-        )
+        ),
     )
 }
 
@@ -596,7 +596,7 @@ private fun PairingMark() {
                         Modifier
                             .weight(1f)
                             .fillMaxSize()
-                            .background(if (on) tokens.color.text else tokens.color.raise)
+                            .background(if (on) tokens.color.text else tokens.color.raise),
                     )
                 }
             }

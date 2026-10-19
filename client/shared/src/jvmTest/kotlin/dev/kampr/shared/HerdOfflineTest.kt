@@ -69,24 +69,23 @@ private val LIVE = ConnectionStatus.Live("full")
 private val OFFLINE = ConnectionStatus.Offline("no route to host", 5_000)
 private val REFUSED = ConnectionStatus.Refused("This node does not know this device.")
 
-private fun layouts(herd: Herd, connection: ConnectionStatus): List<Pair<String, @Composable () -> Unit>> =
-    listOf(
-        "portrait" to {
-            Box(Modifier.size(420.dp, 900.dp)) {
-                HerdPortrait(herd, connection, 0.0, 12.0, emptyList(), {}, null)
-            }
-        },
-        "landscape" to {
-            Box(Modifier.size(900.dp, 420.dp)) {
-                HerdLandscape(herd, connection, 0.0, 12.0, emptyList(), {}, null)
-            }
-        },
-        "sidebar" to {
-            Box(Modifier.size(300.dp, 900.dp)) {
-                HerdSidebar(herd, connection, 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {})
-            }
-        },
-    )
+private fun layouts(herd: Herd, connection: ConnectionStatus): List<Pair<String, @Composable () -> Unit>> = listOf(
+    "portrait" to {
+        Box(Modifier.size(420.dp, 900.dp)) {
+            HerdPortrait(herd, connection, 0.0, 12.0, emptyList(), {}, null)
+        }
+    },
+    "landscape" to {
+        Box(Modifier.size(900.dp, 420.dp)) {
+            HerdLandscape(herd, connection, 0.0, 12.0, emptyList(), {}, null)
+        }
+    },
+    "sidebar" to {
+        Box(Modifier.size(300.dp, 900.dp)) {
+            HerdSidebar(herd, connection, 0.0, 12.0, emptyList(), null, "this device", "full access", {}, {})
+        }
+    },
+)
 
 // A device with no network drew the title, a green dot on "0 nodes" and a void, which is exactly
 // what a healthy node with nothing running on it draws. The client's own spelling of #233.
@@ -94,17 +93,19 @@ private fun layouts(herd: Herd, connection: ConnectionStatus): List<Pair<String,
 class HerdOfflineTest {
     @Test
     fun aHerdWithNoNetworkDoesNotReadAsAHerdWithNoMachines() {
-        for ((name, layout) in layouts(Herd(), OFFLINE)) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            assertTrue(
-                onAllNodesWithContentDescription("Reconnecting", substring = true).fetchSemanticsNodes().isNotEmpty(),
-                "the $name layout said nothing at all about a device that had lost the node",
-            )
-            assertTrue(
-                onAllNodesWithContentDescription("No panes yet", substring = true).fetchSemanticsNodes().isEmpty(),
-                "the $name layout told a device with no network that its herd was simply empty",
-            )
+        for ((name, layout) in layouts(Herd(), OFFLINE)) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                assertTrue(
+                    onAllNodesWithContentDescription("Reconnecting", substring = true).fetchSemanticsNodes().isNotEmpty(),
+                    "the $name layout said nothing at all about a device that had lost the node",
+                )
+                assertTrue(
+                    onAllNodesWithContentDescription("No panes yet", substring = true).fetchSemanticsNodes().isEmpty(),
+                    "the $name layout told a device with no network that its herd was simply empty",
+                )
+            }
         }
     }
 
@@ -120,21 +121,23 @@ class HerdOfflineTest {
             Triple(LIVE, "No panes yet", "nothing running on it"),
         )
         for ((connection, headline, detail) in states) {
-            for ((name, layout) in layouts(Herd(known = true), connection)) runComposeUiTest {
-                setContent { Themed { layout() } }
-                waitForIdle()
-                for (said in listOf(headline, detail)) {
-                    assertTrue(
-                        onAllNodesWithContentDescription(said, substring = true).fetchSemanticsNodes().isNotEmpty(),
-                        "the $name layout rendered an empty body without saying \"$said\"",
-                    )
-                }
-                for ((_, _, other) in states) {
-                    if (other == detail) continue
-                    assertTrue(
-                        onAllNodesWithContentDescription(other, substring = true).fetchSemanticsNodes().isEmpty(),
-                        "the $name layout said \"$other\" about a socket that was $connection",
-                    )
+            for ((name, layout) in layouts(Herd(known = true), connection)) {
+                runComposeUiTest {
+                    setContent { Themed { layout() } }
+                    waitForIdle()
+                    for (said in listOf(headline, detail)) {
+                        assertTrue(
+                            onAllNodesWithContentDescription(said, substring = true).fetchSemanticsNodes().isNotEmpty(),
+                            "the $name layout rendered an empty body without saying \"$said\"",
+                        )
+                    }
+                    for ((_, _, other) in states) {
+                        if (other == detail) continue
+                        assertTrue(
+                            onAllNodesWithContentDescription(other, substring = true).fetchSemanticsNodes().isEmpty(),
+                            "the $name layout said \"$other\" about a socket that was $connection",
+                        )
+                    }
                 }
             }
         }
@@ -144,21 +147,25 @@ class HerdOfflineTest {
     // spell that fact "Stale".
     @Test
     fun aHerdKeptOnScreenAfterTheSocketDroppedReadsAsAMemory() {
-        for ((name, layout) in layouts(REMEMBERED, OFFLINE)) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            assertTrue(
-                onAllNodesWithContentDescription("Stale —", substring = true).fetchSemanticsNodes().isNotEmpty(),
-                "the $name layout kept painting a dead herd as if it were the herd now",
-            )
+        for ((name, layout) in layouts(REMEMBERED, OFFLINE)) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                assertTrue(
+                    onAllNodesWithContentDescription("Stale —", substring = true).fetchSemanticsNodes().isNotEmpty(),
+                    "the $name layout kept painting a dead herd as if it were the herd now",
+                )
+            }
         }
-        for ((name, layout) in layouts(REMEMBERED.copy(stale = false), LIVE)) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            assertTrue(
-                onAllNodesWithContentDescription("Stale —", substring = true).fetchSemanticsNodes().isEmpty(),
-                "the $name layout called a live herd stale",
-            )
+        for ((name, layout) in layouts(REMEMBERED.copy(stale = false), LIVE)) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                assertTrue(
+                    onAllNodesWithContentDescription("Stale —", substring = true).fetchSemanticsNodes().isEmpty(),
+                    "the $name layout called a live herd stale",
+                )
+            }
         }
     }
 
@@ -166,14 +173,16 @@ class HerdOfflineTest {
     // could hear it.
     @Test
     fun theMachinePillSpeaksTheSocketAndNotOnlyTheCount() {
-        for ((name, layout) in layouts(Herd(), OFFLINE)) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            onNodeWithContentDescription("Machines — 0 nodes online, Reconnecting").assertExists()
-            assertTrue(
-                onAllNodesWithContentDescription("Machines — 0 nodes online").fetchSemanticsNodes().isEmpty(),
-                "the $name pill still announced a bare healthy count while the socket was down",
-            )
+        for ((name, layout) in layouts(Herd(), OFFLINE)) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                onNodeWithContentDescription("Machines — 0 nodes online, Reconnecting").assertExists()
+                assertTrue(
+                    onAllNodesWithContentDescription("Machines — 0 nodes online").fetchSemanticsNodes().isEmpty(),
+                    "the $name pill still announced a bare healthy count while the socket was down",
+                )
+            }
         }
     }
 
@@ -184,7 +193,11 @@ class HerdOfflineTest {
         val healthy = tokensFor(themeOf("soft"), TypeScale.Phone, Ground.Dark).color.done.toArgb()
         fun healthyPixels(connection: ConnectionStatus, name: String): Int {
             val image = render(
-                390.dp, 240.dp, themeOf("soft"), TypeScale.Phone, File("build/artboards/herd-$name.png"),
+                390.dp,
+                240.dp,
+                themeOf("soft"),
+                TypeScale.Phone,
+                File("build/artboards/herd-$name.png"),
             ) {
                 HerdPortrait(REMEMBERED.copy(stale = false), connection, 0.0, 12.0, emptyList(), {}, null)
             }

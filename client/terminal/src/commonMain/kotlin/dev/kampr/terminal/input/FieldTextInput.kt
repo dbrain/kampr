@@ -127,6 +127,7 @@ fun FieldTextInput(
                 } else {
                     when (handleKeyEvent(event, sink, onChord)) {
                         null -> false
+
                         Echo.Erase -> {
                             state.edit {
                                 if (length > 0) replace(length - 1, length, "")
@@ -134,10 +135,12 @@ fun FieldTextInput(
                             }
                             true
                         }
+
                         Echo.Drop -> {
                             letGo()
                             true
                         }
+
                         Echo.Kept -> true
                     }
                 }

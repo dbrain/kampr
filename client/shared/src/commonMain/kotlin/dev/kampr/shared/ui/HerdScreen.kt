@@ -1,5 +1,6 @@
 package dev.kampr.shared.ui
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -127,7 +127,7 @@ fun HerdLandscape(
     val groups = herd.groups()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
-    Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
+        Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 18.dp, top = 10.dp, end = 18.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -245,7 +245,7 @@ fun HerdSidebar(
         return
     }
     Box(modifier.width(SIDEBAR_WIDTH).fillMaxHeight()) {
-    Column(
+        Column(
             Modifier
                 .fillMaxSize()
                 .background(tokens.color.bar)

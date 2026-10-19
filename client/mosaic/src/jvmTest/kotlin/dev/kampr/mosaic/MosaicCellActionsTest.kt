@@ -75,8 +75,13 @@ private fun Cell(manage: ManageIo) {
     ) {
         Box(Modifier.size(520.dp, 340.dp)) {
             MosaicCell(
-                PaneState(CELL.id, StyleTable()), CELL, NODE, focused = true,
-                surfaces = TerminalSurfaces(), onFocus = {}, onRemove = {},
+                PaneState(CELL.id, StyleTable()),
+                CELL,
+                NODE,
+                focused = true,
+                surfaces = TerminalSurfaces(),
+                onFocus = {},
+                onRemove = {},
                 modifier = Modifier.size(520.dp, 340.dp),
             )
         }

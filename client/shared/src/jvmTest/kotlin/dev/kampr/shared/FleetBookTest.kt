@@ -8,7 +8,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
-
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
@@ -174,11 +173,11 @@ class FleetBookTest {
         saved: List<FleetCommand> = emptyList(),
     ) = ServerMsg.FleetBook(recent = recent, saved = saved)
 
-    /// The operator, on 0.1.59: *"can we make the fleet run empty screen have quick links to
-    /// launch these instead of having to Click Run -> Click item -> Click Run everywhere"*.
-    ///
-    /// The board with nothing on it is the one screen with room to spare and nothing else to read,
-    /// so what the node remembers goes on it. Three presses become two.
+    // / The operator, on 0.1.59: *"can we make the fleet run empty screen have quick links to
+    // / launch these instead of having to Click Run -> Click item -> Click Run everywhere"*.
+    // /
+    // / The board with nothing on it is the one screen with room to spare and nothing else to read,
+    // / so what the node remembers goes on it. Three presses become two.
     @Test
     fun theEmptyBoardOffersTheRunsTheNodeRemembers() = runComposeUiTest {
         board(book(recent = listOf(RECENT), saved = listOf(SAVED)))
@@ -186,10 +185,10 @@ class FleetBookTest {
         onNodeWithContentDescription("Put pacman -Syu in the run box").assertExists()
     }
 
-    /// **And the third press stays.** A saved command is a one-press fan-out across every machine
-    /// in the herd; a shortcut to it must not also be a shortcut past the confirmation a typed
-    /// command gets. The quick link opens the box with the line in it — the same staging the
-    /// sheet's own rows do — and the sheet's button is still the only thing that fires.
+    // / **And the third press stays.** A saved command is a one-press fan-out across every machine
+    // / in the herd; a shortcut to it must not also be a shortcut past the confirmation a typed
+    // / command gets. The quick link opens the box with the line in it — the same staging the
+    // / sheet's own rows do — and the sheet's button is still the only thing that fires.
     @Test
     fun aQuickLinkStagesItAndRunsNothing() = runComposeUiTest {
         val board = board(book(saved = listOf(SAVED)))
@@ -201,14 +200,13 @@ class FleetBookTest {
         assertEquals("kampr update", board.ran, "the sheet did not open with the line in the box")
     }
 
-
-    /// The operator, on 0.1.74: *"can we add a run button to the saved fleet history so i can
-    /// quickly run something i often run without going through dialogues etc"*.
-    ///
-    /// **This is the rule above being narrowed on purpose, not broken.** What must not happen is a
-    /// press meant for the box becoming a fan-out across the herd, so the row body still stages and
-    /// the run is a control of its own — labelled with the line *and* with the number of machines
-    /// it is about to reach, which is the fact the confirmation existed to carry.
+    // / The operator, on 0.1.74: *"can we add a run button to the saved fleet history so i can
+    // / quickly run something i often run without going through dialogues etc"*.
+    // /
+    // / **This is the rule above being narrowed on purpose, not broken.** What must not happen is a
+    // / press meant for the box becoming a fan-out across the herd, so the row body still stages and
+    // / the run is a control of its own — labelled with the line *and* with the number of machines
+    // / it is about to reach, which is the fact the confirmation existed to carry.
     @Test
     fun aRememberedCommandRunsFromItsOwnButtonWithoutTheSheetsOwn() = runComposeUiTest {
         val board = open(book(saved = listOf(SAVED)), BUSY)
@@ -216,8 +214,8 @@ class FleetBookTest {
         assertEquals("kampr update", board.ran)
     }
 
-    /// And the row beside it still stages: the two are different presses on the same row, and the
-    /// one that fans out is the one that says so.
+    // / And the row beside it still stages: the two are different presses on the same row, and the
+    // / one that fans out is the one that says so.
     @Test
     fun theRowBesideThatButtonStillStagesRatherThanRunning() = runComposeUiTest {
         val board = open(book(saved = listOf(SAVED)), BUSY)
@@ -225,8 +223,8 @@ class FleetBookTest {
         assertNull(board.ran, "a saved command fanned out across the herd on one press")
     }
 
-    /// The empty board's quick links get the same button, which is the whole of what the operator
-    /// asked for: the board they land on, the command they run every day, one press.
+    // / The empty board's quick links get the same button, which is the whole of what the operator
+    // / asked for: the board they land on, the command they run every day, one press.
     @Test
     fun aQuickLinkOnTheEmptyBoardRunsFromItsOwnButtonToo() = runComposeUiTest {
         val board = board(book(saved = listOf(SAVED)))
@@ -235,8 +233,8 @@ class FleetBookTest {
         assertEquals("kampr update", board.ran)
     }
 
-    /// A node that has never run anything says what it always said. The quick links are what the
-    /// memory *adds* to the empty board, not a replacement for it.
+    // / A node that has never run anything says what it always said. The quick links are what the
+    // / memory *adds* to the empty board, not a replacement for it.
     @Test
     fun anEmptyBookLeavesTheEmptyBoardSayingWhatItSaid() = runComposeUiTest {
         board(book())
@@ -244,8 +242,8 @@ class FleetBookTest {
         onAllNodesWithText("One command, on all 2 machines you can reach.").assertCountEquals(1)
     }
 
-    /// The board that is not empty is not a launcher: a run in flight is what the operator came to
-    /// read, and the memory is behind **Run** where it has always been.
+    // / The board that is not empty is not a launcher: a run in flight is what the operator came to
+    // / read, and the memory is behind **Run** where it has always been.
     private fun ComposeUiTest.board(book: ServerMsg.FleetBook): Pressed {
         val board = Pressed()
         setContent {

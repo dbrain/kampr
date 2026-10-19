@@ -66,12 +66,16 @@ fun DevicesScreen(
                     trailing = {
                         if (current) {
                             StatusBadge(
-                                "this device", tokens.color.done, tokens.color.surface2,
+                                "this device",
+                                tokens.color.done,
+                                tokens.color.surface2,
                                 label = "This is the device you are using",
                             )
                         } else {
                             QuietAction(
-                                "Revoke", { confirming = device.id }, Modifier.widthIn(min = 92.dp),
+                                "Revoke",
+                                { confirming = device.id },
+                                Modifier.widthIn(min = 92.dp),
                                 label = "Revoke ${device.name} — it loses access to this node",
                             )
                         }
@@ -89,7 +93,10 @@ fun DevicesScreen(
                             QuietAction("Keep", { confirming = null }, Modifier.widthIn(min = 84.dp), label = "Keep ${device.name}")
                             PrimaryAction(
                                 "Revoke it",
-                                { confirming = null; onRevoke(device.id) },
+                                {
+                                    confirming = null
+                                    onRevoke(device.id)
+                                },
                                 Modifier.widthIn(min = 96.dp),
                                 tokens.type.buttonSmall,
                                 10.dp,
@@ -119,7 +126,9 @@ fun DevicesScreen(
                         badgeLabel = "Expired device",
                         trailing = {
                             QuietAction(
-                                "Renew", { onRenew(device.id) }, Modifier.widthIn(min = 92.dp),
+                                "Renew",
+                                { onRenew(device.id) },
+                                Modifier.widthIn(min = 92.dp),
                                 label = "Renew ${device.name} — restores its access for another term",
                             )
                         },
@@ -164,7 +173,10 @@ private fun DeviceCard(
 
 private fun facts(device: DeviceRecord, now: Double): String = listOfNotNull(
     device.role,
-    if (device.expired) device.expiresAt?.let { "expired ${relativeSeconds(it, now)} ago" } ?: "expired"
-    else device.lastSeenAt?.let { "seen ${relativeSeconds(it, now)}" },
+    if (device.expired) {
+        device.expiresAt?.let { "expired ${relativeSeconds(it, now)} ago" } ?: "expired"
+    } else {
+        device.lastSeenAt?.let { "seen ${relativeSeconds(it, now)}" }
+    },
     device.origin,
 ).joinToString(" · ")

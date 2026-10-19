@@ -28,8 +28,7 @@ private class Face(val name: String, root: File = File("src/commonMain/composeRe
 
     // Asked of Skia rather than of a cmap parser, for the reason above: Skia is what resolves a
     // codepoint in the browser. A face's own coverage is walked over the planes it can reach.
-    fun codePoints(): List<Int> =
-        ((0x20..0x2FFFF) + (0xE0000..0xE01FF)).filter { draws(it) }
+    fun codePoints(): List<Int> = ((0x20..0x2FFFF) + (0xE0000..0xE01FF)).filter { draws(it) }
 
     fun advanceOf(codePoint: Int): Float {
         val glyph = typeface.getUTF32Glyph(codePoint)
@@ -54,8 +53,7 @@ private fun required(): List<Required> {
         .toList()
 }
 
-private fun describe(items: List<Required>) =
-    items.joinToString("\n") { "    U+%04X %s".format(it.codePoint, it.name) }
+private fun describe(items: List<Required>) = items.joinToString("\n") { "    U+%04X %s".format(it.codePoint, it.name) }
 
 class TerminalFontCoverageTest {
 

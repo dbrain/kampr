@@ -7,8 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private fun text(source: String, breaks: Breaks): String =
-    (parseMarkdown(source, breaks).first() as MdBlock.Paragraph).text
+private fun text(source: String, breaks: Breaks): String = (parseMarkdown(source, breaks).first() as MdBlock.Paragraph).text
 
 // CommonMark's soft break — a single newline inside a paragraph is a space — is right for an agent,
 // which writes real markdown and wraps its own lines, and wrong for a person, who pressed Enter and

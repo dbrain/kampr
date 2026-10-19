@@ -9,16 +9,13 @@ import dev.kampr.shared.wire.PaneInfo
 
 class ConversationSurfaces(private val base: PaneSurfaces = FallbackSurfaces) : PaneSurfaces {
     @Composable
-    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        base.Terminal(pane, info, modifier)
+    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = base.Terminal(pane, info, modifier)
 
     @Composable
-    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        ConversationView(pane, info, modifier)
+    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = ConversationView(pane, info, modifier)
 
     @Composable
-    override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) =
-        base.KeyRow(pane, compact, modifier)
+    override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = base.KeyRow(pane, compact, modifier)
 
     @Composable
     override fun Zoom(pane: PaneState, modifier: Modifier) = base.Zoom(pane, modifier)

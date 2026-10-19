@@ -69,7 +69,6 @@ class ComposerDraftTest {
     }
 
     @OptIn(ExperimentalTestApi::class)
-    private fun androidx.compose.ui.test.ComposeUiTest.editable(): String =
-        onNodeWithContentDescription(REPLY).fetchSemanticsNode()
-            .config[SemanticsProperties.EditableText].text
+    private fun androidx.compose.ui.test.ComposeUiTest.editable(): String = onNodeWithContentDescription(REPLY).fetchSemanticsNode()
+        .config[SemanticsProperties.EditableText].text
 }

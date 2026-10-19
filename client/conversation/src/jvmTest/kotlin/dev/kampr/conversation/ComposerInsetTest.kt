@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -12,9 +13,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import dev.kampr.shared.theme.Ground
-import dev.kampr.shared.ui.named
-import androidx.compose.foundation.layout.height
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -28,6 +26,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
@@ -35,12 +34,13 @@ import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.REPLY_ROOM
-import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.keyboardInset
+import dev.kampr.shared.ui.named
 import dev.kampr.shared.wire.PendingOption
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
@@ -76,7 +76,7 @@ private fun rotatedPane(pending: Boolean): PaneState {
                     PendingOption("3", "No, and tell Claude what to do differently"),
                 ),
                 source = "screen",
-            )
+            ),
         )
     }
     return store.pane(PANE_ID)
@@ -340,7 +340,7 @@ class ComposerInsetTest {
         val composer = onNodeWithContentDescription("composer").getUnclippedBoundsInRoot()
         assertTrue(
             composer.bottom - composer.top >= REPLY_ROOM - 1.dp,
-            "in ${room} of column the reply box got ${composer.bottom - composer.top}, against the " +
+            "in $room of column the reply box got ${composer.bottom - composer.top}, against the " +
                 "$REPLY_ROOM it asked for — the bar above it was served first",
         )
     }
@@ -420,6 +420,5 @@ class ComposerInsetTest {
     }
 
     // RICH_CONVO ends on a running `Edit` card, and a lazy list only composes what is in view.
-    private fun ComposeUiTest.lastTurnIsComposed(): Boolean =
-        onAllNodesWithContentDescription("Edit", substring = true).fetchSemanticsNodes().isNotEmpty()
+    private fun ComposeUiTest.lastTurnIsComposed(): Boolean = onAllNodesWithContentDescription("Edit", substring = true).fetchSemanticsNodes().isNotEmpty()
 }

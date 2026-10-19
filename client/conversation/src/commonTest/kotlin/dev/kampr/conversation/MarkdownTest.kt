@@ -19,7 +19,7 @@ class MarkdownTest {
             |---|:-:|---:|
             | PageUp | rejected | ESC[5~ |
             | Home | rejected | ESC[H |
-            """.trimIndent()
+            """.trimIndent(),
         )
         val table = blocks.single() as MdBlock.Table
         assertEquals(listOf("Key", "send_keys", "we send"), table.header)
@@ -67,7 +67,7 @@ class MarkdownTest {
             2. No event fires on resize.
 
             > A short read can also be truncated.
-            """.trimIndent()
+            """.trimIndent(),
         )
         assertEquals(2, (blocks[0] as MdBlock.Heading).level)
         val list = blocks[1] as MdBlock.Bullets
@@ -85,7 +85,7 @@ class MarkdownTest {
     @Test
     fun aQuoteKeepsTheWordsItQuotedWithoutTheMarkersThatMarkedThem() {
         val quote = parseMarkdown(
-            "> Herdr's `truncated` means there was more than you asked for.\n>\n> > not that we hit the cap\n"
+            "> Herdr's `truncated` means there was more than you asked for.\n>\n> > not that we hit the cap\n",
         ).single() as MdBlock.Quote
         assertEquals(
             "Herdr's `truncated` means there was more than you asked for.\n\n> not that we hit the cap",

@@ -11,19 +11,23 @@ fun blockText(block: Block): String = when (block) {
     // What the reader can see: a block carrying a header renders as a card, so a hit on the
     // marker it replaced would be a match the counter promises and nothing on screen shows.
     is Block.Md -> block.att?.let { listOfNotNull(it.name, it.mime).joinToString(" ") } ?: block.text
+
     is Block.Code -> block.text
+
     is Block.Diff -> listOfNotNull(block.path, block.text).joinToString("\n")
+
     is Block.Tool -> toolLabel(block, " ")
+
     // What the card shows of it, which is the agent's type and what it was asked — the turns
     // themselves are another conversation and are not on this screen to be found.
     is Block.Sub -> listOfNotNull(block.kind, block.title).joinToString(" ")
+
     is Block.Unknown -> ""
 }
 
 fun turnText(turn: Turn): String = turn.blocks.joinToString("\n", transform = ::blockText)
 
-fun turnMatches(turn: Turn, query: String): Boolean =
-    query.length >= 2 && turnText(turn).contains(query, ignoreCase = true)
+fun turnMatches(turn: Turn, query: String): Boolean = query.length >= 2 && turnText(turn).contains(query, ignoreCase = true)
 
 fun matchRanges(text: String, query: String): List<IntRange> {
     if (query.length < 2) return emptyList()
@@ -76,19 +80,18 @@ fun resultsOf(found: ServerMsg.ConvoFound?, rows: List<TranscriptRow>, query: St
     } + here.filterNot { it.turn in named }
 }
 
-private fun localResults(rows: List<TranscriptRow>, query: String): List<Result> =
-    rows.mapNotNull { row ->
-        val turn = row.turns.firstOrNull { turnMatches(it, query) } ?: return@mapNotNull null
-        val text = turnText(turn)
-        Result(
-            turn = turn.id,
-            role = turn.role,
-            at = turn.at,
-            text = matchLine(text, query),
-            hits = matchRanges(text, query).size,
-            fromEnd = null,
-        )
-    }
+private fun localResults(rows: List<TranscriptRow>, query: String): List<Result> = rows.mapNotNull { row ->
+    val turn = row.turns.firstOrNull { turnMatches(it, query) } ?: return@mapNotNull null
+    val text = turnText(turn)
+    Result(
+        turn = turn.id,
+        role = turn.role,
+        at = turn.at,
+        text = matchLine(text, query),
+        hits = matchRanges(text, query).size,
+        fromEnd = null,
+    )
+}
 
 // Characters of the matched line worth showing, and how much of it is kept in front of the match.
 // The node clips its own excerpts to the same shape and for the same reason: a tool's output is one

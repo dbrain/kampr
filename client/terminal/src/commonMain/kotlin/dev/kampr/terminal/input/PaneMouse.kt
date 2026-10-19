@@ -17,8 +17,7 @@ private val TAKES_A_CLICK = setOf("claude")
 // ignored — it is *typed*: `echo A` plus a press becomes `echo A0;10;3M`, because readline eats
 // `ESC [ <` and takes the rest as characters (#480). A harness label outlives the harness, so the
 // label alone would still be clicking at a prompt a minute after the agent quit.
-fun paneTakesClicks(agent: String?, cmd: String?): Boolean =
-    cmd != null && agent != null && agent in TAKES_A_CLICK
+fun paneTakesClicks(agent: String?, cmd: String?): Boolean = cmd != null && agent != null && agent in TAKES_A_CLICK
 
 // SGR 1006, button 0, at 1-based cell coordinates: the press, then the release on the same cell.
 // **Both, and both at the same cell.** A press alone does nothing and is not what fires a control;

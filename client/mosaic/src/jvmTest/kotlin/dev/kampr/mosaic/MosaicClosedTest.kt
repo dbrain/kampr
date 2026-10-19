@@ -33,7 +33,9 @@ private val HOST = NodeInfo(id = "01JNODEABCDEFGHJKMNPQRSTV", name = "comingclea
 
 private object BlankCell : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 }
 
@@ -72,8 +74,13 @@ class MosaicClosedTest {
         setContent {
             CompositionLocalProvider(LocalTokens provides tokens(), LocalPaneIo provides ArtboardIo) {
                 MosaicCell(
-                    PaneState(PANE, StyleTable()), info, HOST, focused = true,
-                    surfaces = BlankCell, onFocus = {}, onRemove = {},
+                    PaneState(PANE, StyleTable()),
+                    info,
+                    HOST,
+                    focused = true,
+                    surfaces = BlankCell,
+                    onFocus = {},
+                    onRemove = {},
                     modifier = Modifier.size(420.dp, 300.dp),
                 )
             }

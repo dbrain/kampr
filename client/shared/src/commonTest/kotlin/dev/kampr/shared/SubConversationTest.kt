@@ -41,8 +41,10 @@ class SubConversationTest {
     // affordance this codebase has paid for before.
     @Test
     fun aSubBlockWithNoHandleIsNotABlock() {
-        val convo = decode("""{"t":"convo","pane":"$PANE","turns":[
-            {"id":"t1","role":"assistant","blocks":[{"b":"sub","kind":"Explore"}]}]}""") as ServerMsg.Convo
+        val convo = decode(
+            """{"t":"convo","pane":"$PANE","turns":[
+            {"id":"t1","role":"assistant","blocks":[{"b":"sub","kind":"Explore"}]}]}""",
+        ) as ServerMsg.Convo
         assertTrue(convo.turns.single().blocks.none { it is Block.Sub })
     }
 
@@ -100,8 +102,8 @@ class SubConversationTest {
         store.accept(
             decode(
                 """{"t":"convo.turn","pane":"$PANE","sub":"aGFuZGxl","turns":[
-                    {"id":"s3","role":"assistant","blocks":[{"b":"md","text":"and then took another step"}]}]}"""
-            )
+                    {"id":"s3","role":"assistant","blocks":[{"b":"md","text":"and then took another step"}]}]}""",
+            ),
         )
 
         assertEquals(

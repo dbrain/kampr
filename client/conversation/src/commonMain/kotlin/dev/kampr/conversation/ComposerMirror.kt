@@ -79,8 +79,11 @@ class ComposerMirror {
         val out = mutableListOf<String>()
         when {
             keys == null || held == null -> out += box
+
             held.trimEnd() == box.trimEnd() -> Unit
+
             box.startsWith(held) && caret == held.length -> out += box.substring(held.length)
+
             else -> {
                 walk(keys, held.length)?.let(out::add)
                 if (held.isNotEmpty()) out += keys.back.repeat(held.length)
@@ -106,10 +109,9 @@ class ComposerMirror {
 
     // A newline goes as its own write: it was measured alone (#564), and inside a burst Codex
     // took it for the end of the message.
-    private fun pieces(inserted: String, keys: EditKeys): List<String> =
-        inserted.split('\n').flatMapIndexed { at, piece ->
-            listOfNotNull(keys.newline.takeIf { at > 0 }, piece.takeIf { it.isNotEmpty() })
-        }
+    private fun pieces(inserted: String, keys: EditKeys): List<String> = inserted.split('\n').flatMapIndexed { at, piece ->
+        listOfNotNull(keys.newline.takeIf { at > 0 }, piece.takeIf { it.isNotEmpty() })
+    }
 
     companion object {
         // The longest single write measured to land as typing on all three harnesses; 1500 came

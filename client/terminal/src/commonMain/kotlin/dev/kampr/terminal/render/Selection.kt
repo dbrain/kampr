@@ -7,8 +7,7 @@ import dev.kampr.shared.model.glyphUnits
 import dev.kampr.shared.net.filePathOf
 
 data class GridPoint(val row: Int, val col: Int) : Comparable<GridPoint> {
-    override fun compareTo(other: GridPoint): Int =
-        if (row != other.row) row - other.row else col - other.col
+    override fun compareTo(other: GridPoint): Int = if (row != other.row) row - other.row else col - other.col
 }
 
 // Linear by default: the selection flows from the first cell to the last across the rows between,
@@ -74,8 +73,7 @@ class LogicalText(private val rows: SurfaceRows) {
 
     // What column `col` costs the string appendInk builds: its base in UTF-16 units, plus whatever
     // it is wearing. A column is not a string offset once either can be more than one unit.
-    private fun units(col: Int): Int =
-        if (glyphs[col] == TAIL) 0 else glyphUnits(glyphs[col]) + marks[col].length
+    private fun units(col: Int): Int = if (glyphs[col] == TAIL) 0 else glyphUnits(glyphs[col]) + marks[col].length
 
     // Probe #210: a double-width glyph owns two columns, so the column a finger lands on is not
     // always the column its glyph starts in. Anything turning a column into a character resolves

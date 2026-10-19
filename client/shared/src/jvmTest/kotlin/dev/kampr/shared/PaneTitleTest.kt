@@ -47,8 +47,6 @@ private val PHONE_480 = 360.dp to 800.dp
 private val PHONE_420 = 411.dp to 914.dp
 private val LANDSCAPE_480 = 800.dp to 360.dp
 
-
-
 private class Header(
     val name: String,
     val size: Pair<Dp, Dp>,

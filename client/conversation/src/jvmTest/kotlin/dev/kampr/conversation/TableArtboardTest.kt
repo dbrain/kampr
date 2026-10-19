@@ -32,8 +32,7 @@ private fun probeLogMarkdown(): String {
 }
 
 class TableArtboardTest {
-    private fun renderTable(width: Dp, name: String, spec: ThemeSpec = SoftTheme): Int =
-        renderNarrowTable(probeLogMarkdown(), width, name, spec)
+    private fun renderTable(width: Dp, name: String, spec: ThemeSpec = SoftTheme): Int = renderNarrowTable(probeLogMarkdown(), width, name, spec)
 
     private fun renderNarrowTable(
         markdown: String,

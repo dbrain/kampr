@@ -90,8 +90,12 @@ fun FileViewer(
                     )
                 }
                 GlyphTarget(
-                    ConversationIcons.close, "Close $name", tokens.color.mute,
-                    onClose, target = LANDSCAPE_TOUCH, glyph = 14.dp,
+                    ConversationIcons.close,
+                    "Close $name",
+                    tokens.color.mute,
+                    onClose,
+                    target = LANDSCAPE_TOUCH,
+                    glyph = 14.dp,
                 )
             }
         }
@@ -116,12 +120,14 @@ fun FileViewer(
                 if (diff != null) {
                     when (patch) {
                         is AttachmentState.Text -> DiffCard(null, patch.text, "")
+
                         AttachmentState.Fetching -> KText(
                             "asking git",
                             tokens.type.micro,
                             tokens.color.working,
                             Modifier.announce("Asking git what has changed"),
                         )
+
                         // One uniform refusal covers a file with no changes, a file outside a work
                         // tree and a machine with no git at all, so this says all three rather
                         // than picking one and being wrong about the other two.
@@ -131,6 +137,7 @@ fun FileViewer(
                             tokens.color.mute,
                             Modifier.announce("Nothing changed since HEAD, or this file is not in a git work tree"),
                         )
+
                         else -> DisableSelection {
                             QuietAction(
                                 "Changes since HEAD",

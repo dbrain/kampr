@@ -48,7 +48,7 @@ class ReadingAFileTheGridOpenedTest {
         val close = onNodeWithContentDescription("Close $NOTES").getUnclippedBoundsInRoot()
         assertTrue(
             close.top >= CHROME,
-            "the close button is at ${close.top}, under the ${CHROME} of pane header painted over it",
+            "the close button is at ${close.top}, under the $CHROME of pane header painted over it",
         )
     }
 

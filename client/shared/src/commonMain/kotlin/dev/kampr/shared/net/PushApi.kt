@@ -43,7 +43,11 @@ private data class RuleList(val rules: List<PushRule> = emptyList())
 const val ALL_PANES = "*"
 
 class PushApi(private val client: HttpClient, private val endpoint: Endpoint) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        encodeDefaults = true
+    }
 
     suspend fun state(): PushState? = runCatching {
         json.decodeFromString(
@@ -96,8 +100,7 @@ private data class SubscribeBody(
     val keys: SubscribeKeys,
 ) {
     companion object {
-        fun of(e: PushEnrolment) =
-            SubscribeBody(e.endpoint, e.kind, PUSH_PAYLOAD_VERSION, SubscribeKeys(e.p256dh, e.auth))
+        fun of(e: PushEnrolment) = SubscribeBody(e.endpoint, e.kind, PUSH_PAYLOAD_VERSION, SubscribeKeys(e.p256dh, e.auth))
     }
 }
 

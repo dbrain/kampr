@@ -63,7 +63,7 @@ class OpenOnCreateTest {
                 herd(
                     pane("w1:p1", workspace = "01JNODE/w1"),
                     pane("w2:p1", workspace = "01JNODE/w2"),
-                )
+                ),
             )
             assertEquals("01JNODE/w2:p1", (state.screen as Screen.Pane).paneId)
         } finally {
@@ -85,7 +85,7 @@ class OpenOnCreateTest {
                 herd(
                     pane("w1:p1", workspace = "01JNODE/w1"),
                     pane("w2:p1", workspace = "01JNODE/w2"),
-                )
+                ),
             )
             assertEquals("01JNODE/w2:p1", (state.screen as Screen.Pane).paneId)
         } finally {
@@ -149,7 +149,7 @@ class OpenOnCreateTest {
             herd(
                 pane("w1:p1", workspace = "01JNODE/w1", tab = "01JNODE/w1:t1"),
                 pane("w1:p2", workspace = "01JNODE/w1", tab = "01JNODE/w1:t2"),
-            )
+            ),
         ).let { KamprStore().apply { accept(it!!) }.herd.value }
 
         assertEquals("01JNODE/w1:p2", herd.createdPane("01JNODE/w1:t2")?.id)

@@ -1,11 +1,11 @@
 package dev.kampr.shared.net
 
+import dev.kampr.shared.util.parseHttpDateMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
-import dev.kampr.shared.util.parseHttpDateMillis
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
@@ -34,7 +34,10 @@ data class NodeStatus(
 )
 
 class NodeApi(private val client: HttpClient, private val endpoint: Endpoint) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     suspend fun info(): NodeStatus? = runCatching {
         val response = client.get("${endpoint.httpBase}/api/node") { auth() }

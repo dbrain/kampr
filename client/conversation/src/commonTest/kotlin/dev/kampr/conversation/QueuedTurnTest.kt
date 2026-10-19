@@ -8,6 +8,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val AT = "2026-08-28T09:00:00.000Z"
+
 // The second one runs to three lines on purpose: that is the length at which an ordinary turn
 // earns a chevron, so it is the only fixture that can show a queued prompt does not.
 private const val LONG = "run the tests\nand the lint\nand push the branch"

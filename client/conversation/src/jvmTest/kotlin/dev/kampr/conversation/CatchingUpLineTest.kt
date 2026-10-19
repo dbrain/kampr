@@ -30,7 +30,9 @@ private fun paged(): Pair<KamprStore, PaneState> {
     val store = KamprStore()
     store.accept(
         ServerMsg.Convo(
-            pane = PANE_ID, cursor = "u-1", more = false,
+            pane = PANE_ID,
+            cursor = "u-1",
+            more = false,
             turns = listOf(
                 Turn("u-1", "user", "2026-08-31T09:00:00.000Z", listOf(Block.Md("which path is dead?"))),
                 Turn("a-1", "assistant", "2026-08-31T09:00:04.000Z", listOf(Block.Md(NEWEST))),

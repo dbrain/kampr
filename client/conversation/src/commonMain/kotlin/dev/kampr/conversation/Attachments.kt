@@ -5,8 +5,8 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.platform.attachmentFileName
@@ -43,10 +43,13 @@ enum class AttachmentOffer(val label: String) {
 // download every unknown kind gets, which is the truth until something can actually play one.
 fun offerFor(att: Attachment): AttachmentOffer = when {
     att.kind == IMAGE -> AttachmentOffer.Image
+
     att.kind == AUDIO || att.mime?.startsWith("$AUDIO/") == true -> AttachmentOffer.Audio
+
     // A file whose bytes are words is read here rather than handed to the device's downloads
     // folder, which on a phone is a file the reader then has to go and find an app for.
     att.kind == TEXT || att.mime?.startsWith("$TEXT/") == true -> AttachmentOffer.Text
+
     else -> AttachmentOffer.File
 }
 
@@ -66,6 +69,7 @@ fun offerOn(att: Attachment, voices: Voices, named: String? = null): AttachmentO
 sealed interface AttachmentState {
     data object Idle : AttachmentState
     data object Fetching : AttachmentState
+
     // The bytes are kept beside the picture, and they are the cheap half: a 730 KB screenshot is
     // ~9 MB once decoded, so holding the original as well costs a twelfth of what is already held
     // and is the only way the viewer can hand the file to the device afterwards. Re-fetching it
@@ -74,6 +78,7 @@ sealed interface AttachmentState {
         override fun equals(other: Any?): Boolean = this === other
         override fun hashCode(): Int = image.hashCode()
     }
+
     // Held beside the text for the same reason a picture's are: the viewer hands the file to the
     // device afterwards, and re-fetching bytes that never left is a second authorised round trip
     // for nothing.
@@ -81,6 +86,7 @@ sealed interface AttachmentState {
         override fun equals(other: Any?): Boolean = this === other
         override fun hashCode(): Int = text.hashCode()
     }
+
     // The bytes and nothing made of them. A [Voice] is a decoder and, on two of the three targets,
     // a hardware line: it is opened by the card that draws the button and released when that card
     // leaves the composition, so nothing this store evicts can leave one running.

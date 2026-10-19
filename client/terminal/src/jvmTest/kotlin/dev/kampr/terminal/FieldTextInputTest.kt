@@ -22,8 +22,8 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.guard.ConfirmState
 import dev.kampr.terminal.guard.SubmitGuard
@@ -32,8 +32,8 @@ import dev.kampr.terminal.input.FieldTextInput
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.KeyCap
 import dev.kampr.terminal.input.Latch
-import dev.kampr.terminal.input.active
 import dev.kampr.terminal.input.Latches
+import dev.kampr.terminal.input.active
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -95,8 +95,7 @@ private fun ComposeUiTest.rig(
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.buffer(): String =
-    onNodeWithTag(TAG).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+private fun ComposeUiTest.buffer(): String = onNodeWithTag(TAG).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
 
 @OptIn(ExperimentalTestApi::class)
 class FieldTextInputTest {
@@ -317,16 +316,15 @@ class FieldTextInputTest {
     // Escape and then an Enter, a `pane.send_text` round trip apart, and the agent submitted the
     // message rather than opening a line in it.
     @Test
-    fun alt_enter_reaches_the_pane_as_one_keystroke_rather_than_an_escape_and_an_enter() =
-        runComposeUiTest {
-            val io = field(guard = ::guarded)
+    fun alt_enter_reaches_the_pane_as_one_keystroke_rather_than_an_escape_and_an_enter() = runComposeUiTest {
+        val io = field(guard = ::guarded)
 
-            onNodeWithTag(TAG).performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.Enter) } }
-            waitForIdle()
-            assertEquals(
-                listOf(Esc.ESCAPE + Esc.ENTER),
-                io.sent,
-                "alt+enter was cut into an Escape and an Enter on its way to the pane",
-            )
-        }
+        onNodeWithTag(TAG).performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.Enter) } }
+        waitForIdle()
+        assertEquals(
+            listOf(Esc.ESCAPE + Esc.ENTER),
+            io.sent,
+            "alt+enter was cut into an Escape and an Enter on its way to the pane",
+        )
+    }
 }

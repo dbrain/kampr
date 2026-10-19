@@ -26,8 +26,7 @@ private val HERD = Herd(
     ),
 )
 
-private fun search(query: String, mosaic: Boolean = true, canCreate: Boolean = true): List<PaletteItem> =
-    paletteSearch(paletteItems(HERD, mosaic, canCreate), query)
+private fun search(query: String, mosaic: Boolean = true, canCreate: Boolean = true): List<PaletteItem> = paletteSearch(paletteItems(HERD, mosaic, canCreate), query)
 
 private fun PaletteItem.paneId() = (target as? PaletteTarget.OpenPane)?.paneId
 

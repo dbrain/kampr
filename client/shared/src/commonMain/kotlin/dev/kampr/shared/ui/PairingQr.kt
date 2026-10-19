@@ -61,8 +61,11 @@ fun PairingQr(url: String, pairing: Boolean, modifier: Modifier = Modifier) {
                 maxLines = 2,
             )
             KText(
-                if (pairing) "The code rides along, so the phone only has to say yes."
-                else "Ask for a pairing code first and the code rides along too.",
+                if (pairing) {
+                    "The code rides along, so the phone only has to say yes."
+                } else {
+                    "Ask for a pairing code first and the code rides along too."
+                },
                 tokens.type.captionSmall,
                 tokens.color.mute,
                 maxLines = 3,

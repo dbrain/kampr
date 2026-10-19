@@ -25,7 +25,6 @@ import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.LocalGround
 import dev.kampr.shared.theme.LocalTokens
-import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.TypeScale
@@ -33,6 +32,7 @@ import dev.kampr.shared.ui.AppearanceScreen
 import dev.kampr.shared.ui.DevicesScreen
 import dev.kampr.shared.ui.HerdPortrait
 import dev.kampr.shared.ui.HerdSidebar
+import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneScreenDesktop
 import dev.kampr.shared.ui.PaneScreenMobile

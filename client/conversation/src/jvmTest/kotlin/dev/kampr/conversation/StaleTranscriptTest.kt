@@ -36,11 +36,14 @@ class StaleTranscriptTest {
         val store = KamprStore()
         store.accept(
             ServerMsg.Convo(
-                pane = PANE_ID, cursor = "u-1", more = false,
+                pane = PANE_ID,
+                cursor = "u-1",
+                more = false,
                 turns = listOf(
                     said("u-1", "user", "which of the two paths to herdr is dead?"),
                     said(
-                        "a-2", "assistant",
+                        "a-2",
+                        "assistant",
                         "The socket answers and the spawned binary does not, which is why the node " +
                             "looks healthy and every pane it serves is blank.",
                     ),
@@ -54,7 +57,11 @@ class StaleTranscriptTest {
             store.pane(PANE_ID).markStale()
         }
         val image = renderArtboard(
-            390.dp, 700.dp, SoftTheme, TypeScale.Phone, File("build/artboards/transcript-$name.png"),
+            390.dp,
+            700.dp,
+            SoftTheme,
+            TypeScale.Phone,
+            File("build/artboards/transcript-$name.png"),
         ) {
             ConversationView(store.pane(PANE_ID), demoInfo(status = "idle"), Modifier.fillMaxSize())
         }

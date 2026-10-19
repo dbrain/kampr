@@ -50,21 +50,25 @@ private fun faces(id: FamilyId): List<FontFace> = when (id) {
         FontFace("manrope-700", Res.font.manrope_700, FontWeight.W700),
         FontFace("manrope-800", Res.font.manrope_800, FontWeight.W800),
     )
+
     FamilyId.IbmPlexMono -> listOf(
         FontFace("plex-400", Res.font.ibmplexmono_400, FontWeight.W400),
         FontFace("plex-500", Res.font.ibmplexmono_500, FontWeight.W500),
         FontFace("plex-600", Res.font.ibmplexmono_600, FontWeight.W600),
     )
+
     FamilyId.JetBrainsMono -> listOf(
         FontFace("jbm-400", Res.font.jetbrainsmono_400, FontWeight.W400),
         FontFace("jbm-500", Res.font.jetbrainsmono_500, FontWeight.W500),
         FontFace("jbm-700", Res.font.jetbrainsmono_700, FontWeight.W700),
     )
+
     FamilyId.InstrumentSans -> listOf(
         FontFace("instrument-400", Res.font.instrumentsans_400, FontWeight.W400),
         FontFace("instrument-500", Res.font.instrumentsans_500, FontWeight.W500),
         FontFace("instrument-600", Res.font.instrumentsans_600, FontWeight.W600),
     )
+
     FamilyId.Archivo -> listOf(
         FontFace("archivo-500", Res.font.archivo_500, FontWeight.W500),
         FontFace("archivo-700", Res.font.archivo_700, FontWeight.W700),

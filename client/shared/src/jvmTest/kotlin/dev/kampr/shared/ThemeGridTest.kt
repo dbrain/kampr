@@ -39,18 +39,17 @@ private const val CARD = " theme — "
 private const val BLURB = "Soft native ships. The rest stay one attribute away."
 
 @OptIn(ExperimentalTestApi::class)
-private fun body(width: Dp, height: Dp = 1400.dp, block: SkikoComposeUiTest.() -> Unit) =
-    runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) {
-        setContent {
-            CompositionLocalProvider(LocalTokens provides phoneTokens()) {
-                Box(Modifier.fillMaxSize()) {
-                    AppearanceScreen(themeOf("soft").id, ThemeMode.Dark, {}, {}, {})
-                }
+private fun body(width: Dp, height: Dp = 1400.dp, block: SkikoComposeUiTest.() -> Unit) = runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) {
+    setContent {
+        CompositionLocalProvider(LocalTokens provides phoneTokens()) {
+            Box(Modifier.fillMaxSize()) {
+                AppearanceScreen(themeOf("soft").id, ThemeMode.Dark, {}, {}, {})
             }
         }
-        waitForIdle()
-        block()
     }
+    waitForIdle()
+    block()
+}
 
 @OptIn(ExperimentalTestApi::class)
 private fun SemanticsNodeInteractionsProvider.cards(): List<DpRect> {
@@ -59,25 +58,23 @@ private fun SemanticsNodeInteractionsProvider.cards(): List<DpRect> {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun SemanticsNodeInteractionsProvider.ellipsised(text: String): Boolean =
-    onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes().any { node ->
-        val laid = mutableListOf<TextLayoutResult>()
-        if (!node.config.contains(SemanticsActions.GetTextLayoutResult)) return@any false
-        node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(laid)
-        laid.any { it.multiParagraph.didExceedMaxLines }
-    }
+private fun SemanticsNodeInteractionsProvider.ellipsised(text: String): Boolean = onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes().any { node ->
+    val laid = mutableListOf<TextLayoutResult>()
+    if (!node.config.contains(SemanticsActions.GetTextLayoutResult)) return@any false
+    node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(laid)
+    laid.any { it.multiParagraph.didExceedMaxLines }
+}
 
 @OptIn(ExperimentalTestApi::class)
-private fun SemanticsNodeInteractionsProvider.creditsOnOneLine(): Boolean =
-    AllThemes.all { spec ->
-        onAllNodesWithText(spec.id.credit, substring = true, useUnmergedTree = true)
-            .fetchSemanticsNodes().all { node ->
-                val laid = mutableListOf<TextLayoutResult>()
-                if (!node.config.contains(SemanticsActions.GetTextLayoutResult)) return@all true
-                node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(laid)
-                laid.all { it.lineCount <= 1 }
-            }
-    }
+private fun SemanticsNodeInteractionsProvider.creditsOnOneLine(): Boolean = AllThemes.all { spec ->
+    onAllNodesWithText(spec.id.credit, substring = true, useUnmergedTree = true)
+        .fetchSemanticsNodes().all { node ->
+            val laid = mutableListOf<TextLayoutResult>()
+            if (!node.config.contains(SemanticsActions.GetTextLayoutResult)) return@all true
+            node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(laid)
+            laid.all { it.lineCount <= 1 }
+        }
+}
 
 // The grid hardcoded its column count per breakpoint — four on any desktop at all — so a 900 dp
 // window, whose body is about 600 dp once the sidebar has had its share, laid four cards out at a

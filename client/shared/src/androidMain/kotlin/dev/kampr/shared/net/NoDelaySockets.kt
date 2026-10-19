@@ -16,11 +16,9 @@ internal object NoDelaySockets : SocketFactory() {
 
     override fun createSocket(host: String, port: Int): Socket = platform.createSocket(host, port).eager()
 
-    override fun createSocket(host: String, port: Int, local: InetAddress, localPort: Int): Socket =
-        platform.createSocket(host, port, local, localPort).eager()
+    override fun createSocket(host: String, port: Int, local: InetAddress, localPort: Int): Socket = platform.createSocket(host, port, local, localPort).eager()
 
     override fun createSocket(host: InetAddress, port: Int): Socket = platform.createSocket(host, port).eager()
 
-    override fun createSocket(host: InetAddress, port: Int, local: InetAddress, localPort: Int): Socket =
-        platform.createSocket(host, port, local, localPort).eager()
+    override fun createSocket(host: InetAddress, port: Int, local: InetAddress, localPort: Int): Socket = platform.createSocket(host, port, local, localPort).eager()
 }

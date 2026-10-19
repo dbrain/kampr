@@ -1,8 +1,8 @@
 package dev.kampr.shared
 
 import dev.kampr.shared.model.ScrollbackStore
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -82,7 +82,7 @@ class SupersededHistoryTest {
                 totalRows = 363,
                 complete = true,
                 capped = false,
-            )
+            ),
         )
         assertEquals(363, store.historyRows, "a quiet poll threw the operator's history away")
     }

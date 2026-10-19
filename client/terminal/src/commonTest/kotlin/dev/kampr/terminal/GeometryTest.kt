@@ -2,11 +2,11 @@ package dev.kampr.terminal
 
 import dev.kampr.terminal.view.CaretBand
 import dev.kampr.terminal.view.PaintRect
-import dev.kampr.terminal.view.followCursorPan
+import dev.kampr.terminal.view.TerminalViewState
 import dev.kampr.terminal.view.caretBand
 import dev.kampr.terminal.view.contentFloor
+import dev.kampr.terminal.view.followCursorPan
 import dev.kampr.terminal.view.terminalGeometry
-import dev.kampr.terminal.view.TerminalViewState
 import dev.kampr.terminal.view.zoomPresets
 import kotlin.math.abs
 import kotlin.test.Test
@@ -17,11 +17,9 @@ import kotlin.test.assertTrue
 private const val CELL_W = 8f
 private const val CELL_H = 17f
 
-private fun phone(insetTop: Float = 108f, insetBottom: Float = 130f) =
-    PaintRect(width = 390f, height = 844f, insetTop = insetTop, insetBottom = insetBottom)
+private fun phone(insetTop: Float = 108f, insetBottom: Float = 130f) = PaintRect(width = 390f, height = 844f, insetTop = insetTop, insetBottom = insetBottom)
 
-private fun close(a: Float, b: Float, tolerance: Float = 0.01f) =
-    assertTrue(abs(a - b) < tolerance, "expected $b, got $a")
+private fun close(a: Float, b: Float, tolerance: Float = 0.01f) = assertTrue(abs(a - b) < tolerance, "expected $b, got $a")
 
 class GeometryTest {
     @Test

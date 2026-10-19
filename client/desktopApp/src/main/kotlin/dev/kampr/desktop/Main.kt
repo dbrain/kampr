@@ -4,9 +4,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import dev.kampr.shared.ui.KamprApp
 import dev.kampr.conversation.ConversationSurfaces
 import dev.kampr.mosaic.MosaicSurfaces
+import dev.kampr.shared.ui.KamprApp
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
 

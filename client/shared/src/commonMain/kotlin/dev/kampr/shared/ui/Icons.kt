@@ -6,8 +6,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Fill
@@ -41,18 +41,26 @@ object KamprIcons {
     val lock = icon(18f, 1.6f, Glyph.Frame(3f, 7.6f, 12f, 8f, 1.8f), d("M5.6 7.6V5.2a3.4 3.4 0 0 1 6.8 0v2.4"))
     val lockSmall = icon(14f, 1.6f, Glyph.Frame(3.4f, 6f, 7.2f, 6f, 1.4f), d("M4.8 6V4.2a2.2 2.2 0 0 1 4.4 0V6"))
     val gear = icon(
-        16f, 1.6f, Glyph.Round(8f, 8f, 2f),
+        16f,
+        1.6f,
+        Glyph.Round(8f, 8f, 2f),
         d("M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3"),
     )
     val search = icon(16f, 1.7f, Glyph.Round(7f, 7f, 4.6f), d("M10.4 10.4 14 14"))
     val zoom = icon(14f, 1.6f, Glyph.Round(6f, 6f, 4.4f), d("M9.4 9.4 12.6 12.6M4.2 6h3.6M6 4.2v3.6"))
     val herd = icon(20f, 1.7f, Glyph.Frame(2f, 3f, 16f, 5f, 1.5f), Glyph.Frame(2f, 12f, 16f, 5f, 1.5f))
     val nodes = icon(
-        20f, 1.7f, Glyph.Round(10f, 4.5f, 2.5f), Glyph.Round(4.5f, 15.5f, 2.5f), Glyph.Round(15.5f, 15.5f, 2.5f),
+        20f,
+        1.7f,
+        Glyph.Round(10f, 4.5f, 2.5f),
+        Glyph.Round(4.5f, 15.5f, 2.5f),
+        Glyph.Round(15.5f, 15.5f, 2.5f),
         d("M10 7v3.4M8.4 12.4 6.6 13.6M11.6 12.4l1.8 1.2"),
     )
     val globe = icon(
-        18f, 1.6f, Glyph.Round(9f, 9f, 7.2f),
+        18f,
+        1.6f,
+        Glyph.Round(9f, 9f, 7.2f),
         d("M1.8 9h14.4M9 1.8c1.9 2 2.9 4.5 2.9 7.2S10.9 15.2 9 16.2C7.1 15.2 6.1 11.7 6.1 9S7.1 3.8 9 1.8z"),
     )
     val warning = icon(16f, 1.7f, d("M8 2 15 14H1z"), d("M8 6.4v3.1M8 11.4v.5"))
@@ -61,6 +69,7 @@ object KamprIcons {
     val tab = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M1.5 6.5h15M6.5 2.5v4"))
     val mosaic = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13M1.5 9h15"))
     val split = icon(18f, 1.7f, Glyph.Frame(1.5f, 2.5f, 15f, 13f, 2f), d("M9 2.5v13"))
+
     // Three machines and one instruction reaching all of them.
     val fleet = icon(
         18f,
@@ -70,12 +79,18 @@ object KamprIcons {
         Glyph.Frame(2f, 12.4f, 14f, 3.6f, 1.2f),
     )
     val branch = icon(
-        18f, 1.7f, Glyph.Round(5f, 4f, 2.2f), Glyph.Round(5f, 14f, 2.2f), Glyph.Round(13f, 9f, 2.2f),
+        18f,
+        1.7f,
+        Glyph.Round(5f, 4f, 2.2f),
+        Glyph.Round(5f, 14f, 2.2f),
+        Glyph.Round(13f, 9f, 2.2f),
         d("M5 6.2v5.6M7.2 4h1.6A2.2 2.2 0 0 1 11 6.2v.9"),
     )
+
     // Two windows, one behind the other: the same pane open somewhere that is not here.
     val alsoOpen = icon(
-        16f, 1.5f,
+        16f,
+        1.5f,
         Glyph.Frame(1.4f, 5f, 9.2f, 9.2f, 1.4f),
         d("M5 5V1.4h9.6V11h-3.6"),
     )
@@ -83,7 +98,8 @@ object KamprIcons {
     val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
     val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))
     val ellipsis = icon(
-        16f, 1.6f,
+        16f,
+        1.6f,
         Glyph.Round(3.2f, 8f, 1.1f, filled = true),
         Glyph.Round(8f, 8f, 1.1f, filled = true),
         Glyph.Round(12.8f, 8f, 1.1f, filled = true),
@@ -106,12 +122,14 @@ fun IconGlyph(icon: Icon, size: Dp, tint: Color, modifier: Modifier = Modifier) 
                         color = tint,
                         style = if (part.filled) Fill else stroke,
                     )
+
                     is Glyph.Round -> drawCircle(
                         color = tint,
                         radius = part.r,
                         center = Offset(part.cx, part.cy),
                         style = if (part.filled) Fill else stroke,
                     )
+
                     is Glyph.Frame -> drawRoundRect(
                         color = tint,
                         topLeft = Offset(part.x, part.y),

@@ -125,9 +125,15 @@ fun PanePicker(
                                     watchersPhrase(othersWatching(pane)),
                                     "to the mosaic",
                                 ).joinToString(", "),
-                                trailing = if (already) ({
-                                    KText("in the mosaic", tokens.type.micro, tokens.color.accent)
-                                }) else null,
+                                trailing = if (already) {
+                                    (
+                                        {
+                                            KText("in the mosaic", tokens.type.micro, tokens.color.accent)
+                                        }
+                                        )
+                                } else {
+                                    null
+                                },
                             )
                         }
                     }

@@ -3,11 +3,11 @@ package dev.kampr.shared
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.themeOf
-import dev.kampr.shared.model.ConnectionStatus
-import dev.kampr.shared.model.Herd
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.HerdPortrait
 import dev.kampr.shared.ui.LocalManage
@@ -93,8 +93,12 @@ class NewSheetArtboardTest {
             sheet()(Breakpoint.Portrait)
         }
         render(
-            PORTRAIT.first, PORTRAIT.second, themeOf("soft"), TypeScale.Phone,
-            File(OUT, "new-sheet-light.png"), Ground.Light,
+            PORTRAIT.first,
+            PORTRAIT.second,
+            themeOf("soft"),
+            TypeScale.Phone,
+            File(OUT, "new-sheet-light.png"),
+            Ground.Light,
         ) { sheet()(Breakpoint.Portrait) }
     }
 
@@ -130,7 +134,9 @@ class NewSheetArtboardTest {
         val opened = mutableListOf<String?>()
         val allowed = object : ManageIo {
             override val enabled = true
-            override fun openNew(paneId: String?) { opened += paneId }
+            override fun openNew(paneId: String?) {
+                opened += paneId
+            }
             override fun openActions(paneId: String) = Unit
         }
         val refused = object : ManageIo {
@@ -139,7 +145,10 @@ class NewSheetArtboardTest {
             override fun openActions(paneId: String) = fail("a refused node must not offer it")
         }
         val withManage = render(
-            PORTRAIT.first, PORTRAIT.second, themeOf("soft"), TypeScale.Phone,
+            PORTRAIT.first,
+            PORTRAIT.second,
+            themeOf("soft"),
+            TypeScale.Phone,
             File(OUT, "herd-with-new.png"),
         ) {
             CompositionLocalProvider(LocalManage provides allowed) {
@@ -147,7 +156,10 @@ class NewSheetArtboardTest {
             }
         }
         val without = render(
-            PORTRAIT.first, PORTRAIT.second, themeOf("soft"), TypeScale.Phone,
+            PORTRAIT.first,
+            PORTRAIT.second,
+            themeOf("soft"),
+            TypeScale.Phone,
             File(OUT, "herd-without-new.png"),
         ) {
             CompositionLocalProvider(LocalManage provides refused) {

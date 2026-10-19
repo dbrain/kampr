@@ -81,8 +81,7 @@ private class CredentialManagerPasskeys : Passkeys {
     // Credential Manager's own message is the useful half when there is one; its type is a class
     // name and reads as one. Whether the node's asset links are the real cause is answered by
     // `PasskeyApi`, which is the half of this that can read the node.
-    private fun reasonFor(type: String, message: String?): String =
-        message?.takeIf { it.isNotBlank() } ?: "Android refused the passkey ($type)."
+    private fun reasonFor(type: String, message: String?): String = message?.takeIf { it.isNotBlank() } ?: "Android refused the passkey ($type)."
 
     private companion object {
         val NO_ACTIVITY = PasskeyResult.Failed("Kampr is not on screen, so Android has nothing to ask on.")

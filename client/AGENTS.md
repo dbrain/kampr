@@ -11,8 +11,8 @@ is a pre-node wire fixture from the same era. Neither is on a shipping path.
   overrides the wrapper (#67). The repository's `make` targets and its Claude Code hook enforce it.
 - `make check-client` (from the root) is exactly the CI client job: `check`, the bundle the node
   embeds, a debug APK, and a refusal to accept a test result served from the build cache.
-- Kotlin style is ktlint, applied to every module from `build.gradle.kts` with a baseline per
-  module in `config/ktlint/`. The baseline is debt: shrink it, never grow it to make a change pass.
+- Kotlin style is ktlint, applied to every module from `build.gradle.kts` with no baseline: the
+  tree is clean, so `ktlintCheck` must stay empty. `ktlintFormat` fixes most of what it reports.
 
 ## Traps that have cost real time
 

@@ -26,8 +26,7 @@ import dev.kampr.shared.ui.touchable
 // Herdr's `pane.send_text` **appends**, so a reply typed here does not replace what is on the
 // pane's line — it is added to the end of it, and the two submit together as one sentence. That is
 // occasionally what somebody wants and it was never visible, which is the whole complaint.
-fun deskWords(line: DeskLine, agent: String?): String =
-    "Waiting in ${agent ?: "the agent"}'s box — your reply is added to the end of it"
+fun deskWords(line: DeskLine, agent: String?): String = "Waiting in ${agent ?: "the agent"}'s box — your reply is added to the end of it"
 
 // Whether the operator can take the line off the pane rather than adding to it.
 //

@@ -93,11 +93,21 @@ object BenchPlan {
         Scenario("289x69 scrollback walk 25/frame", SC, SR, Profile.Idle, history = RING, walk = 25),
         Scenario(
             "289x69 scrollback walk 25/frame run-cache",
-            SC, SR, Profile.Idle, RenderMode.CachedRuns, history = RING, walk = 25,
+            SC,
+            SR,
+            Profile.Idle,
+            RenderMode.CachedRuns,
+            history = RING,
+            walk = 25,
         ),
         Scenario(
             "289x69 scrollback walk 25/frame glyph-cache",
-            SC, SR, Profile.Idle, RenderMode.PerGlyph, history = RING, walk = 25,
+            SC,
+            SR,
+            Profile.Idle,
+            RenderMode.PerGlyph,
+            history = RING,
+            walk = 25,
         ),
     )
 }
@@ -148,7 +158,13 @@ class BenchRunner(
     val current: Scenario get() = scenarios[index.coerceAtMost(scenarios.size - 1)]
     val total: Int get() = scenarios.size
     val measuring: Boolean get() = !finished && frame >= warmup
-    val phase: String get() = if (finished) "done" else if (measuring) "measure" else "warmup"
+    val phase: String get() = if (finished) {
+        "done"
+    } else if (measuring) {
+        "measure"
+    } else {
+        "warmup"
+    }
 
     fun tick(
         stats: FrameStats,
@@ -344,7 +360,12 @@ private fun BenchBody() {
                 },
         )
         Hud(
-            hud, scenario, runner, done, modes.mode, walk.painted,
+            hud,
+            scenario,
+            runner,
+            done,
+            modes.mode,
+            walk.painted,
             Modifier.align(Alignment.TopStart).padding(6.dp),
         )
     }
@@ -420,13 +441,15 @@ private fun Hud(
             )
             BasicText("fps=${two(it.fps)} dropped=${it.dropped} n=${it.frames}", style = style)
         }
-        if (done) for (result in runner.results) {
-            BasicText(
-                "${result.scenario.name}: draw50=${two(result.report.drawP50)} " +
-                    "drop=${result.report.dropped} hit=${two(result.hitPct * 100f)} " +
-                    "hist=${result.historyRows}",
-                style = style,
-            )
+        if (done) {
+            for (result in runner.results) {
+                BasicText(
+                    "${result.scenario.name}: draw50=${two(result.report.drawP50)} " +
+                        "drop=${result.report.dropped} hit=${two(result.hitPct * 100f)} " +
+                        "hist=${result.historyRows}",
+                    style = style,
+                )
+            }
         }
     }
 }

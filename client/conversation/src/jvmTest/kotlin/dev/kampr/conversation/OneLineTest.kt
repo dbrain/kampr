@@ -13,12 +13,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.ClientMsg
@@ -47,11 +47,9 @@ private fun paneWithNoQuestion(): Pair<KamprStore, PaneState> {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.box(): String =
-    onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+private fun ComposeUiTest.box(): String = onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
 
-private fun typedIntoThePane(): List<String> =
-    RecordingIo.sent.filterIsInstance<ClientMsg.InputText>().map { it.text }
+private fun typedIntoThePane(): List<String> = RecordingIo.sent.filterIsInstance<ClientMsg.InputText>().map { it.text }
 
 // The reply box and the pane's own box are one line: what the desk types is in the reply box as it
 // is typed, what the reply box types is in the pane as it is typed, and sending is the Enter.

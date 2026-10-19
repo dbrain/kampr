@@ -3,8 +3,7 @@ package dev.kampr.terminal
 import kotlin.js.ExperimentalWasmJsInterop
 
 @OptIn(ExperimentalWasmJsInterop::class)
-internal fun inputFocused(): Boolean =
-    js("(function(){ var s = globalThis.__kamprInput; return !!(s && document.activeElement === s.el); })()")
+internal fun inputFocused(): Boolean = js("(function(){ var s = globalThis.__kamprInput; return !!(s && document.activeElement === s.el); })()")
 
 // Karma's own browser is a headless Chromium reporting no input device at all, so a desk and a
 // phone both have to be handed to the code as the readings they give. `dev.kampr.shared` measures
@@ -28,7 +27,7 @@ internal fun pretendPointer(hover: String, pointer: String) {
                 configurable: true,
             });
         })()
-        """
+        """,
     )
 }
 
@@ -43,7 +42,7 @@ internal fun stopPretending() {
                 });
             }
         })()
-        """
+        """,
     )
 }
 
@@ -55,9 +54,8 @@ internal fun pretendPhone() = pretendPointer(hover = "none", pointer = "coarse")
 // keydown the handler did not `preventDefault` is a keydown the browser is still free to act on,
 // which for `⌘T` is the whole point.
 @OptIn(ExperimentalWasmJsInterop::class)
-internal fun chordKey(key: String, ctrl: Boolean, meta: Boolean, shift: Boolean): Boolean =
-    js(
-        """
+internal fun chordKey(key: String, ctrl: Boolean, meta: Boolean, shift: Boolean): Boolean = js(
+    """
         (function () {
             var s = globalThis.__kamprInput;
             var e = new KeyboardEvent('keydown', {
@@ -67,5 +65,5 @@ internal fun chordKey(key: String, ctrl: Boolean, meta: Boolean, shift: Boolean)
             s.el.dispatchEvent(e);
             return !e.defaultPrevented;
         })()
-        """
-    )
+        """,
+)

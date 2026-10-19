@@ -44,8 +44,7 @@ private class FootIo : PaneIo {
 
 private class DeskTerminal(private val session: PaneSession, private val io: PaneIo) : PaneSurfaces {
     @Composable
-    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        TerminalView(pane, session, io, modifier)
+    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = TerminalView(pane, session, io, modifier)
 
     @Composable
     override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Unit

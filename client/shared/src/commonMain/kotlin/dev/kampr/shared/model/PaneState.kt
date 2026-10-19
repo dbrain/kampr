@@ -9,8 +9,8 @@ import androidx.compose.runtime.setValue
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.EditKeys
 import dev.kampr.shared.wire.Facets
-import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 
@@ -179,8 +179,7 @@ private const val QUIET_AFTER_MOVES = 3
 // full-screen agent on the alt screen keeps no scrollback at all (its ring is flat at zero), and a
 // plain shell has no agent status to move — so a detector built on one of them is blind to exactly
 // half the panes in the product, and the half it was blind to was `codex`.
-fun paneMoved(before: PaneInfo, after: PaneInfo): Boolean =
-    after.scrollbackRows > before.scrollbackRows || after.agentStatus != before.agentStatus
+fun paneMoved(before: PaneInfo, after: PaneInfo): Boolean = after.scrollbackRows > before.scrollbackRows || after.agentStatus != before.agentStatus
 
 // One conversation a pane's agent launched. A page of one is always `fresh` — it has nothing in
 // common with the pane's transcript to merge into — but a page of it can still be asked for with a
@@ -274,7 +273,6 @@ fun mergeTurns(into: MutableList<Turn>, page: List<Turn>, unanchored: Unanchored
     into.addAll(at, waiting)
 }
 
-
 class PaneState(val id: String, val styles: StyleTable) {
     val cells = CellBuffer(80, 24)
     val links = mutableListOf<String>()
@@ -300,6 +298,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         private set
     var pending by mutableStateOf<ServerMsg.Pending?>(null)
         internal set
+
     // A reply half written and not yet sent. It belongs to the pane rather than to the composer,
     // which leaves the composition every time the operator looks at the terminal.
     //

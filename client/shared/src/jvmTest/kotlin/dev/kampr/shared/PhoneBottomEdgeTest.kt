@@ -18,8 +18,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.KeyboardFloor
 import dev.kampr.shared.ui.LocalSafeArea
-import dev.kampr.shared.ui.PhoneScaffold
 import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.ui.PhoneScaffold
 import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.named
 import kotlin.test.Test

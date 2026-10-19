@@ -4,13 +4,13 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
-import java.net.HttpURLConnection
-import java.net.URL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.HttpURLConnection
+import java.net.URL
 
 // Every self-hosted node this app is pointed at is a private address over plain http —
 // `Endpoint.schemeFor` picks http for exactly those. From targetSdk 37 a node on the phone's own

@@ -40,8 +40,7 @@ private fun ComposeUiTest.composer(drafts: MutableList<String> = mutableListOf()
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.editable(): String =
-    onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+private fun ComposeUiTest.editable(): String = onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
 
 private fun KeyInjectionScope.ctrl(key: Key) = withKeyDown(Key.CtrlLeft) { pressKey(key) }
 
@@ -62,13 +61,28 @@ private class Case(
 
 private val CASES = listOf(
     Case("ctrl+A", "one two", { ctrl(Key.A) }, then = "|", expect = "|one two"),
-    Case("ctrl+E", "one two", { ctrl(Key.A); ctrl(Key.E) }, then = "|", expect = "one two|"),
+    Case("ctrl+E", "one two", {
+        ctrl(Key.A)
+        ctrl(Key.E)
+    }, then = "|", expect = "one two|"),
     Case("ctrl+U on the whole line", "one two", { ctrl(Key.U) }, expect = ""),
-    Case("ctrl+U behind the caret", "one two", { left(3); ctrl(Key.U) }, expect = "two"),
-    Case("ctrl+shift+K", "one two", { left(3); ctrlShift(Key.K) }, expect = "one "),
-    Case("ctrl+K is the palette's", "one two", { left(3); ctrl(Key.K) }, expect = "one two"),
+    Case("ctrl+U behind the caret", "one two", {
+        left(3)
+        ctrl(Key.U)
+    }, expect = "two"),
+    Case("ctrl+shift+K", "one two", {
+        left(3)
+        ctrlShift(Key.K)
+    }, expect = "one "),
+    Case("ctrl+K is the palette's", "one two", {
+        left(3)
+        ctrl(Key.K)
+    }, expect = "one two"),
     Case("ctrl+W", "one two", { ctrl(Key.W) }, expect = "one "),
-    Case("ctrl+W twice", "one two", { ctrl(Key.W); ctrl(Key.W) }, expect = ""),
+    Case("ctrl+W twice", "one two", {
+        ctrl(Key.W)
+        ctrl(Key.W)
+    }, expect = ""),
 )
 
 // The operator's ask, in their words: "on bash i can ctrl+A ctrl+E ctrl+U etc. to move to

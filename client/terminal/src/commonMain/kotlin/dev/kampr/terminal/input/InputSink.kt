@@ -141,7 +141,10 @@ class InputSink(
             return
         }
         val head = decorate(
-            text.take(1), latches.ctrl.active(), latches.alt.active(), latches.shift.active(),
+            text.take(1),
+            latches.ctrl.active(),
+            latches.alt.active(),
+            latches.shift.active(),
         )
         latches.consume()
         raw(head + text.drop(1))

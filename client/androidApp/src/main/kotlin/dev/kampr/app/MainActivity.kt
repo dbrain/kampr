@@ -11,12 +11,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.conversation.ConversationSurfaces
+import dev.kampr.mosaic.MosaicSurfaces
 import dev.kampr.shared.net.KamprHost
 import dev.kampr.shared.platform.KamprAndroid
 import dev.kampr.shared.ui.DeepLink
 import dev.kampr.shared.ui.KamprApp
-import dev.kampr.conversation.ConversationSurfaces
-import dev.kampr.mosaic.MosaicSurfaces
 import dev.kampr.terminal.TerminalSurfaces
 import dev.kampr.terminal.bench.TerminalBenchApp
 import dev.kampr.terminal.input.keyTracing

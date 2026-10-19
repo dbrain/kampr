@@ -31,7 +31,10 @@ class PasskeyApi(
     private val endpoint: Endpoint,
     private val passkeys: Passkeys = createPasskeys(),
 ) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     val available: Boolean get() = passkeys.available
 
@@ -105,7 +108,7 @@ class PasskeyApi(
                 deviceId = device?.get("id")?.jsonPrimitive?.content,
                 name = device?.get("name")?.jsonPrimitive?.content,
                 role = device?.get("role")?.jsonPrimitive?.content,
-            )
+            ),
         )
     }
 
@@ -150,8 +153,7 @@ fun relyingParty(optionsJson: String): String? {
 // RP ID above the origin is read over https on 443 and nowhere else; when it *is* the host being
 // dialled, that endpoint's own scheme and port are the right ones — a dev node is plain http on
 // 8793 and has nothing on 443 at all.
-fun assetLinksUrl(endpoint: Endpoint, rpId: String): String =
-    when (rpId) {
-        endpoint.host.substringBeforeLast(':') -> "${endpoint.httpBase}$ASSET_LINKS_PATH"
-        else -> "https://$rpId$ASSET_LINKS_PATH"
-    }
+fun assetLinksUrl(endpoint: Endpoint, rpId: String): String = when (rpId) {
+    endpoint.host.substringBeforeLast(':') -> "${endpoint.httpBase}$ASSET_LINKS_PATH"
+    else -> "https://$rpId$ASSET_LINKS_PATH"
+}

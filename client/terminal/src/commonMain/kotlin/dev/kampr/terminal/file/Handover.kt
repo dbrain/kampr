@@ -27,8 +27,7 @@ fun handoverName(picked: PickedFile): String = picked.name?.takeIf { it.isNotBla
 // The node answers a paste it will not take with an error naming this pane — too large, not
 // base64, nowhere to write — and that error is deliberately quiet everywhere else. The refusal is
 // cleared before the bytes go, so what lands next is the answer to this.
-fun handoverAfter(handover: Handover, refusal: String?): Handover =
-    if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
+fun handoverAfter(handover: Handover, refusal: String?): Handover = if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
 
 // Off the main thread, because base64 of eight megabytes is eight megabytes of work and this
 // surface is repainting a terminal grid while it happens. That wait is what `Going` is for.

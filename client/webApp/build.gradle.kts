@@ -10,7 +10,7 @@ plugins {
 // layer at runtime — it is extracted from it at build time instead, so the two cannot drift.
 // Both grounds are extracted: with only the dark one a light-ground load flashes black.
 val tokensFile = layout.projectDirectory.file(
-    "../shared/src/commonMain/kotlin/dev/kampr/shared/theme/Themes.kt"
+    "../shared/src/commonMain/kotlin/dev/kampr/shared/theme/Themes.kt",
 )
 
 val generateBootCss = tasks.register("generateBootCss") {
@@ -37,7 +37,7 @@ val generateBootCss = tasks.register("generateBootCss") {
             html[data-ground="dark"], html[data-ground="dark"] body { background: #$dark; }
             html[data-ground="light"], html[data-ground="light"] body { background: #$light; }
             canvas { outline: none; }
-            """.trimIndent() + "\n"
+            """.trimIndent() + "\n",
         )
     }
 }
@@ -62,7 +62,7 @@ kotlin {
             implementation(project(":shared"))
             implementation(project(":terminal"))
             implementation(project(":conversation"))
-        implementation(project(":mosaic"))
+            implementation(project(":mosaic"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.ui)
             implementation(libs.compose.foundation)

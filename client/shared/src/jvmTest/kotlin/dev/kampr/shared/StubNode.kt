@@ -77,8 +77,10 @@ internal class StubNode(private val greeting: String = HELLO) {
                 .digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()),
         )
         output.write(
-            ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
-                "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray()
+            (
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: $accept\r\n\r\n"
+                ).toByteArray(),
         )
         output.flush()
         accepted.incrementAndGet()
@@ -133,8 +135,9 @@ internal class StubNode(private val greeting: String = HELLO) {
         if (second < 0) return null
         val masked = second and 0x80 != 0
         var length = second and 0x7f
-        if (length == 126) length = (input.read() shl 8) or input.read()
-        else if (length == 127) {
+        if (length == 126) {
+            length = (input.read() shl 8) or input.read()
+        } else if (length == 127) {
             length = 0
             repeat(8) { length = (length shl 8) or input.read() }
         }

@@ -90,8 +90,7 @@ private const val GREETING = "You're already in."
 // `runComposeUiTest` clamps its content to a 1024 dp window, which is narrower than every window
 // this file is about, so the sizes have to be the scene's rather than a modifier's.
 @OptIn(ExperimentalTestApi::class)
-private fun window(width: Dp, height: Dp, block: SkikoComposeUiTest.() -> Unit) =
-    runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) { block() }
+private fun window(width: Dp, height: Dp, block: SkikoComposeUiTest.() -> Unit) = runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) { block() }
 
 @OptIn(ExperimentalTestApi::class)
 private fun SemanticsNodeInteractionsProvider.cards(): List<DpRect> {
@@ -137,15 +136,17 @@ private fun Setup() {
 class WideWindowTest {
     @Test
     fun aPaneCardStopsGrowingAtTheWidthItsOwnContentNeeds() {
-        for (width in listOf(1280.dp, 1920.dp, 3440.dp)) window(width, 560.dp) {
-            setContent { Themed { Herd(HERD) } }
-            waitForIdle()
-            val card = cards().first()
-            val measured = card.right - card.left
-            assertTrue(
-                measured <= COLUMN_MAX,
-                "a $width window stretched a pane card to $measured, past the $COLUMN_MAX its content ends at",
-            )
+        for (width in listOf(1280.dp, 1920.dp, 3440.dp)) {
+            window(width, 560.dp) {
+                setContent { Themed { Herd(HERD) } }
+                waitForIdle()
+                val card = cards().first()
+                val measured = card.right - card.left
+                assertTrue(
+                    measured <= COLUMN_MAX,
+                    "a $width window stretched a pane card to $measured, past the $COLUMN_MAX its content ends at",
+                )
+            }
         }
     }
 
@@ -172,10 +173,12 @@ class WideWindowTest {
     @Test
     fun theNumberOfColumnsAnswersTheWindow() {
         val counted = mutableMapOf<Dp, Int>()
-        for (width in listOf(640.dp, 1280.dp, 3440.dp)) window(width, 560.dp) {
-            setContent { Themed { Herd(HERD) } }
-            waitForIdle()
-            counted[width] = cards().lefts().size
+        for (width in listOf(640.dp, 1280.dp, 3440.dp)) {
+            window(width, 560.dp) {
+                setContent { Themed { Herd(HERD) } }
+                waitForIdle()
+                counted[width] = cards().lefts().size
+            }
         }
         assertEquals(1, counted[640.dp], "a window with room for one measure was still split in two")
         assertEquals(2, counted[1280.dp], "1280 dp did not fit the two columns it has room for")

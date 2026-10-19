@@ -16,8 +16,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.touchable
@@ -87,6 +87,7 @@ fun PinnedBlockBar(
                 KText(replyTally(row.reply), tokens.type.micro, tokens.color.mute)
             }
         }
+
         is TranscriptRow.Ask -> {
             val skin = speakerSkin(speakerOf(row.turn), agent)
             val gist = turnGist(row.turn)
@@ -96,6 +97,7 @@ fun PinnedBlockBar(
                 KText(gist, tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
             }
         }
+
         else -> Unit
     }
 }
@@ -123,8 +125,11 @@ private fun PinnedBar(
                 Modifier
                     .weight(1f)
                     .then(
-                        if (onCollapse == null) Modifier
-                        else Modifier.touchable(LANDSCAPE_TOUCH).action(label, onCollapse),
+                        if (onCollapse == null) {
+                            Modifier
+                        } else {
+                            Modifier.touchable(LANDSCAPE_TOUCH).action(label, onCollapse)
+                        },
                     )
                     .padding(start = 16.dp, end = if (trailing == null) 16.dp else 4.dp, top = 7.dp, bottom = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,

@@ -46,6 +46,7 @@ class Latches {
     // press fn to get out of fn I need to press fn twice"*.
     fun tap(latch: Latch) = when (latch) {
         Latch.Fn -> lock(latch)
+
         else -> set(
             latch,
             when (this[latch]) {

@@ -19,8 +19,8 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
@@ -72,8 +72,7 @@ private fun deskPane(): PaneState {
 
 private class DeskSurfaces(private val session: PaneSession) : PaneSurfaces {
     @Composable
-    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        TerminalView(pane, session, DeskIo, modifier)
+    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = TerminalView(pane, session, DeskIo, modifier)
 
     @Composable
     override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Unit
@@ -82,7 +81,10 @@ private class DeskSurfaces(private val session: PaneSession) : PaneSurfaces {
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val sink = InputSink(pane.id, DeskIo, session.latches)
         PaneKeyRow(
-            session, sink, compact, enabled = true,
+            session,
+            sink,
+            compact,
+            enabled = true,
             modifier = modifier.onSizeChanged { session.keyRowHeight = it.height.toFloat() },
         )
     }

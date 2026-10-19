@@ -31,8 +31,11 @@ private val IPV4 = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
 // literal, a single-label LAN name, an mDNS name — takes http. The panel prints the result back,
 // so a wrong guess is one the operator can see and correct rather than one that just fails.
 private fun schemeFor(hostPort: String): String {
-    val host = if (hostPort.startsWith("[")) hostPort.substringBefore(']').removePrefix("[")
-    else hostPort.substringBefore(':')
+    val host = if (hostPort.startsWith("[")) {
+        hostPort.substringBefore(']').removePrefix("[")
+    } else {
+        hostPort.substringBefore(':')
+    }
     val lan = ':' in host ||
         IPV4.matches(host) ||
         '.' !in host ||
@@ -70,8 +73,7 @@ private const val CODE_LEN = 8
 
 // A pairing code has one length, and the node is what fixed it. That is what lets a field holding
 // a whole one act on it instead of waiting for a key nobody can see on a phone.
-fun pairingCodeComplete(typed: String): Boolean =
-    typed.uppercase().count { it in CODE_ALPHABET } == CODE_LEN
+fun pairingCodeComplete(typed: String): Boolean = typed.uppercase().count { it in CODE_ALPHABET } == CODE_LEN
 
 // What a scanned QR turns into. The desktop's symbol is `origin#pair=<code>` and the code rides in
 // the fragment on purpose — a fragment is never sent, so it reaches neither the node's access log

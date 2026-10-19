@@ -8,11 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -45,8 +45,7 @@ import dev.kampr.shared.wire.talks
 // the desktop's own Split default all outlive the transcript that justified them, and the pane they
 // name is still live — so the terminal is where that lands, and the request is kept rather than
 // rewritten, which is what brings the operator's choice back when the transcript returns.
-private fun viewOn(info: PaneInfo?, view: PaneView): PaneView =
-    if (info.talks) view else PaneView.Terminal
+private fun viewOn(info: PaneInfo?, view: PaneView): PaneView = if (info.talks) view else PaneView.Terminal
 
 // The room a conversation needs at its foot to be worth opening: one line of reply box, its
 // padding, and the send button beside it — 70 dp, which `aReplyBoxIsNoTallerThanTheRoomReservedForIt`
@@ -72,8 +71,7 @@ private val PHONE_HEADER: Dp = 88.dp
 // node's own refusal about this pane stands in where the herd entry says nothing: a failure the
 // global strip stayed quiet about — because the operator was on another pane when it arrived — is
 // still the answer to why they are looking at an empty one now.
-private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
-    (info?.detail ?: pane.refusal)?.takeUnless { pane.painted }
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? = (info?.detail ?: pane.refusal)?.takeUnless { pane.painted }
 
 // The zoom sheet belongs to the terminal surface, so the control that opens it has nothing to open
 // on a transcript. Withdrawing it outright is what the report is about: every one of these headers
@@ -147,7 +145,9 @@ private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone:
     if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
     if (readOnly) {
         StatusBadge(
-            "read-only", tokens.color.dim, tokens.color.surface,
+            "read-only",
+            tokens.color.dim,
+            tokens.color.surface,
             label = "This device is read-only — it cannot type into the pane",
         )
     }
@@ -405,51 +405,51 @@ fun PaneScreenDesktop(
                 .readingOrder(-1f)
                 .onGloballyPositioned { chrome = with(density) { it.size.height.toDp() } },
         ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(tokens.color.bar)
-                .edgeBottom()
-                .absolutePadding(left = 12.dp + safe.left, top = 3.dp + safe.top, right = 8.dp + safe.right, bottom = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading(), maxLines = 1)
-            if (gone != null) GoneBadge(gone)
-            if (info?.detail != null) StreamBadge()
-            if (pane.stale) StaleBadge(shown)
-            if (pane.quiet) QuietBadge()
-            if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
-            StatusChip(info)
-            Box(Modifier.weight(1f))
-            ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
-            if (info.talks) {
-                // Terminal first and Split last, in the order a pane is actually opened in: the
-                // switch led with the one view a pane never opens as, so the two that matter sat
-                // where the eye arrives second.
-                Segmented(
-                    listOf("Terminal", "Conversation", "Split"),
-                    when (shown) {
-                        PaneView.Terminal -> 0
-                        PaneView.Conversation -> 1
-                        PaneView.Split -> 2
-                    },
-                    { index ->
-                        onView(
-                            when (index) {
-                                0 -> PaneView.Terminal
-                                1 -> PaneView.Conversation
-                                else -> PaneView.Split
-                            }
-                        )
-                    },
-                    what = "view",
-                    compact = true,
-                )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(tokens.color.bar)
+                    .edgeBottom()
+                    .absolutePadding(left = 12.dp + safe.left, top = 3.dp + safe.top, right = 8.dp + safe.right, bottom = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading(), maxLines = 1)
+                if (gone != null) GoneBadge(gone)
+                if (info?.detail != null) StreamBadge()
+                if (pane.stale) StaleBadge(shown)
+                if (pane.quiet) QuietBadge()
+                if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
+                StatusChip(info)
+                Box(Modifier.weight(1f))
+                ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                if (info.talks) {
+                    // Terminal first and Split last, in the order a pane is actually opened in: the
+                    // switch led with the one view a pane never opens as, so the two that matter sat
+                    // where the eye arrives second.
+                    Segmented(
+                        listOf("Terminal", "Conversation", "Split"),
+                        when (shown) {
+                            PaneView.Terminal -> 0
+                            PaneView.Conversation -> 1
+                            PaneView.Split -> 2
+                        },
+                        { index ->
+                            onView(
+                                when (index) {
+                                    0 -> PaneView.Terminal
+                                    1 -> PaneView.Conversation
+                                    else -> PaneView.Split
+                                },
+                            )
+                        },
+                        what = "view",
+                        compact = true,
+                    )
+                }
+                NewAction(pane.id, target = LANDSCAPE_TOUCH)
+                PaneManageAction(pane.id, target = LANDSCAPE_TOUCH)
             }
-            NewAction(pane.id, target = LANDSCAPE_TOUCH)
-            PaneManageAction(pane.id, target = LANDSCAPE_TOUCH)
-        }
             gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
         }
 

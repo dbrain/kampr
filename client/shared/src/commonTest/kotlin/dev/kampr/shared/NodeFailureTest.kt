@@ -14,8 +14,7 @@ import kotlin.test.assertTrue
 private const val HERE = "01JHERE/w1:p1"
 private const val THERE = "01JTHERE/w2:p4"
 
-private fun failure(frame: String): ServerMsg.Failure =
-    Wire.decode(frame) as? ServerMsg.Failure ?: error("undecodable: $frame")
+private fun failure(frame: String): ServerMsg.Failure = Wire.decode(frame) as? ServerMsg.Failure ?: error("undecodable: $frame")
 
 private const val OFFLINE =
     """{"t":"error","code":"node_offline","message":"workbox is offline","node":"01JTHERE"}"""
@@ -57,7 +56,7 @@ class NodeFailureTest {
     @Test
     fun aPaneScopedRefusalIsLoudOnlyOnThatPane() {
         val stream = failure(
-            """{"t":"error","code":"stream_unavailable","pane":"$THERE","message":"kampr cannot run herdr"}"""
+            """{"t":"error","code":"stream_unavailable","pane":"$THERE","message":"kampr cannot run herdr"}""",
         )
         assertTrue(saidOutLoud(stream, THERE))
         assertFalse(saidOutLoud(stream, HERE))
@@ -70,7 +69,7 @@ class NodeFailureTest {
         val store = KamprStore()
         store.pane(THERE)
         store.accept(
-            failure("""{"t":"error","code":"stream_unavailable","pane":"$THERE","message":"kampr cannot run herdr"}""")
+            failure("""{"t":"error","code":"stream_unavailable","pane":"$THERE","message":"kampr cannot run herdr"}"""),
         )
         assertEquals("kampr cannot run herdr", store.pane(THERE).refusal)
         assertNull(store.pane(HERE).refusal, "a refusal about one pane was recorded against another")
@@ -81,14 +80,13 @@ class NodeFailureTest {
 // token is permanently unresolved and every pane in one repository is named after the same
 // working directory.
 class PaneTitleFieldTest {
-    private fun paneOf(frame: String) =
-        (Wire.decode(frame) as ServerMsg.Herd).panes.single()
+    private fun paneOf(frame: String) = (Wire.decode(frame) as ServerMsg.Herd).panes.single()
 
     @Test
     fun aPaneCarriesTheHarnessesOwnNameForItsSession() {
         val pane = paneOf(
             """{"t":"herd","nodes":[],"panes":[{"id":"$HERE","node_id":"01JHERE","rows":30,
-               "cwd":"/home/u/dev/kampr","title":"the width inference","agent":"claude"}]}"""
+               "cwd":"/home/u/dev/kampr","title":"the width inference","agent":"claude"}]}""",
         )
         assertEquals("the width inference", pane.title)
         assertEquals("the width inference · claude", paneTitle(pane))
@@ -99,7 +97,7 @@ class PaneTitleFieldTest {
     fun aLabelTheOperatorTypedStillWins() {
         val pane = paneOf(
             """{"t":"herd","nodes":[],"panes":[{"id":"$HERE","node_id":"01JHERE","rows":30,
-               "cwd":"/home/u/dev/kampr","title":"the width inference","label":"build","agent":"claude"}]}"""
+               "cwd":"/home/u/dev/kampr","title":"the width inference","label":"build","agent":"claude"}]}""",
         )
         assertEquals("build · claude", paneTitle(pane))
     }
@@ -108,7 +106,7 @@ class PaneTitleFieldTest {
     fun aPaneWithNoTitleIsNamedTheWayItAlwaysWas() {
         val pane = paneOf(
             """{"t":"herd","nodes":[],"panes":[{"id":"$HERE","node_id":"01JHERE","rows":30,
-               "cwd":"/home/u/dev/kampr","agent":"claude"}]}"""
+               "cwd":"/home/u/dev/kampr","agent":"claude"}]}""",
         )
         assertNull(pane.title)
         assertEquals("kampr · claude", paneTitle(pane))

@@ -11,8 +11,8 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
-import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.theme.LocalTokens
@@ -40,8 +40,7 @@ private fun ComposeUiTest.compose(keyboard: Boolean, sent: MutableList<String>) 
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.editable(): String =
-    onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
+private fun ComposeUiTest.editable(): String = onNodeWithContentDescription(REPLY).fetchSemanticsNode().config[SemanticsProperties.EditableText].text
 
 // What a keyboard makes people expect, and what every agent CLI on the other end of this pane
 // already does: return sends, and a modifier with it is how you get a second line. On a phone it

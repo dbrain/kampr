@@ -1,30 +1,31 @@
 package dev.kampr.terminal
 
-import dev.kampr.terminal.view.ZoomButton
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.assertHeightIsAtLeast
-import androidx.compose.ui.test.isFocused
-import androidx.compose.ui.test.onFirst
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.filterToOne
+import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -42,8 +43,8 @@ import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.Esc
@@ -51,8 +52,7 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
 import dev.kampr.terminal.view.ConfirmSheet
 import dev.kampr.terminal.view.TerminalView
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.test.SemanticsNodeInteraction
+import dev.kampr.terminal.view.ZoomButton
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -72,7 +72,9 @@ private class GridIo(
 ) : PaneIo {
     val sent = mutableListOf<ClientMsg>()
     var shown: dev.kampr.shared.ui.PaneView? = null
-    override fun send(msg: ClientMsg) { sent += msg }
+    override fun send(msg: ClientMsg) {
+        sent += msg
+    }
     override fun prefs(paneId: String) = PanePrefs(mapOf("confirm" to "on"))
     override fun info(paneId: String) = PaneInfo(
         id = GRID_PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
@@ -80,7 +82,9 @@ private class GridIo(
         agentStatus = "idle", cols = 62, rows = 24, hasConversation = conversation, watchers = watchers,
         converses = converses,
     )
-    override fun show(view: dev.kampr.shared.ui.PaneView) { shown = view }
+    override fun show(view: dev.kampr.shared.ui.PaneView) {
+        shown = view
+    }
 }
 
 private fun gridPane(): PaneState {
@@ -282,9 +286,13 @@ class GridReviewTest {
         waitForIdle()
 
         for (name in listOf(
-            "Read the previous row", "Read the next row",
-            "Read the previous word", "Read the next word",
-            "Read this row again", "Back to the live cursor", "Leave review",
+            "Read the previous row",
+            "Read the next row",
+            "Read the previous word",
+            "Read the next word",
+            "Read this row again",
+            "Back to the live cursor",
+            "Leave review",
         )) {
             onNodeWithContentDescription(name, substring = true).assertExists()
         }

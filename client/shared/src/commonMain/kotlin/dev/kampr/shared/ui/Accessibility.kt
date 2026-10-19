@@ -62,8 +62,7 @@ private fun Modifier.focusRing(shape: Shape = RectangleShape, tint: Color = Kamp
 //
 // Disabled resolves to the plain arrow rather than to nothing: a control that refuses the press is
 // still not text, and leaving it alone hands the I-beam back.
-fun Modifier.pressable(enabled: Boolean = true): Modifier =
-    pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default, overrideDescendants = true)
+fun Modifier.pressable(enabled: Boolean = true): Modifier = pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default, overrideDescendants = true)
 
 // Every interactive control in Kampr goes through here. `label` names the action rather than the
 // glyph — "Zoom, currently 1.6×", never "magnifier" — and it replaces whatever text the control
@@ -114,10 +113,23 @@ fun Modifier.gestureAction(
     contentDescription = label
     this.role = role
     if (state != null) stateDescription = state
-    onClick(label = clickLabel) { onClick(); true }
-    if (onLongClick != null) onLongClick(label = longLabel) { onLongClick(); true }
+    onClick(label = clickLabel) {
+        onClick()
+        true
+    }
+    if (onLongClick != null) {
+        onLongClick(label = longLabel) {
+            onLongClick()
+            true
+        }
+    }
     if (actions.isNotEmpty()) {
-        customActions = actions.map { (name, run) -> CustomAccessibilityAction(name) { run(); true } }
+        customActions = actions.map { (name, run) ->
+            CustomAccessibilityAction(name) {
+                run()
+                true
+            }
+        }
     }
 }
 
@@ -127,11 +139,10 @@ fun Modifier.named(label: String): Modifier = semantics { contentDescription = l
 // Something that appears without the reader asking for it — a prompt, an error, a node dropping
 // off the mesh. Polite waits for a gap in speech; urgent interrupts, and is reserved for the two
 // things that hold the operator up: a blocked agent and a command about to run.
-fun Modifier.announce(label: String, urgent: Boolean = false): Modifier =
-    semantics(mergeDescendants = true) {
-        contentDescription = label
-        liveRegion = if (urgent) LiveRegionMode.Assertive else LiveRegionMode.Polite
-    }
+fun Modifier.announce(label: String, urgent: Boolean = false): Modifier = semantics(mergeDescendants = true) {
+    contentDescription = label
+    liveRegion = if (urgent) LiveRegionMode.Assertive else LiveRegionMode.Polite
+}
 
 // Traversal order is composition order, and three of Kampr's screens paint the terminal first and
 // the chrome over it — so reading order and composition order disagree unless this says otherwise.

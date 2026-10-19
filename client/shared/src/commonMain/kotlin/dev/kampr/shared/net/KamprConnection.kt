@@ -67,6 +67,7 @@ class KamprConnection(
     private var loop: Job? = null
     private var outbox = Channel<ClientMsg>(Channel.BUFFERED)
     private var live = false
+
     // A pane can be on screen twice at once — the pane screen and any number of mosaic cells —
     // and the last viewer to let go is the one that stops the stream. Watching by owner is what
     // makes "removing a cell unwatches" true without it also unwatching what is still on screen.
@@ -82,6 +83,7 @@ class KamprConnection(
     private var probeArmed = false
     private var sessionJob: Job? = null
     private var dropped: String? = null
+
     // Conflated, and only ever read by whichever of the two waits is the live one: the heartbeat
     // while there is a socket, the retry ladder while there is not.
     private val wake = Channel<Unit>(Channel.CONFLATED)
@@ -242,9 +244,11 @@ class KamprConnection(
                             capsWanted = msg.caps.manage
                             askCaps()
                         }
+
                         // Agent kinds and named sessions both move when the herd does, and the
                         // node caches its answer anyway, so a patch is the cue to re-read them.
                         is ServerMsg.Herd, is ServerMsg.HerdPatch -> askCaps()
+
                         else -> Unit
                     }
                 }

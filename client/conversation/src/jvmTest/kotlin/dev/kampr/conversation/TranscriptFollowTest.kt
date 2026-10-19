@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -18,19 +19,19 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
@@ -40,7 +41,6 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
-import androidx.compose.foundation.layout.size
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneView
@@ -54,8 +54,7 @@ private const val NEWEST_LINE = "This paragraph is the last thing anyone has sai
 private const val TO_END = "Go to the end of the transcript"
 private const val OLDEST_LINE = "An older page, fetched after the transcript was already open."
 
-private fun body(turn: Int) =
-    (1..6).joinToString("\n\n") { "Turn $turn, paragraph $it, long enough to take a few lines of a phone." }
+private fun body(turn: Int) = (1..6).joinToString("\n\n") { "Turn $turn, paragraph $it, long enough to take a few lines of a phone." }
 
 private fun transcript(turns: Int, more: Boolean) = ServerMsg.Convo(
     pane = PANE_ID,
@@ -192,7 +191,9 @@ class TranscriptFollowTest {
                 pane = PANE_ID,
                 turns = listOf(
                     Turn(
-                        "t-12", "assistant", "2026-08-23T09:00:09.000Z",
+                        "t-12",
+                        "assistant",
+                        "2026-08-23T09:00:09.000Z",
                         listOf(
                             Block.Code("kotlin", (1..12).joinToString("\n") { "    val line$it = $it" }),
                             Block.Md(body(12) + "\n\n" + NEWEST_LINE),
@@ -304,8 +305,7 @@ class TranscriptFollowTest {
     // became a `TextFieldState` field: that one publishes a scroll action of its own, so the
     // selector matched two nodes and injected touch into neither. The transcript is the scrollable
     // that is a *list of turns*, and a collection is what says so.
-    private fun ComposeUiTest.transcript() =
-        onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo))
+    private fun ComposeUiTest.transcript() = onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo))
 
     private fun ComposeUiTest.scrollBack() {
         repeat(2) {

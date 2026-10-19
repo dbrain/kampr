@@ -85,7 +85,11 @@ class AuthApi(
     private val endpoint: Endpoint,
     private val node: NodeApi = NodeApi(client, endpoint),
 ) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        encodeDefaults = true
+    }
 
     suspend fun status(): SetupStatus? {
         val info = node.info() ?: return null
@@ -98,8 +102,7 @@ class AuthApi(
         )
     }
 
-    suspend fun devices(): List<DeviceRecord> =
-        get("/api/devices") { json.decodeFromString(DeviceList.serializer(), it).devices } ?: emptyList()
+    suspend fun devices(): List<DeviceRecord> = get("/api/devices") { json.decodeFromString(DeviceList.serializer(), it).devices } ?: emptyList()
 
     // Ktor does not throw on a non-2xx, so without this a revocation the node refused — or never
     // routed — reports success and the device stays in the list, still connected.
@@ -116,8 +119,11 @@ class AuthApi(
     // is a herdr popup and a read-only device sees every frame of it.
     suspend fun pairingCode(): String? = runCatching {
         val response = client.post("${endpoint.httpBase}/api/pair") { auth() }
-        if (!response.status.isSuccess()) null
-        else json.decodeFromString(PairingOffer.serializer(), response.bodyAsText()).code
+        if (!response.status.isSuccess()) {
+            null
+        } else {
+            json.decodeFromString(PairingOffer.serializer(), response.bodyAsText()).code
+        }
     }.getOrNull()
 
     // A refused code is a refusal, not a token. Treating the typed code as a bearer is what turned
@@ -131,7 +137,9 @@ class AuthApi(
         }
         when {
             response.status == HttpStatusCode.ServiceUnavailable -> Pairing.Busy
+
             !response.status.isSuccess() -> Pairing.Refused
+
             else -> {
                 val result = json.decodeFromString(PairResult.serializer(), response.bodyAsText())
                 result.token

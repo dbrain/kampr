@@ -4,30 +4,30 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.CapKind
-import dev.kampr.terminal.input.capHold
-import dev.kampr.terminal.input.capPress
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.KeyLayouts
-import dev.kampr.terminal.input.Latch
-import dev.kampr.terminal.input.Latches
-import dev.kampr.terminal.input.LatchState
-import dev.kampr.terminal.input.active
-import dev.kampr.terminal.input.PaneScroll
 import dev.kampr.terminal.input.KeyTrace
-import dev.kampr.terminal.input.ScrollTrace
-import dev.kampr.terminal.input.ScrollKeys
-import dev.kampr.terminal.input.land
+import dev.kampr.terminal.input.Latch
+import dev.kampr.terminal.input.LatchState
+import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.PaneChord
+import dev.kampr.terminal.input.PaneScroll
+import dev.kampr.terminal.input.ScrollKeys
+import dev.kampr.terminal.input.ScrollTrace
+import dev.kampr.terminal.input.active
+import dev.kampr.terminal.input.capHold
+import dev.kampr.terminal.input.capPress
 import dev.kampr.terminal.input.chordSendsControl
+import dev.kampr.terminal.input.land
 import dev.kampr.terminal.input.paneChord
 import dev.kampr.terminal.input.paneScrollKeys
 import kotlin.test.Test
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 private class Recorder : PaneIo {
     val sent = mutableListOf<ClientMsg>()
@@ -45,8 +45,10 @@ private fun sink(): Pair<Recorder, InputSink> {
     return recorder to InputSink("n/w1:p1", recorder, Latches())
 }
 
-private fun allCaps() = (KeyLayouts.portrait + KeyLayouts.portraitFn + KeyLayouts.landscape +
-    KeyLayouts.landscapeFn).flatten().filterNotNull()
+private fun allCaps() = (
+    KeyLayouts.portrait + KeyLayouts.portraitFn + KeyLayouts.landscape +
+        KeyLayouts.landscapeFn
+    ).flatten().filterNotNull()
     .filter { it.kind != CapKind.Blank }
     .flatMap { listOfNotNull(it, it.alternate) }
 
@@ -470,8 +472,7 @@ private fun namedLayouts() = listOf(
 
 // Which column a slot starts in, counting what the caps before it span rather than how many of
 // them there are.
-private fun columnOf(row: List<dev.kampr.terminal.input.KeyCap?>, slot: Int): Int =
-    row.take(slot).filterNotNull().sumOf { it.span }
+private fun columnOf(row: List<dev.kampr.terminal.input.KeyCap?>, slot: Int): Int = row.take(slot).filterNotNull().sumOf { it.span }
 
 // Row and column, because a cap two columns wide is one slot and two of what a thumb sees: the
 // `fn` cap is in the same *place* on both portrait layouts and in a different slot of the list.

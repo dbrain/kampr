@@ -4,10 +4,10 @@ import dev.kampr.shared.model.AnswerRefusal
 import dev.kampr.shared.model.FleetRefused
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.balanced
 import dev.kampr.shared.model.cohorts
 import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.groups
-import dev.kampr.shared.model.balanced
 import dev.kampr.shared.model.matching
 import dev.kampr.shared.model.recipients
 import dev.kampr.shared.wire.ClientMsg
@@ -30,8 +30,7 @@ import kotlin.test.assertTrue
 // The board's arithmetic, kept in step with `crates/kampr-client/tests/cohorts.rs`. The two clients
 // must not disagree about which host needs somebody.
 class FleetTest {
-    private fun node(id: String, online: Boolean = true, reachable: Boolean? = null) =
-        NodeInfo(id = id, name = id, kind = "peer", online = online, reachable = reachable)
+    private fun node(id: String, online: Boolean = true, reachable: Boolean? = null) = NodeInfo(id = id, name = id, kind = "peer", online = online, reachable = reachable)
 
     private fun fleet(
         cohort: String,
@@ -51,11 +50,9 @@ class FleetTest {
         startedUnix = 1_700_000_000,
     )
 
-    private fun pane(nodeId: String, id: String, fleet: FleetInfo? = null) =
-        PaneInfo(id = "$nodeId/$id", nodeId = nodeId, fleet = fleet)
+    private fun pane(nodeId: String, id: String, fleet: FleetInfo? = null) = PaneInfo(id = "$nodeId/$id", nodeId = nodeId, fleet = fleet)
 
-    private fun herd(vararg panes: PaneInfo) =
-        Herd(nodes = listOf(node("n1"), node("n2"), node("n3")), panes = panes.toList(), known = true)
+    private fun herd(vararg panes: PaneInfo) = Herd(nodes = listOf(node("n1"), node("n2"), node("n3")), panes = panes.toList(), known = true)
 
     private fun confirm(prompt: String) = Question(
         prompt = prompt,

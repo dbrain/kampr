@@ -19,8 +19,7 @@ import kotlin.test.Test
 private val OUT = File("build/artboards")
 
 class DetailArtboardTest {
-    private fun revisedEditTurn() =
-        (Wire.decode(RICH_REVISION) as ServerMsg.ConvoTurn).turns.first { it.blocks.any { b -> b is Block.Diff } }
+    private fun revisedEditTurn() = (Wire.decode(RICH_REVISION) as ServerMsg.ConvoTurn).turns.first { it.blocks.any { b -> b is Block.Diff } }
 
     // The collapsed state is what every other artboard shows; this is the other half of it, plus
     // the diff and search highlighting that only appear once a reader goes looking.

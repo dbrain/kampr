@@ -84,19 +84,23 @@ class ReviewState {
         row = resolve(surface)
         when (move) {
             ReviewMove.Reread -> read(surface, depth = false)
+
             ReviewMove.Now -> {
                 word = NO_WORD
                 anchor = anchorAt(surface, surface.cursorIndex)
                 read(surface, depth = true)
             }
+
             ReviewMove.PreviousLine -> {
                 word = NO_WORD
                 moveTo(surface, row - 1)
             }
+
             ReviewMove.NextLine -> {
                 word = NO_WORD
                 moveTo(surface, row + 1)
             }
+
             ReviewMove.NextWord -> {
                 val words = reviewWords(surface.rowAt(row))
                 if (word + 1 < words.size) {
@@ -107,6 +111,7 @@ class ReviewState {
                     if (moveTo(surface, row + 1)) firstWord(surface)
                 }
             }
+
             ReviewMove.PreviousWord -> {
                 if (word > 0) {
                     word--
@@ -158,8 +163,11 @@ class ReviewState {
         } else {
             val words = reviewWords(text)
             val at = word.coerceIn(0, (words.size - 1).coerceAtLeast(0))
-            if (words.isEmpty()) "row ${row + 1}. blank line"
-            else "${words[at]}, word ${at + 1} of ${words.size}"
+            if (words.isEmpty()) {
+                "row ${row + 1}. blank line"
+            } else {
+                "${words[at]}, word ${at + 1} of ${words.size}"
+            }
         }
         say(prefix() + body)
     }
@@ -191,7 +199,9 @@ class ReviewState {
         val last = (surface.total - 1).coerceAtLeast(0)
         return when (val held = anchor) {
             null -> 0
+
             is ReviewAnchor.Live -> (surface.historyRows + held.row).coerceIn(0, last)
+
             is ReviewAnchor.History -> {
                 if (held.absolute < surface.fromTop) lost = true
                 (held.absolute - surface.fromTop).coerceIn(0, last)

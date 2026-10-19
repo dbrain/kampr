@@ -23,10 +23,9 @@ class Reply(val turns: List<Turn>) {
 // The line a put-away reply shows of itself. Its first *prose*, not its first turn: a reply that
 // opens on three tool calls would otherwise describe itself as "Bash", which is what it did rather
 // than what it said.
-fun replyGist(reply: Reply): String =
-    reply.turns.firstOrNull { turn -> turn.blocks.any { it is Block.Md && it.att == null } }
-        ?.let(::turnGist)
-        ?: reply.turns.firstOrNull()?.let(::turnGist).orEmpty()
+fun replyGist(reply: Reply): String = reply.turns.firstOrNull { turn -> turn.blocks.any { it is Block.Md && it.att == null } }
+    ?.let(::turnGist)
+    ?: reply.turns.firstOrNull()?.let(::turnGist).orEmpty()
 
 // A reply as a reader would paste it: the message it ended on, as the markdown it was written in.
 // The prose before it is the agent's working, and so are the calls after it — an agent that answers
@@ -132,9 +131,15 @@ fun stepStamps(rows: List<TranscriptRow>, nowMillis: Double): List<String?> {
             last = null
         }
         val stamp = when (row) {
-            is TranscriptRow.Head -> turnStamp(row.reply.at, nowMillis).also { last = it; out += null }
+            is TranscriptRow.Head -> turnStamp(row.reply.at, nowMillis).also {
+                last = it
+                out += null
+            }
+
             is TranscriptRow.One -> turnStamp(row.turn.at, nowMillis)
+
             is TranscriptRow.Run -> turnStamp(row.turns.first().at, nowMillis)
+
             else -> null.also { out += null }
         }
         if (row is TranscriptRow.One || row is TranscriptRow.Run) {

@@ -12,7 +12,8 @@ class Series(private val capacity: Int) {
     }
 
     fun reset() {
-        n = 0; head = 0
+        n = 0
+        head = 0
     }
 
     fun sorted(): FloatArray {
@@ -21,7 +22,6 @@ class Series(private val capacity: Int) {
         out.sort()
         return out
     }
-
 }
 
 fun FloatArray.pct(p: Double): Float {
@@ -57,7 +57,10 @@ class FrameStats(capacity: Int = 1200) {
     private var frames = 0
 
     fun reset() {
-        interval.reset(); draw.reset(); apply.reset(); frames = 0
+        interval.reset()
+        draw.reset()
+        apply.reset()
+        frames = 0
     }
 
     fun record(intervalMs: Float, drawMs: Float, applyMs: Float) {
@@ -74,7 +77,12 @@ class FrameStats(capacity: Int = 1200) {
         val hist = IntArray(HIST_EDGES.size + 1)
         for (x in iv) {
             var b = HIST_EDGES.size
-            for (i in HIST_EDGES.indices) if (x < HIST_EDGES[i]) { b = i; break }
+            for (i in HIST_EDGES.indices) {
+                if (x < HIST_EDGES[i]) {
+                    b = i
+                    break
+                }
+            }
             hist[b]++
         }
         var dropped = 0

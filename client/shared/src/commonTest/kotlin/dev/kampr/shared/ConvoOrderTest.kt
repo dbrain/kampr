@@ -11,11 +11,9 @@ private const val PANE = "01JNODE/w1:p1"
 
 private fun turn(n: Int) = Turn("t$n", if (n % 2 == 0) "user" else "assistant", null, listOf(Block.Md("said $n")))
 
-private fun page(range: IntRange, fresh: Boolean = true) =
-    ServerMsg.Convo(pane = PANE, cursor = "t${range.first}", more = true, turns = range.map(::turn), fresh = fresh)
+private fun page(range: IntRange, fresh: Boolean = true) = ServerMsg.Convo(pane = PANE, cursor = "t${range.first}", more = true, turns = range.map(::turn), fresh = fresh)
 
-private fun revision(range: IntRange) =
-    ServerMsg.ConvoTurn(pane = PANE, sub = null, turns = range.map(::turn))
+private fun revision(range: IntRange) = ServerMsg.ConvoTurn(pane = PANE, sub = null, turns = range.map(::turn))
 
 // Reported off a desk, watching a long session: *"your conversation page on wasm desktop is
 // currently showing a very old message"*, then *"now its showing your new messages responding to

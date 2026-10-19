@@ -6,11 +6,11 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
 import kotlin.test.assertTrue

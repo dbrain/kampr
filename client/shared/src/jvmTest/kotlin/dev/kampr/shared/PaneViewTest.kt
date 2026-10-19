@@ -62,12 +62,10 @@ private fun pane(conversation: Boolean) = PaneInfo(
 
 private class SurfaceProbe : PaneSurfaces {
     @Composable
-    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        Box(modifier.named(TERMINAL_SURFACE))
+    override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier.named(TERMINAL_SURFACE))
 
     @Composable
-    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        Box(modifier.named(CONVERSATION_SURFACE))
+    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier.named(CONVERSATION_SURFACE))
 
     @Composable
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
@@ -129,8 +127,7 @@ private fun ComposeUiTest.desktop(view: PaneView, conversation: Boolean) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.count(label: String): Int =
-    onAllNodesWithContentDescription(label).fetchSemanticsNodes().size
+private fun ComposeUiTest.count(label: String): Int = onAllNodesWithContentDescription(label).fetchSemanticsNodes().size
 
 // `has_conversation` means "a transcript actually resolves", not "this pane is an agent". A shell —
 // and an agent whose transcript has not appeared yet — must not be offered a view of nothing, and

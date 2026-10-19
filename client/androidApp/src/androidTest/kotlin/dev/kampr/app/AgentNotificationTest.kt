@@ -176,8 +176,7 @@ class AgentNotificationTest {
         )
     }
 
-    private fun ours(kind: NoteKind): List<StatusBarNotification> =
-        manager.activeNotifications.filter { it.id == kind.id }
+    private fun ours(kind: NoteKind): List<StatusBarNotification> = manager.activeNotifications.filter { it.id == kind.id }
 
     // NotificationManager.notify() crosses a binder and lands in the shade asynchronously, so
     // reading activeNotifications on the next line is a race the first assertion always loses.

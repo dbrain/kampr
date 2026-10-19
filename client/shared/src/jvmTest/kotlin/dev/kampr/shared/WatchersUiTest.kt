@@ -104,7 +104,12 @@ class WatchersUiTest {
             Themed {
                 HerdPortrait(
                     Herd(nodes = listOf(NODE), panes = listOf(ALONE, SHARED), known = true),
-                    ConnectionStatus.Live("full"), 0.0, 12.0, emptyList(), {}, null,
+                    ConnectionStatus.Live("full"),
+                    0.0,
+                    12.0,
+                    emptyList(),
+                    {},
+                    null,
                 )
             }
         }

@@ -5,8 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -219,8 +219,7 @@ internal class AppPaneIo(private val state: AppState) : PaneIo {
     override fun echoed(paneId: String, ms: Long) = state.store.echoed(paneId, ms)
     override val searchesTranscript: Boolean get() = state.store.hello.value?.caps?.convoFind == true
     override fun show(view: PaneView) = state.setPaneView(view)
-    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean) =
-        state.claimMatch(paneId, cols, rows, grow)
+    override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean) = state.claimMatch(paneId, cols, rows, grow)
     override val growsPanes: Boolean get() = state.store.hello.value?.caps?.paneGrow == true
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
@@ -297,8 +296,10 @@ internal fun AppScaffold(
             ?: herd.panes.firstOrNull()
         when {
             target != null -> state.go(target)
+
             (deepLink?.view != null || deepLink?.pane != null) && chosen != null ->
                 state.openPane(chosen.id, view)
+
             // A view, not a layout: whatever this device last chose for that pane, and the
             // terminal when it has chosen nothing. Opening every pane in Split made the choice
             // unkeepable — the next open overwrote it — and is the wrong answer for most panes.
@@ -376,6 +377,7 @@ internal fun AppScaffold(
                                 readOnly = readOnly,
                                 onView = state::setPaneView,
                             )
+
                             Screen.Setup -> SetupScreen(
                                 status = auth.setup,
                                 security = security,
@@ -398,12 +400,20 @@ internal fun AppScaffold(
                                 offeredCode = deepLink?.pair,
                                 wide = true,
                             )
+
                             Screen.Devices -> DevicesScreen(
-                                auth.devices, auth.currentDeviceId, now,
-                                { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
+                                auth.devices,
+                                auth.currentDeviceId,
+                                now,
+                                { state.go(Screen.Setup) },
+                                auth.onRevoke,
+                                auth.onRenew,
                             )
+
                             Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+
                             Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+
                             Screen.Fleet -> FleetScreen(
                                 herd = herd,
                                 breakpoint = breakpoint,
@@ -415,6 +425,7 @@ internal fun AppScaffold(
                                 book = book,
                                 onBook = state::manage,
                             )
+
                             Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
                         }
                     }
@@ -437,6 +448,7 @@ internal fun AppScaffold(
                             onBack = state::back,
                             onView = state::setPaneView,
                         )
+
                         Screen.Setup -> SetupScreen(
                             status = auth.setup,
                             security = security,
@@ -459,12 +471,20 @@ internal fun AppScaffold(
                             offeredCode = deepLink?.pair,
                             wide = false,
                         )
+
                         Screen.Devices -> DevicesScreen(
-                            auth.devices, auth.currentDeviceId, now,
-                            { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
+                            auth.devices,
+                            auth.currentDeviceId,
+                            now,
+                            { state.go(Screen.Setup) },
+                            auth.onRevoke,
+                            auth.onRenew,
                         )
+
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+
                         Screen.Fleet -> FleetScreen(
                             herd = herd,
                             breakpoint = breakpoint,
@@ -476,6 +496,7 @@ internal fun AppScaffold(
                             book = book,
                             onBook = state::manage,
                         )
+
                         Screen.Herd, Screen.Mosaic -> HerdLandscape(
                             herd, connectionStatus, now, localRtt, triage, state::openPane, null,
                             onResync = { state.connection.send(ClientMsg.Resync) },
@@ -497,6 +518,7 @@ internal fun AppScaffold(
                             onBack = state::back,
                             onView = state::setPaneView,
                         )
+
                         Screen.Setup -> SetupScreen(
                             status = auth.setup,
                             security = security,
@@ -519,12 +541,20 @@ internal fun AppScaffold(
                             offeredCode = deepLink?.pair,
                             wide = false,
                         )
+
                         Screen.Devices -> DevicesScreen(
-                            auth.devices, auth.currentDeviceId, now,
-                            { state.go(Screen.Setup) }, auth.onRevoke, auth.onRenew,
+                            auth.devices,
+                            auth.currentDeviceId,
+                            now,
+                            { state.go(Screen.Setup) },
+                            auth.onRevoke,
+                            auth.onRenew,
                         )
+
                         Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+
                         Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+
                         Screen.Fleet -> FleetScreen(
                             herd = herd,
                             breakpoint = breakpoint,
@@ -536,6 +566,7 @@ internal fun AppScaffold(
                             book = book,
                             onBook = state::manage,
                         )
+
                         Screen.Herd, Screen.Mosaic -> HerdPortrait(
                             herd, connectionStatus, now, localRtt, triage,
                             state::openPane,
@@ -571,8 +602,11 @@ internal fun AppScaffold(
         refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
         auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
         state.passkeyNote?.let {
-            if (it.refused) ErrorStrip(it.message, "passkey", state::dismissPasskeyNote)
-            else NoteStrip(it.message, state::dismissPasskeyNote)
+            if (it.refused) {
+                ErrorStrip(it.message, "passkey", state::dismissPasskeyNote)
+            } else {
+                NoteStrip(it.message, state::dismissPasskeyNote)
+            }
         }
         // A demotion or a promotion that landed on this socket. Nothing the operator did caused
         // it, so it is said here rather than discovered by pressing a control that has gone.

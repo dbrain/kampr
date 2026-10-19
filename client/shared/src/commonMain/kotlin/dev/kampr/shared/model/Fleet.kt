@@ -1,9 +1,9 @@
 package dev.kampr.shared.model
 
 import androidx.compose.runtime.Immutable
-import kotlin.random.Random
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
+import kotlin.random.Random
 
 // One fan-out: the same command, on however many hosts it was sent to.
 //
@@ -45,19 +45,18 @@ private fun boardRank(pane: PaneInfo): Int {
 private val boardOrder = compareBy<PaneInfo>({ boardRank(it) }, { it.id })
 
 // Every fleet run, gathered into the fan-outs that produced them, newest first.
-fun Herd.cohorts(): List<Cohort> =
-    panes.mapNotNull { pane -> pane.fleet?.let { pane to it } }
-        .groupBy { (_, fleet) -> fleet.cohort }
-        .map { (id, pairs) ->
-            val ordered = pairs.map { it.first }.sortedWith(boardOrder)
-            Cohort(
-                id = id,
-                command = pairs.first().second.command,
-                startedUnix = pairs.minOf { it.second.startedUnix },
-                panes = ordered,
-            )
-        }
-        .sortedWith(compareByDescending<Cohort> { it.startedUnix }.thenBy { it.id })
+fun Herd.cohorts(): List<Cohort> = panes.mapNotNull { pane -> pane.fleet?.let { pane to it } }
+    .groupBy { (_, fleet) -> fleet.cohort }
+    .map { (id, pairs) ->
+        val ordered = pairs.map { it.first }.sortedWith(boardOrder)
+        Cohort(
+            id = id,
+            command = pairs.first().second.command,
+            startedUnix = pairs.minOf { it.second.startedUnix },
+            panes = ordered,
+        )
+    }
+    .sortedWith(compareByDescending<Cohort> { it.startedUnix }.thenBy { it.id })
 
 // Which other hosts in this run are asking exactly the same thing.
 @Immutable
@@ -101,13 +100,14 @@ fun Herd.matching(paneId: String): Result<Matching> {
     return Result.success(Matching(target, others, differing))
 }
 
-class FleetRefused(val refusal: AnswerRefusal) : Exception(
-    when (refusal) {
-        AnswerRefusal.NotAFleetRun -> "that pane is not a fleet run"
-        AnswerRefusal.NotWaiting -> "that host is not waiting for anything"
-        AnswerRefusal.Secret -> "a password is answered one host at a time"
-    },
-)
+class FleetRefused(val refusal: AnswerRefusal) :
+    Exception(
+        when (refusal) {
+            AnswerRefusal.NotAFleetRun -> "that pane is not a fleet run"
+            AnswerRefusal.NotWaiting -> "that host is not waiting for anything"
+            AnswerRefusal.Secret -> "a password is answered one host at a time"
+        },
+    )
 
 // Which panes one answer should be typed into. The answer itself travels as the ordinary pane
 // input every other reply uses — there is no `fleet.answer`, and a second way to type into a

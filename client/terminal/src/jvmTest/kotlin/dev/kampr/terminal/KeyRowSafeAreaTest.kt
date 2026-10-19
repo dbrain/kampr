@@ -32,11 +32,11 @@ import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.wire.ClientMsg
-import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow

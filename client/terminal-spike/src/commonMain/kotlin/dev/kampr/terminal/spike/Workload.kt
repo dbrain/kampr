@@ -76,14 +76,21 @@ private val WORDS = arrayOf(
 )
 
 private val PATHS = arrayOf(
-    "crates/kampr-term/src/grid.rs", "crates/kampr-herdr/src/observe.rs",
-    "client/shared/terminal/Canvas.kt", "crates/kampr-node/src/ws.rs",
-    "docs/04-wire-protocol.md", "crates/kampr-core/src/registry.rs",
+    "crates/kampr-term/src/grid.rs",
+    "crates/kampr-herdr/src/observe.rs",
+    "client/shared/terminal/Canvas.kt",
+    "crates/kampr-node/src/ws.rs",
+    "docs/04-wire-protocol.md",
+    "crates/kampr-core/src/registry.rs",
 )
 
 private val LEVELS = arrayOf("TRACE", "DEBUG", "INFO ", "WARN ", "ERROR")
 private val LEVEL_STYLES = intArrayOf(
-    SpikeStyles.DIM, SpikeStyles.CYAN, SpikeStyles.GREEN, SpikeStyles.YELLOW, SpikeStyles.RED,
+    SpikeStyles.DIM,
+    SpikeStyles.CYAN,
+    SpikeStyles.GREEN,
+    SpikeStyles.YELLOW,
+    SpikeStyles.RED,
 )
 
 private const val WORST_ALPHABET =

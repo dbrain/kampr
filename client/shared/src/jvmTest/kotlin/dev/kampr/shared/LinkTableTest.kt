@@ -12,9 +12,8 @@ import kotlin.test.assertTrue
 // OSC-8 links with a `pane split` between each — the split is what makes herdr repaint and the
 // node re-send the whole table from index 0. Hand-built messages agreed with the client's own
 // reading of the protocol, which is exactly why this went unnoticed.
-private fun frames(): List<String> =
-    checkNotNull(LinkTableTest::class.java.getResourceAsStream("/link-reset.ndjson"))
-        .bufferedReader().readLines().filter { it.isNotBlank() }
+private fun frames(): List<String> = checkNotNull(LinkTableTest::class.java.getResourceAsStream("/link-reset.ndjson"))
+    .bufferedReader().readLines().filter { it.isNotBlank() }
 
 class LinkTableTest {
     @Test
@@ -65,5 +64,4 @@ class LinkTableTest {
     }
 }
 
-private fun rowText(pane: dev.kampr.shared.model.PaneState, row: Int): String =
-    pane.cells.rowText(row)
+private fun rowText(pane: dev.kampr.shared.model.PaneState, row: Int): String = pane.cells.rowText(row)

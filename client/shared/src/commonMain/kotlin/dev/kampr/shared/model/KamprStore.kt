@@ -5,8 +5,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
-import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Security
 import dev.kampr.shared.wire.ServerMsg
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -246,6 +246,7 @@ class KamprStore {
                 }
                 _status.value = ConnectionStatus.Live(msg.role)
             }
+
             is ServerMsg.RoleChanged -> {
                 // One change, not two. Written a statement apart, a reader watching for the role
                 // to move landed between them 31% of the time and saw the new role with no notice
@@ -259,22 +260,29 @@ class KamprStore {
                 }
                 _status.value = ConnectionStatus.Live(msg.role)
             }
+
             is ServerMsg.Herd -> {
                 val before = _herd.value
                 _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
                 noteMovement(before)
                 dropRepairedFault()
             }
+
             is ServerMsg.HerdPatch -> {
                 val before = _herd.value
                 _herd.value = _herd.value.applyPatch(msg)
                 noteMovement(before)
                 dropRepairedFault()
             }
+
             is ServerMsg.Styles -> styles.append(msg.from, msg.styles)
+
             is ServerMsg.GridReset -> pane(msg.pane).applyReset(msg)
+
             is ServerMsg.GridPatch -> pane(msg.pane).applyPatch(msg)
+
             is ServerMsg.Scrollback -> pane(msg.pane).applyScrollback(msg)
+
             // A page merges by id, which is what lets `convo.load` prepend older slices of the
             // same transcript — and what leaves a conversation the pane has left sitting under
             // the one it moved to. `fresh` is the node saying this page is a different
@@ -298,12 +306,19 @@ class KamprStore {
                     pane.applyConvo(msg)
                 }
             }
+
             is ServerMsg.ConvoTurn -> pane(msg.pane).applyConvoTurn(msg)
+
             is ServerMsg.ConvoFacets -> pane(msg.pane).applyFacets(msg)
+
             is ServerMsg.ConvoComposer -> pane(msg.pane).applyComposer(msg)
+
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
+
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes
+
             is ServerMsg.FleetBook -> _book.value = msg
+
             is ServerMsg.Failure -> {
                 _failure.value = msg
                 // Read without creating: a refusal about a pane nobody has open is not news about
@@ -313,15 +328,20 @@ class KamprStore {
                     msg.pane?.let { paneStates[it]?.noteStreamStopped() }
                 }
             }
+
             is ServerMsg.Found -> _found.value = msg
+
             // Read without creating, like a refusal: an answer about a pane nobody has open is
             // not news about any transcript on screen.
             is ServerMsg.ConvoFound -> paneStates[msg.pane]?.convoFound = msg
+
             is ServerMsg.Managed -> {
                 _managed.value = msg
                 _acks.tryEmit(msg)
             }
+
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
+
             is ServerMsg.Pong -> Unit
         }
     }

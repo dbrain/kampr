@@ -13,11 +13,10 @@ import androidx.compose.ui.semantics.SemanticsNode
 // exists to read a test's own harness does not belong in a source set that ships to a phone.
 private val HOVER = Regex("""PointerHoverIconModifierElement\(icon=(.+), overrideDescendants=(\w+)\)""")
 
-private fun SemanticsNode.hoverChain(): List<Pair<String, Boolean>> =
-    layoutInfo.getModifierInfo()
-        .mapNotNull { HOVER.find(it.modifier.toString()) }
-        .map { it.groupValues[1] to it.groupValues[2].toBoolean() } +
-        children.flatMap { it.hoverChain() }
+private fun SemanticsNode.hoverChain(): List<Pair<String, Boolean>> = layoutInfo.getModifierInfo()
+    .mapNotNull { HOVER.find(it.modifier.toString()) }
+    .map { it.groupValues[1] to it.groupValues[2].toBoolean() } +
+    children.flatMap { it.hoverChain() }
 
 internal fun SemanticsNode.cursor(): String? {
     val chain = hoverChain()

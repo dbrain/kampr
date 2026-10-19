@@ -26,8 +26,8 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.ZoomMode
-import kotlinx.serialization.json.JsonObject
 import dev.kampr.shared.wire.workspaceIdOf
+import kotlinx.serialization.json.JsonObject
 
 // The in-session sheet, which is the half of this that may talk about the desk at all: it is
 // reached from the pane's own header and from a mosaic cell, so the operator is looking at the
@@ -76,7 +76,12 @@ fun PaneActionsSheet(
                     clearable = true,
                     zoomable = true,
                     onManage = ::send,
-                    onFind = onFind?.let { go -> { onDismiss(); go() } },
+                    onFind = onFind?.let { go ->
+                        {
+                            onDismiss()
+                            go()
+                        }
+                    },
                     extra = tools,
                 )
                 pane.tabId?.let { tabId ->
@@ -90,12 +95,16 @@ fun PaneActionsSheet(
                         onManage = ::send,
                     ) {
                         Chip(
-                            "remember the splits", false, { send(ManageOp.LayoutExport(tabId)) },
+                            "remember the splits",
+                            false,
+                            { send(ManageOp.LayoutExport(tabId)) },
                             label = "Remember how this tab is split, so it can be put back",
                         )
                         snapshot?.let { tree ->
                             Chip(
-                                "put the splits back", false, { send(ManageOp.LayoutApply(tabId, tree)) },
+                                "put the splits back",
+                                false,
+                                { send(ManageOp.LayoutApply(tabId, tree)) },
                                 label = "Split this tab the way it was when you remembered it",
                             )
                         }
@@ -138,25 +147,23 @@ fun PaneActionsSheet(
 
 // Herdr counts the panes before it will close a thing that holds any — `Close workspace?` over
 // `bravo — 1 pane` (#426). This is the same count from the herd the client already has.
-private fun held(kind: String, name: String, holds: Int): String =
-    when {
-        kind == "pane" || holds <= 0 -> name
-        holds == 1 -> "$name — 1 pane"
-        else -> "$name — $holds panes"
-    }
+private fun held(kind: String, name: String, holds: Int): String = when {
+    kind == "pane" || holds <= 0 -> name
+    holds == 1 -> "$name — 1 pane"
+    else -> "$name — $holds panes"
+}
 
 // Focus is the one op that destroys herdr's `done` — the state it synthesises for a pane that
 // finished while nobody was looking, which is the operator's unread flag (#357), and `tab.focus`
 // and `workspace.focus` do it exactly as `pane.focus` does (#396). Every read leaves it standing,
 // so this is the only control in Kampr that can take it away, and it says so before it does.
-private fun focusNote(kind: String): String =
-    if (kind == "pane") {
-        "Puts this pane on the machine's own screen — and clears its done marker, the flag for an " +
-            "agent that finished while nobody was looking."
-    } else {
-        "Puts this $kind on the machine's own screen — and clears the done marker on whichever " +
-            "pane it lands on, the flag for an agent that finished while nobody was looking."
-    }
+private fun focusNote(kind: String): String = if (kind == "pane") {
+    "Puts this pane on the machine's own screen — and clears its done marker, the flag for an " +
+        "agent that finished while nobody was looking."
+} else {
+    "Puts this $kind on the machine's own screen — and clears the done marker on whichever " +
+        "pane it lands on, the flag for an agent that finished while nobody was looking."
+}
 
 @Composable
 private fun Target(
@@ -192,7 +199,9 @@ private fun Target(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Chip(
-                    "focus at the desk", focusing, { focusing = !focusing },
+                    "focus at the desk",
+                    focusing,
+                    { focusing = !focusing },
                     label = "Focus this $kind on the machine's own screen",
                 )
                 if (zoomable) {
@@ -209,7 +218,9 @@ private fun Target(
                     // `done` marks for that whole tab (probe #515). That is not something a control
                     // called "fill the tab" implies.
                     Chip(
-                        "fill the tab", false, { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
+                        "fill the tab",
+                        false,
+                        { onManage(ManageOp.PaneZoom(at, ZoomMode.Toggle)) },
                         label = "Make this $kind fill its tab at the desk, and put the others back when it already does. " +
                             "Clears the unread marks for every pane in that tab.",
                     )
@@ -221,9 +232,12 @@ private fun Target(
                     Chip("find", false, it, label = "Search this $kind's whole scrollback")
                 }
                 extra?.invoke()
-                Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind", )
+                Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind")
                 Chip(
-                    "close", confirming, { confirming = !confirming }, quiet = !confirming,
+                    "close",
+                    confirming,
+                    { confirming = !confirming },
+                    quiet = !confirming,
                     label = "Close this $kind",
                 )
             }
@@ -242,7 +256,12 @@ private fun Target(
                     )
                     Chip("cancel", false, { focusing = false }, quiet = true, label = "Leave the desk alone")
                     Chip(
-                        "focus", true, { focusing = false; onManage(ManageOp.Focus(at)) },
+                        "focus",
+                        true,
+                        {
+                            focusing = false
+                            onManage(ManageOp.Focus(at))
+                        },
                         label = "Confirm — focus $name at the desk and clear its done marker",
                     )
                 }
@@ -288,7 +307,12 @@ private fun Target(
                     }
                     Chip("cancel", false, { confirming = false }, quiet = true, label = "Do not close it")
                     Chip(
-                        "close", true, { confirming = false; onManage(ManageOp.Close(at)) },
+                        "close",
+                        true,
+                        {
+                            confirming = false
+                            onManage(ManageOp.Close(at))
+                        },
                         label = "Confirm — close ${held(kind, name, holds)}",
                     )
                 }

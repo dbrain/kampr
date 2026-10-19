@@ -22,9 +22,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 // vendor devices that report KEYBOARD_TYPE_ALPHABETIC without a key on them. The configuration is
 // the signal the framework itself keeps current, and it is what makes this reactive for free:
 // attaching a keyboard is a configuration change, and `LocalConfiguration` is recomposed on it.
-internal fun hardKeyboardIn(configuration: Configuration): Boolean =
-    configuration.keyboard != Configuration.KEYBOARD_NOKEYS &&
-        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+internal fun hardKeyboardIn(configuration: Configuration): Boolean = configuration.keyboard != Configuration.KEYBOARD_NOKEYS &&
+    configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
 
 @Composable
 actual fun hardKeyboardAttached(): Boolean = hardKeyboardIn(LocalConfiguration.current)

@@ -38,8 +38,7 @@ private class AgentIo(
         }
     }
     override fun prefs(paneId: String) = PanePrefs()
-    override fun info(paneId: String) =
-        PaneInfo(paneId, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)
+    override fun info(paneId: String) = PaneInfo(paneId, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)
 }
 
 // A pane with no ring behind it, which is the one in the report: a harness on the alternate screen

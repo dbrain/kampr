@@ -128,10 +128,14 @@ class DeskSelectionTest {
         val startCentre = (startHandle.left + startHandle.right) / 2
         val endCentre = (endHandle.left + endHandle.right) / 2
 
-        assertTrue(abs(startCentre.value - (startX - 5.dp).value) <= 1f,
-            "the start dot is not centred on the start cell's left edge: $startCentre vs $startX")
-        assertTrue(abs(endCentre.value - (endX + 5.dp).value) <= 1f,
-            "the end dot is not centred on the end cell's right edge: $endCentre vs $endX")
+        assertTrue(
+            abs(startCentre.value - (startX - 5.dp).value) <= 1f,
+            "the start dot is not centred on the start cell's left edge: $startCentre vs $startX",
+        )
+        assertTrue(
+            abs(endCentre.value - (endX + 5.dp).value) <= 1f,
+            "the end dot is not centred on the end cell's right edge: $endCentre vs $endX",
+        )
         assertTrue(abs((startHandle.right - startHandle.left).value - 22f) <= 1f, "the drag target shrank with the dot")
         assertTrue(abs((endHandle.right - endHandle.left).value - 22f) <= 1f, "the drag target shrank with the dot")
     }

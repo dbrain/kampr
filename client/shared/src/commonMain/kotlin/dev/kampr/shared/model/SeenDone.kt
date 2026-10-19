@@ -77,8 +77,7 @@ class SeenDone(private val prefs: Prefs? = null, private val key: String = "seen
 // been told, and this device's read is the fact it is waiting on — so reconciling against the
 // herd alone would leave the notification standing for the round trip, or for good on a node too
 // old to know the verb.
-fun Herd.unreadDone(seen: SeenDone): List<PaneInfo> =
-    panes.filter { statusOf(it) == AgentStatus.Done && !seen.hasRead(it) }
+fun Herd.unreadDone(seen: SeenDone): List<PaneInfo> = panes.filter { statusOf(it) == AgentStatus.Done && !seen.hasRead(it) }
 
 // Read here and still `done` on the node: the finishes the node has not been told about.
 fun Herd.readDone(seen: SeenDone): List<PaneInfo> = panes.filter { statusOf(it) == AgentStatus.Done && seen.hasRead(it) }

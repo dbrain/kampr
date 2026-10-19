@@ -45,8 +45,7 @@ private const val IDLESS_CONVO =
         "\"att\":{\"kind\":\"image\",\"mime\":\"image/png\"}}]," +
         "\"id\":\"n-1\",\"role\":\"user\"}]}"
 
-private fun turnsOf(frame: String) =
-    KamprStore().also { it.accept(assertNotNull(Wire.decode(frame), "undecodable frame")) }.pane(PANE).turns
+private fun turnsOf(frame: String) = KamprStore().also { it.accept(assertNotNull(Wire.decode(frame), "undecodable frame")) }.pane(PANE).turns
 
 class AttachmentTest {
     @Test
@@ -151,7 +150,9 @@ class AttachmentTest {
             "/tmp/main.rs" to "text",
             "/tmp/README" to "text",
             "/tmp/notes.no-such-type" to "text",
-        )) assertEquals(kind, fileTarget(path).kind, path)
+        )) {
+            assertEquals(kind, fileTarget(path).kind, path)
+        }
     }
 
     // Additive by rule: a node that starts recording `audio/wav` beside a record reaches the same

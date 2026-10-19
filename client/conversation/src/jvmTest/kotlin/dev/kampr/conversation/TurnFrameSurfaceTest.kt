@@ -13,12 +13,12 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.BrutalistFamily
 import dev.kampr.shared.theme.Ground
+import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.PhosphorFamily
 import dev.kampr.shared.theme.SoftFamily
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.WarmFamily
-import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.on
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.ServerMsg
@@ -36,7 +36,9 @@ private fun bothSpeakers(): KamprStore {
     val store = KamprStore()
     store.accept(
         ServerMsg.Convo(
-            pane = PANE_ID, cursor = "u-1", more = false,
+            pane = PANE_ID,
+            cursor = "u-1",
+            more = false,
             turns = listOf(
                 proseTurn("u-1", ASKED, role = "user"),
                 proseTurn("a-2", ANSWERED),

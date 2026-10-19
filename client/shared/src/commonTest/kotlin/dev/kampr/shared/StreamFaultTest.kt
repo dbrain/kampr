@@ -46,11 +46,11 @@ class StreamFaultTest {
         store.take(herd(null))
         store.take(
             """{"t":"herd.patch","changed":{"panes":[
-               {"id":"$PANE","node_id":"01JNODE","rows":30,"detail":"cannot run herdr"}]}}"""
+               {"id":"$PANE","node_id":"01JNODE","rows":30,"detail":"cannot run herdr"}]}}""",
         )
         assertEquals("cannot run herdr", store.paneInfo(PANE)?.detail)
         store.take(
-            """{"t":"herd.patch","changed":{"panes":[{"id":"$PANE","node_id":"01JNODE","rows":30}]}}"""
+            """{"t":"herd.patch","changed":{"panes":[{"id":"$PANE","node_id":"01JNODE","rows":30}]}}""",
         )
         assertNull(store.paneInfo(PANE)?.detail, "the herd entry clearing is the recovery signal")
     }

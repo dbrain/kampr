@@ -52,8 +52,7 @@ private fun drawn(source: String, tokens: KamprTokens): Int {
 // none, so the prose face draws *something* here either way. What can be asserted is that the
 // routed rendering is the one the terminal face produces and the unrouted one is not.
 class ProseGlyphTest {
-    private fun tokens(routed: Boolean) =
-        tokensFor(SoftTheme, TypeScale.Phone, Ground.Dark, routed = routed)
+    private fun tokens(routed: Boolean) = tokensFor(SoftTheme, TypeScale.Phone, Ground.Dark, routed = routed)
 
     @Test
     fun aMessageCarryingSymbolsTheProseFaceCannotDrawIsRenderedDifferentlyOnceTheyAreRouted() {

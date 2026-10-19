@@ -134,5 +134,4 @@ internal fun BoxScope.RefusedNotice(message: String, onPair: () -> Unit) {
 // but it is the whole of why the buttons went away or came back, and a change nobody announced
 // is one that gets discovered by pressing something that no longer works.
 @Composable
-fun BoxScope.RoleNotice(message: String, onDismiss: () -> Unit) =
-    NoteStrip(message, onDismiss, Kampr.tokens.color.accent)
+fun BoxScope.RoleNotice(message: String, onDismiss: () -> Unit) = NoteStrip(message, onDismiss, Kampr.tokens.color.accent)

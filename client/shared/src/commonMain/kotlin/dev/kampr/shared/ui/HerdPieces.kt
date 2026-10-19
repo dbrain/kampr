@@ -8,11 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -31,8 +31,8 @@ import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.homeRelative
-import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.othersWatching
+import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.theme.Kampr
@@ -118,8 +118,7 @@ fun connectionColor(status: ConnectionStatus): Color {
     }
 }
 
-fun connectionShape(status: ConnectionStatus): MarkShape =
-    if (status is ConnectionStatus.Live) MarkShape.Bar else MarkShape.Ring
+fun connectionShape(status: ConnectionStatus): MarkShape = if (status is ConnectionStatus.Live) MarkShape.Bar else MarkShape.Ring
 
 // The count is the door to the list behind it: a pill that only ever said a number was a control
 // with nothing under it, and "1 nodes" is what an unconditional plural reads as on a herd of one.
@@ -309,8 +308,7 @@ val LocalKeystrokeMs = compositionLocalOf<Map<String, Double>> { emptyMap() }
 // key to the caret it moved. Until then the node's ping to herdr, *named* a ping — shown bare, it
 // read as the latency an operator types against and was one leg of it (a 2.2 ms figure over a
 // pane that visibly halted).
-fun nodeLatency(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?): String =
-    keystrokes[node.id]?.let { "key ${formatLatency(it)}" } ?: "ping ${formatLatency(ping)}"
+fun nodeLatency(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?): String = keystrokes[node.id]?.let { "key ${formatLatency(it)}" } ?: "ping ${formatLatency(ping)}"
 
 @Composable
 fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
@@ -354,7 +352,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                 onClick,
                 shape,
                 onLongClick = if (manage.enabled) ({ manage.openMenu(pane.id) }) else null,
-            )
+            ),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
@@ -475,8 +473,11 @@ fun TriageList(
         modifier
             .fillMaxWidth()
             .announce(
-                if (items.size > 1) "Needs you: ${items.size} agents are blocked"
-                else "Needs you: ${paneTitle(items.first().pane)} is blocked",
+                if (items.size > 1) {
+                    "Needs you: ${items.size} agents are blocked"
+                } else {
+                    "Needs you: ${paneTitle(items.first().pane)} is blocked"
+                },
                 urgent = true,
             ),
         verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 9.dp),
@@ -505,7 +506,13 @@ fun TriageList(
                 pane = item.pane,
                 question = item.question,
                 compact = compact,
-                label = if (items.size > 1) null else if (compact) "Needs you · 1" else "Needs you",
+                label = if (items.size > 1) {
+                    null
+                } else if (compact) {
+                    "Needs you · 1"
+                } else {
+                    "Needs you"
+                },
                 onOpen = { onOpen(item.pane.id) },
                 onApprove = onApprove?.let { approve -> { approve(item.pane.id) } },
             )
@@ -567,12 +574,18 @@ fun BlockedNotice(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PrimaryAction(
-                    "Open", onOpen, Modifier.weight(1f), tokens.type.buttonSmall, 10.dp,
+                    "Open",
+                    onOpen,
+                    Modifier.weight(1f),
+                    tokens.type.buttonSmall,
+                    10.dp,
                     label = "Open ${paneTitle(pane)}",
                 )
                 if (onApprove != null) {
                     QuietAction(
-                        "Approve", onApprove, Modifier.weight(1f),
+                        "Approve",
+                        onApprove,
+                        Modifier.weight(1f),
                         label = "Approve, and answer ${paneTitle(pane)} with option 1",
                     )
                 }

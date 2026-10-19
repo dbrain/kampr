@@ -9,13 +9,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -243,8 +243,11 @@ internal fun capPress(cap: KeyCap, session: PaneSession, sink: InputSink) {
             which?.let(session.latches::tap)
             session.settleLatch(which)
         }
+
         CapKind.Keyboard -> session.toggleKeyboard()
+
         CapKind.Blank -> Unit
+
         CapKind.Text -> {
             sink.press(cap)
             session.reclaimKeyboard()
@@ -259,8 +262,11 @@ internal fun capHold(cap: KeyCap, session: PaneSession, sink: InputSink) {
             if (hold != null) session.latches.tap(hold) else cap.latch?.let(session.latches::lock)
             session.settleLatch(hold ?: cap.latch)
         }
+
         CapKind.Keyboard -> session.toggleKeyboard()
+
         CapKind.Blank -> Unit
+
         CapKind.Text -> {
             sink.press(cap.alternate ?: cap)
             session.reclaimKeyboard()

@@ -147,10 +147,12 @@ fun NewSheet(
         inFlight = null
         when {
             !ack.ok -> refusal = ack.message ?: ack.code
+
             ack.op.startsWith("session.") -> {
                 sessionName = TextFieldValue()
                 onRefreshCaps()
             }
+
             else -> {
                 // The whole reason a create op carries an id back. Without this the sheet closed
                 // on a workspace that then appeared at the foot of the herd, and the operator had
@@ -183,12 +185,16 @@ fun NewSheet(
             Pick.Workspace -> "Create workspace" to {
                 run(ManageOp.WorkspaceCreate(nodeId, cwd = trimmedCwd))
             }
-            Pick.Split -> "Split ${direction.wire}" to (pane?.let { p ->
-                {
-                    splitting = p.id to direction
-                    run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd))
+
+            Pick.Split -> "Split ${direction.wire}" to (
+                pane?.let { p ->
+                    {
+                        splitting = p.id to direction
+                        run(ManageOp.PaneSplit(p.id, direction, ratio, trimmedCwd))
+                    }
                 }
-            })
+                )
+
             Pick.Agent -> "Start ${kind ?: "an agent"}" to (
                 if (agentTarget != null && kind != null) {
                     {
@@ -201,30 +207,45 @@ fun NewSheet(
                                 chosen,
                                 agentName.text.trim().ifEmpty { null },
                                 parseArgs(typed),
-                            )
+                            ),
                         )
                     }
-                } else null
+                } else {
+                    null
+                }
                 )
         }
+
         Step.Workspace -> "Create workspace" to {
             run(ManageOp.WorkspaceCreate(nodeId, trimmedLabel, trimmedCwd, env.filter { it.first.isNotBlank() }.toMap()))
         }
-        Step.Tab -> "Create tab" to (workspaceId?.let { at ->
-            { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd)) }
-        })
+
+        Step.Tab -> "Create tab" to (
+            workspaceId?.let { at ->
+                { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd)) }
+            }
+            )
+
         Step.Worktree -> if (existingWorktree) {
-            "Open worktree" to (worktreePath.text.trim().ifEmpty { null }?.let { path ->
-                { run(ManageOp.WorktreeOpen(nodeId, path, trimmedCwd, trimmedLabel)) }
-            })
+            "Open worktree" to (
+                worktreePath.text.trim().ifEmpty { null }?.let { path ->
+                    { run(ManageOp.WorktreeOpen(nodeId, path, trimmedCwd, trimmedLabel)) }
+                }
+                )
         } else {
-            "Create worktree" to (branch.text.trim().ifEmpty { null }?.let { b ->
-                { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
-            })
+            "Create worktree" to (
+                branch.text.trim().ifEmpty { null }?.let { b ->
+                    { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
+                }
+                )
         }
-        Step.Session -> "Start session" to (sessionName.text.trim().takeIf { SESSION_NAME.matches(it) }?.let { n ->
-            { run(ManageOp.SessionCreate(nodeId, n)) }
-        })
+
+        Step.Session -> "Start session" to (
+            sessionName.text.trim().takeIf { SESSION_NAME.matches(it) }?.let { n ->
+                { run(ManageOp.SessionCreate(nodeId, n)) }
+            }
+            )
+
         // The rows are the action: picking one is the whole step, and a button under them would
         // be one that is never the thing to press.
         Step.Node -> "" to null
@@ -232,7 +253,10 @@ fun NewSheet(
 
     // Deeper than the sheet's own handler in `SystemBack`, so this is the one that answers while
     // a step is open: back walks the sheet's ladder before it closes the sheet.
-    val stepBack = { step = Step.Menu; refusal = null }
+    val stepBack = {
+        step = Step.Menu
+        refusal = null
+    }
     BackHandler(enabled = step != Step.Menu, onBack = stepBack)
 
     BottomSheet(breakpoint, onDismiss) {
@@ -265,16 +289,28 @@ fun NewSheet(
                     direction = direction,
                     ratio = ratio,
                     sessions = caps?.sessions.orEmpty(),
-                    onStep = { step = it; refusal = null },
+                    onStep = {
+                        step = it
+                        refusal = null
+                    },
                     onPick = { pick = it },
-                    onDirection = { direction = it; pick = Pick.Split },
+                    onDirection = {
+                        direction = it
+                        pick = Pick.Split
+                    },
                     onRatio = { ratio = it },
-                    onKind = { kind = it; pick = Pick.Agent },
+                    onKind = {
+                        kind = it
+                        pick = Pick.Agent
+                    },
                     onMoreKinds = { allKinds = true },
                     agentPanes = ownPanes,
                     agentTarget = agentTarget,
                     agentPane = agentPane,
-                    onAgentPane = { agentPane = it; pick = Pick.Agent },
+                    onAgentPane = {
+                        agentPane = it
+                        pick = Pick.Agent
+                    },
                     agentName = agentName,
                     onAgentName = { agentName = it },
                     agentFlags = agentFlags,
@@ -283,6 +319,7 @@ fun NewSheet(
                     onKeepFlags = { keepFlags = it },
                     onNodePicker = onNodePicker,
                 )
+
                 Step.Node -> Fields {
                     for (machine in nodes) {
                         // `online` is whether the machine's *herdr* answers; `isReachable` is
@@ -310,11 +347,17 @@ fun NewSheet(
                             },
                             selected = machine.id == node.id,
                             compact = breakpoint == Breakpoint.Landscape,
-                            onClick = if (!machine.isReachable) null else ({
-                                onNode(machine.id)
-                                step = Step.Menu
-                                refusal = null
-                            }),
+                            onClick = if (!machine.isReachable) {
+                                null
+                            } else {
+                                (
+                                    {
+                                        onNode(machine.id)
+                                        step = Step.Menu
+                                        refusal = null
+                                    }
+                                    )
+                            },
                             label = "Create on ${machine.name}",
                         )
                     }
@@ -331,6 +374,7 @@ fun NewSheet(
                     // Everything else in the sheet is addressed by id and reaches any of them.
                     Note("Workspaces, tabs, splits and worktrees can be made on any machine here. Agents and named sessions are offered by the node this device is connected to.")
                 }
+
                 Step.Workspace -> Fields {
                     LabelledField("label", "kampr", label) { label = it }
                     LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
@@ -342,14 +386,19 @@ fun NewSheet(
                     )
                     Note("A workspace, its directory and its variables in one call — a Claude session in this worktree with these variables is one action, not a script.")
                 }
+
                 Step.Tab -> Fields {
                     LabelledField("label", "tests", label) { label = it }
                     LabelledField("directory", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
                     Note(
-                        if (workspaceId == null) "Open a pane first — a tab is created inside a workspace."
-                        else "In ${pane?.workspace ?: workspaceId}."
+                        if (workspaceId == null) {
+                            "Open a pane first — a tab is created inside a workspace."
+                        } else {
+                            "In ${pane?.workspace ?: workspaceId}."
+                        },
                     )
                 }
+
                 Step.Worktree -> Fields {
                     Segmented(
                         listOf("New branch", "Existing path"),
@@ -367,6 +416,7 @@ fun NewSheet(
                     LabelledField("label", "mesh-auth", label) { label = it }
                     Note("Herdr's own git support: a worktree for the branch, and a workspace opened on it.")
                 }
+
                 Step.Session -> Fields {
                     LabelledField("name", "agents", sessionName) { sessionName = it }
                     if (sessionName.text.isNotEmpty() && !SESSION_NAME.matches(sessionName.text.trim())) {
@@ -530,8 +580,11 @@ private fun Structure(
             icon = KamprIcons.nodes,
             iconTint = tokens.color.dim,
             title = node.name,
-            subtitle = if (peers.isEmpty()) "the only machine in this herd"
-            else "made here — tap for the other ${peers.size}",
+            subtitle = if (peers.isEmpty()) {
+                "the only machine in this herd"
+            } else {
+                "made here — tap for the other ${peers.size}"
+            },
             compact = true,
             onClick = { onStep(Step.Node) },
             label = "Change machine, currently ${node.name}",
@@ -543,7 +596,10 @@ private fun Structure(
             subtitle = "a directory and a fresh shell",
             compact = compact,
             selected = pick == Pick.Workspace,
-            onClick = { onPick(Pick.Workspace); onStep(Step.Workspace) },
+            onClick = {
+                onPick(Pick.Workspace)
+                onStep(Step.Workspace)
+            },
         )
         SheetCard(
             icon = KamprIcons.tab,
@@ -560,18 +616,30 @@ private fun Structure(
             subtitle = if (pane == null) "open a pane first" else "changes the layout at the desk too",
             compact = compact,
             selected = pick == Pick.Split,
-            trailing = if (pane == null) ({}) else ({
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Chip(
-                        "right", direction == SplitDirection.Right, { onDirection(SplitDirection.Right) },
-                        quiet = true, label = "Split to the right",
+            trailing = if (pane == null) {
+                ({})
+            } else {
+                (
+                    {
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Chip(
+                                "right",
+                                direction == SplitDirection.Right,
+                                { onDirection(SplitDirection.Right) },
+                                quiet = true,
+                                label = "Split to the right",
+                            )
+                            Chip(
+                                "down",
+                                direction == SplitDirection.Down,
+                                { onDirection(SplitDirection.Down) },
+                                quiet = true,
+                                label = "Split downwards",
+                            )
+                        }
+                    }
                     )
-                    Chip(
-                        "down", direction == SplitDirection.Down, { onDirection(SplitDirection.Down) },
-                        quiet = true, label = "Split downwards",
-                    )
-                }
-            }),
+            },
         )
         if (pane != null && pick == Pick.Split) {
             Row(
@@ -635,8 +703,10 @@ private fun Elsewhere(
                     when {
                         agent.target != null ->
                             "Offered by the node, not baked into the app — whatever Herdr can detect on that machine."
+
                         agent.panes.isEmpty() ->
                             "There is no pane on ${agent.nodeName} to start one in — make a workspace first."
+
                         else -> "An agent starts inside a pane. Pick the one on ${agent.nodeName} it runs in."
                     },
                     tokens.type.captionSmall,

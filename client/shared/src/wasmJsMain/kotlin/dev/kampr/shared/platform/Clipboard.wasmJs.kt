@@ -20,7 +20,7 @@ private fun jsReadText(): Promise<JsString?> = js(
       if (!navigator.clipboard || !navigator.clipboard.readText) return Promise.resolve(null);
       return navigator.clipboard.readText().catch(function () { return null; });
     })()
-    """
+    """,
 )
 
 actual suspend fun clipboardText(): String? = try {

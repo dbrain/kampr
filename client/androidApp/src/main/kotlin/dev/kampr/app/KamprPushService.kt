@@ -59,6 +59,5 @@ class KamprPushService : PushService() {
         UnifiedPushEndpoints.forget(applicationContext)
     }
 
-    private fun JSONObject.text(key: String): String? =
-        optString(key).takeIf { it.isNotBlank() && it != "null" }
+    private fun JSONObject.text(key: String): String? = optString(key).takeIf { it.isNotBlank() && it != "null" }
 }

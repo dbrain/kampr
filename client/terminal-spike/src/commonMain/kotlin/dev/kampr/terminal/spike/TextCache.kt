@@ -61,8 +61,7 @@ class TextCache(
         }
     }
 
-    fun shape(text: String, fontKey: Int): TextLayoutResult =
-        measurer.measure(text, style(fontKey), softWrap = false, maxLines = 1, skipCache = true)
+    fun shape(text: String, fontKey: Int): TextLayoutResult = measurer.measure(text, style(fontKey), softWrap = false, maxLines = 1, skipCache = true)
 
     fun cachedRun(text: String, fontKey: Int): TextLayoutResult {
         val key = RunKey(text, fontKey)
@@ -116,8 +115,12 @@ class TextCache(
     fun metrics(sizeSp: TextUnit): GridMetrics {
         ensureSize(sizeSp)
         val probe = measurer.measure(
-            PROBE, style(0), softWrap = false, maxLines = 1,
-            constraints = Constraints(), skipCache = true,
+            PROBE,
+            style(0),
+            softWrap = false,
+            maxLines = 1,
+            constraints = Constraints(),
+            skipCache = true,
         )
         val cellW = probe.size.width.toFloat() / PROBE.length
         val lineH = probe.size.height.toFloat()

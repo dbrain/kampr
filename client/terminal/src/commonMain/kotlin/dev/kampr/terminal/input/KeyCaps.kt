@@ -21,8 +21,7 @@ data class KeyCap(
     val span: Int = 1,
 )
 
-private fun text(label: String, send: String = label, alternate: KeyCap? = null) =
-    KeyCap(label, CapKind.Text, send, alternate = alternate)
+private fun text(label: String, send: String = label, alternate: KeyCap? = null) = KeyCap(label, CapKind.Text, send, alternate = alternate)
 
 private fun csi(
     label: String,
@@ -31,12 +30,16 @@ private fun csi(
     symbol: Boolean = false,
     repeats: Boolean = false,
 ) = KeyCap(
-    label, CapKind.Text, send,
-    alternate = alternate, csi = true, symbol = symbol, repeats = repeats,
+    label,
+    CapKind.Text,
+    send,
+    alternate = alternate,
+    csi = true,
+    symbol = symbol,
+    repeats = repeats,
 )
 
-private fun latch(label: String, which: Latch, hold: Latch? = null) =
-    KeyCap(label, CapKind.Latch, latch = which, hold = hold)
+private fun latch(label: String, which: Latch, hold: Latch? = null) = KeyCap(label, CapKind.Latch, latch = which, hold = hold)
 
 private val insert = csi("ins", Esc.INSERT)
 private val delete = csi("del", Esc.DELETE)
@@ -107,8 +110,7 @@ private val SPOKEN = mapOf(
 
 private val FUNCTION = Regex("^F(\\d{1,2})$")
 
-fun spokenKey(label: String): String =
-    SPOKEN[label] ?: FUNCTION.matchEntire(label)?.let { "F " + it.groupValues[1] } ?: label
+fun spokenKey(label: String): String = SPOKEN[label] ?: FUNCTION.matchEntire(label)?.let { "F " + it.groupValues[1] } ?: label
 
 object KeyLayouts {
     // `fn` takes the slot `-` had, on the operator's own reading of the row: a hyphen and an

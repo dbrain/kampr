@@ -9,12 +9,12 @@ import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEventDispatcher
 import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
+import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprTokens
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.themeOf
-import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.ManageIo
 import dev.kampr.shared.ui.PaneSurfaces
@@ -48,8 +48,11 @@ fun Bars(bars: SafeArea = BARS, content: @Composable () -> Unit) {
 // around them. The zoom control is a real 40 dp box because the header measures what it holds.
 object BlankSurfaces : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(40.dp))
 }
 

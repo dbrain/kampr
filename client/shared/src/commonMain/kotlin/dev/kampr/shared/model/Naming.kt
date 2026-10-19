@@ -134,14 +134,43 @@ private class Scanner(private val source: String) {
         while (true) {
             val c = next() ?: break
             when {
-                c == '{' && peek() == '{' -> { at++; text.append('{') }
-                c == '}' && peek() == '}' -> { at++; text.append('}') }
-                c == '[' && peek() == '[' -> { at++; text.append('[') }
-                c == ']' && peek() == ']' -> { at++; text.append(']') }
-                c == '{' -> { flush(); parts.add(Part.Slot(slot())) }
-                c == '[' -> { flush(); parts.add(Part.Group(parts(inGroup = true))) }
-                c == ']' && inGroup -> { flush(); return parts }
+                c == '{' && peek() == '{' -> {
+                    at++
+                    text.append('{')
+                }
+
+                c == '}' && peek() == '}' -> {
+                    at++
+                    text.append('}')
+                }
+
+                c == '[' && peek() == '[' -> {
+                    at++
+                    text.append('[')
+                }
+
+                c == ']' && peek() == ']' -> {
+                    at++
+                    text.append(']')
+                }
+
+                c == '{' -> {
+                    flush()
+                    parts.add(Part.Slot(slot()))
+                }
+
+                c == '[' -> {
+                    flush()
+                    parts.add(Part.Group(parts(inGroup = true)))
+                }
+
+                c == ']' && inGroup -> {
+                    flush()
+                    return parts
+                }
+
                 c == ']' -> throw TemplateException("a `]` closes a group that was never opened")
+
                 else -> text.append(c)
             }
         }
@@ -159,9 +188,16 @@ private class Scanner(private val source: String) {
             val c = next() ?: break
             val open = literal
             when {
-                c == '\'' && open != null -> { choices.add(Choice.Literal(open.toString())); literal = null; word.clear() }
+                c == '\'' && open != null -> {
+                    choices.add(Choice.Literal(open.toString()))
+                    literal = null
+                    word.clear()
+                }
+
                 c == '\'' -> literal = StringBuilder()
+
                 open != null -> open.append(c)
+
                 c == '|' || c == '}' -> {
                     val name = word.toString().trim()
                     if (name.isNotEmpty()) {
@@ -172,8 +208,12 @@ private class Scanner(private val source: String) {
                         choices.add(Choice.Token(token))
                     }
                     word.clear()
-                    if (c == '}') { closed = true; break }
+                    if (c == '}') {
+                        closed = true
+                        break
+                    }
                 }
+
                 else -> word.append(c)
             }
         }
@@ -191,6 +231,7 @@ private fun renderInto(parts: List<Part>, fields: Fields, out: StringBuilder): F
     for (part in parts) {
         when (part) {
             is Part.Text -> out.append(part.text)
+
             is Part.Slot -> {
                 filled.seen = true
                 for (choice in part.choices) {
@@ -205,6 +246,7 @@ private fun renderInto(parts: List<Part>, fields: Fields, out: StringBuilder): F
                     }
                 }
             }
+
             is Part.Group -> {
                 val buffer = StringBuilder()
                 val inner = renderInto(part.parts, fields, buffer)

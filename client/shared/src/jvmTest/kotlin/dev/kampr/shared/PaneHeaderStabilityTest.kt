@@ -10,11 +10,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.SkikoComposeUiTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SkikoComposeUiTest
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.v2.runSkikoComposeUiTest
@@ -63,10 +63,12 @@ private val INFO = PaneInfo(
 // it is handed — a probe narrower than that would reserve a slot the button does not fit in.
 private object ZoomProbe : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
-    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) =
-        Box(modifier.size(71.dp, 44.dp).named(ZOOM))
+
+    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(71.dp, 44.dp).named(ZOOM))
 }
 
 // The fonts Kampr ships, not the machine's. `FontFamily.Default` and `.Monospace` resolve through
@@ -149,8 +151,7 @@ private fun SemanticsNode.collect(into: MutableList<Pair<String, Rect>>) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun SkikoComposeUiTest.headerBounds(): List<Pair<String, Rect>> =
-    mutableListOf<Pair<String, Rect>>().also { onRoot(useUnmergedTree = true).fetchSemanticsNode().collect(it) }
+private fun SkikoComposeUiTest.headerBounds(): List<Pair<String, Rect>> = mutableListOf<Pair<String, Rect>>().also { onRoot(useUnmergedTree = true).fetchSemanticsNode().collect(it) }
 
 // Compared by the part of a description before its dash. A badge is allowed to name the surface it
 // is about — the stale one says "the last grid" over a terminal and "the last transcript that
@@ -159,8 +160,7 @@ private fun SkikoComposeUiTest.headerBounds(): List<Pair<String, Rect>> =
 private fun key(label: String) = label.substringBefore(" — ")
 
 @OptIn(ExperimentalTestApi::class)
-private fun SkikoComposeUiTest.zooms(): Int =
-    onAllNodesWithContentDescription(ZOOM).fetchSemanticsNodes().size
+private fun SkikoComposeUiTest.zooms(): Int = onAllNodesWithContentDescription(ZOOM).fetchSemanticsNodes().size
 
 // The report: "it hides in conversation mode then shows again in terminal mode and makes the view
 // switcher jump around". The zoom sheet is the terminal surface's, so the control that opens it has
@@ -197,8 +197,11 @@ class PaneHeaderStabilityTest {
                 .filter { (was, now) -> key(was.first) != key(now.first) || was.second != now.second }
                 .map { (was, now) -> "${board.name}: $was became $now" }
                 .ifEmpty {
-                    if (terminal.size == conversation.size) emptyList()
-                    else listOf("${board.name}: the header lost ${terminal.map { key(it.first) } - conversation.map { key(it.first) }.toSet()}")
+                    if (terminal.size == conversation.size) {
+                        emptyList()
+                    } else {
+                        listOf("${board.name}: the header lost ${terminal.map { key(it.first) } - conversation.map { key(it.first) }.toSet()}")
+                    }
                 }
         }
         assertEquals(emptyList(), moved, "the pane header reflowed when the pane changed view")

@@ -4,10 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
@@ -158,7 +158,7 @@ class NewSheetTargetTest {
 
             store.take(
                 """{"t":"herd","nodes":[{"id":"01JHUB","name":"comingclean","kind":"local"}],""" +
-                    """"panes":[{"id":"01JHUB/w7:p1","node_id":"01JHUB","workspace_id":"01JHUB/w7","updated_at":"7"}]}"""
+                    """"panes":[{"id":"01JHUB/w7:p1","node_id":"01JHUB","workspace_id":"01JHUB/w7","updated_at":"7"}]}""",
             )
             waitForIdle()
             assertEquals("01JHUB/w7:p1", (state.screen as Screen.Pane).paneId)

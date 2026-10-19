@@ -12,7 +12,10 @@ const val ASSET_LINKS_PATH = "/.well-known/assetlinks.json"
 // app-links file and buys a passkey nothing at all.
 private const val LOGIN_CREDS = "delegate_permission/common.get_login_creds"
 
-private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+private val json = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+}
 
 // Why Android refused, when the reason is the one thing the phone can see and the node cannot.
 //

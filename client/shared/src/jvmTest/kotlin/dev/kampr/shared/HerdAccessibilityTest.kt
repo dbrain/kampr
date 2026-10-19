@@ -2,6 +2,7 @@ package dev.kampr.shared
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -9,18 +10,19 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.isFocused
-import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
-import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.KamprFonts
@@ -30,18 +32,16 @@ import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.on
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.theme.typography
-import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.BottomSheet
-import dev.kampr.shared.ui.HerdPortrait
-import dev.kampr.shared.ui.SheetHeader
-import dev.kampr.shared.ui.PaneScreenMobile
+import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.FallbackSurfaces
+import dev.kampr.shared.ui.HerdPortrait
+import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.ui.SheetHeader
 import dev.kampr.shared.ui.TOUCH
 import dev.kampr.shared.ui.statusShape
 import dev.kampr.shared.ui.statusWord
-import dev.kampr.shared.model.PaneState
-import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import kotlin.test.Test
@@ -166,5 +166,4 @@ class HerdAccessibilityTest {
             .assertHeightIsAtLeast(TOUCH)
             .assertWidthIsAtLeast(TOUCH)
     }
-
 }

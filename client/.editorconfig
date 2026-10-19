@@ -3,3 +3,6 @@ root = true
 [*.{kt,kts}]
 ktlint_code_style = intellij_idea
 ktlint_function_naming_ignore_when_annotated_with = Composable
+# A file is named for what it is about (`Codec.kt`, `Escapes.kt`), not for whichever declaration
+# happens to be the only top-level one in it.
+ktlint_standard_filename = disabled

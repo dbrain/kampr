@@ -33,8 +33,11 @@ import dev.kampr.shared.ui.announce
 fun catchingUp(status: ConnectionStatus, confirmed: Boolean, drawn: Boolean): String? = when {
     // Nothing drawn is not out of date, it is empty, and the transcript says so itself.
     !drawn -> null
+
     confirmed && status !is ConnectionStatus.Offline && status !is ConnectionStatus.Connecting -> null
+
     status is ConnectionStatus.Offline -> "read up to here — offline"
+
     else -> "read up to here"
 }
 

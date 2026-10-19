@@ -89,8 +89,7 @@ class TerminalPalette(private val skin: TerminalSkin) {
     val selectionWash: Color get() = skin.selectionWash
     val linkInk: Color get() = skin.linkInk
 
-    fun slot(index: Int): Int =
-        if (index < 16) skin.slots[index] else extended[index - 16]
+    fun slot(index: Int): Int = if (index < 16) skin.slots[index] else extended[index - 16]
 
     private fun resolve(spec: ColorSpec, fallback: Color): Color = when (spec) {
         ColorSpec.Default -> fallback
@@ -107,8 +106,7 @@ class TerminalPalette(private val skin: TerminalSkin) {
         }
     }
 
-    fun background(style: Style): Color =
-        if (style.reverse) resolve(style.fg, skin.ink) else resolve(style.bg, skin.ground)
+    fun background(style: Style): Color = if (style.reverse) resolve(style.fg, skin.ink) else resolve(style.bg, skin.ground)
 }
 
 fun terminalSkin(id: ThemeId): TerminalSkin = terminalSkins.getValue(id)

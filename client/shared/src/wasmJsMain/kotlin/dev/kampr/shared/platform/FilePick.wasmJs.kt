@@ -2,7 +2,6 @@ package dev.kampr.shared.platform
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.await
 import kotlinx.serialization.json.Json
@@ -49,7 +48,7 @@ private fun jsPick(): Promise<JsString?> = js(
         input.click();
       });
     })()
-    """
+    """,
 )
 
 // **The `paste` event is the only way a page is given clipboard bytes without asking permission**,
@@ -129,7 +128,7 @@ private fun jsNextPaste(): Promise<JsString?> = js(
         else box.waiting.push(resolve);
       });
     })()
-    """
+    """,
 )
 
 private fun pickedFrom(answer: String): PickedFile? {

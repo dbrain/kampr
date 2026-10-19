@@ -15,8 +15,7 @@ private val DELIMITER = Regex("^\\s*\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)*
 // bullets and tables into a reply and they go on rendering as what they are.
 enum class Breaks { Soft, Hard }
 
-fun parseMarkdown(source: String, breaks: Breaks = Breaks.Soft): List<MdBlock> =
-    Reader(source.replace("\r\n", "\n").split('\n'), breaks).blocks()
+fun parseMarkdown(source: String, breaks: Breaks = Breaks.Soft): List<MdBlock> = Reader(source.replace("\r\n", "\n").split('\n'), breaks).blocks()
 
 private class Reader(private val lines: List<String>, private val breaks: Breaks) {
     private var at = 0
@@ -27,12 +26,22 @@ private class Reader(private val lines: List<String>, private val breaks: Breaks
             val line = lines[at]
             when {
                 line.isBlank() -> at++
+
                 FENCE.matches(line) -> out += fence()
-                RULE.matches(line) -> { at++; out += MdBlock.Rule }
+
+                RULE.matches(line) -> {
+                    at++
+                    out += MdBlock.Rule
+                }
+
                 ATX.matches(line) -> out += heading()
+
                 line.trimStart().startsWith("> ") || line.trimStart() == ">" -> out += quote()
+
                 isTable() -> out += table()
+
                 BULLET.matches(line) || ORDERED.matches(line) -> out += list()
+
                 else -> out += paragraph()
             }
         }
@@ -112,10 +121,20 @@ private class Reader(private val lines: List<String>, private val breaks: Breaks
             val c = body[index]
             when {
                 c == '\\' && index + 1 < body.length -> {
-                    cell.append(body[index + 1]); index++
+                    cell.append(body[index + 1])
+                    index++
                 }
-                c == '`' -> { inCode = !inCode; cell.append(c) }
-                c == '|' && !inCode -> { out += cell.toString().trim(); cell.setLength(0) }
+
+                c == '`' -> {
+                    inCode = !inCode
+                    cell.append(c)
+                }
+
+                c == '|' && !inCode -> {
+                    out += cell.toString().trim()
+                    cell.setLength(0)
+                }
+
                 else -> cell.append(c)
             }
             index++
@@ -154,7 +173,7 @@ private class Reader(private val lines: List<String>, private val breaks: Breaks
                 body += next.removePrefix(" ".repeat(minOf(leading(next), indent + 2)))
                 at++
             }
-            items += MdItem(if (ordered) "${counter}." else "•", Reader(body, breaks).blocks())
+            items += MdItem(if (ordered) "$counter." else "•", Reader(body, breaks).blocks())
             counter++
         }
         return MdBlock.Bullets(items, ordered)

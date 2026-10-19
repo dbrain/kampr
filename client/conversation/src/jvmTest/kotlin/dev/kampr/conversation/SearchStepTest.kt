@@ -37,8 +37,11 @@ private fun longTranscript(more: Boolean = false): KamprStore {
     for (n in 0 until 12) {
         turns += Turn("u-$n", "user", AT, listOf(Block.Md("question number $n, and a few more words to take a line")))
         val said =
-            if (n % 2 == 0) "hit $n: the $NEEDLE column is the one it keeps back"
-            else "answer number $n, nothing to find in it"
+            if (n % 2 == 0) {
+                "hit $n: the $NEEDLE column is the one it keeps back"
+            } else {
+                "answer number $n, nothing to find in it"
+            }
         turns += Turn("a-$n", "assistant", AT, listOf(Block.Md(said)))
     }
     val store = KamprStore()
@@ -81,8 +84,7 @@ private fun Transcript(store: KamprStore, io: PaneIo = RecordingIo) {
 
 @OptIn(ExperimentalTestApi::class)
 class SearchStepTest {
-    private fun ComposeUiTest.shows(text: String) =
-        onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    private fun ComposeUiTest.shows(text: String) = onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     private fun ComposeUiTest.search(store: KamprStore, io: PaneIo = RecordingIo) {
         setContent { Transcript(store, io) }

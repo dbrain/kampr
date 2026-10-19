@@ -3,18 +3,18 @@ package dev.kampr.shared.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
-import dev.kampr.shared.model.ConnectionStatus
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
-import dev.kampr.shared.wire.ManageOp
-import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
+import dev.kampr.shared.wire.SizeMode
 
 interface PaneSurfaces {
     @Composable
@@ -90,14 +90,12 @@ interface PaneIo {
     // and a refusal is a strip over the pane on a phone whose operator asked for nothing.
     val growsPanes: Boolean get() = false
 
-    fun releaseMatch(paneId: String, linger: Boolean = true) =
-        send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
+    fun releaseMatch(paneId: String, linger: Boolean = true) = send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
 
     // The bytes behind a transcript attachment, on demand and over HTTP rather than over the
     // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines
     // every pane for seconds on a phone link.
-    suspend fun attachment(paneId: String, id: String): AttachmentBytes =
-        AttachmentBytes.Failed("This device has no node to fetch it from.")
+    suspend fun attachment(paneId: String, id: String): AttachmentBytes = AttachmentBytes.Failed("This device has no node to fetch it from.")
 }
 
 private object NoPaneIo : PaneIo {

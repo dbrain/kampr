@@ -58,8 +58,10 @@ private class NodeWithOneAttachment {
         val out = it.getOutputStream()
         if (path.endsWith("/att-7f3")) {
             out.write(
-                ("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${PIXELS.size}\r\n" +
-                    "Connection: close\r\n\r\n").toByteArray()
+                (
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${PIXELS.size}\r\n" +
+                        "Connection: close\r\n\r\n"
+                    ).toByteArray(),
             )
             out.write(PIXELS)
         } else {

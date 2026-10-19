@@ -13,14 +13,14 @@ import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.util.clockFace
 import dev.kampr.shared.util.clockTime
-import dev.kampr.shared.util.localDay
 import dev.kampr.shared.util.isoIsZoned
+import dev.kampr.shared.util.localDay
 import dev.kampr.shared.util.localOffsetMillis
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.util.relativeTime
@@ -106,8 +106,10 @@ const val SUMMARY_GIST = "the conversation before this, summarised"
 
 // One line of prose for a folded turn to show of itself. Markdown's own punctuation is stripped
 // rather than rendered: a row reading "## Corrections and event" is the syntax, not the message.
-fun turnGist(turn: Turn): String =
-    if (isSummary(turn)) SUMMARY_GIST else turnText(turn)
+fun turnGist(turn: Turn): String = if (isSummary(turn)) {
+    SUMMARY_GIST
+} else {
+    turnText(turn)
         .lineSequence()
         .map { it.trim() }
         .firstOrNull { it.isNotEmpty() }
@@ -116,6 +118,7 @@ fun turnGist(turn: Turn): String =
         ?.replace("`", "")
         ?.trim()
         .orEmpty()
+}
 
 fun headerLabel(skin: SpeakerSkin, stamp: String?, gist: String, parts: Int): String = listOfNotNull(
     skin.label,
@@ -144,22 +147,28 @@ fun TurnHeader(
             modifier
                 .fillMaxWidth()
                 .then(
-                    if (onToggle == null) Modifier
-                    else Modifier
-                        .touchable(LANDSCAPE_TOUCH)
-                        .action(
-                            if (folded) "Show the message of $held" else "Hide the message of $held",
-                            onToggle,
-                            selected = !folded,
-                        ),
+                    if (onToggle == null) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .touchable(LANDSCAPE_TOUCH)
+                            .action(
+                                if (folded) "Show the message of $held" else "Hide the message of $held",
+                                onToggle,
+                                selected = !folded,
+                            )
+                    },
                 ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             LabelText(skin.label, tokens.type.metaSmall, skin.rail)
             if (stamp != null) KText(stamp, tokens.type.micro, tokens.color.mute)
-            if (folded) KText(gist, tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
-            else Box(Modifier.weight(1f))
+            if (folded) {
+                KText(gist, tokens.type.meta, tokens.color.dim, Modifier.weight(1f))
+            } else {
+                Box(Modifier.weight(1f))
+            }
             if (onToggle != null) {
                 IconGlyph(
                     if (folded) ConversationIcons.chevronDown else ConversationIcons.chevronUp,

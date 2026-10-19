@@ -1,13 +1,13 @@
 package dev.kampr.terminal
 
 import dev.kampr.shared.platform.touchBrowser
+import dev.kampr.terminal.input.PaneChord
+import dev.kampr.terminal.input.deliverChordsTo
 import dev.kampr.terminal.input.deliverInputTo
 import dev.kampr.terminal.input.drainInput
 import dev.kampr.terminal.input.focusInput
 import dev.kampr.terminal.input.holdsInput
-import dev.kampr.terminal.input.deliverChordsTo
 import dev.kampr.terminal.input.installInput
-import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.reclaimInputFocus
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
@@ -28,7 +28,7 @@ private fun typeKey(key: String) {
             var s = globalThis.__kamprInput;
             s.el.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true, cancelable: true }));
         })()
-        """
+        """,
     )
 }
 
@@ -46,7 +46,7 @@ private fun altKey(key: String) {
                 key: key, altKey: true, bubbles: true, cancelable: true,
             }));
         })()
-        """
+        """,
     )
 }
 
@@ -62,7 +62,7 @@ private fun typeText(data: String) {
                 inputType: 'insertText', data: data, bubbles: true, cancelable: true,
             }));
         })()
-        """
+        """,
     )
 }
 
@@ -74,7 +74,7 @@ private fun composeKey(type: String, data: String) {
             var s = globalThis.__kamprInput;
             s.el.dispatchEvent(new CompositionEvent(type, { data: data, bubbles: true }));
         })()
-        """
+        """,
     )
 }
 
@@ -96,7 +96,7 @@ private fun parkTheTab() {
             Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
             document.dispatchEvent(new Event('visibilitychange'));
         })()
-        """
+        """,
     )
 }
 
@@ -112,13 +112,12 @@ private fun showTheTab() {
             delete document.visibilityState;
             document.dispatchEvent(new Event('visibilitychange'));
         })()
-        """
+        """,
     )
 }
 
 @OptIn(ExperimentalWasmJsInterop::class)
 private fun framesAskedFor(): Int = js("globalThis.__kamprFramesAsked || 0")
-
 
 // A rival for the one focus slot the page has. A `textarea` is the shape Compose's own text input
 // takes in this DOM, so it is what the conversation composer looks like from here; a `button` is
@@ -136,7 +135,7 @@ private fun putRival(tag: String) {
             globalThis.__kamprRival = el;
             el.focus();
         })()
-        """
+        """,
     )
 }
 
@@ -151,10 +150,9 @@ private fun dismissRival() {
             if (el.parentNode) el.parentNode.removeChild(el);
             globalThis.__kamprRival = null;
         })()
-        """
+        """,
     )
 }
-
 
 // Runs in a real ChromeHeadless, which is the only place the browser half of the input exists.
 // Everything here is the DOM the wasm build actually talks to, not a model of it.
@@ -250,7 +248,6 @@ class BrowserInputTest {
         assertTrue(inputFocused(), "the pane never took back the focus the gesture cost it")
         focusInput(false)
     }
-
 
     // The report: a browser pane kept painting frames from the desk and stopped taking keys, for
     // good. DOM focus is one slot for the whole page and the pane asserted its claim on it exactly

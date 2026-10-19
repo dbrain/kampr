@@ -84,7 +84,7 @@ class QrDecodeTest {
         for (n in listOf(
             1, 14, 15, 26, 27, 42, 43, 62, 63, 84, 85, 106, 107, 122, 123, 152, 153, 180, 181, 213,
         )) {
-            roundTrip("k.example/" .repeat(30).take(n), "len-$n")
+            roundTrip("k.example/".repeat(30).take(n), "len-$n")
         }
     }
 

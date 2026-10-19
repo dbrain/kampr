@@ -58,8 +58,7 @@ class NamingParityTest {
 
     // `title` is the session's own — the harness writes it, the wire does not carry it yet — so it
     // is overlaid onto the fields rather than read off a `PaneInfo`.
-    private fun fields(case: JsonObject) =
-        fieldsOf(pane(case), title = (case["title"] as? JsonPrimitive)?.contentOrNull)
+    private fun fields(case: JsonObject) = fieldsOf(pane(case), title = (case["title"] as? JsonPrimitive)?.contentOrNull)
 
     @Test
     fun `every shipped case renders the string the fixture pins`() {

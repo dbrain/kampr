@@ -77,7 +77,7 @@ class ConvoFindWireTest {
     fun aFreshPageTakesTheSearchWithIt() {
         val store = KamprStore()
         store.accept(
-            ServerMsg.Convo(pane = PANE, cursor = "a-1", more = false, turns = listOf(Turn("a-1", "assistant", null, listOf(Block.Md("said")))))
+            ServerMsg.Convo(pane = PANE, cursor = "a-1", more = false, turns = listOf(Turn("a-1", "assistant", null, listOf(Block.Md("said"))))),
         )
         store.accept(ServerMsg.ConvoFound(pane = PANE, query = "said", matches = emptyList(), total = 1))
         assertEquals(1, store.pane(PANE).convoFound?.total)

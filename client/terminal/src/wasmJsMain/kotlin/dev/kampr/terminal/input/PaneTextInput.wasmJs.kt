@@ -171,13 +171,12 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String) {
             });
 
         })()
-        """
+        """,
     )
 }
 
 @OptIn(ExperimentalWasmJsInterop::class)
-internal fun drainInput(): String =
-    js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
+internal fun drainInput(): String = js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
 
 // The queue used to be emptied from a Compose frame loop, and `withFrameNanos` is
 // `requestAnimationFrame`. A browser stops calling that back for a hidden tab, so the drain parked
@@ -252,8 +251,7 @@ internal fun installInput() = installDom(::flushInput, ::answerChord)
 // A desk browser has no keys to raise, so the input holds the focus for as long as a pane is on
 // screen, which is the only thing that makes a hardware keyboard reach the pane at all.
 
-internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean): Boolean =
-    enabled && (keyboardAsked || !touch)
+internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean): Boolean = enabled && (keyboardAsked || !touch)
 
 // Standing down has to hand the focus *somewhere*, not merely let go of it.
 //
@@ -288,7 +286,7 @@ internal fun focusInput(open: Boolean) {
             var canvas = find(document);
             if (canvas) canvas.focus({ preventScroll: true });
         })()
-        """
+        """,
     )
 }
 
@@ -322,7 +320,7 @@ internal fun reclaimInputFocus() {
                            active.isContentEditable)) return;
             s.el.focus({ preventScroll: true });
         })()
-        """
+        """,
     )
 }
 

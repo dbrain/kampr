@@ -25,6 +25,7 @@ object ColorSpecSerializer : KSerializer<ColorSpec> {
         val obj = (decoder as JsonDecoder).decodeJsonElement() as? JsonObject ?: return ColorSpec.Default
         return when (obj["k"]?.jsonPrimitive?.contentOrNull) {
             "i" -> ColorSpec.Indexed(obj["v"]?.jsonPrimitive?.intOrNull ?: 0)
+
             "r" -> {
                 val v = obj["v"] as? JsonArray ?: return ColorSpec.Default
                 ColorSpec.Rgb(
@@ -33,6 +34,7 @@ object ColorSpecSerializer : KSerializer<ColorSpec> {
                     v.getOrNull(2)?.jsonPrimitive?.intOrNull ?: 0,
                 )
             }
+
             else -> ColorSpec.Default
         }
     }
@@ -42,12 +44,17 @@ object ColorSpecSerializer : KSerializer<ColorSpec> {
         out.encodeJsonElement(
             when (value) {
                 is ColorSpec.Default -> buildJsonObject { put("k", "d") }
-                is ColorSpec.Indexed -> buildJsonObject { put("k", "i"); put("v", value.v) }
+
+                is ColorSpec.Indexed -> buildJsonObject {
+                    put("k", "i")
+                    put("v", value.v)
+                }
+
                 is ColorSpec.Rgb -> buildJsonObject {
                     put("k", "r")
                     put("v", JsonArray(listOf(JsonPrimitive(value.r), JsonPrimitive(value.g), JsonPrimitive(value.b))))
                 }
-            }
+            },
         )
     }
 }
@@ -62,18 +69,22 @@ object BlockSerializer : KSerializer<Block> {
         val text = obj["text"]?.jsonPrimitive?.contentOrNull ?: ""
         return when (kind) {
             "md" -> Block.Md(text, attachmentOf(obj["att"]))
+
             "code" -> Block.Code(
                 obj["lang"]?.jsonPrimitive?.contentOrNull,
                 text,
                 obj["role"]?.jsonPrimitive?.contentOrNull,
             )
+
             "tool" -> Block.Tool(
                 name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "tool",
                 summary = obj["summary"]?.jsonPrimitive?.contentOrNull,
                 lines = obj["lines"]?.jsonPrimitive?.intOrNull,
                 state = obj["state"]?.jsonPrimitive?.contentOrNull,
             )
+
             "diff" -> Block.Diff(obj["path"]?.jsonPrimitive?.contentOrNull, text)
+
             // Without an id there is nothing to hand back, and a card offering to open a
             // conversation it cannot name is the inert affordance rule in miniature.
             "sub" -> (obj["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { id ->
@@ -84,6 +95,7 @@ object BlockSerializer : KSerializer<Block> {
                     depth = (obj["depth"] as? JsonPrimitive)?.intOrNull,
                 )
             } ?: Block.Unknown(kind)
+
             else -> Block.Unknown(kind)
         }
     }
@@ -116,28 +128,42 @@ object BlockSerializer : KSerializer<Block> {
         out.encodeJsonElement(
             when (value) {
                 is Block.Md -> buildJsonObject {
-                    put("b", "md"); put("text", value.text)
+                    put("b", "md")
+                    put("text", value.text)
                     value.att?.let { put("att", attachmentJson(it)) }
                 }
+
                 is Block.Code -> buildJsonObject {
-                    put("b", "code"); value.lang?.let { put("lang", it) }; put("text", value.text)
+                    put("b", "code")
+                    value.lang?.let { put("lang", it) }
+                    put("text", value.text)
                     value.role?.let { put("role", it) }
                 }
+
                 is Block.Tool -> buildJsonObject {
-                    put("b", "tool"); put("name", value.name)
+                    put("b", "tool")
+                    put("name", value.name)
                     value.summary?.let { put("summary", it) }
                     value.lines?.let { put("lines", it) }
                     value.state?.let { put("state", it) }
                 }
-                is Block.Diff -> buildJsonObject { put("b", "diff"); value.path?.let { put("path", it) }; put("text", value.text) }
+
+                is Block.Diff -> buildJsonObject {
+                    put("b", "diff")
+                    value.path?.let { put("path", it) }
+                    put("text", value.text)
+                }
+
                 is Block.Sub -> buildJsonObject {
-                    put("b", "sub"); put("id", value.id)
+                    put("b", "sub")
+                    put("id", value.id)
                     value.kind?.let { put("kind", it) }
                     value.title?.let { put("title", it) }
                     value.depth?.let { put("depth", it) }
                 }
+
                 is Block.Unknown -> buildJsonObject { put("b", value.kind) }
-            }
+            },
         )
     }
 }

@@ -49,9 +49,9 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.announce
+import kotlinx.coroutines.delay
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.delay
 
 actual val pairingScanAvailable: Boolean = true
 
@@ -62,7 +62,7 @@ actual fun PairingScanSurface(onScanned: (String) -> Unit, onClose: () -> Unit) 
     var granted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
+                PackageManager.PERMISSION_GRANTED,
         )
     }
     // A refusal is an answer, not a dead end: the address and the code can still be typed, and
@@ -100,8 +100,11 @@ actual fun PairingScanSurface(onScanned: (String) -> Unit, onClose: () -> Unit) 
                     tokens.type.body,
                     if (found == null) Color.White else tokens.color.done,
                     Modifier.announce(
-                        if (found == null) "Point the camera at the pairing code on the other screen"
-                        else "Pairing code read",
+                        if (found == null) {
+                            "Point the camera at the pairing code on the other screen"
+                        } else {
+                            "Pairing code read"
+                        },
                     ),
                     maxLines = 2,
                 )

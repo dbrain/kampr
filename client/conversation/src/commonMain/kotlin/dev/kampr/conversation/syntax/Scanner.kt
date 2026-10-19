@@ -33,7 +33,10 @@ fun scan(code: String, spec: LangSpec): List<Span> {
         if (c in spec.quotes && spec.quotes.isNotEmpty()) {
             var probe = at + 1
             while (probe < code.length) {
-                if (code[probe] == '\\') { probe += 2; continue }
+                if (code[probe] == '\\') {
+                    probe += 2
+                    continue
+                }
                 if (code[probe] == c || code[probe] == '\n') break
                 probe++
             }
@@ -64,7 +67,13 @@ fun scan(code: String, spec: LangSpec): List<Span> {
             var probe = at
             while (probe < code.length && isWordChar(code[probe])) probe++
             val word = code.substring(at, probe)
-            val next = code.getOrNull(probe.let { var p = it; while (p < code.length && code[p] == ' ') p++; p })
+            val next = code.getOrNull(
+                probe.let {
+                    var p = it
+                    while (p < code.length && code[p] == ' ') p++
+                    p
+                },
+            )
             val token = when {
                 word in spec.keywords -> Token.Keyword
                 word in spec.constants -> Token.Number

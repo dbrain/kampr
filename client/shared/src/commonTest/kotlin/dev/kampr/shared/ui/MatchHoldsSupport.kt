@@ -13,8 +13,7 @@ internal const val B = "01JKAMPRNODE0000000000000/w1:p2"
 
 internal fun List<ClientMsg>.manages(): List<ClientMsg.Manage> = filterIsInstance<ClientMsg.Manage>()
 
-internal fun List<ClientMsg>.sizings(pane: String): List<ManageOp.PaneSize> =
-    manages().mapNotNull { it.request as? ManageOp.PaneSize }.filter { it.at == pane }
+internal fun List<ClientMsg>.sizings(pane: String): List<ManageOp.PaneSize> = manages().mapNotNull { it.request as? ManageOp.PaneSize }.filter { it.at == pane }
 
 internal fun List<ManageOp.PaneSize>.modes() = map { it.mode }
 

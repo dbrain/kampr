@@ -6,12 +6,12 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.platform.ClipEntry
@@ -23,13 +23,13 @@ import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
@@ -75,14 +75,19 @@ private fun highlighted(scene: ImageComposeScene): Int {
     val want = ((HIGHLIGHT.red * 255).toInt() shl 16) or
         ((HIGHLIGHT.green * 255).toInt() shl 8) or (HIGHLIGHT.blue * 255).toInt()
     var found = 0
-    for (y in 0 until image.height) for (x in 0 until image.width) {
-        if (image.getRGB(x, y) and 0xFFFFFF == want) found++
+    for (y in 0 until image.height) {
+        for (x in 0 until image.width) {
+            if (image.getRGB(x, y) and 0xFFFFFF == want) found++
+        }
     }
     return found
 }
 
 private fun draggedAcrossTheTranscript(pane: PaneState): Int = withScene(
-    PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
+    PORTRAIT.first,
+    PORTRAIT.second,
+    SoftTheme,
+    TypeScale.Phone,
     content = {
         CompositionLocalProvider(LocalTextSelectionColors provides TextSelectionColors(HIGHLIGHT, HIGHLIGHT)) {
             ConversationView(pane, demoInfo(), Modifier.fillMaxSize())
@@ -126,7 +131,9 @@ internal class HeldClipboard : Clipboard {
     var entry: ClipEntry? = null
     override val nativeClipboard: Any get() = throw UnsupportedOperationException()
     override suspend fun getClipEntry(): ClipEntry? = entry
-    override suspend fun setClipEntry(clipEntry: ClipEntry?) { entry = clipEntry }
+    override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+        entry = clipEntry
+    }
 
     val pasted: String?
         get() = (entry?.nativeClipEntry as? Transferable)?.getTransferData(DataFlavor.stringFlavor) as String?
@@ -139,7 +146,10 @@ private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 255f): Strin
     val toolbar = SelectionToolbar()
     val clipboard = HeldClipboard()
     withScene(
-        PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone,
+        PORTRAIT.first,
+        PORTRAIT.second,
+        SoftTheme,
+        TypeScale.Phone,
         content = {
             CompositionLocalProvider(
                 LocalTextToolbar provides toolbar,
@@ -164,7 +174,10 @@ private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 255f): Strin
             touch(PointerEventType.Release, 740f, 760f)
             scene.render()
             toolbar.copy?.invoke()
-            repeat(4) { scene.render(); Thread.sleep(60) }
+            repeat(4) {
+                scene.render()
+                Thread.sleep(60)
+            }
         },
     )
     return clipboard.pasted

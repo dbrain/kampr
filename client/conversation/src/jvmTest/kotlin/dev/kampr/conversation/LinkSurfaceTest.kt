@@ -7,16 +7,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeUiTest
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
@@ -27,7 +28,6 @@ import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
-import androidx.compose.ui.test.performClick
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -42,13 +42,12 @@ private fun Themed(content: @Composable () -> Unit) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.targets(): List<String> =
-    onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Text))
-        .fetchSemanticsNodes()
-        .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }
-        .flatMap { text ->
-            text.getLinkAnnotations(0, text.length).mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
-        }
+private fun ComposeUiTest.targets(): List<String> = onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Text))
+    .fetchSemanticsNodes()
+    .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }
+    .flatMap { text ->
+        text.getLinkAnnotations(0, text.length).mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
+    }
 
 // Compose gives every link inside a paragraph its own clickable node with no text and no label of
 // its own, which is what tells it apart from every button around it.
@@ -61,7 +60,9 @@ private fun theLink() = SemanticsMatcher("a link inside prose") { node ->
 
 private class Opened : UriHandler {
     val uris = mutableListOf<String>()
-    override fun openUri(uri: String) { uris += uri }
+    override fun openUri(uri: String) {
+        uris += uri
+    }
 }
 
 // A URL a reader can see is a URL they should be able to press, and the surfaces that are not
@@ -78,7 +79,9 @@ class LinkSurfaceTest {
     @Test
     fun aUrlInToolOutputIsPressableWhereTheReaderSeesIt() = runComposeUiTest {
         val turn = Turn(
-            "a-2", "assistant", null,
+            "a-2",
+            "assistant",
+            null,
             listOf(
                 Block.Tool("Bash", "curl the docs", 2, "done"),
                 Block.Code("bash", "curl -sS https://kampr.dev/docs/probe.json\n# 404 — see https://kampr.dev/help"),
@@ -94,7 +97,9 @@ class LinkSurfaceTest {
     @Test
     fun aUrlInAPatchIsPressableWhereTheReaderSeesIt() = runComposeUiTest {
         val turn = Turn(
-            "a-3", "assistant", null,
+            "a-3",
+            "assistant",
+            null,
             listOf(Block.Diff("README.md", "@@ -1 +1 @@\n-see http://old.example/x\n+see https://new.example/x")),
         )
         setContent { Themed { TurnView(turn, "", emptyList(), {}, Modifier.fillMaxWidth()) } }

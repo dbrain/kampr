@@ -15,8 +15,7 @@ private fun jsPrompt(): Promise<JsBoolean> = js("window.kamprInstall.prompt()")
 private class BrowserInstallPrompt : InstallPrompt {
     override val available: Boolean get() = runCatching { jsAvailable() }.getOrDefault(false)
 
-    override suspend fun prompt(): Boolean =
-        runCatching { jsPrompt().await().toBoolean() }.getOrDefault(false)
+    override suspend fun prompt(): Boolean = runCatching { jsPrompt().await().toBoolean() }.getOrDefault(false)
 }
 
 actual fun createInstallPrompt(): InstallPrompt = BrowserInstallPrompt()

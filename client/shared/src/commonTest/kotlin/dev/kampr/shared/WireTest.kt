@@ -32,7 +32,7 @@ class WireTest {
         val msg = Wire.decode(
             """{"t":"hello","protocol":1,"node_id":"01J","node_name":"cc","build":"0.1.0",
                "role":"full","caps":{"push":true,"scrollback":true,"conversation":true,"teleport":true},
-               "future":{"nested":[1,2,3]}}"""
+               "future":{"nested":[1,2,3]}}""",
         )
         val hello = msg as ServerMsg.Hello
         assertEquals("cc", hello.nodeName)
@@ -45,7 +45,7 @@ class WireTest {
             """{"t":"styles","from":12,"styles":[
                {"fg":{"k":"r","v":[255,120,0]},"bg":{"k":"d"},"bold":true,"underline":true},
                {"fg":{"k":"i","v":214}},
-               {"fg":{"k":"weird"}}]}"""
+               {"fg":{"k":"weird"}}]}""",
         ) as ServerMsg.Styles
         assertEquals(12, msg.from)
         assertEquals(ColorSpec.Rgb(255, 120, 0), msg.styles[0].fg)
@@ -63,7 +63,7 @@ class WireTest {
             """{"t":"grid.reset","pane":"01J/w3:p2","cols":74,"rows":30,
                "rows_data":[{"row":9,"runs":[{"s":0,"x":"> 1. "},{"s":4,"x":"Yes","l":0}]}],
                "cursor":{"col":37,"row":9,"visible":true},
-               "links":["https://herdr.dev"]}"""
+               "links":["https://herdr.dev"]}""",
         ) as ServerMsg.GridReset
         assertEquals(74, msg.cols)
         assertEquals(9, msg.rowsData[0].row)
@@ -76,7 +76,7 @@ class WireTest {
     fun gridPatchLinksAreADelta() {
         val msg = Wire.decode(
             """{"t":"grid.patch","pane":"p","rows":[{"row":9,"runs":[{"s":0,"x":"hi"}]}],
-               "links":["https://example.test"]}"""
+               "links":["https://example.test"]}""",
         ) as ServerMsg.GridPatch
         assertNull(msg.cursor)
         assertEquals(listOf("https://example.test"), msg.links)
@@ -87,7 +87,7 @@ class WireTest {
         val msg = Wire.decode(
             """{"t":"scrollback","pane":"p","from_top":70000,
                "rows":[{"row":70001,"runs":[{"s":0,"x":"deep"}]}],
-               "total_rows":90000,"complete":false,"capped":true}"""
+               "total_rows":90000,"complete":false,"capped":true}""",
         ) as ServerMsg.Scrollback
         assertEquals(70_001, msg.rows[0].row)
         assertTrue(msg.capped)
@@ -97,11 +97,11 @@ class WireTest {
     @Test
     fun aPageSaysWhetherItReplacesTheConversationOrMergesIntoIt() {
         val merging = Wire.decode(
-            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[]}"""
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[]}""",
         ) as ServerMsg.Convo
         assertFalse(merging.fresh)
         val replacing = Wire.decode(
-            """{"t":"convo","pane":"p","cursor":"c","more":false,"fresh":true,"turns":[]}"""
+            """{"t":"convo","pane":"p","cursor":"c","more":false,"fresh":true,"turns":[]}""",
         ) as ServerMsg.Convo
         assertTrue(replacing.fresh)
     }
@@ -113,7 +113,7 @@ class WireTest {
                {"id":"t1","role":"assistant","at":"2026-08-20T13:41:55Z","blocks":[
                  {"b":"md","text":"hi"},
                  {"b":"hologram","text":"from the future"},
-                 {"b":"tool","name":"Bash","summary":"probe","lines":48,"state":"done"}]}]}"""
+                 {"b":"tool","name":"Bash","summary":"probe","lines":48,"state":"done"}]}]}""",
         ) as ServerMsg.Convo
         val blocks = msg.turns[0].blocks
         assertEquals(3, blocks.size)
@@ -132,7 +132,7 @@ class WireTest {
                {"id":"t1","role":"assistant","blocks":[
                  {"b":"tool","name":"Bash","summary":"probe key grammar","lines":3,"state":"done"},
                  {"b":"code","lang":"bash","text":"herdr key list"},
-                 {"b":"code","text":"Home\nEnd\nPageUp","role":"output"}]}]}"""
+                 {"b":"code","text":"Home\nEnd\nPageUp","role":"output"}]}]}""",
         ) as ServerMsg.Convo
         val blocks = msg.turns[0].blocks
         assertNull((blocks[1] as Block.Code).role, "the call's own input is not its output")
@@ -146,7 +146,7 @@ class WireTest {
     fun aCodeBlockWithNoRoleIsTheOneEveryOlderNodeSends() {
         val msg = Wire.decode(
             """{"t":"convo","pane":"p","cursor":"c","more":false,"turns":[
-               {"id":"t1","role":"assistant","blocks":[{"b":"code","lang":"ts","text":"send()"}]}]}"""
+               {"id":"t1","role":"assistant","blocks":[{"b":"code","lang":"ts","text":"send()"}]}]}""",
         ) as ServerMsg.Convo
         val code = msg.turns[0].blocks[0] as Block.Code
         assertEquals("ts", code.lang)
@@ -162,7 +162,7 @@ class WireTest {
                {"id":"t1","role":"user","blocks":[
                  {"b":"md","text":"[image · png]","att":{"id":"a7","kind":"image",
                    "mime":"image/png","bytes":52831,"name":"shot.png","thumb":{"w":8}}},
-                 {"b":"md","text":"plain prose"}]}]}"""
+                 {"b":"md","text":"plain prose"}]}]}""",
         ) as ServerMsg.Convo
         val blocks = msg.turns[0].blocks
         val marked = blocks[0] as Block.Md
@@ -183,7 +183,7 @@ class WireTest {
                {"id":"t1","role":"user","blocks":[
                  {"b":"md","text":"[audio]","att":{"id":"a9","kind":"audio"}},
                  {"b":"md","text":"[image]","att":{"kind":"image"}},
-                 {"b":"md","text":"[image]","att":"a10"}]}]}"""
+                 {"b":"md","text":"[image]","att":"a10"}]}]}""",
         ) as ServerMsg.Convo
         val blocks = msg.turns[0].blocks
         assertEquals("a9", (blocks[0] as Block.Md).att?.id)
@@ -228,7 +228,7 @@ class WireTest {
             """{"t":"caps","node":"01JA","agent_kinds":["claude"],"sessions":[
                {"name":"default","running":true,"served":true},
                {"name":"agents","running":true,"served":false},
-               {"name":"legacy","running":false}]}"""
+               {"name":"legacy","running":false}]}""",
         ) as ServerMsg.NodeCaps
         assertEquals(listOf(true, false, true), caps.sessions.map { it.served })
     }
@@ -240,7 +240,7 @@ class WireTest {
         val herd = Wire.decode(
             """{"t":"herd","panes":[],"nodes":[
                {"id":"01JA","name":"front","kind":"local","online":true,"build":"0.1.0","update":"0.1.2"},
-               {"id":"01JB","name":"back","kind":"peer","online":true,"build":"0.1.2"}]}"""
+               {"id":"01JB","name":"back","kind":"peer","online":true,"build":"0.1.2"}]}""",
         ) as ServerMsg.Herd
         assertEquals("0.1.2", herd.nodes[0].update)
         assertNull(herd.nodes[1].update, "a node that said nothing was read as saying something")

@@ -16,8 +16,8 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.platform.MemoryPrefs
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.AppScaffold
-import dev.kampr.shared.ui.AuthSurface
 import dev.kampr.shared.ui.AppState
+import dev.kampr.shared.ui.AuthSurface
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.NoMosaic

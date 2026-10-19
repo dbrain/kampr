@@ -151,7 +151,6 @@ val PhosphorTheme = PhosphorFamily.dark
 val WarmTheme = WarmFamily.dark
 val BrutalistTheme = BrutalistFamily.dark
 
-fun ThemeSpec.on(ground: Ground): ThemeSpec =
-    if (ground == this.ground) this else AllFamilies.first { it.id == id }.on(ground)
+fun ThemeSpec.on(ground: Ground): ThemeSpec = if (ground == this.ground) this else AllFamilies.first { it.id == id }.on(ground)
 
 fun themeOf(key: String?): ThemeSpec = (AllFamilies.firstOrNull { it.id.key == key } ?: SoftFamily).dark

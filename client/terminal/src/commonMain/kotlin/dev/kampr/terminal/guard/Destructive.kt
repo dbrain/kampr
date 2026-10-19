@@ -57,24 +57,29 @@ private fun segments(line: String): List<String> {
                 builder.append(ch)
                 index++
             }
+
             ch == '\'' || ch == '"' -> {
                 quote = ch
                 builder.append(ch)
                 index++
             }
+
             ch == '\\' && index + 1 < line.length -> {
                 builder.append(ch).append(line[index + 1])
                 index += 2
             }
+
             ch == '&' && index > 0 && line[index - 1] == '>' -> {
                 builder.append(ch)
                 index++
             }
+
             ch == ';' || ch == '\n' || ch == '&' || ch == '|' -> {
                 out += builder.toString()
                 builder.clear()
                 index += if (index + 1 < line.length && line[index + 1] == ch) 2 else 1
             }
+
             else -> {
                 builder.append(ch)
                 index++
@@ -99,16 +104,20 @@ private fun words(segment: String): List<Word> {
                 escaped = false
                 open = true
             }
+
             ch == '\\' && quote != '\'' -> {
                 escaped = true
                 open = true
             }
+
             quote != ' ' -> if (ch == quote) quote = ' ' else builder.append(ch)
+
             ch == '\'' || ch == '"' -> {
                 quote = ch
                 quoted = true
                 open = true
             }
+
             ch == ' ' || ch == '\t' -> {
                 if (open) {
                     out += Word(builder.toString(), quoted)
@@ -117,6 +126,7 @@ private fun words(segment: String): List<Word> {
                     open = false
                 }
             }
+
             else -> {
                 builder.append(ch)
                 open = true
@@ -153,15 +163,16 @@ private fun commandAt(words: List<Word>): Int {
 private fun List<Word>.flag(short: Char, vararg long: String): Boolean = any { word ->
     if (word.quoted || !word.text.startsWith("-")) return@any false
     val body = word.text.substring(1)
-    if (body.startsWith("-")) body.substring(1).substringBefore('=') in long
-    else body.any { it == short }
+    if (body.startsWith("-")) {
+        body.substring(1).substringBefore('=') in long
+    } else {
+        body.any { it == short }
+    }
 }
 
-private fun List<Word>.has(vararg literal: String): Boolean =
-    any { !it.quoted && it.text in literal }
+private fun List<Word>.has(vararg literal: String): Boolean = any { !it.quoted && it.text in literal }
 
-private fun List<Word>.operands(): List<String> =
-    drop(1).filter { !it.text.startsWith("-") }.map { it.text }
+private fun List<Word>.operands(): List<String> = drop(1).filter { !it.text.startsWith("-") }.map { it.text }
 
 // Everything under one of these is either the OS or the whole of the operator's work. A path that
 // resolves to depth zero or one under them is worth naming in the confirm; anything deeper is
@@ -234,22 +245,34 @@ private fun inspect(segment: String): Destructive? {
         name == "rm" && acts && !rest.flag('i', "interactive") &&
             (rest.flag('r', "recursive") || rest.flag('R')) -> {
             val target = targets.firstOrNull { nearRoot(it) }
-            if (target != null) "deletes everything under $target, recursively"
-            else "deletes ${targets.firstOrNull() ?: "whatever is piped in"} and everything under it"
+            if (target != null) {
+                "deletes everything under $target, recursively"
+            } else {
+                "deletes ${targets.firstOrNull() ?: "whatever is piped in"} and everything under it"
+            }
         }
+
         name.startsWith("mkfs") && acts -> "formats a filesystem — every byte on it goes"
+
         name == "dd" && rest.any { !it.quoted && it.text.startsWith("of=") } ->
             "writes raw blocks straight over ${rest.first { it.text.startsWith("of=") }.text.removePrefix("of=")}"
+
         name == "shred" && acts -> "overwrites the file so it cannot be recovered"
+
         name == "truncate" && acts -> "empties the file in place"
+
         name == "chmod" && rest.flag('R', "recursive") &&
             targets.any { it == "777" || it == "666" || it.endsWith("+rwx") || it.endsWith("o+w") } ->
             "makes a whole tree world-writable"
+
         name == "git" -> gitReason(argv)
+
         name == "docker" || name == "podman" ->
             if (argv.has("prune")) "prunes docker state — stopped containers, unused volumes and images" else null
+
         name == "kubectl" && argv.has("delete") && rest.none { it.text.startsWith("--dry-run") } ->
             "deletes a live cluster resource"
+
         else -> null
     }
     if (reason != null) return Destructive(reason, segment)
@@ -273,8 +296,11 @@ private fun gitReason(words: List<Word>): String? {
         // --force-with-lease is the careful form and matching it is what teaches the tap-through,
         // so the comparison is on whole words rather than a prefix.
         "push" -> if (args.has("--force") || args.flag('f')) "force-pushes over shared history" else null
+
         "reset" -> if (args.has("--hard")) "throws away every uncommitted change" else null
+
         "clean" -> if (args.flag('f', "force")) "deletes untracked files for good" else null
+
         else -> null
     }
 }

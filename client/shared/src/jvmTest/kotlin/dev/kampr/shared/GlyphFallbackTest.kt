@@ -33,8 +33,7 @@ import kotlin.test.assertTrue
 
 private val FONTS = File("src/commonMain/composeResources/font")
 
-private fun face(name: String, weight: FontWeight = FontWeight.W400) =
-    Font(name, File(FONTS, "$name.ttf").readBytes(), weight)
+private fun face(name: String, weight: FontWeight = FontWeight.W400) = Font(name, File(FONTS, "$name.ttf").readBytes(), weight)
 
 private val UI = FontFamily(face("manrope_400"))
 private val TERMINAL = FontFamily(face("terminalmono_regular"))
@@ -79,7 +78,7 @@ class GlyphFallbackTest {
     // never move a glyph that already draws. Manrope has these and the terminal face does not.
     @Test
     fun aSymbolTheProseFaceCanAlreadyDrawIsLeftExactlyWhereItIs() {
-        for (kept in listOf(0x20A9 /* ₩ */, 0x20B9 /* ₹ */, 0x21B5 /* ↵ */)) {
+        for (kept in listOf(0x20A9, 0x20B9, 0x21B5)) {
             assertTrue(!manrope.holds(kept), "U+%04X is in Manrope and must not be re-aimed".format(kept))
         }
         assertTrue(!manrope.holds('e'.code) && !manrope.holds(0x2019), "ordinary prose is untouched")

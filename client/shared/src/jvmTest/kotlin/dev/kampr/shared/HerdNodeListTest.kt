@@ -127,14 +127,16 @@ class HerdNodeListTest {
                 }
             },
         )
-        for ((name, layout) in layouts) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            onNodeWithContentDescription("nodes online", substring = true).performClick()
-            waitForIdle()
-            onNodeWithContentDescription("Ask this node for the whole herd again").performClick()
-            waitForIdle()
-            assertTrue(name in asked, "the $name machine list could not ask for the herd again")
+        for ((name, layout) in layouts) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                onNodeWithContentDescription("nodes online", substring = true).performClick()
+                waitForIdle()
+                onNodeWithContentDescription("Ask this node for the whole herd again").performClick()
+                waitForIdle()
+                assertTrue(name in asked, "the $name machine list could not ask for the herd again")
+            }
         }
     }
 
@@ -172,18 +174,20 @@ class HerdNodeListTest {
                 }
             },
         )
-        for ((name, layout) in layouts) runComposeUiTest {
-            setContent { Themed { layout() } }
-            waitForIdle()
-            onNodeWithContentDescription("nodes online", substring = true).performClick()
-            waitForIdle()
-            onNodeWithContentDescription(DOWN_ROW).assertExists().assertIsDisplayed()
-            onNodeWithContentDescription("Close Machines").performClick()
-            waitForIdle()
-            assertTrue(
-                onAllNodesWithContentDescription(DOWN_ROW).fetchSemanticsNodes().isEmpty(),
-                "the $name layout could open the machine list but not close it",
-            )
+        for ((name, layout) in layouts) {
+            runComposeUiTest {
+                setContent { Themed { layout() } }
+                waitForIdle()
+                onNodeWithContentDescription("nodes online", substring = true).performClick()
+                waitForIdle()
+                onNodeWithContentDescription(DOWN_ROW).assertExists().assertIsDisplayed()
+                onNodeWithContentDescription("Close Machines").performClick()
+                waitForIdle()
+                assertTrue(
+                    onAllNodesWithContentDescription(DOWN_ROW).fetchSemanticsNodes().isEmpty(),
+                    "the $name layout could open the machine list but not close it",
+                )
+            }
         }
     }
 }

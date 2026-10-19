@@ -61,11 +61,9 @@ fun AnnotatedString.markUrls(style: SpanStyle): AnnotatedString {
     }.toAnnotatedString()
 }
 
-private fun wordStart(src: String, at: Int): Boolean =
-    at == 0 || !src[at - 1].isLetterOrDigit()
+private fun wordStart(src: String, at: Int): Boolean = at == 0 || !src[at - 1].isLetterOrDigit()
 
-private fun isUrlChar(c: Char): Boolean =
-    !c.isWhitespace() && c.code >= 0x20 && c !in "<>\"`"
+private fun isUrlChar(c: Char): Boolean = !c.isWhitespace() && c.code >= 0x20 && c !in "<>\"`"
 
 private fun dropsFromTail(src: String, from: Int, to: Int): Boolean {
     val last = src[to - 1]

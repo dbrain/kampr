@@ -9,12 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.text.AnnotatedString
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.kampr.conversation.Composer
 import dev.kampr.shared.platform.pastedFile
@@ -56,41 +56,39 @@ class PastingAFileTest {
     }
 
     @Test
-    fun anImageOnTheClipboardPastedIntoTheReplyBoxArrivesAsBytesRatherThanAsALineOfUrl() =
-        runComposeUiTest {
-            val expected = app.contentResolver.openInputStream(picture)!!.use { it.readBytes() }
-            putThePictureOnTheClipboard()
-            var sent: String? = null
-            setContent {
-                KamprTheme(SoftTheme, TypeScale.Phone) {
-                    Box(Modifier.fillMaxSize()) {
-                        Composer("claude", enabled = true, onSend = { sent = it })
-                    }
+    fun anImageOnTheClipboardPastedIntoTheReplyBoxArrivesAsBytesRatherThanAsALineOfUrl() = runComposeUiTest {
+        val expected = app.contentResolver.openInputStream(picture)!!.use { it.readBytes() }
+        putThePictureOnTheClipboard()
+        var sent: String? = null
+        setContent {
+            KamprTheme(SoftTheme, TypeScale.Phone) {
+                Box(Modifier.fillMaxSize()) {
+                    Composer("claude", enabled = true, onSend = { sent = it })
                 }
             }
-            onNodeWithContentDescription(REPLY).performSemanticsAction(SemanticsActions.PasteText)
-            waitForIdle()
-
-            val arrived = runBlocking { withTimeoutOrNull(10_000) { pastedFile() } }
-            assertNotNull("the paste never reached the receiver", arrived)
-            assertArrayEquals("the bytes are not the bytes on the clipboard", expected, arrived!!.bytes)
-            // **Measured, and it costs nothing.** `ContentResolver.getType` answers null for an
-            // `android.resource://` URI where it answers `image/png` for a gallery's `content://`
-            // one — but `ClientMsg.Paste` carries no media type at all and the node derives the
-            // extension by sniffing the body (`paste::write`), so neither the type nor the display
-            // name is on the path a pasted picture takes. Asserted rather than skipped, so a
-            // platform that starts answering sends somebody back to this row.
-            assertEquals(null, arrived.mime)
-            assertEquals(null, arrived.name)
-
-            // The other half, and the one that would be the silent defect: the receiver consumed
-            // the item, so nothing of the paste was left for the text field to insert. A URL typed
-            // into somebody's reply is what not consuming it looks like.
-            assertEquals("", editableOf(REPLY))
-            assertEquals(null, sent)
         }
+        onNodeWithContentDescription(REPLY).performSemanticsAction(SemanticsActions.PasteText)
+        waitForIdle()
 
-    private fun ComposeUiTest.editableOf(label: String): String =
-        onNodeWithContentDescription(label).fetchSemanticsNode()
-            .config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
+        val arrived = runBlocking { withTimeoutOrNull(10_000) { pastedFile() } }
+        assertNotNull("the paste never reached the receiver", arrived)
+        assertArrayEquals("the bytes are not the bytes on the clipboard", expected, arrived!!.bytes)
+        // **Measured, and it costs nothing.** `ContentResolver.getType` answers null for an
+        // `android.resource://` URI where it answers `image/png` for a gallery's `content://`
+        // one — but `ClientMsg.Paste` carries no media type at all and the node derives the
+        // extension by sniffing the body (`paste::write`), so neither the type nor the display
+        // name is on the path a pasted picture takes. Asserted rather than skipped, so a
+        // platform that starts answering sends somebody back to this row.
+        assertEquals(null, arrived.mime)
+        assertEquals(null, arrived.name)
+
+        // The other half, and the one that would be the silent defect: the receiver consumed
+        // the item, so nothing of the paste was left for the text field to insert. A URL typed
+        // into somebody's reply is what not consuming it looks like.
+        assertEquals("", editableOf(REPLY))
+        assertEquals(null, sent)
+    }
+
+    private fun ComposeUiTest.editableOf(label: String): String = onNodeWithContentDescription(label).fetchSemanticsNode()
+        .config.getOrElse(SemanticsProperties.EditableText) { AnnotatedString("") }.text
 }

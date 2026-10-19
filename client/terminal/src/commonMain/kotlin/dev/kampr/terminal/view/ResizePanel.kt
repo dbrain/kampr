@@ -14,9 +14,9 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.touchable

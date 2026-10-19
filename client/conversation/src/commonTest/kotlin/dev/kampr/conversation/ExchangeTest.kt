@@ -44,11 +44,14 @@ class ExchangeTest {
         }
         assertEquals(
             listOf(
-                BlockEdge.Only,                                    // the ask
-                BlockEdge.Head,                                    // the reply opens its box
-                BlockEdge.Middle, BlockEdge.Middle, BlockEdge.Foot, // its three steps close it
-                BlockEdge.Only,                                    // the second ask
-                BlockEdge.Head, BlockEdge.Foot,                    // a reply of one step
+                BlockEdge.Only, // the ask
+                BlockEdge.Head, // the reply opens its box
+                BlockEdge.Middle,
+                BlockEdge.Middle,
+                BlockEdge.Foot, // its three steps close it
+                BlockEdge.Only, // the second ask
+                BlockEdge.Head,
+                BlockEdge.Foot, // a reply of one step
             ),
             edges,
         )

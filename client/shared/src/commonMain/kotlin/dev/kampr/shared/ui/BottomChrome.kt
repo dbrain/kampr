@@ -14,8 +14,7 @@ import androidx.compose.ui.Modifier
 // Only a phone's tabs, and never under a pane: every row of height there is the pane's, and
 // `onBack` already leads out to them. The desk has nothing down there — the sidebar says what a
 // status strip used to, and a held pane says so in its own header.
-internal fun bottomChrome(breakpoint: Breakpoint, screen: Screen): Boolean =
-    breakpoint != Breakpoint.Desktop && screen !is Screen.Pane
+internal fun bottomChrome(breakpoint: Breakpoint, screen: Screen): Boolean = breakpoint != Breakpoint.Desktop && screen !is Screen.Pane
 
 // Every screen but one. A pane hosts the terminal, which draws its grid on a canvas and carries
 // its own selection — anchor, head, block mode, a copy of the logical line — off gestures a
@@ -28,8 +27,11 @@ internal fun screenSelects(screen: Screen): Boolean = screen !is Screen.Pane
 @Composable
 internal fun ScreenBody(modifier: Modifier, chrome: Boolean, selects: Boolean, content: @Composable () -> Unit) {
     Box(modifier) {
-        if (selects) SelectionContainer { BottomEdgeHeldBelow(chrome, content) }
-        else BottomEdgeHeldBelow(chrome, content)
+        if (selects) {
+            SelectionContainer { BottomEdgeHeldBelow(chrome, content) }
+        } else {
+            BottomEdgeHeldBelow(chrome, content)
+        }
     }
 }
 

@@ -37,20 +37,25 @@ object Wire {
                 caps = obj.decode("caps") ?: Caps(),
                 security = obj.decode("security") ?: Security(),
             )
+
             "role" -> ServerMsg.RoleChanged(role = obj.str("role") ?: return null)
+
             "herd" -> ServerMsg.Herd(
                 nodes = obj.decodeList<NodeInfo>("nodes"),
                 panes = obj.decodeList<PaneInfo>("panes"),
             )
+
             "herd.patch" -> ServerMsg.HerdPatch(
                 added = obj.decode<HerdDelta>("added") ?: HerdDelta(),
                 changed = obj.decode<HerdDelta>("changed") ?: HerdDelta(),
                 removedIds = obj.strings("removed_ids"),
             )
+
             "styles" -> ServerMsg.Styles(
                 from = obj.int("from") ?: 0,
                 styles = obj.decodeList<Style>("styles"),
             )
+
             "grid.reset" -> ServerMsg.GridReset(
                 pane = obj.str("pane") ?: return null,
                 cols = obj.int("cols") ?: return null,
@@ -59,12 +64,14 @@ object Wire {
                 cursor = obj.decode<Cursor>("cursor") ?: Cursor(),
                 links = obj.strings("links"),
             )
+
             "grid.patch" -> ServerMsg.GridPatch(
                 pane = obj.str("pane") ?: return null,
                 rows = obj.decodeList<RowDiff>("rows"),
                 cursor = obj.decode<Cursor>("cursor"),
                 links = obj.strings("links"),
             )
+
             "find" -> ServerMsg.Found(
                 pane = obj.str("pane") ?: return null,
                 query = obj.str("query") ?: "",
@@ -72,12 +79,14 @@ object Wire {
                 total = obj.int("total") ?: 0,
                 current = obj.int("current"),
             )
+
             "convo.find" -> ServerMsg.ConvoFound(
                 pane = obj.str("pane") ?: return null,
                 query = obj.str("query") ?: "",
                 matches = obj.decodeList<ConvoMatch>("matches"),
                 total = obj.int("total") ?: 0,
             )
+
             "scrollback" -> ServerMsg.Scrollback(
                 pane = obj.str("pane") ?: return null,
                 fromTop = obj.int("from_top") ?: 0,
@@ -87,6 +96,7 @@ object Wire {
                 capped = obj.bool("capped") ?: false,
                 era = obj.int("era") ?: 0,
             )
+
             "convo" -> ServerMsg.Convo(
                 pane = obj.str("pane") ?: return null,
                 cursor = obj.str("cursor"),
@@ -95,11 +105,13 @@ object Wire {
                 fresh = obj.bool("fresh") ?: false,
                 sub = obj.str("sub"),
             )
+
             "convo.turn" -> ServerMsg.ConvoTurn(
                 pane = obj.str("pane") ?: return null,
                 turns = obj.decodeList<Turn>("turns").ifEmpty { listOfNotNull(obj.decode<Turn>("turn")) },
                 sub = obj.str("sub"),
             )
+
             "convo.composer" -> ServerMsg.ConvoComposer(
                 pane = obj.str("pane") ?: return null,
                 text = obj.str("text"),
@@ -107,10 +119,12 @@ object Wire {
                 caret = obj.int("caret"),
                 keys = obj.decode<EditKeys>("keys"),
             )
+
             "convo.facets" -> ServerMsg.ConvoFacets(
                 pane = obj.str("pane") ?: return null,
                 facets = obj.decode<Facets>("facets") ?: Facets(),
             )
+
             "pending" -> ServerMsg.Pending(
                 pane = obj.str("pane") ?: return null,
                 question = obj.str("question")?.takeIf { it.isNotBlank() },
@@ -119,6 +133,7 @@ object Wire {
                 header = obj.str("header")?.takeIf { it.isNotBlank() },
                 multi = obj.bool("multi") ?: false,
             )
+
             "managed" -> ServerMsg.Managed(
                 op = obj.str("op").orEmpty(),
                 ok = obj.bool("ok") ?: false,
@@ -129,31 +144,37 @@ object Wire {
                 layout = obj["layout"] as? JsonObject,
                 held = obj.bool("held"),
             )
+
             "caps" -> ServerMsg.NodeCaps(
                 node = obj.str("node").orEmpty(),
                 agentKinds = obj.strings("agent_kinds"),
                 sessions = obj.decodeList<SessionInfo>("sessions"),
             )
+
             "error" -> ServerMsg.Failure(
                 code = obj.str("code") ?: "bad_request",
                 message = obj.str("message").orEmpty(),
                 pane = obj.str("pane"),
                 node = obj.str("node"),
             )
+
             "prefs" -> ServerMsg.Prefs(
                 panes = (obj["panes"] as? JsonObject)?.mapValues { (_, value) ->
                     PanePrefs(
                         (value as? JsonObject)?.mapNotNull { (key, item) ->
                             (item as? JsonPrimitive)?.contentOrNull?.let { key to it }
-                        }?.toMap() ?: emptyMap()
+                        }?.toMap() ?: emptyMap(),
                     )
-                } ?: emptyMap()
+                } ?: emptyMap(),
             )
+
             "fleet.book" -> ServerMsg.FleetBook(
                 recent = obj.decodeList<FleetCommand>("recent"),
                 saved = obj.decodeList<FleetCommand>("saved"),
             )
+
             "pong" -> ServerMsg.Pong(obj.int("n") ?: 0)
+
             else -> null
         }
     }
@@ -162,21 +183,47 @@ object Wire {
 
     private fun element(msg: ClientMsg): JsonObject = when (msg) {
         is ClientMsg.Watch -> buildJsonObject {
-            put("t", "watch"); put("pane", msg.pane)
-            put("scrollback", msg.scrollback); put("conversation", msg.conversation)
+            put("t", "watch")
+            put("pane", msg.pane)
+            put("scrollback", msg.scrollback)
+            put("conversation", msg.conversation)
         }
-        is ClientMsg.Unwatch -> buildJsonObject { put("t", "unwatch"); put("pane", msg.pane) }
+
+        is ClientMsg.Unwatch -> buildJsonObject {
+            put("t", "unwatch")
+            put("pane", msg.pane)
+        }
+
         is ClientMsg.InputText -> buildJsonObject {
-            put("t", "input"); put("pane", msg.pane); put("text", msg.text)
+            put("t", "input")
+            put("pane", msg.pane)
+            put("text", msg.text)
             if (msg.typed) put("typed", true)
         }
-        is ClientMsg.InputB64 -> buildJsonObject { put("t", "input"); put("pane", msg.pane); put("b64", msg.b64) }
+
+        is ClientMsg.InputB64 -> buildJsonObject {
+            put("t", "input")
+            put("pane", msg.pane)
+            put("b64", msg.b64)
+        }
+
         is ClientMsg.InputKeys -> buildJsonObject {
-            put("t", "input"); put("pane", msg.pane)
+            put("t", "input")
+            put("pane", msg.pane)
             put("keys", buildJsonArray { msg.keys.forEach { add(JsonPrimitive(it)) } })
         }
-        is ClientMsg.Answer -> buildJsonObject { put("t", "answer"); put("pane", msg.pane); put("key", msg.key) }
-        is ClientMsg.AnswerSubmit -> buildJsonObject { put("t", "answer.submit"); put("pane", msg.pane) }
+
+        is ClientMsg.Answer -> buildJsonObject {
+            put("t", "answer")
+            put("pane", msg.pane)
+            put("key", msg.key)
+        }
+
+        is ClientMsg.AnswerSubmit -> buildJsonObject {
+            put("t", "answer.submit")
+            put("pane", msg.pane)
+        }
+
         is ClientMsg.DoneRead ->
             buildJsonObject {
                 put("t", "done.read")
@@ -185,35 +232,59 @@ object Wire {
             }
 
         is ClientMsg.ConvoLoad -> buildJsonObject {
-            put("t", "convo.load"); put("pane", msg.pane); msg.before?.let { put("before", it) }
+            put("t", "convo.load")
+            put("pane", msg.pane)
+            msg.before?.let { put("before", it) }
         }
+
         is ClientMsg.Find -> buildJsonObject {
-            put("t", "find"); put("pane", msg.pane); put("query", msg.query)
+            put("t", "find")
+            put("pane", msg.pane)
+            put("query", msg.query)
             put("backward", msg.backward)
             msg.from?.let { put("from", it) }
         }
+
         is ClientMsg.ConvoFind -> buildJsonObject {
-            put("t", "convo.find"); put("pane", msg.pane); put("query", msg.query)
+            put("t", "convo.find")
+            put("pane", msg.pane)
+            put("query", msg.query)
         }
+
         is ClientMsg.ConvoSub -> buildJsonObject {
-            put("t", "convo.sub"); put("pane", msg.pane); put("id", msg.id)
+            put("t", "convo.sub")
+            put("pane", msg.pane)
+            put("id", msg.id)
             msg.before?.let { put("before", it) }
         }
+
         is ClientMsg.Paste -> buildJsonObject {
-            put("t", "paste"); put("pane", msg.pane); put("b64", msg.b64)
+            put("t", "paste")
+            put("pane", msg.pane)
+            put("b64", msg.b64)
             msg.name?.let { put("name", it) }
         }
+
         is ClientMsg.SetPrefs -> buildJsonObject {
-            put("t", "prefs"); put("pane", msg.pane)
+            put("t", "prefs")
+            put("pane", msg.pane)
             put("prefs", buildJsonObject { msg.prefs.forEach { (k, v) -> put(k, v) } })
         }
+
         ClientMsg.Resync -> buildJsonObject { put("t", "resync") }
-        is ClientMsg.Ping -> buildJsonObject { put("t", "ping"); put("n", msg.n) }
+
+        is ClientMsg.Ping -> buildJsonObject {
+            put("t", "ping")
+            put("n", msg.n)
+        }
+
         is ClientMsg.Manage -> buildJsonObject {
-            put("t", "manage"); put("op", msg.request.op)
+            put("t", "manage")
+            put("op", msg.request.op)
             msg.request.fields().forEach { (k, v) -> put(k, v) }
             msg.rid?.let { put("rid", it) }
         }
+
         ClientMsg.RequestCaps -> buildJsonObject { put("t", "caps") }
     }
 
@@ -225,8 +296,7 @@ object Wire {
 
     private fun JsonObject.bool(key: String): Boolean? = prim(key)?.booleanOrNull
 
-    private fun JsonObject.strings(key: String): List<String> =
-        (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
+    private fun JsonObject.strings(key: String): List<String> = (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
 
     private inline fun <reified T> JsonObject.decode(key: String): T? {
         val e = this[key] ?: return null

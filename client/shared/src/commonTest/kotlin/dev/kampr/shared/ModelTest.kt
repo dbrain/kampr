@@ -1,18 +1,18 @@
 package dev.kampr.shared
 
+import dev.kampr.shared.model.CONVO_KEEP
 import dev.kampr.shared.model.CellBuffer
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
-import dev.kampr.shared.model.StyleTable
-import dev.kampr.shared.model.CONVO_KEEP
 import dev.kampr.shared.model.SCROLLBACK_MAX_ROWS
+import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.wire.HerdDelta
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Style
 import dev.kampr.shared.wire.Wire
@@ -21,10 +21,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.assertTrue
 
-private fun pane(id: String, node: String, status: String = "idle") =
-    PaneInfo(id = id, nodeId = node, workspace = "w", cwd = "~/x", agentStatus = status)
+private fun pane(id: String, node: String, status: String = "idle") = PaneInfo(id = id, nodeId = node, workspace = "w", cwd = "~/x", agentStatus = status)
 
 class ModelTest {
     @Test
@@ -152,7 +150,7 @@ class ModelTest {
                 added = HerdDelta(panes = listOf(pane("n1/p2", "n1", "working"))),
                 changed = HerdDelta(panes = listOf(pane("n1/p1", "n1", "blocked"))),
                 removedIds = listOf("n2"),
-            )
+            ),
         )
         assertEquals(listOf("n1"), patched.nodes.map { it.id })
         assertEquals(setOf("n1/p1", "n1/p2"), patched.panes.map { it.id }.toSet())
@@ -202,8 +200,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"grid.reset","pane":"p","cols":8,"rows":2,
                    "rows_data":[{"row":0,"runs":[{"s":1,"x":"hello"}]}],
-                   "cursor":{"col":5,"row":0,"visible":true},"links":[]}"""
-            )!!
+                   "cursor":{"col":5,"row":0,"visible":true},"links":[]}""",
+            )!!,
         )
         val pane = store.pane("p")
         assertTrue(pane.painted)
@@ -218,8 +216,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"grid.reset","pane":"p","cols":8,"rows":2,
                    "rows_data":[{"row":0,"runs":[{"s":1,"x":"world"}]}],
-                   "cursor":{"col":5,"row":0,"visible":true},"links":[]}"""
-            )!!
+                   "cursor":{"col":5,"row":0,"visible":true},"links":[]}""",
+            )!!,
         )
         assertFalse(pane.stale)
         assertEquals('w'.code, pane.cells.codePointAt(0, 0))
@@ -232,15 +230,15 @@ class ModelTest {
             Wire.decode(
                 """{"t":"scrollback","pane":"p","from_top":0,
                    "rows":[{"row":0,"runs":[{"s":0,"x":"old"}]},{"row":1,"runs":[{"s":0,"x":"mid"}]}],
-                   "total_rows":2,"complete":true,"capped":false}"""
-            )!!
+                   "total_rows":2,"complete":true,"capped":false}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
                 """{"t":"scrollback","pane":"p","from_top":2,
                    "rows":[{"row":2,"runs":[{"s":0,"x":"new"}]}],
-                   "total_rows":1,"complete":true,"capped":true}"""
-            )!!
+                   "total_rows":1,"complete":true,"capped":true}""",
+            )!!,
         )
         val scrollback = store.pane("p").scrollback
         assertEquals(0, scrollback.fromTop)
@@ -257,15 +255,15 @@ class ModelTest {
             Wire.decode(
                 """{"t":"scrollback","pane":"p","from_top":0,
                    "rows":[{"row":0,"runs":[{"s":0,"x":"old"}]},{"row":1,"runs":[{"s":0,"x":"mid"}]}],
-                   "total_rows":2,"complete":true,"capped":false}"""
-            )!!
+                   "total_rows":2,"complete":true,"capped":false}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
                 """{"t":"scrollback","pane":"p","from_top":9,
                    "rows":[{"row":9,"runs":[{"s":0,"x":"new"}]}],
-                   "total_rows":1,"complete":true,"capped":true}"""
-            )!!
+                   "total_rows":1,"complete":true,"capped":true}""",
+            )!!,
         )
         val scrollback = store.pane("p").scrollback
         assertEquals(9, scrollback.fromTop)
@@ -281,14 +279,15 @@ class ModelTest {
             Wire.decode(
                 """{"t":"scrollback","pane":"p","from_top":1493,
                    "rows":[{"row":1493,"runs":[{"s":0,"x":"npm run build"}]}],
-                   "total_rows":60,"complete":true,"capped":true}"""
-            )!!
+                   "total_rows":60,"complete":true,"capped":true}""",
+            )!!,
         )
         val scrollback = store.pane("p").scrollback
         assertEquals(60, scrollback.historyRows)
         assertEquals(1493, scrollback.fromTop)
         assertEquals("npm run build", scrollback.row(1493)?.runs?.first()?.x)
     }
+
     // The Claude transcript in crates/kampr-journal/tests/fixtures carries a resumed session, so
     // its last record is stamped three weeks BEFORE the ones above it. Transcript order is the
     // only order a client may show; sorting on `at` reorders a real conversation.
@@ -300,8 +299,8 @@ class ModelTest {
                 """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
                    {"id":"t1","role":"user","at":"2026-08-17T03:47:14Z","blocks":[{"b":"md","text":"a"}]},
                    {"id":"t2","role":"assistant","at":"2026-08-17T03:48:40Z","blocks":[{"b":"md","text":"b"}]},
-                   {"id":"t3","role":"assistant","at":"2026-07-30T00:52:59Z","blocks":[{"b":"md","text":"c"}]}]}"""
-            )!!
+                   {"id":"t3","role":"assistant","at":"2026-07-30T00:52:59Z","blocks":[{"b":"md","text":"c"}]}]}""",
+            )!!,
         )
         assertEquals(listOf("t1", "t2", "t3"), store.pane("p").turns.map { it.id })
     }
@@ -313,15 +312,15 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t3","more":true,"turns":[
                    {"id":"t3","role":"user","blocks":[{"b":"md","text":"c"}]},
-                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}"""
-            )!!
+                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
-                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}""",
+            )!!,
         )
         val pane = store.pane("p")
         assertEquals(listOf("t1", "t2", "t3", "t4"), pane.turns.map { it.id })
@@ -347,8 +346,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
-                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}""",
+            )!!,
         )
         val pane = store.pane("p")
         assertTrue(pane.convoMore)
@@ -356,8 +355,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo.turn","pane":"p","turns":[
                    {"id":"t1","role":"assistant","blocks":[]},
-                   {"id":"t2","role":"assistant","blocks":[]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[]}]}""",
+            )!!,
         )
         assertFalse(pane.convoMore, "the pane still offers older turns of a conversation it has left")
         assertNull(pane.convoCursor)
@@ -372,11 +371,11 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":true,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
-                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]}]}""",
+            )!!,
         )
         store.accept(
-            Wire.decode("""{"t":"convo.turn","pane":"p","turns":[{"id":"t2","role":"assistant","blocks":[]}]}""")!!
+            Wire.decode("""{"t":"convo.turn","pane":"p","turns":[{"id":"t2","role":"assistant","blocks":[]}]}""")!!,
         )
         val pane = store.pane("p")
         assertTrue(pane.convoMore)
@@ -405,8 +404,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"which keys does it take?"}]},
-                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"thinking"}]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"thinking"}]}]}""",
+            )!!,
         )
         // The same transcript, re-read after the pump was restarted, one turn longer.
         store.accept(
@@ -414,8 +413,8 @@ class ModelTest {
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"which keys does it take?"}]},
                    {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"thinking"}]},
-                   {"id":"t3","role":"assistant","blocks":[{"b":"md","text":"here is the answer"}]}]}"""
-            )!!
+                   {"id":"t3","role":"assistant","blocks":[{"b":"md","text":"here is the answer"}]}]}""",
+            )!!,
         )
         assertEquals(listOf("t1", "t2", "t3"), store.pane("p").turns.map { it.id })
     }
@@ -429,8 +428,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
                    {"id":"t1","role":"user","blocks":[{"b":"md","text":"a"}]},
-                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}"""
-            )!!
+                   {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]}]}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
@@ -440,8 +439,8 @@ class ModelTest {
                    {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"b"}]},
                    {"id":"t3","role":"assistant","blocks":[{"b":"md","text":"c"}]},
                    {"id":"t4","role":"assistant","blocks":[{"b":"md","text":"d"}]},
-                   {"id":"t5","role":"assistant","blocks":[{"b":"md","text":"e"}]}]}"""
-            )!!
+                   {"id":"t5","role":"assistant","blocks":[{"b":"md","text":"e"}]}]}""",
+            )!!,
         )
         assertEquals(
             listOf("t0", "t1", "t2", "t3", "t4", "t5"),
@@ -460,14 +459,14 @@ class ModelTest {
         store.accept(
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
-                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"before the clear"}]}]}"""
-            )!!
+                   {"id":"t1","role":"user","blocks":[{"b":"md","text":"before the clear"}]}]}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"n1","more":false,"fresh":true,"turns":[
-                   {"id":"n1","role":"user","blocks":[{"b":"md","text":"after the clear"}]}]}"""
-            )!!
+                   {"id":"n1","role":"user","blocks":[{"b":"md","text":"after the clear"}]}]}""",
+            )!!,
         )
         val pane = store.pane("p")
         assertEquals(listOf("n1"), pane.turns.map { it.id })
@@ -483,8 +482,8 @@ class ModelTest {
             Wire.decode(
                 """{"t":"convo","pane":"p","cursor":"t1","more":false,"turns":[
                    {"id":"t1","role":"assistant","blocks":[
-                     {"b":"tool","name":"Edit","summary":"surface.rs","state":"running"}]}]}"""
-            )!!
+                     {"b":"tool","name":"Edit","summary":"surface.rs","state":"running"}]}]}""",
+            )!!,
         )
         store.accept(
             Wire.decode(
@@ -492,8 +491,8 @@ class ModelTest {
                    {"id":"t1","role":"assistant","blocks":[
                      {"b":"tool","name":"Edit","summary":"surface.rs","lines":3,"state":"done"},
                      {"b":"diff","path":"surface.rs","text":"@@ -1,1 +1,1 @@\n-a\n+b\n"}]},
-                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"done"}]}]}"""
-            )!!
+                   {"id":"t2","role":"assistant","blocks":[{"b":"md","text":"done"}]}]}""",
+            )!!,
         )
         val turns = store.pane("p").turns
         assertEquals(listOf("t1", "t2"), turns.map { it.id })
@@ -557,7 +556,7 @@ class ModelTest {
             """{"id":"t$it","role":"user","blocks":[{"b":"md","text":"$it"}]}"""
         }
         return Wire.decode(
-            """{"t":"convo","pane":"p","cursor":"$cursor","more":$more,"turns":[$turns]}"""
+            """{"t":"convo","pane":"p","cursor":"$cursor","more":$more,"turns":[$turns]}""",
         ) as ServerMsg.Convo
     }
 
@@ -577,7 +576,7 @@ class ModelTest {
                 RowDiff(it, listOf(Run(0, "row $it")))
             }
             pane.applyScrollback(
-                ServerMsg.Scrollback("p", next, rows, rows.size, complete = true, capped = false)
+                ServerMsg.Scrollback("p", next, rows, rows.size, complete = true, capped = false),
             )
             next += 500
         }

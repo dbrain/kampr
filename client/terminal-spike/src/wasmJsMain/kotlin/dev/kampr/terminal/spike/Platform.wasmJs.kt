@@ -1,7 +1,7 @@
 package dev.kampr.terminal.spike
 
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlinx.browser.window
+import kotlin.js.ExperimentalWasmJsInterop
 
 @OptIn(ExperimentalWasmJsInterop::class)
 private fun consoleLog(s: String) {
@@ -15,7 +15,7 @@ private fun postLine(s: String) {
         try {
             fetch('/bench', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: s });
         } catch (e) {}
-        """
+        """,
     )
 }
 
@@ -79,7 +79,7 @@ private fun probeBackend(): String = js(
         out.push('dpr=' + window.devicePixelRatio);
         return out.join(' | ');
     })()
-    """
+    """,
 )
 
 actual fun graphicsBackend(): String = probeBackend()

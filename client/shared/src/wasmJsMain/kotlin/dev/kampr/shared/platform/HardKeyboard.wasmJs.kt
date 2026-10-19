@@ -30,7 +30,7 @@ private fun mediaMatches(query: String): Boolean = js(
     (function () {
         try { return window.matchMedia(query).matches; } catch (e) { return false; }
     })()
-    """
+    """,
 )
 
 internal fun pointerKind(): PointerKind = when {

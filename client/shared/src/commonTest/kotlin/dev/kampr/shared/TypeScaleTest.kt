@@ -36,10 +36,9 @@ private fun KamprType.named(): List<Pair<String, TextStyle>> = listOf(
     "pill" to pill,
 )
 
-private fun scales(): List<Pair<TypeScale, List<Pair<String, TextStyle>>>> =
-    TypeScale.entries.map { scale ->
-        scale to typography(fonts, AllFamilies.first().dark.label, scale).named()
-    }
+private fun scales(): List<Pair<TypeScale, List<Pair<String, TextStyle>>>> = TypeScale.entries.map { scale ->
+    scale to typography(fonts, AllFamilies.first().dark.label, scale).named()
+}
 
 class TypeScaleTest {
     // The whole scale in `sp`. A `dp` size looks identical on the test device and then ignores the

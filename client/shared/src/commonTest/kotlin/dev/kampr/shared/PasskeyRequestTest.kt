@@ -2,11 +2,11 @@ package dev.kampr.shared
 
 import dev.kampr.shared.net.AppIdentity
 import dev.kampr.shared.net.Endpoint
+import dev.kampr.shared.net.Enrolment
+import dev.kampr.shared.net.PasskeyOutcome
 import dev.kampr.shared.net.assetLinkComplaint
 import dev.kampr.shared.net.assetLinksUrl
 import dev.kampr.shared.net.credentialManagerRequest
-import dev.kampr.shared.net.Enrolment
-import dev.kampr.shared.net.PasskeyOutcome
 import dev.kampr.shared.net.passkeyRefusal
 import dev.kampr.shared.net.relyingParty
 import dev.kampr.shared.ui.passkeyNoteOf
@@ -184,8 +184,7 @@ class PasskeyRequestTest {
     }
 }
 
-private fun elementOf(json: String, key: String): String? =
-    kotlinx.serialization.json.Json.parseToJsonElement(json)
-        .let { it as? kotlinx.serialization.json.JsonObject }
-        ?.get(key)
-        ?.toString()
+private fun elementOf(json: String, key: String): String? = kotlinx.serialization.json.Json.parseToJsonElement(json)
+    .let { it as? kotlinx.serialization.json.JsonObject }
+    ?.get(key)
+    ?.toString()

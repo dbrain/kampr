@@ -74,13 +74,23 @@ class MosaicWatchersTest {
             CompositionLocalProvider(LocalTokens provides watchTokens(), LocalPaneIo provides ArtboardIo) {
                 Row {
                     MosaicCell(
-                        PaneState(shared.id, StyleTable()), shared, WATCH_NODE, focused = true,
-                        surfaces = WatchSurfaces, onFocus = {}, onRemove = {},
+                        PaneState(shared.id, StyleTable()),
+                        shared,
+                        WATCH_NODE,
+                        focused = true,
+                        surfaces = WatchSurfaces,
+                        onFocus = {},
+                        onRemove = {},
                         modifier = Modifier.size(420.dp, 300.dp),
                     )
                     MosaicCell(
-                        PaneState(other.id, StyleTable()), other, WATCH_NODE, focused = false,
-                        surfaces = WatchSurfaces, onFocus = {}, onRemove = {},
+                        PaneState(other.id, StyleTable()),
+                        other,
+                        WATCH_NODE,
+                        focused = false,
+                        surfaces = WatchSurfaces,
+                        onFocus = {},
+                        onRemove = {},
                         modifier = Modifier.size(420.dp, 300.dp),
                     )
                 }
@@ -108,8 +118,13 @@ class MosaicWatchersTest {
         setContent {
             CompositionLocalProvider(LocalTokens provides watchTokens(), LocalPaneIo provides ArtboardIo) {
                 MosaicCell(
-                    PaneState(alone.id, StyleTable()), alone, WATCH_NODE, focused = true,
-                    surfaces = WatchSurfaces, onFocus = {}, onRemove = {},
+                    PaneState(alone.id, StyleTable()),
+                    alone,
+                    WATCH_NODE,
+                    focused = true,
+                    surfaces = WatchSurfaces,
+                    onFocus = {},
+                    onRemove = {},
                     modifier = Modifier.size(420.dp, 300.dp),
                 )
             }

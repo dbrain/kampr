@@ -47,15 +47,16 @@ private val INFO = PaneInfo(
 
 private object KeyRowProbe : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
-    @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) =
-        Box(modifier.size(200.dp, 90.dp).named(KEY_ROW))
+
+    @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier.size(200.dp, 90.dp).named(KEY_ROW))
+
     @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(40.dp))
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun window(width: Dp, height: Dp, block: SkikoComposeUiTest.() -> Unit) =
-    runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) { block() }
+private fun window(width: Dp, height: Dp, block: SkikoComposeUiTest.() -> Unit) = runSkikoComposeUiTest(Size(width.value, height.value), Density(1f)) { block() }
 
 @Composable
 private fun Desk(keyboard: Boolean, view: PaneView = PaneView.Terminal) {

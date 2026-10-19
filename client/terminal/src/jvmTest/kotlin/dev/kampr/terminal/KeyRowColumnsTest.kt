@@ -51,8 +51,7 @@ private fun ComposeUiTest.keyRow(compact: Boolean) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.cap(spoken: String): Rect =
-    onNodeWithContentDescription(spoken, substring = true).fetchSemanticsNode().boundsInRoot
+private fun ComposeUiTest.cap(spoken: String): Rect = onNodeWithContentDescription(spoken, substring = true).fetchSemanticsNode().boundsInRoot
 
 // **A cap that spans two columns takes the gap between them with it**, so its row holds one fewer
 // gap than the row above and every weight in it would grow by an eighth of one — which is the

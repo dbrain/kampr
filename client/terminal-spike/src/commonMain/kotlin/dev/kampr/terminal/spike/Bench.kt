@@ -90,7 +90,13 @@ class BenchRunner(
     val total get() = scenarios.size
 
     val phase: String
-        get() = if (finished) "done" else if (frame < warmupFrames) "warmup" else "measure"
+        get() = if (finished) {
+            "done"
+        } else if (frame < warmupFrames) {
+            "warmup"
+        } else {
+            "measure"
+        }
 
     fun tick(stats: FrameStats, budgetMs: Float, cache: TextCache, onScenarioStart: (Scenario) -> Unit): Boolean {
         if (finished) return false

@@ -2,9 +2,9 @@ package dev.kampr.shared
 
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
-import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.ZoomMode
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -87,7 +87,7 @@ class ManageWireTest {
             at = "01JNODE/w3:t1",
             layout = Wire.json.parseToJsonElement(
                 """{"root":{"type":"split","direction":"right","ratio":0.5,
-                   "children":[{"type":"pane"},{"type":"pane"}]}}"""
+                   "children":[{"type":"pane"},{"type":"pane"}]}}""",
             ) as JsonObject,
         ),
         "session.create" to ManageOp.SessionCreate("01JNODE", "agents"),
@@ -97,8 +97,7 @@ class ManageWireTest {
         "fleet.drop" to ManageOp.FleetDrop("01JBOOK"),
     )
 
-    private fun encoded(op: ManageOp) =
-        Wire.json.parseToJsonElement(Wire.encode(ClientMsg.Manage(op))) as JsonObject
+    private fun encoded(op: ManageOp) = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.Manage(op))) as JsonObject
 
     @Test
     fun everyOpEncodesToTheJsonTheNodeAccepts() {
@@ -169,7 +168,9 @@ class ManageWireTest {
     fun anEmptyEnvIsOmittedRatherThanSentAsAnEmptyObject() {
         assertEquals(
             buildJsonObject {
-                put("t", "manage"); put("op", "workspace.create"); put("node", "01JNODE")
+                put("t", "manage")
+                put("op", "workspace.create")
+                put("node", "01JNODE")
             },
             encoded(ManageOp.WorkspaceCreate(node = "01JNODE")),
         )

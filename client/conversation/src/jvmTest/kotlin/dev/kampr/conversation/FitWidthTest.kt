@@ -35,11 +35,15 @@ private fun fittedPane(): KamprStore {
     val store = KamprStore()
     store.accept(
         ServerMsg.Convo(
-            pane = PANE_ID, cursor = "f-1", more = false,
+            pane = PANE_ID,
+            cursor = "f-1",
+            more = false,
             turns = listOf(
                 proseTurn("f-1", "how wide is it?", role = "user"),
                 Turn(
-                    "f-2", "assistant", null,
+                    "f-2",
+                    "assistant",
+                    null,
                     listOf(
                         Block.Md(PROSE),
                         Block.Code("kotlin", SHORT_CODE),

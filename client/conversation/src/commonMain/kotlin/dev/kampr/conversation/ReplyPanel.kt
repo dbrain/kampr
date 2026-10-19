@@ -11,8 +11,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
 

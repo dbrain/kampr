@@ -15,7 +15,7 @@ private fun jsAvailable(): Boolean = js(
       return !!(self.isSecureContext && window.PublicKeyCredential && navigator.credentials &&
                 navigator.credentials.create && navigator.credentials.get);
     })()
-    """
+    """,
 )
 
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -50,7 +50,7 @@ private fun jsCreate(optionsJson: String): Promise<JsString?> = js(
         },
       });
     })()
-    """
+    """,
 )
 
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -87,17 +87,15 @@ private fun jsGet(optionsJson: String): Promise<JsString?> = js(
         response: response,
       });
     })()
-    """
+    """,
 )
 
 private class BrowserPasskeys : Passkeys {
     override val available: Boolean get() = runCatching { jsAvailable() }.getOrDefault(false)
 
-    override suspend fun create(optionsJson: String): PasskeyResult =
-        outcome(runCatching { jsCreate(optionsJson).await() })
+    override suspend fun create(optionsJson: String): PasskeyResult = outcome(runCatching { jsCreate(optionsJson).await() })
 
-    override suspend fun get(optionsJson: String): PasskeyResult =
-        outcome(runCatching { jsGet(optionsJson).await() })
+    override suspend fun get(optionsJson: String): PasskeyResult = outcome(runCatching { jsGet(optionsJson).await() })
 
     // `navigator.credentials` throws `NotAllowedError` both for a refusal and for a timeout, and
     // the browser's own sheet has already said which. Neither is worth a second message.

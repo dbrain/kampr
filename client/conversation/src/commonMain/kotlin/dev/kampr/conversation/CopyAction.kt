@@ -28,6 +28,7 @@ class Copying(val copied: Boolean, val tint: Color, val copy: () -> Unit)
 @Composable
 fun rememberCopying(text: String): Copying {
     val tokens = Kampr.tokens
+
     // LocalClipboard replaces this, but its ClipEntry can only be built from a platform-native
     // object, so a plain string still has no common-code path in CMP 1.11.
     @Suppress("DEPRECATION")

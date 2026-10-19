@@ -24,9 +24,9 @@ import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
-import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
+import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.terminal.render.LogicalText
 import dev.kampr.terminal.render.SurfaceRows
 import dev.kampr.terminal.review.ReviewSurface

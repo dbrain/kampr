@@ -7,5 +7,4 @@ actual fun emitBench(line: String) {
 actual val platformLabel: String =
     "jvm-desktop/" + System.getProperty("os.name") + "/" + System.getProperty("java.version")
 
-actual fun graphicsBackend(): String =
-    "skiko/" + (System.getProperty("skiko.renderApi") ?: "auto")
+actual fun graphicsBackend(): String = "skiko/" + (System.getProperty("skiko.renderApi") ?: "auto")

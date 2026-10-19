@@ -12,8 +12,8 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.CARET_SETTLE_MS
 import kotlin.test.Test
@@ -126,8 +126,7 @@ private fun ComposeUiTest.aNewSession(): Triple<PaneState, PaneSession, Shell> {
 // Where a row of the whole surface is painted, which is what the renderer does with the same two
 // numbers — history and the live grid are one index space.
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.surfaceRowTop(session: PaneSession, index: Int): Dp =
-    with(density) { (session.grid.originY + index * session.grid.cellHeight).toDp() }
+private fun ComposeUiTest.surfaceRowTop(session: PaneSession, index: Int): Dp = with(density) { (session.grid.originY + index * session.grid.cellHeight).toDp() }
 
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.wheelUp(notches: Int) {
@@ -141,30 +140,29 @@ private fun ComposeUiTest.wheelUp(notches: Int) {
 @OptIn(ExperimentalTestApi::class)
 class AShellFillingItsOwnScreenTest {
     @Test
-    fun a_shell_filling_its_own_screen_does_not_walk_the_viewport_into_its_history() =
-        runComposeUiTest {
-            val (pane, session, shell) = aNewSession()
-            val view = session.view
+    fun a_shell_filling_its_own_screen_does_not_walk_the_viewport_into_its_history() = runComposeUiTest {
+        val (pane, session, shell) = aNewSession()
+        val view = session.view
 
-            repeat(8) { turn ->
-                shell.df()
-                publish(pane, shell)
-                val cell = session.grid.cellHeight
-                assertTrue(
-                    view.following,
-                    "turn $turn: nothing but df -h has happened and the viewport stopped following",
-                )
-                // The prompt is the row being typed at. Off the bottom of the content rectangle is
-                // where a surface drawn against too short an origin puts it, one batch further per
-                // command, and the rows on screen are then the ones that scrolled off.
-                assertTrue(
-                    onScreen(pane, session, shell.caretRow),
-                    "turn $turn: the prompt is off the screen — ${shell.history} rows of history, " +
-                        "the surface drawn from ${session.grid.originY / cell} rows, the prompt at " +
-                        "${rowTop(pane, session, shell.caretRow)} with the chrome at ${stripTop()}",
-                )
-            }
+        repeat(8) { turn ->
+            shell.df()
+            publish(pane, shell)
+            val cell = session.grid.cellHeight
+            assertTrue(
+                view.following,
+                "turn $turn: nothing but df -h has happened and the viewport stopped following",
+            )
+            // The prompt is the row being typed at. Off the bottom of the content rectangle is
+            // where a surface drawn against too short an origin puts it, one batch further per
+            // command, and the rows on screen are then the ones that scrolled off.
+            assertTrue(
+                onScreen(pane, session, shell.caretRow),
+                "turn $turn: the prompt is off the screen — ${shell.history} rows of history, " +
+                    "the surface drawn from ${session.grid.originY / cell} rows, the prompt at " +
+                    "${rowTop(pane, session, shell.caretRow)} with the chrome at ${stripTop()}",
+            )
         }
+    }
 
     // The same blindness by its other face, and the reason it is not enough to fix the follower.
     // `carryHistory` is driven from the composition too: rows entering the ring extend the surface
@@ -172,47 +170,46 @@ class AShellFillingItsOwnScreenTest {
     // on the lines they are reading. A ring that grows without recomposing is a carry that never
     // happens, and the operator's own rows slide up the pane at the rate it produces output.
     @Test
-    fun output_that_scrolls_without_moving_the_caret_still_carries_a_reader_in_the_history() =
-        runComposeUiTest {
-            val (pane, session, shell) = aNewSession()
-            val view = session.view
-            repeat(20) { shell.df() }
+    fun output_that_scrolls_without_moving_the_caret_still_carries_a_reader_in_the_history() = runComposeUiTest {
+        val (pane, session, shell) = aNewSession()
+        val view = session.view
+        repeat(20) { shell.df() }
+        publish(pane, shell)
+
+        wheelUp(40)
+        val parked = view.scrollY
+        assertTrue(
+            !view.following && parked > session.grid.cellHeight * GRID_ROWS,
+            "the wheel has to leave the reader a screenful and more into the history, or the " +
+                "carry does not apply and nothing here is tested",
+        )
+        val reading = 10
+        val was = surfaceRowTop(session, reading)
+
+        repeat(3) {
+            shell.df()
             publish(pane, shell)
-
-            wheelUp(40)
-            val parked = view.scrollY
-            assertTrue(
-                !view.following && parked > session.grid.cellHeight * GRID_ROWS,
-                "the wheel has to leave the reader a screenful and more into the history, or the " +
-                    "carry does not apply and nothing here is tested",
-            )
-            val reading = 10
-            val was = surfaceRowTop(session, reading)
-
-            repeat(3) {
-                shell.df()
-                publish(pane, shell)
-            }
-
-            // **Asked of the carry and not only of the pixel.** With the ring invisible to the
-            // composition, `originY` is frozen along with everything else — so a row's position on
-            // the screen sits still for exactly the reason the defect exists, and asserting on it
-            // alone is a harness that was never the app (#191). What has to have happened is that
-            // the surface grew and the reader was moved down it by the same amount.
-            val carried = 3 * PER_RUN * session.grid.cellHeight
-            assertEquals(
-                parked + carried,
-                view.scrollY,
-                0.51f,
-                "${3 * PER_RUN} rows entered the ring beneath a reader parked " +
-                    "${parked / session.grid.cellHeight} rows up and the surface never carried them",
-            )
-            assertEquals(
-                was.value,
-                surfaceRowTop(session, reading).value,
-                0.51f,
-                "row $reading slid ${surfaceRowTop(session, reading) - was} up the screen while " +
-                    "${3 * PER_RUN} rows entered the ring beneath it",
-            )
         }
+
+        // **Asked of the carry and not only of the pixel.** With the ring invisible to the
+        // composition, `originY` is frozen along with everything else — so a row's position on
+        // the screen sits still for exactly the reason the defect exists, and asserting on it
+        // alone is a harness that was never the app (#191). What has to have happened is that
+        // the surface grew and the reader was moved down it by the same amount.
+        val carried = 3 * PER_RUN * session.grid.cellHeight
+        assertEquals(
+            parked + carried,
+            view.scrollY,
+            0.51f,
+            "${3 * PER_RUN} rows entered the ring beneath a reader parked " +
+                "${parked / session.grid.cellHeight} rows up and the surface never carried them",
+        )
+        assertEquals(
+            was.value,
+            surfaceRowTop(session, reading).value,
+            0.51f,
+            "row $reading slid ${surfaceRowTop(session, reading) - was} up the screen while " +
+                "${3 * PER_RUN} rows entered the ring beneath it",
+        )
+    }
 }

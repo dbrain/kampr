@@ -24,22 +24,21 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
-private fun keyRow(enabled: Boolean, body: ComposeUiTest.() -> Unit) =
-    runComposeUiTest {
-        val session = PaneSession(Phone.PANE)
-        val sink = InputSink(Phone.PANE, HushIo, session.latches, null)
-        setContent {
-            CompositionLocalProvider(
-                LocalTokens provides Phone.tokens(),
-                LocalSafeArea provides Phone.BARS,
-            ) {
-                Box(Modifier.size(411.dp, 914.dp)) {
-                    PaneKeyRow(session, sink, compact = false, enabled = enabled)
-                }
+private fun keyRow(enabled: Boolean, body: ComposeUiTest.() -> Unit) = runComposeUiTest {
+    val session = PaneSession(Phone.PANE)
+    val sink = InputSink(Phone.PANE, HushIo, session.latches, null)
+    setContent {
+        CompositionLocalProvider(
+            LocalTokens provides Phone.tokens(),
+            LocalSafeArea provides Phone.BARS,
+        ) {
+            Box(Modifier.size(411.dp, 914.dp)) {
+                PaneKeyRow(session, sink, compact = false, enabled = enabled)
             }
         }
-        body()
     }
+    body()
+}
 
 // Two surfaces, two answers, and neither of them was ever read back. The caps are controls driven
 // by a raw tap detector, so they get nothing from the cursor `Modifier.action` already chains and
@@ -92,4 +91,3 @@ class PaneHoverCursorTest {
         assertNotEquals(HAND, grid().cursor(), "the grid is a text surface, not a control")
     }
 }
-

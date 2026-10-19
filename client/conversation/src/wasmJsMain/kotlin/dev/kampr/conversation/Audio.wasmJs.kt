@@ -12,7 +12,7 @@ private fun jsCanPlay(mime: String): Boolean = js(
     (function () {
       try { return new Audio().canPlayType(mime) !== ''; } catch (e) { return false; }
     })()
-    """
+    """,
 )
 
 // The bytes came out of an authorised fetch, so there is no URL an `<audio>` element could be
@@ -36,7 +36,7 @@ private fun jsOpen(mime: String, base64: String): Int = js(
         return -1;
       }
     })()
-    """
+    """,
 )
 
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -50,7 +50,7 @@ private fun jsPlay(token: Int) {
           var started = held.audio.play();
           if (started && started.catch) started.catch(function () {});
         })()
-        """
+        """,
     )
 }
 
@@ -62,7 +62,7 @@ private fun jsPause(token: Int) {
           var held = window.__kamprVoices && window.__kamprVoices.held[token];
           if (held) held.audio.pause();
         })()
-        """
+        """,
     )
 }
 
@@ -73,7 +73,7 @@ private fun jsPlaying(token: Int): Boolean = js(
       var held = window.__kamprVoices && window.__kamprVoices.held[token];
       return !!held && !held.audio.paused && !held.audio.ended;
     })()
-    """
+    """,
 )
 
 @OptIn(ExperimentalWasmJsInterop::class)
@@ -88,7 +88,7 @@ private fun jsRelease(token: Int) {
           URL.revokeObjectURL(held.url);
           delete window.__kamprVoices.held[token];
         })()
-        """
+        """,
     )
 }
 

@@ -73,8 +73,7 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
         textDecoration = decoration(fontKey),
     ).also { styles[fontKey] = it }
 
-    fun shape(text: String, fontKey: Int): TextLayoutResult =
-        measurer.measure(text, style(fontKey), softWrap = false, maxLines = 1, skipCache = true)
+    fun shape(text: String, fontKey: Int): TextLayoutResult = measurer.measure(text, style(fontKey), softWrap = false, maxLines = 1, skipCache = true)
 
     fun run(text: String, fontKey: Int): TextLayoutResult {
         probeKey.text = text
@@ -91,8 +90,7 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
 
     // A cell wearing marks is one grapheme drawn on its own, so it is cached by its whole text and
     // kept out of the run counters the mode selector reads: it is never a run.
-    fun cluster(text: String, fontKey: Int): TextLayoutResult =
-        clusters.getOrPut(RunKey(text, fontKey)) { shape(text, fontKey) }
+    fun cluster(text: String, fontKey: Int): TextLayoutResult = clusters.getOrPut(RunKey(text, fontKey)) { shape(text, fontKey) }
 
     fun glyph(codePoint: Int, fontKey: Int): TextLayoutResult {
         if (codePoint < 128) {
@@ -107,8 +105,12 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
     fun metrics(value: TextUnit): CellMetrics {
         sizeFor(value)
         val probe = measurer.measure(
-            PROBE, style(0), softWrap = false, maxLines = 1,
-            constraints = Constraints(), skipCache = true,
+            PROBE,
+            style(0),
+            softWrap = false,
+            maxLines = 1,
+            constraints = Constraints(),
+            skipCache = true,
         )
         advance = probe.size.width.toFloat() / PROBE.length
         return CellMetrics(advance, probe.size.height.toFloat())
@@ -121,8 +123,11 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
             underline && strike -> TextDecoration.combine(
                 listOf(TextDecoration.Underline, TextDecoration.LineThrough),
             )
+
             underline -> TextDecoration.Underline
+
             strike -> TextDecoration.LineThrough
+
             else -> null
         }
     }
@@ -135,6 +140,5 @@ class TextCache(private val measurer: TextMeasurer, private val family: FontFami
 
 private class RunKey(var text: String, var fontKey: Int) {
     override fun hashCode(): Int = text.hashCode() * 31 + fontKey
-    override fun equals(other: Any?): Boolean =
-        other is RunKey && other.fontKey == fontKey && other.text == text
+    override fun equals(other: Any?): Boolean = other is RunKey && other.fontKey == fontKey && other.text == text
 }

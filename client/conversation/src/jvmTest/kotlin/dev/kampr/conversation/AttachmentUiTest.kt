@@ -81,8 +81,7 @@ internal class NodeWithAttachments(
     }
 }
 
-private fun attachedTurn(att: Attachment, id: String = "u-1") =
-    Turn(id, "user", "2026-08-24T09:00:01.000Z", listOf(Block.Md(MARKER, att)))
+private fun attachedTurn(att: Attachment, id: String = "u-1") = Turn(id, "user", "2026-08-24T09:00:01.000Z", listOf(Block.Md(MARKER, att)))
 
 @Composable
 private fun Card(turn: Turn, io: PaneIo, store: AttachmentStore) {

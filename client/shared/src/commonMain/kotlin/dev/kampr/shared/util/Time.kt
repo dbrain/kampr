@@ -68,8 +68,7 @@ fun relativeTime(updatedAt: String?, nowMillis: Double): String {
     return elapsed(((nowMillis - at) / 1000.0).toLong())
 }
 
-fun relativeSeconds(epochSeconds: Long, nowMillis: Double): String =
-    elapsed((nowMillis / 1000.0).toLong() - epochSeconds)
+fun relativeSeconds(epochSeconds: Long, nowMillis: Double): String = elapsed((nowMillis / 1000.0).toLong() - epochSeconds)
 
 private fun elapsed(seconds: Long): String = when {
     seconds < 45 -> "now"
@@ -108,8 +107,7 @@ fun clockTime(atMillis: Double, offsetMillis: Double): String {
     return "${pad2(seconds / 3600L)}:${pad2(seconds % 3600L / 60L)}"
 }
 
-fun localDay(atMillis: Double, offsetMillis: Double): Long =
-    floorDiv(((atMillis + offsetMillis) / 1000.0).toLong(), 86_400L)
+fun localDay(atMillis: Double, offsetMillis: Double): Long = floorDiv(((atMillis + offsetMillis) / 1000.0).toLong(), 86_400L)
 
 private fun pad2(value: Long): String = if (value < 10L) "0$value" else "$value"
 

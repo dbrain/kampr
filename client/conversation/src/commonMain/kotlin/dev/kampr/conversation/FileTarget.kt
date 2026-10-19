@@ -60,8 +60,7 @@ private val OPAQUE = setOf(
 
 fun fileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
 
-private fun extensionOf(path: String): String =
-    fileName(path).substringAfterLast('.', "").lowercase()
+private fun extensionOf(path: String): String = fileName(path).substringAfterLast('.', "").lowercase()
 
 // What a name says the file is, for the question [canPlayAudio] answers. Null for everything that
 // is not a recording, which is what makes a path in a sentence a row rather than a guess.
@@ -119,11 +118,14 @@ fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifie
     val verb = if (audible) "Play" else "Open"
     val (word, tone, press) = when (state) {
         AttachmentState.Fetching -> Triple("fetching", tokens.color.working, null)
+
         is AttachmentState.Failed -> Triple(state.reason, tokens.color.blocked, {
             scope.launch { attachments.reveal(io, att) }
             Unit
         })
+
         is AttachmentState.Saved -> Triple("saved to ${state.where}", tokens.color.done, null)
+
         else -> Triple(verb.lowercase(), tokens.color.dim, {
             scope.launch { attachments.reveal(io, att) }
             Unit
@@ -135,8 +137,11 @@ fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifie
             modifier
                 .fillMaxWidth()
                 .let { base ->
-                    if (press == null) base.announce("$name, $word")
-                    else base.touchable(LANDSCAPE_TOUCH).action("$verb $name", press)
+                    if (press == null) {
+                        base.announce("$name, $word")
+                    } else {
+                        base.touchable(LANDSCAPE_TOUCH).action("$verb $name", press)
+                    }
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,

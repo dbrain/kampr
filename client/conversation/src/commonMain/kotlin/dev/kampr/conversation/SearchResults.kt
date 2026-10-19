@@ -69,7 +69,9 @@ fun SearchResults(
                         found != null && found > results.size ->
                             "$found matches in the transcript — the newest ${results.size} are listed, " +
                                 "so narrow the search to reach the rest"
+
                         whole -> "the whole transcript was searched"
+
                         else -> "searched the turns this device holds — older ones have not been asked for"
                     },
                     tokens.type.meta,

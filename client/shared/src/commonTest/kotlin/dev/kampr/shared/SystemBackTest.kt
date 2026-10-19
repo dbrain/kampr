@@ -3,9 +3,9 @@ package dev.kampr.shared
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Screen
+import dev.kampr.shared.ui.Tab
 import dev.kampr.shared.ui.backTarget
 import dev.kampr.shared.ui.tabFor
-import dev.kampr.shared.ui.Tab
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

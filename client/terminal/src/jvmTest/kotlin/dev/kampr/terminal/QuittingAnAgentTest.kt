@@ -10,8 +10,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.CARET_SETTLE_MS
 import kotlin.test.Test
@@ -163,55 +163,54 @@ class QuittingAnAgentTest {
     // `claude` the operator had already quit, with the row they were reading half a screen from
     // where it had been.
     @Test
-    fun a_ring_going_away_and_coming_back_does_not_redraw_the_pane_at_another_size() =
-        runComposeUiTest {
-            val (pane, session) = aShellWithItsPromptNearTheTop(caret = PROMPT_AT)
-            wrote(pane, 1, era(0, RING, era = 0), row = PROMPT_AT, caret = PROMPT_AT)
-            mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
-            waitForIdle()
-            assertTrue(session.view.following, "a pane nobody has touched follows its own output")
-            val cell = session.grid.cellHeight
-            val caretAt = rowTop(pane, session, pane.cursor.row)
+    fun a_ring_going_away_and_coming_back_does_not_redraw_the_pane_at_another_size() = runComposeUiTest {
+        val (pane, session) = aShellWithItsPromptNearTheTop(caret = PROMPT_AT)
+        wrote(pane, 1, era(0, RING, era = 0), row = PROMPT_AT, caret = PROMPT_AT)
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
+        waitForIdle()
+        assertTrue(session.view.following, "a pane nobody has touched follows its own output")
+        val cell = session.grid.cellHeight
+        val caretAt = rowTop(pane, session, pane.cursor.row)
 
-            // A harness takes the screen, and gives it back with the same rows in it.
-            wrote(pane, 2, ringTakenAway(RING, era = 1), row = PROMPT_AT, caret = PROMPT_AT)
-            mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
-            waitForIdle()
-            // While it holds the screen, and not only once it has given it back: this is the whole
-            // of what the operator is looking at for as long as the harness runs.
-            assertEquals(
-                cell,
-                session.grid.cellHeight,
-                0.01f,
-                "the harness took the ring and the pane was redrawn at ${session.grid.cellHeight} " +
-                    "pixels a row against $cell",
-            )
-            assertEquals(
-                caretAt,
-                rowTop(pane, session, pane.cursor.row),
-                "the harness took the ring and the row being typed into left the bottom of the " +
-                    "screen for $caretAt — the operator: *\"if I didn't manually scroll up I want " +
-                    "it to follow the bottom\"*",
-            )
+        // A harness takes the screen, and gives it back with the same rows in it.
+        wrote(pane, 2, ringTakenAway(RING, era = 1), row = PROMPT_AT, caret = PROMPT_AT)
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
+        waitForIdle()
+        // While it holds the screen, and not only once it has given it back: this is the whole
+        // of what the operator is looking at for as long as the harness runs.
+        assertEquals(
+            cell,
+            session.grid.cellHeight,
+            0.01f,
+            "the harness took the ring and the pane was redrawn at ${session.grid.cellHeight} " +
+                "pixels a row against $cell",
+        )
+        assertEquals(
+            caretAt,
+            rowTop(pane, session, pane.cursor.row),
+            "the harness took the ring and the row being typed into left the bottom of the " +
+                "screen for $caretAt — the operator: *\"if I didn't manually scroll up I want " +
+                "it to follow the bottom\"*",
+        )
 
-            wrote(pane, 3, era(RING, RING, era = 2), row = PROMPT_AT, caret = PROMPT_AT)
-            mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
-            waitForIdle()
+        wrote(pane, 3, era(RING, RING, era = 2), row = PROMPT_AT, caret = PROMPT_AT)
+        mainClock.advanceTimeBy(CARET_SETTLE_MS * 3)
+        waitForIdle()
 
-            assertEquals(
-                cell,
-                session.grid.cellHeight,
-                0.01f,
-                "the ring went away and came back and the pane is drawn at another size: " +
-                    "${session.grid.cellHeight} pixels a row against $cell",
-            )
-            assertEquals(
-                caretAt,
-                rowTop(pane, session, pane.cursor.row),
-                "the row being typed into moved from $caretAt to " +
-                    "${rowTop(pane, session, pane.cursor.row)} across a harness that came and went",
-            )
-        }
+        assertEquals(
+            cell,
+            session.grid.cellHeight,
+            0.01f,
+            "the ring went away and came back and the pane is drawn at another size: " +
+                "${session.grid.cellHeight} pixels a row against $cell",
+        )
+        assertEquals(
+            caretAt,
+            rowTop(pane, session, pane.cursor.row),
+            "the row being typed into moved from $caretAt to " +
+                "${rowTop(pane, session, pane.cursor.row)} across a harness that came and went",
+        )
+    }
 
     @Test
     fun a_ring_delivered_a_second_time_does_not_carry_a_parked_reader_into_it() = runComposeUiTest {

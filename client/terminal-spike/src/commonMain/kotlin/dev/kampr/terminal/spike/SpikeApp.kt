@@ -4,9 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,16 +32,15 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
 import dev.kampr.terminal.spike.res.Res
 import dev.kampr.terminal.spike.res.jetbrainsmononl_bold
 import dev.kampr.terminal.spike.res.jetbrainsmononl_bolditalic
 import dev.kampr.terminal.spike.res.jetbrainsmononl_italic
 import dev.kampr.terminal.spike.res.jetbrainsmononl_regular
+import org.jetbrains.compose.resources.Font
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.time.TimeSource
-import org.jetbrains.compose.resources.Font
 
 private const val BUDGET_MS = 1000f / 60f
 
@@ -107,6 +106,7 @@ fun TerminalSpikeApp() {
 
                 when (scenario.zoom) {
                     ZoomMode.NONE -> Unit
+
                     else -> {
                         val phase = elapsedMs / 2500.0
                         zoom.floatValue = (1.3f + 0.55f * cos(phase * 2 * PI_F).toFloat())

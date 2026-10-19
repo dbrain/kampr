@@ -23,8 +23,7 @@ private const val COLUMN_LIMIT = 4
 
 data class ColumnPlan(val count: Int, val width: Dp)
 
-fun columnWidth(available: Dp, gap: Dp, count: Int): Dp =
-    minOf(COLUMN_MAX, (available - gap * (count - 1)) / count)
+fun columnWidth(available: Dp, gap: Dp, count: Int): Dp = minOf(COLUMN_MAX, (available - gap * (count - 1)) / count)
 
 // `wanted` caps the count at what there is to put in the columns: an empty column is the same
 // canyon this exists to close.

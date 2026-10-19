@@ -4,30 +4,33 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import dev.kampr.shared.model.Herd
-import dev.kampr.shared.model.createdPane
-import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.ConnectionStatus
-import dev.kampr.shared.net.Endpoint
-import dev.kampr.shared.net.Enrolment
-import dev.kampr.shared.net.AuthApi
-import dev.kampr.shared.net.Pairing
-import dev.kampr.shared.net.KamprConnection
-import dev.kampr.shared.net.InstallPrompt
-import dev.kampr.shared.net.AttachmentApi
-import dev.kampr.shared.net.AttachmentBytes
-import dev.kampr.shared.net.NodeApi
-import dev.kampr.shared.net.PasskeyApi
-import dev.kampr.shared.net.PushApi
-import dev.kampr.shared.net.PasskeyOutcome
-import dev.kampr.shared.net.createPasskeys
-import dev.kampr.shared.net.createHttpClient
-import dev.kampr.shared.net.createInstallPrompt
-import dev.kampr.shared.net.defaultEndpoint
-import dev.kampr.shared.net.deviceName
+import dev.kampr.shared.model.Herd
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.createdPane
+import dev.kampr.shared.model.fleetTargets
+import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.model.readDone
 import dev.kampr.shared.model.unreadDone
+import dev.kampr.shared.net.AttachmentApi
+import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.net.AuthApi
+import dev.kampr.shared.net.Endpoint
+import dev.kampr.shared.net.Enrolment
+import dev.kampr.shared.net.InstallPrompt
+import dev.kampr.shared.net.KamprConnection
+import dev.kampr.shared.net.NodeApi
+import dev.kampr.shared.net.Pairing
+import dev.kampr.shared.net.PasskeyApi
+import dev.kampr.shared.net.PasskeyOutcome
+import dev.kampr.shared.net.PushApi
+import dev.kampr.shared.net.createHttpClient
+import dev.kampr.shared.net.createInstallPrompt
+import dev.kampr.shared.net.createPasskeys
+import dev.kampr.shared.net.defaultEndpoint
+import dev.kampr.shared.net.deviceName
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.Prefs
 import dev.kampr.shared.platform.createPrefs
 import dev.kampr.shared.push.PushPlatform
@@ -37,9 +40,6 @@ import dev.kampr.shared.theme.ThemeMode
 import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
-import dev.kampr.shared.net.wallClockMillis
-import dev.kampr.shared.model.fleetTargets
-import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.ServerMsg
@@ -85,6 +85,7 @@ data class MosaicSeed(val panes: List<String>, val stacked: Boolean)
 sealed interface Screen {
     data object Herd : Screen
     data object Mosaic : Screen
+
     // One command across the herd, grouped by the fan-out that produced it. A place of its own
     // rather than a section of the herd: a fleet run is on nobody's desk, and "which host needs
     // me" is not the herd's question.
@@ -154,8 +155,7 @@ class AppState(
     // ownership on this side of it.
     private val matches = MatchHolds(scope) { connection.send(it) }
 
-    suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean = false) =
-        matches.claim(paneId, cols, rows, grow)
+    suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean = false) = matches.claim(paneId, cols, rows, grow)
 
     fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
 
@@ -326,7 +326,9 @@ class AppState(
             pairingError = null
             when (val outcome = withPasskeys(target.copy(token = null)) { it.signIn() }) {
                 PasskeyOutcome.Cancelled -> {}
+
                 is PasskeyOutcome.Refused -> pairingError = outcome.reason
+
                 is PasskeyOutcome.Enrolled ->
                     adopt(target.copy(token = outcome.enrolment.token), outcome.enrolment.deviceId)
             }
@@ -365,10 +367,13 @@ class AppState(
         }
         pairingError = when (outcome) {
             is Pairing.Enrolled -> null
+
             Pairing.Refused ->
                 "That pairing code was not accepted. Codes expire after ten minutes, " +
                     "and one printed at a console needs a keypress there before it works."
+
             Pairing.Busy -> "That node is busy. The code is still good — try again in a moment."
+
             Pairing.Unreachable -> "Could not reach that node. The code is still good."
         }
         return (outcome as? Pairing.Enrolled)?.enrolment

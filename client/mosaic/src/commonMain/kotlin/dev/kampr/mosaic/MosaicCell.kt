@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -47,10 +47,10 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
-import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.PaneGone
-import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.WatchPresence
+import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.theme.BorderSpec
@@ -59,24 +59,24 @@ import dev.kampr.shared.ui.GlyphAction
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
-import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
+import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneChrome
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneManageAction
 import dev.kampr.shared.ui.PaneSurfaces
-import dev.kampr.shared.ui.StreamNotice
 import dev.kampr.shared.ui.PaneView
+import dev.kampr.shared.ui.StatusMark
+import dev.kampr.shared.ui.StreamNotice
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.WatchNotice
-import dev.kampr.shared.ui.rememberWatchPresence
-import dev.kampr.shared.ui.StatusMark
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.paneActions
 import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.ui.rememberWatchPresence
 import dev.kampr.shared.ui.statusColor
 import dev.kampr.shared.ui.statusWord
 import dev.kampr.shared.util.formatLatency
@@ -92,8 +92,7 @@ private val FOCUS_EDGE = 2.dp
 // which is the whole point of putting the number in the cell.
 private const val SLOW_MS = 150.0
 
-private fun cellStatusWord(status: AgentStatus): String? =
-    if (status == AgentStatus.Unknown) null else statusWord(status).uppercase()
+private fun cellStatusWord(status: AgentStatus): String? = if (status == AgentStatus.Unknown) null else statusWord(status).uppercase()
 
 // Input reaches exactly one cell. Refusing it the way a read-only device is refused it means the
 // key row and the destructive-command guard both follow the focus without knowing about it.
@@ -293,8 +292,7 @@ private fun CellHeader(
 }
 
 // Why this pane will never paint, when there is no grid on its surface to read instead.
-private fun streamFault(pane: PaneState, info: PaneInfo?): String? =
-    info?.detail?.takeUnless { pane.painted }
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? = info?.detail?.takeUnless { pane.painted }
 
 // The same words the pane screen shows, over the same wash the offline cell uses. One notice, two
 // placements: a cell that phrased this itself would be a second copy of the one thing on this
@@ -366,8 +364,14 @@ private fun DragGrip(
                 role = Role.Button
                 if (place.isNotEmpty()) stateDescription = place
                 customActions = listOf(
-                    CustomAccessibilityAction("Move this pane earlier") { onMove(-1); true },
-                    CustomAccessibilityAction("Move this pane later") { onMove(1); true },
+                    CustomAccessibilityAction("Move this pane earlier") {
+                        onMove(-1)
+                        true
+                    },
+                    CustomAccessibilityAction("Move this pane later") {
+                        onMove(1)
+                        true
+                    },
                 )
             }
             .onFocusChanged { focused = it.isFocused }

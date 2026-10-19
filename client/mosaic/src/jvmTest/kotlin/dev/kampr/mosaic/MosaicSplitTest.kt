@@ -43,16 +43,17 @@ private const val ELSEWHERE = "01JNODE/w2:p1"
 
 private object NoSurface : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 }
 
 private fun deskTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, FontFamily.Monospace)
     .let { KamprTokens(SoftTheme, it, typography(it, SoftTheme.label, TypeScale.Desk)) }
 
-private fun herdOf(vararg ids: String) =
-    """{"t":"herd","nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],"panes":[""" +
-        ids.joinToString(",") { """{"id":"$it","node_id":"01JNODE"}""" } + "]}"
+private fun herdOf(vararg ids: String) = """{"t":"herd","nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],"panes":[""" +
+    ids.joinToString(",") { """{"id":"$it","node_id":"01JNODE"}""" } + "]}"
 
 private fun KamprStore.take(frame: String) = accept(Wire.decode(frame) ?: error("undecodable: $frame"))
 
@@ -61,36 +62,35 @@ private fun KamprStore.take(frame: String) = accept(Wire.decode(frame) ?: error(
 // made from, then the pane it made, in the shape herdr gave them.
 @OptIn(ExperimentalTestApi::class)
 class MosaicSplitTest {
-    private fun opened(direction: SplitDirection, check: (MosaicSurfaces, cell1: Pair<Float, Float>, cell2: Pair<Float, Float>) -> Unit) =
-        runComposeUiTest {
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val store = KamprStore()
-            val prefs = MemoryPrefs().apply { set("mosaic.panes", ELSEWHERE) }
-            val state = AppState(scope, store, prefs, null)
-            val host = MosaicSurfaces()
-            try {
-                store.take(herdOf(SOURCE, ELSEWHERE))
-                state.openPane(SOURCE)
-                state.openingSplit(SOURCE, MADE, direction)
-                store.take(herdOf(SOURCE, MADE, ELSEWHERE))
-                assertEquals(Screen.Mosaic, state.screen)
+    private fun opened(direction: SplitDirection, check: (MosaicSurfaces, cell1: Pair<Float, Float>, cell2: Pair<Float, Float>) -> Unit) = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val store = KamprStore()
+        val prefs = MemoryPrefs().apply { set("mosaic.panes", ELSEWHERE) }
+        val state = AppState(scope, store, prefs, null)
+        val host = MosaicSurfaces()
+        try {
+            store.take(herdOf(SOURCE, ELSEWHERE))
+            state.openPane(SOURCE)
+            state.openingSplit(SOURCE, MADE, direction)
+            store.take(herdOf(SOURCE, MADE, ELSEWHERE))
+            assertEquals(Screen.Mosaic, state.screen)
 
-                setContent {
-                    CompositionLocalProvider(LocalTokens provides deskTokens(), LocalPaneIo provides ArtboardIo) {
-                        Box(Modifier.size(1200.dp, 800.dp)) {
-                            host.Mosaic(state, Breakpoint.Desktop, NoSurface, Modifier)
-                        }
+            setContent {
+                CompositionLocalProvider(LocalTokens provides deskTokens(), LocalPaneIo provides ArtboardIo) {
+                    Box(Modifier.size(1200.dp, 800.dp)) {
+                        host.Mosaic(state, Breakpoint.Desktop, NoSurface, Modifier)
                     }
                 }
-                waitForIdle()
-                val first = onNode(hasStateDescription("cell 1 of 2")).getBoundsInRoot()
-                val second = onNode(hasStateDescription("cell 2 of 2")).getBoundsInRoot()
-                assertNull(state.mosaicSeed, "a seed is applied once")
-                check(host, first.left.value to first.top.value, second.left.value to second.top.value)
-            } finally {
-                scope.cancel()
             }
+            waitForIdle()
+            val first = onNode(hasStateDescription("cell 1 of 2")).getBoundsInRoot()
+            val second = onNode(hasStateDescription("cell 2 of 2")).getBoundsInRoot()
+            assertNull(state.mosaicSeed, "a seed is applied once")
+            check(host, first.left.value to first.top.value, second.left.value to second.top.value)
+        } finally {
+            scope.cancel()
         }
+    }
 
     @Test
     fun aSplitToTheRightOpensTheTwoPanesSideBySide() = opened(SplitDirection.Right) { host, first, second ->

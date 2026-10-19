@@ -30,13 +30,13 @@ import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.AppState
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalManage
-import dev.kampr.shared.ui.ManageLayer
 import dev.kampr.shared.ui.ManageIo
+import dev.kampr.shared.ui.ManageLayer
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.PaneView
-import dev.kampr.shared.ui.Sheet
 import dev.kampr.shared.ui.RoleNotice
+import dev.kampr.shared.ui.Sheet
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.Wire
@@ -237,5 +237,4 @@ class RoleChangeTest {
 private const val NEW = "New, from this pane"
 private const val READ_ONLY = "This device is read-only — it cannot type into the pane"
 
-private fun assertNotNullNote(note: String?): String =
-    note ?: error("the role change was never surfaced to the operator")
+private fun assertNotNullNote(note: String?): String = note ?: error("the role change was never surfaced to the operator")

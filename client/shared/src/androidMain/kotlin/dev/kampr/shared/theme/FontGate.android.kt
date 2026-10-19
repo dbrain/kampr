@@ -5,5 +5,4 @@ import androidx.compose.ui.text.font.FontFamily
 import org.jetbrains.compose.resources.Font
 
 @Composable
-actual fun rememberFamily(faces: List<FontFace>): FontFamily? =
-    FontFamily(faces.map { Font(it.resource, it.weight, it.style) })
+actual fun rememberFamily(faces: List<FontFace>): FontFamily? = FontFamily(faces.map { Font(it.resource, it.weight, it.style) })

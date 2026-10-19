@@ -110,8 +110,8 @@ class ColumnBarTest {
         val (left, right, top, bottom) = with(density) {
             listOf(bar.left.toDp(), bar.right.toDp(), bar.top.toDp(), bar.bottom.toDp())
         }
-        assertEquals(0f, left.value, 0.5f, "the bar starts ${left} in from the view's left edge")
-        assertEquals(411f, right.value, 0.5f, "the bar stops at ${right} of a 411 dp view")
+        assertEquals(0f, left.value, 0.5f, "the bar starts $left in from the view's left edge")
+        assertEquals(411f, right.value, 0.5f, "the bar stops at $right of a 411 dp view")
         assertEquals(stripTop().value, bottom.value, 0.5f, "the bar floats above the chrome under it")
         val last = rowBottom(pane, session, pane.cells.rows - 1)
         assertEquals(top.value, last.value, 0.5f, "the last row ends at $last, not at the bar's top edge $top")

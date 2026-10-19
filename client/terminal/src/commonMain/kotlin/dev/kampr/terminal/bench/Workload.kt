@@ -2,8 +2,8 @@ package dev.kampr.terminal.bench
 
 import dev.kampr.shared.wire.ColorSpec
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Style
 
@@ -81,14 +81,21 @@ private val WORDS = arrayOf(
 )
 
 private val PATHS = arrayOf(
-    "crates/kampr-term/src/grid.rs", "crates/kampr-herdr/src/observe.rs",
-    "client/terminal/render/GridRenderer.kt", "crates/kampr-node/src/ws.rs",
-    "docs/04-wire-protocol.md", "crates/kampr-core/src/registry.rs",
+    "crates/kampr-term/src/grid.rs",
+    "crates/kampr-herdr/src/observe.rs",
+    "client/terminal/render/GridRenderer.kt",
+    "crates/kampr-node/src/ws.rs",
+    "docs/04-wire-protocol.md",
+    "crates/kampr-core/src/registry.rs",
 )
 
 private val LEVELS = arrayOf("TRACE", "DEBUG", "INFO ", "WARN ", "ERROR")
 private val LEVEL_STYLES = intArrayOf(
-    BenchStyles.DIM, BenchStyles.CYAN, BenchStyles.GREEN, BenchStyles.YELLOW, BenchStyles.RED,
+    BenchStyles.DIM,
+    BenchStyles.CYAN,
+    BenchStyles.GREEN,
+    BenchStyles.YELLOW,
+    BenchStyles.RED,
 )
 
 private const val CHURN_ALPHABET =

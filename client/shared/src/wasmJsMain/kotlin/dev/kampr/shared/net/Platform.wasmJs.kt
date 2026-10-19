@@ -7,8 +7,7 @@ import kotlinx.browser.window
 
 actual fun createHttpClient(): HttpClient = HttpClient(Js) { install(WebSockets) }
 
-actual fun defaultEndpoint(): Endpoint? =
-    Endpoint(window.location.protocol + "//" + window.location.host)
+actual fun defaultEndpoint(): Endpoint? = Endpoint(window.location.protocol + "//" + window.location.host)
 
 // A browser name, not a fingerprint: the node already records the full user agent, and what the
 // device list needs is something a person can tell apart at a glance.
@@ -31,7 +30,7 @@ private fun jsDeviceName(): String = js(
         : '';
       return platform ? browser + ' on ' + platform : browser;
     })()
-    """
+    """,
 )
 
 actual fun deviceName(): String = runCatching { jsDeviceName() }.getOrDefault("Browser")

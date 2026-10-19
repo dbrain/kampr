@@ -50,8 +50,11 @@ private object Manage : ManageIo {
 // stand-in here, it is being shown the button an operator taps.
 private class RealZoom(private val session: PaneSession) : PaneSurfaces {
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Unit
+
     @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = ZoomButton(session, modifier)
 }
 
@@ -82,8 +85,12 @@ class ZoomSlotArtboardTest {
             for (view in listOf(PaneView.Terminal, PaneView.Conversation)) {
                 val suffix = if (view == PaneView.Conversation) "conversation" else "terminal"
                 renderArtboard(
-                    board.width, board.height, SoftTheme, TypeScale.Phone,
-                    File(OUT, "${board.name}-$suffix.png"), density = Density(board.density),
+                    board.width,
+                    board.height,
+                    SoftTheme,
+                    TypeScale.Phone,
+                    File(OUT, "${board.name}-$suffix.png"),
+                    density = Density(board.density),
                 ) {
                     val pane = PaneState(PANE, StyleTable())
                     val surfaces = RealZoom(PaneSession(PANE))

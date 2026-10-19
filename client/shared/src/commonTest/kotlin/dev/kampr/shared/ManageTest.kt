@@ -15,7 +15,7 @@ private const val PANE = "01JNODE/w3:p2"
 
 private fun hello(role: String = "full", manage: Boolean = true) = Wire.decode(
     """{"t":"hello","protocol":1,"node_id":"01JNODE","node_name":"comingclean","build":"0.1.0",
-       "role":"$role","caps":{"push":false,"scrollback":true,"conversation":true,"manage":$manage}}"""
+       "role":"$role","caps":{"push":false,"scrollback":true,"conversation":true,"manage":$manage}}""",
 )!!
 
 class ManageTest {
@@ -28,7 +28,7 @@ class ManageTest {
     fun theNodesCapsAnswerCarriesKindsAndSessions() {
         val msg = Wire.decode(
             """{"t":"caps","node":"01JNODE","agent_kinds":["claude","codex","gemini"],
-               "sessions":[{"name":"default","running":true},{"name":"agents","running":false}]}"""
+               "sessions":[{"name":"default","running":true},{"name":"agents","running":false}]}""",
         ) as ServerMsg.NodeCaps
         assertEquals(listOf("claude", "codex", "gemini"), msg.agentKinds)
         assertEquals("agents", msg.sessions[1].name)
@@ -43,7 +43,7 @@ class ManageTest {
         assertNull(ok.code)
 
         val refused = Wire.decode(
-            """{"t":"managed","op":"pane.split","ok":false,"code":"not_writer","message":"read-only"}"""
+            """{"t":"managed","op":"pane.split","ok":false,"code":"not_writer","message":"read-only"}""",
         ) as ServerMsg.Managed
         assertFalse(refused.ok)
         assertEquals("not_writer", refused.code)
@@ -66,7 +66,7 @@ class ManageTest {
         assertTrue(newer.caps.paneGrow)
 
         val enough = Wire.decode(
-            """{"t":"managed","op":"pane.size","ok":true,"held":false,"cols":120,"rows":40,"rid":"match-1"}"""
+            """{"t":"managed","op":"pane.size","ok":true,"held":false,"cols":120,"rows":40,"rid":"match-1"}""",
         ) as ServerMsg.Managed
         assertEquals(false, enough.held)
         val create = Wire.decode("""{"t":"managed","op":"workspace.create","ok":true}""") as ServerMsg.Managed
@@ -77,7 +77,7 @@ class ManageTest {
     @Test
     fun anUnknownCodeStillCarriesItsMessage() {
         val refused = Wire.decode(
-            """{"t":"managed","op":"pane.split","ok":false,"code":"quota_exhausted","message":"too many panes"}"""
+            """{"t":"managed","op":"pane.split","ok":false,"code":"quota_exhausted","message":"too many panes"}""",
         ) as ServerMsg.Managed
         assertEquals("too many panes", refused.message)
         assertEquals("quota_exhausted", refused.code)
@@ -87,7 +87,7 @@ class ManageTest {
     fun aLayoutExportComesBackOnItsAck() {
         val ack = Wire.decode(
             """{"t":"managed","op":"layout.export","ok":true,
-               "layout":{"tab_id":"w3:t1","root":{"type":"split","direction":"right"}}}"""
+               "layout":{"tab_id":"w3:t1","root":{"type":"split","direction":"right"}}}""",
         ) as ServerMsg.Managed
         val layout = ack.layout!!
         assertEquals("w3:t1", layout["tab_id"].toString().trim('"'))
@@ -101,7 +101,7 @@ class ManageTest {
         val herd = Wire.decode(
             """{"t":"herd","nodes":[{"id":"01JNODE","name":"comingclean","kind":"local"}],
                "panes":[{"id":"$PANE","node_id":"01JNODE","workspace_id":"01JNODE/w3",
-                         "tab_id":"01JNODE/w3:t1","workspace":"kampr","tab":"1","cols":74,"rows":30}]}"""
+                         "tab_id":"01JNODE/w3:t1","workspace":"kampr","tab":"1","cols":74,"rows":30}]}""",
         ) as ServerMsg.Herd
         val pane = herd.panes.single()
         assertEquals("01JNODE/w3", pane.workspaceId)
@@ -132,8 +132,8 @@ class ManageTest {
                 """{"t":"herd","panes":[],"nodes":[
                    {"id":"01JNODE","name":"comingclean","kind":"local"},
                    {"id":"01JNODE.agents","name":"comingclean/agents","kind":"local"},
-                   {"id":"01JPEER","name":"haymaker"}]}"""
-            )!!
+                   {"id":"01JPEER","name":"haymaker"}]}""",
+            )!!,
         )
         store.accept(Wire.decode("""{"t":"caps","node":"01JNODE","agent_kinds":["claude"]}""")!!)
         assertEquals(listOf("claude"), store.capsFor("01JNODE")?.agentKinds)
@@ -160,8 +160,8 @@ class ManageTest {
             Wire.decode(
                 """{"t":"herd.patch","added":{"panes":[{"id":"01JNODE/w9:p1","node_id":"01JNODE",
                    "workspace_id":"01JNODE/w9","tab_id":"01JNODE/w9:t1","workspace":"probe",
-                   "cols":80,"rows":24}]}}"""
-            )!!
+                   "cols":80,"rows":24}]}}""",
+            )!!,
         )
         assertEquals(listOf("01JNODE/w9:p1"), store.herd.value.panes.map { it.id })
         assertEquals("01JNODE/w9:t1", store.herd.value.panes.single().tabId)

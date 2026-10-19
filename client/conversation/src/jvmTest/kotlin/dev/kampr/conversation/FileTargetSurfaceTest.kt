@@ -63,7 +63,9 @@ private fun node(readOnly: Boolean = false) = object : PaneIo {
         return when (id) {
             fileAttachmentId(PATH) ->
                 AttachmentBytes.Ok(FILE_TEXT.encodeToByteArray(), "application/octet-stream")
+
             diffAttachmentId(PATH) -> AttachmentBytes.Ok(PATCH.encodeToByteArray(), "text/plain")
+
             else -> AttachmentBytes.Failed("no such attachment")
         }
     }

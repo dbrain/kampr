@@ -30,7 +30,9 @@ private fun compacted(): KamprStore {
     val store = KamprStore()
     store.accept(
         ServerMsg.Convo(
-            pane = PANE_ID, cursor = "u-1", more = false,
+            pane = PANE_ID,
+            cursor = "u-1",
+            more = false,
             turns = listOf(
                 proseTurn("u-1", PROMPT, role = "user"),
                 summaryTurn("u-2"),

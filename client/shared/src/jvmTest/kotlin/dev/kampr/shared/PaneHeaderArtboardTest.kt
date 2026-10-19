@@ -40,14 +40,16 @@ private val INFO = PaneInfo(
     hasConversation = true,
 )
 
-
-
 // The two defects with something to look at, at the density they were reported on: 1080x2400 is
 // 360 dp at 3x, which is where the header ran out of room.
 class PaneHeaderArtboardTest {
     private fun board(name: String, width: Int, height: Int, density: Float, content: @Composable () -> Unit) {
         val image = render(
-            width.dp, height.dp, themeOf("soft"), TypeScale.Phone, File(OUT, "$name.png"),
+            width.dp,
+            height.dp,
+            themeOf("soft"),
+            TypeScale.Phone,
+            File(OUT, "$name.png"),
             density = Density(density),
         ) {
             CompositionLocalProvider(LocalSafeArea provides BARS, LocalManage provides AllowManage) { content() }
@@ -55,8 +57,7 @@ class PaneHeaderArtboardTest {
         assertTrue(image.width > 0 && image.height > 0)
     }
 
-    private fun pane(readOnly: Boolean = false, stale: Boolean = false, landscape: Boolean = false):
-        @Composable () -> Unit = {
+    private fun pane(readOnly: Boolean = false, stale: Boolean = false, landscape: Boolean = false): @Composable () -> Unit = {
         PaneScreenMobile(
             pane = PaneState(PANE_ID, StyleTable()).also { it.stale = stale },
             info = INFO,

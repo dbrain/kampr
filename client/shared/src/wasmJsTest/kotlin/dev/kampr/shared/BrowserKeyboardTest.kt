@@ -38,7 +38,7 @@ private fun pretendBrowser(hover: String, pointer: String, touchPoints: Int) {
             });
             Object.defineProperty(navigator, 'maxTouchPoints', { value: touchPoints, configurable: true });
         })()
-        """
+        """,
     )
 }
 
@@ -54,7 +54,7 @@ private fun stopPretending() {
             }
             Object.defineProperty(navigator, 'maxTouchPoints', { value: 0, configurable: true });
         })()
-        """
+        """,
     )
 }
 

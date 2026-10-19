@@ -595,7 +595,6 @@ sealed interface ServerMsg {
     ) : ServerMsg
 
     data class Pong(val n: Int) : ServerMsg
-
 }
 
 @Serializable
@@ -683,7 +682,6 @@ sealed interface ClientMsg {
     // Without this `caps.agent_kinds` and `caps.sessions` are dead on both ends: the node only
     // answers a `caps` it was asked for.
     data object RequestCaps : ClientMsg
-
 }
 
 @Serializable

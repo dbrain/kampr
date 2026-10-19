@@ -57,7 +57,10 @@ fun ConnectPanel(
     var code by remember(offeredCode) { mutableStateOf(TextFieldValue(offeredCode.orEmpty())) }
 
     val target = endpointFrom(address.text, code.text)
-    val dial = { endpointFrom(address.text, code.text)?.let(onConnect); Unit }
+    val dial = {
+        endpointFrom(address.text, code.text)?.let(onConnect)
+        Unit
+    }
 
     Surface(modifier.fillMaxWidth()) {
         Column(

@@ -47,9 +47,8 @@ val LocalPalette = staticCompositionLocalOf<() -> Unit> { {} }
 
 private val DIGITS = listOf(Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine)
 
-fun isPaletteChord(event: KeyEvent): Boolean =
-    event.type == KeyEventType.KeyDown && event.key == Key.K && !event.isShiftPressed && !event.isAltPressed &&
-        (event.isCtrlPressed != event.isMetaPressed)
+fun isPaletteChord(event: KeyEvent): Boolean = event.type == KeyEventType.KeyDown && event.key == Key.K && !event.isShiftPressed && !event.isAltPressed &&
+    (event.isCtrlPressed != event.isMetaPressed)
 
 @Composable
 fun PaletteHost(
@@ -73,7 +72,10 @@ fun PaletteHost(
         if (open) {
             CommandPalette(
                 items = remember { items() },
-                onPick = { open = false; onPick(it) },
+                onPick = {
+                    open = false
+                    onPick(it)
+                },
                 onDismiss = { open = false },
             )
         }

@@ -64,7 +64,9 @@ private class HeldClipboard : Clipboard {
     var entry: ClipEntry? = null
     override val nativeClipboard: Any get() = throw UnsupportedOperationException()
     override suspend fun getClipEntry(): ClipEntry? = entry
-    override suspend fun setClipEntry(clipEntry: ClipEntry?) { entry = clipEntry }
+    override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+        entry = clipEntry
+    }
 
     val pasted: String?
         get() = (entry?.nativeClipEntry as? Transferable)?.getTransferData(DataFlavor.stringFlavor) as String?
@@ -104,8 +106,10 @@ private fun highlighted(scene: ImageComposeScene): Int {
     val want = ((HIGHLIGHT.red * 255).toInt() shl 16) or
         ((HIGHLIGHT.green * 255).toInt() shl 8) or (HIGHLIGHT.blue * 255).toInt()
     var found = 0
-    for (y in 0 until image.height) for (x in 0 until image.width) {
-        if (image.getRGB(x, y) and 0xFFFFFF == want) found++
+    for (y in 0 until image.height) {
+        for (x in 0 until image.width) {
+            if (image.getRGB(x, y) and 0xFFFFFF == want) found++
+        }
     }
     return found
 }
@@ -158,7 +162,10 @@ private fun copiedFrom(drag: Pair<Offset, Offset>, content: @Composable () -> Un
         body = { made ->
             made.longPressDrag(drag.first, drag.second)
             toolbar.copy?.invoke()
-            repeat(4) { made.render(); Thread.sleep(60) }
+            repeat(4) {
+                made.render()
+                Thread.sleep(60)
+            }
         },
     )
     return clipboard.pasted

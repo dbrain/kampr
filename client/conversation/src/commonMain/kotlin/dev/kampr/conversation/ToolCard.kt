@@ -12,19 +12,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.Mark
-import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LabelText
+import dev.kampr.shared.ui.Mark
+import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.touchable
-import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.wire.Block
 
 const val TOOL_RUNNING = "running"
@@ -77,13 +77,19 @@ fun ToolCard(
                 Modifier
                     .fillMaxWidth()
                     .let {
-                        if (!body) it.named("Tool $named, $outcome")
-                        else it.touchable(LANDSCAPE_TOUCH).action(
-                            if (expanded) "Hide $opens $named, $outcome"
-                            else "Show $opens $named, $outcome",
-                            onToggle,
-                            selected = expanded,
-                        )
+                        if (!body) {
+                            it.named("Tool $named, $outcome")
+                        } else {
+                            it.touchable(LANDSCAPE_TOUCH).action(
+                                if (expanded) {
+                                    "Hide $opens $named, $outcome"
+                                } else {
+                                    "Show $opens $named, $outcome"
+                                },
+                                onToggle,
+                                selected = expanded,
+                            )
+                        }
                     }
                     .padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -106,7 +112,9 @@ fun ToolCard(
                 )
                 when {
                     running -> KText("running", tokens.type.micro, tokens.color.working)
+
                     tool.state == TOOL_ERROR -> KText("failed", tokens.type.micro, tokens.color.blocked)
+
                     else -> tool.lines?.let {
                         KText("$it lines of output", tokens.type.micro, tokens.color.mute, maxLines = 2)
                     }
@@ -174,5 +182,4 @@ private fun ToolOutput(block: Block.Code, total: Int?, query: String, labelled: 
     }
 }
 
-internal fun linesOf(text: String): Int =
-    if (text.isEmpty()) 0 else text.trimEnd('\n').count { it == '\n' } + 1
+internal fun linesOf(text: String): Int = if (text.isEmpty()) 0 else text.trimEnd('\n').count { it == '\n' } + 1

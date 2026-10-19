@@ -129,7 +129,7 @@ class MosaicStateTest {
                 ),
                 panes = listOf(pane("hub/p1", "hub"), pane("peer/p2", "peer")),
                 known = true,
-            )
+            ),
         )
         assertEquals(listOf("hub/p1", "peer/p2"), mosaic.panes)
 
@@ -138,7 +138,7 @@ class MosaicStateTest {
                 nodes = listOf(NodeInfo(id = "hub", kind = "local")),
                 panes = listOf(pane("hub/p1", "hub")),
                 known = true,
-            )
+            ),
         )
         assertEquals(listOf("hub/p1"), mosaic.panes)
         assertEquals("hub/p1", mosaic.focused)

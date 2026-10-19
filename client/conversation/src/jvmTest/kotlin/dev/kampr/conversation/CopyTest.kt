@@ -62,8 +62,7 @@ private fun calling(id: String) = Turn(
     listOf(Block.Tool("Bash", "run the tests", 1, null), Block.Code(null, "1 passed", TOOL_OUTPUT)),
 )
 
-private fun saying(id: String, vararg text: String) =
-    Turn(id, "assistant", "2026-08-24T09:00:04.000Z", text.map { Block.Md(it) })
+private fun saying(id: String, vararg text: String) = Turn(id, "assistant", "2026-08-24T09:00:04.000Z", text.map { Block.Md(it) })
 
 // The last thing said is not the last step: an agent that answers and then runs one more check
 // ends its reply on a call, and the answer is still the message above it.

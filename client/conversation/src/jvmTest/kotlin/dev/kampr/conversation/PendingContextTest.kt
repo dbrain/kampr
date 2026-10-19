@@ -160,7 +160,7 @@ class PendingContextTest {
     fun anOlderNodesPendingFrameStillDrawsAsASingleAnswerQuestion() {
         val frame = Wire.decode(
             """{"t":"pending","pane":"$PANE_ID","question":"Do you want to make this edit?",
-               "options":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}],"source":"screen"}"""
+               "options":[{"key":"1","label":"Yes"},{"key":"2","label":"No"}],"source":"screen"}""",
         ) as ServerMsg.Pending
 
         assertEquals(null, frame.header)
@@ -175,7 +175,7 @@ class PendingContextTest {
             """{"t":"pending","pane":"$PANE_ID","question":"Which test suites should I run?",
                "header":"Test suites","multi":true,"source":"screen","options":[
                  {"key":"1","label":"unit","detail":"Run the unit test suite.","chosen":true},
-                 {"key":"2","label":"integration","detail":"Run the integration test suite."}]}"""
+                 {"key":"2","label":"integration","detail":"Run the integration test suite."}]}""",
         ) as ServerMsg.Pending
 
         assertEquals("Test suites", frame.header)

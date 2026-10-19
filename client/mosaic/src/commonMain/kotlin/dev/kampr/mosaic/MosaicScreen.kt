@@ -6,10 +6,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,19 +30,19 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.Mark
+import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.Pill
 import dev.kampr.shared.ui.Segmented
-import dev.kampr.shared.ui.Mark
-import dev.kampr.shared.ui.MarkShape
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.asHeading
+import dev.kampr.shared.ui.edgeBottom
+import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.touchable
-import dev.kampr.shared.ui.edgeBottom
-import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.util.formatLatency
 
 private val GAP = 1.dp
@@ -236,8 +236,11 @@ private fun MosaicStatus(
     ) {
         Row(
             Modifier.announce(
-                if (live) "Connected to hub ${hub?.name ?: "unknown"}"
-                else "Not connected to hub ${hub?.name ?: "unknown"}",
+                if (live) {
+                    "Connected to hub ${hub?.name ?: "unknown"}"
+                } else {
+                    "Not connected to hub ${hub?.name ?: "unknown"}"
+                },
             ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),

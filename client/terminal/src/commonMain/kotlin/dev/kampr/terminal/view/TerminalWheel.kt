@@ -5,9 +5,9 @@ import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
-import dev.kampr.terminal.input.PaneScroll
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.kampr.terminal.input.PaneScroll
 import kotlin.math.pow
 
 // A notch is three rows, the way a terminal emulator moves.

@@ -18,8 +18,7 @@ private const val LONGEST_ID = 4096
 
 // base64url with no padding, which is the alphabet the route reads and leaves an id as one path
 // segment with nothing in it a URL minds.
-private fun mint(tag: String, path: String): String =
-    Base64.UrlSafe.encode("$tag$SEPARATOR$path".encodeToByteArray()).trimEnd('=')
+private fun mint(tag: String, path: String): String = Base64.UrlSafe.encode("$tag$SEPARATOR$path".encodeToByteArray()).trimEnd('=')
 
 fun fileAttachmentId(path: String): String = mint(FILE, path)
 

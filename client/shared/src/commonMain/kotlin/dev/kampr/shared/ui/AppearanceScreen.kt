@@ -182,7 +182,7 @@ private fun ThemeCard(spec: ThemeSpec, active: Boolean, onSelect: () -> Unit) {
                             .weight(1f)
                             .height(22.dp)
                             .background(swatch, RoundedCornerShape(tokens.radii.sm))
-                            .edge(tokens.card, RoundedCornerShape(tokens.radii.sm))
+                            .edge(tokens.card, RoundedCornerShape(tokens.radii.sm)),
                     )
                 }
             }

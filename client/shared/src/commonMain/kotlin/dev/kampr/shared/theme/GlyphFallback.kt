@@ -95,8 +95,7 @@ private fun runOf(text: String, from: Int, gaps: GlyphGaps): Int {
     return at
 }
 
-private fun charCount(text: String, at: Int): Int =
-    if (text[at].isHighSurrogate() && at + 1 < text.length && text[at + 1].isLowSurrogate()) 2 else 1
+private fun charCount(text: String, at: Int): Int = if (text[at].isHighSurrogate() && at + 1 < text.length && text[at + 1].isLowSurrogate()) 2 else 1
 
 // An astral symbol is a surrogate pair, and half of one is not a codepoint any face has an opinion
 // about — every emoji this exists for lives above U+FFFF.

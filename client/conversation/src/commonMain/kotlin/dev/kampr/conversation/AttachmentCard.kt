@@ -19,10 +19,10 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.touchable

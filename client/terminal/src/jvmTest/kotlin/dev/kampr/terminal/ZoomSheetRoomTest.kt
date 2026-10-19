@@ -67,8 +67,7 @@ private class Measured(private val real: TerminalSurfaces = TerminalSurfaces()) 
     }
 
     @Composable
-    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) =
-        real.Conversation(pane, info, modifier)
+    override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = real.Conversation(pane, info, modifier)
 
     @Composable
     override fun Zoom(pane: PaneState, modifier: Modifier) = real.Zoom(pane, modifier)
@@ -77,7 +76,8 @@ private class Measured(private val real: TerminalSurfaces = TerminalSurfaces()) 
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val density = LocalDensity.current
         real.KeyRow(
-            pane, compact,
+            pane,
+            compact,
             modifier.onGloballyPositioned { keyRowTop = with(density) { it.positionInRoot().y.toDp() } },
         )
     }
@@ -102,40 +102,39 @@ class ZoomSheetRoomTest {
         forPhone(876, 393, landscape = true)
     }
 
-    private fun forPhone(width: Int, height: Int, landscape: Boolean) =
-        runDesktopComposeUiTest(width, height) {
-            val surfaces = Measured()
-            setContent {
-                CompositionLocalProvider(
-                    LocalTokens provides Phone.tokens(),
-                    LocalPaneIo provides RoomIo,
-                    LocalManage provides RoomManage,
-                    LocalSafeArea provides Phone.BARS,
-                ) {
-                    PaneScreenMobile(
-                        Phone.shell(), ROOM_INFO, PaneView.Terminal, surfaces, landscape, false,
-                        onBack = {}, onView = {}, modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
-            waitForIdle()
-            onNodeWithContentDescription("Zoom, currently", substring = true).performClick()
-            waitForIdle()
-
-            val top = assertNotNull(surfaces.headerBottom, "the pane header never measured itself")
-            val bottom = assertNotNull(surfaces.keyRowTop, "the key row never laid itself out")
-            val where = if (landscape) "landscape" else "portrait"
-            for ((what, node) in sheetControls()) {
-                node.performScrollTo()
-                waitForIdle()
-                val at = node.getUnclippedBoundsInRoot()
-                assertTrue(
-                    at.top >= top && at.bottom <= bottom,
-                    "in $where the sheet's $what sits at ${at.top}..${at.bottom}, outside the " +
-                        "$top..$bottom the pane screen leaves between the header and the key row",
+    private fun forPhone(width: Int, height: Int, landscape: Boolean) = runDesktopComposeUiTest(width, height) {
+        val surfaces = Measured()
+        setContent {
+            CompositionLocalProvider(
+                LocalTokens provides Phone.tokens(),
+                LocalPaneIo provides RoomIo,
+                LocalManage provides RoomManage,
+                LocalSafeArea provides Phone.BARS,
+            ) {
+                PaneScreenMobile(
+                    Phone.shell(), ROOM_INFO, PaneView.Terminal, surfaces, landscape, false,
+                    onBack = {}, onView = {}, modifier = Modifier.fillMaxSize(),
                 )
             }
         }
+        waitForIdle()
+        onNodeWithContentDescription("Zoom, currently", substring = true).performClick()
+        waitForIdle()
+
+        val top = assertNotNull(surfaces.headerBottom, "the pane header never measured itself")
+        val bottom = assertNotNull(surfaces.keyRowTop, "the key row never laid itself out")
+        val where = if (landscape) "landscape" else "portrait"
+        for ((what, node) in sheetControls()) {
+            node.performScrollTo()
+            waitForIdle()
+            val at = node.getUnclippedBoundsInRoot()
+            assertTrue(
+                at.top >= top && at.bottom <= bottom,
+                "in $where the sheet's $what sits at ${at.top}..${at.bottom}, outside the " +
+                    "$top..$bottom the pane screen leaves between the header and the key row",
+            )
+        }
+    }
 
     private fun ComposeUiTest.sheetControls(): List<Pair<String, SemanticsNodeInteraction>> = listOf(
         "first line" to onNodeWithText("pinch to adjust", substring = true),

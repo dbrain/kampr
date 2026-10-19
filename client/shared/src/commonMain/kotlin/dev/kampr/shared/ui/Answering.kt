@@ -23,7 +23,9 @@ data class Answering(val enabled: Boolean, val note: String?) {
 fun answering(status: ConnectionStatus, undelivered: Int): Answering = when {
     status !is ConnectionStatus.Live ->
         Answering(false, "not connected — this cannot leave the device yet")
+
     undelivered > 0 ->
         Answering(true, "that did not get through — try it again")
+
     else -> Answering.Ready
 }

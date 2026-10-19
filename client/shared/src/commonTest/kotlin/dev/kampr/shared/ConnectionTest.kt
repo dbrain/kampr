@@ -2,8 +2,8 @@ package dev.kampr.shared
 
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Backoff
-import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.net.Endpoint
+import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.util.formatLatency
 import dev.kampr.shared.util.parseIsoMillis
 import dev.kampr.shared.util.relativeTime

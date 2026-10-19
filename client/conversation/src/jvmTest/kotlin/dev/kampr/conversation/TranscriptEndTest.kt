@@ -30,9 +30,8 @@ private const val LAST_LINE = "That paragraph is the end of the newest thing the
 // A real answer is longer than a phone screen, which is the case every fixture here was missing:
 // RICH_CONVO ends on a two-line tool card, so a list that stopped at the *top* of its last item
 // still looked like it had stopped at the bottom.
-private fun tallAnswer(): String =
-    (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
-        "\n\n" + LAST_LINE
+private fun tallAnswer(): String = (1..40).joinToString("\n\n") { "Paragraph $it of an answer that runs well past one screen." } +
+    "\n\n" + LAST_LINE
 
 private const val OLDEST_LINE = "An older page of the same transcript, fetched after the open."
 
@@ -47,7 +46,7 @@ private fun paneWithATallLastTurn(more: Boolean = false): Pair<KamprStore, PaneS
                 Turn("u-1", "user", "2026-08-23T09:00:00.000Z", listOf(Block.Md(FIRST_LINE))),
                 Turn("a-1", "assistant", "2026-08-23T09:00:04.000Z", listOf(Block.Md(tallAnswer()))),
             ),
-        )
+        ),
     )
     return store to store.pane(PANE_ID)
 }

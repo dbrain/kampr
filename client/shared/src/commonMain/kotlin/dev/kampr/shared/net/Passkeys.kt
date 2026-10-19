@@ -54,7 +54,10 @@ class NoPasskeys : Passkeys {
     }
 }
 
-private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+private val json = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+}
 
 // A browser takes `{"publicKey": {…}}` and hands the inner object to `navigator.credentials`.
 // Credential Manager takes the inner object itself, so the unwrapping that happens inside the

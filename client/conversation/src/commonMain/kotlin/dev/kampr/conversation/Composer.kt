@@ -4,18 +4,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,12 +40,11 @@ import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
-import kotlinx.coroutines.delay
+import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
-import dev.kampr.shared.ui.LocalSafeArea
-import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.TOUCH
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
@@ -53,6 +52,7 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeTop
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
+import kotlinx.coroutines.delay
 
 // Android hangs a text selection handle 25 dp below the line it grips, and hangs the start handle
 // the same distance to the left of the character the selection begins at. They are windows of
@@ -254,7 +254,7 @@ fun Composer(
             .background(tokens.color.bar)
             .acceptsPastedFiles()
             .edgeTop()
-            .readingOrder(1f)
+            .readingOrder(1f),
     ) {
         // Beside the box only while the two say different things: a line the box is in step with
         // is already in it, or is about to be.
@@ -344,9 +344,13 @@ private fun HandoverLine(handover: Handover, agent: String?) {
     val tokens = Kampr.tokens
     val (words, tone) = when (handover) {
         Handover.Idle -> return
+
         is Handover.Going -> "sending ${handover.name}" to tokens.color.working
-        is Handover.Sent -> "${handover.name} is on ${agent ?: "the agent"}'s machine, and its path is typed in" to
-            tokens.color.done
+
+        is Handover.Sent ->
+            "${handover.name} is on ${agent ?: "the agent"}'s machine, and its path is typed in" to
+                tokens.color.done
+
         is Handover.Refused -> handover.reason to tokens.color.blocked
     }
     KText(

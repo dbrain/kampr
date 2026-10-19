@@ -23,8 +23,8 @@ import dev.kampr.shared.theme.AllThemes
 import dev.kampr.shared.theme.TerminalPalette
 import dev.kampr.shared.theme.terminalSkin
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.render.GridRenderer
 import dev.kampr.terminal.render.ModeSelector
@@ -59,8 +59,7 @@ private fun paneOf(vararg rows: List<Run>): PaneState {
 
 private fun terminalFamily(): FontFamily {
     val dir = File("../shared/src/commonMain/composeResources/font")
-    fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) =
-        Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
+    fun face(name: String, weight: FontWeight, style: FontStyle = FontStyle.Normal) = Font(name, File(dir, "$name.ttf").readBytes(), weight, style)
     return FontFamily(
         face("terminalmono_regular", FontWeight.W400),
         face("terminalmono_bold", FontWeight.W700),

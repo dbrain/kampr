@@ -32,8 +32,7 @@ class FleetSecretTest {
         fail("could not find $FIXTURE from ${File(".").absolutePath}")
     }
 
-    private fun argv(element: Any?): List<String> =
-        (element as JsonArray).map { (it as JsonPrimitive).content }
+    private fun argv(element: Any?): List<String> = (element as JsonArray).map { (it as JsonPrimitive).content }
 
     private fun section(name: String) = fixture[name] as JsonObject
 

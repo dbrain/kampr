@@ -41,7 +41,9 @@ class ToolRunTest {
     @Test
     fun aSingleTurnHoldingAWholeRunOfCallsIsStillARun() {
         val batched = Turn(
-            "b-1", "assistant", null,
+            "b-1",
+            "assistant",
+            null,
             (1..3).flatMap { listOf(Block.Tool("Bash", "cargo test $it", 3, "done"), Block.Code("bash", "cargo test $it")) },
         )
         val rows = transcriptRows(listOf(batched), "")
@@ -59,15 +61,19 @@ class ToolRunTest {
             Turn("x", "assistant", null, listOf(Block.Diff("a.rs", "@@\n-a\n+b\n"))),
             proseTurn("x", "do it again", role = "user"),
             Turn(
-                "x", "assistant", null,
+                "x",
+                "assistant",
+                null,
                 listOf(Block.Tool("Bash", "five", 1, "done"), Block.Md("and here is why I ran that")),
             ),
         )
         for (ender in enders) {
             val turns = listOf(
-                bashTurn("t-1", "one", "done", 1), bashTurn("t-2", "two", "done", 1),
+                bashTurn("t-1", "one", "done", 1),
+                bashTurn("t-2", "two", "done", 1),
                 ender,
-                bashTurn("t-3", "three", "done", 1), bashTurn("t-4", "four", "done", 1),
+                bashTurn("t-3", "three", "done", 1),
+                bashTurn("t-4", "four", "done", 1),
             )
             assertTrue(
                 transcriptRows(turns, "").none { it is TranscriptRow.Run },

@@ -39,8 +39,7 @@ private fun rawDataModules(version: Int): Int {
     return result
 }
 
-private fun dataCapacityBits(version: Int): Int =
-    rawDataModules(version) / 8 * 8 - ECC_PER_BLOCK[version] * BLOCKS[version] * 8
+private fun dataCapacityBits(version: Int): Int = rawDataModules(version) / 8 * 8 - ECC_PER_BLOCK[version] * BLOCKS[version] * 8
 
 private fun countBits(version: Int): Int = if (version <= 9) 8 else 16
 
@@ -274,7 +273,11 @@ private class QrBuilder(private val version: Int, private val data: ByteArray) {
         for (i in 0 until size) {
             if (cell(i) == colour) {
                 run++
-                if (run == 5) result += 3 else if (run > 5) result++
+                if (run == 5) {
+                    result += 3
+                } else if (run > 5) {
+                    result++
+                }
             } else {
                 pushRun(run, history)
                 if (!colour) result += finderLike(history) * 40

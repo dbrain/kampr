@@ -36,9 +36,8 @@ private fun ComposeUiTest.rows(vararg initial: Pair<String, String>): MutableLis
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.nameField(index: Int): String =
-    onAllNodesWithContentDescription(NAME)[index].fetchSemanticsNode()
-        .config[SemanticsProperties.EditableText].text
+private fun ComposeUiTest.nameField(index: Int): String = onAllNodesWithContentDescription(NAME)[index].fetchSemanticsNode()
+    .config[SemanticsProperties.EditableText].text
 
 // A field handed a TextFieldValue built fresh on every recomposition is handed a caret at offset
 // zero with it, so every character lands in front of the one before it and PATH is typed HTAP.

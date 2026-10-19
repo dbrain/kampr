@@ -41,21 +41,29 @@ fun historyEdge(surface: ReviewSurface): HistoryEdge = when {
     // into "this pane keeps no history", which is the node's one careful admission rendered as its
     // opposite. `capped` is what separates the two: a pane that never had a ring is not capped.
     surface.historyRows == 0 && surface.capped -> HistoryEdge.Superseded
+
     surface.historyRows == 0 -> HistoryEdge.None
+
     !surface.complete -> HistoryEdge.Discarded
+
     surface.capped -> HistoryEdge.Clipped
+
     else -> HistoryEdge.Whole
 }
 
 fun historyEdgeSpoken(surface: ReviewSurface): String = when (historyEdge(surface)) {
     HistoryEdge.None -> "Top of the grid. This pane keeps no history."
+
     HistoryEdge.Superseded ->
         "Top of the grid. The program on screen keeps its own scrollback, so Kampr holds none for " +
             "this pane while it is running."
+
     HistoryEdge.Whole -> "Top of the history. The record starts here."
+
     HistoryEdge.Clipped ->
         "Top of the history. Older output was never captured — herdr hands back at most 1000 " +
             "lines and cannot be asked for more."
+
     HistoryEdge.Discarded ->
         "Top of the history. ${surface.fromTop} rows above this were discarded when output " +
             "outran the poll, and cannot be fetched back."
@@ -65,12 +73,15 @@ fun historyEdgeSpoken(surface: ReviewSurface): String = when (historyEdge(surfac
 // only thing worth saying about intact history is nothing.
 fun historyWarning(surface: ReviewSurface): String? = when (historyEdge(surface)) {
     HistoryEdge.None, HistoryEdge.Whole -> null
+
     HistoryEdge.Superseded ->
         "the program on screen keeps its own scrollback — Kampr holds none for this pane while it " +
             "is running, and what ran before it is no longer this pane's history"
+
     HistoryEdge.Clipped ->
         "history is clipped — output older than this scrolled away before Kampr was watching, " +
             "and herdr caps a read at 1000 lines"
+
     HistoryEdge.Discarded ->
         "history is broken — ${surface.fromTop} rows were discarded here because output outran " +
             "the poll, and nothing can fetch them back"
@@ -87,5 +98,4 @@ fun historyEdgeLabel(surface: ReviewSurface): String? = when (historyEdge(surfac
 
 private val SPACES = Regex("\\s+")
 
-fun reviewWords(text: String): List<String> =
-    text.split(SPACES).filter { it.isNotBlank() }
+fun reviewWords(text: String): List<String> = text.split(SPACES).filter { it.isNotBlank() }

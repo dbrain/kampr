@@ -1,11 +1,11 @@
 package dev.kampr.terminal.input
 
-import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
@@ -68,6 +68,7 @@ internal class Landing(val rows: Int, val ramp: Double?)
 
 internal fun ScrollKeys.land(count: Int, reversed: Boolean, ramp: Double? = null): Landing = when (this) {
     ScrollKeys.CursorKeys -> Landing(count, null)
+
     ScrollKeys.Wheel -> {
         var rows = 0
         // Summed in doubles as Claude's JavaScript sums them: the eleventh step is 3.999… and

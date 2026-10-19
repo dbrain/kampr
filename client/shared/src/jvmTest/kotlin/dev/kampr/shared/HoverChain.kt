@@ -11,19 +11,17 @@ import androidx.compose.ui.semantics.getOrNull
 // took the decision off it with `overrideDescendants`, in which case the highest one that did.
 internal val HOVER = Regex("""PointerHoverIconModifierElement\(icon=(.+), overrideDescendants=(\w+)\)""")
 
-internal fun SemanticsNode.hoverChain(): List<Pair<String, Boolean>> =
-    layoutInfo.getModifierInfo()
-        .mapNotNull { HOVER.find(it.modifier.toString()) }
-        .map { it.groupValues[1] to it.groupValues[2].toBoolean() } +
-        children.flatMap { it.hoverChain() }
+internal fun SemanticsNode.hoverChain(): List<Pair<String, Boolean>> = layoutInfo.getModifierInfo()
+    .mapNotNull { HOVER.find(it.modifier.toString()) }
+    .map { it.groupValues[1] to it.groupValues[2].toBoolean() } +
+    children.flatMap { it.hoverChain() }
 
 internal fun SemanticsNode.cursor(): String? {
     val chain = hoverChain()
     return chain.firstOrNull { it.second }?.first ?: chain.lastOrNull()?.first
 }
 
-internal fun SemanticsNode.paintsText(): Boolean =
-    children.any { it.config.getOrNull(SemanticsProperties.Text) != null || it.paintsText() }
+internal fun SemanticsNode.paintsText(): Boolean = children.any { it.config.getOrNull(SemanticsProperties.Text) != null || it.paintsText() }
 
 internal val HAND = PointerIcon.Hand.toString()
 internal val TEXT = PointerIcon.Text.toString()
@@ -40,12 +38,10 @@ internal val ARROW = PointerIcon.Default.toString()
 // Read off the text node itself and never off an ancestor: a control wears `Modifier.pressable`,
 // whose `overrideDescendants` decides the *cursor* over the whole button and says nothing at all
 // about whether the words inside it are selectable.
-internal fun SemanticsNode.selectsItsOwnText(): Boolean =
-    layoutInfo.getModifierInfo().any { info ->
-        HOVER.find(info.modifier.toString())?.groupValues?.get(1) == TEXT
-    }
+internal fun SemanticsNode.selectsItsOwnText(): Boolean = layoutInfo.getModifierInfo().any { info ->
+    HOVER.find(info.modifier.toString())?.groupValues?.get(1) == TEXT
+}
 
 // Every run of painted text at or under this node, with the string it paints.
-internal fun SemanticsNode.textRuns(): List<Pair<String, SemanticsNode>> =
-    (config.getOrNull(SemanticsProperties.Text)?.map { it.text to this } ?: emptyList()) +
-        children.flatMap { it.textRuns() }
+internal fun SemanticsNode.textRuns(): List<Pair<String, SemanticsNode>> = (config.getOrNull(SemanticsProperties.Text)?.map { it.text to this } ?: emptyList()) +
+    children.flatMap { it.textRuns() }

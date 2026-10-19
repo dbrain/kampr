@@ -31,9 +31,11 @@ data class MenuAnchor(val x: Dp, val y: Dp)
 interface ManageIo {
     val enabled: Boolean
     fun openNew(paneId: String?)
+
     // The in-session sheet: the pane, its tab and its workspace, and the things that only mean
     // something while you are looking at the pane.
     fun openActions(paneId: String)
+
     // The list menu, on a surface where the pane is a row rather than a screen. Defaulted onto
     // `openActions` because `ManageIo` is implemented by test doubles in four modules and two of
     // them are not this one's to edit; `AppManage` is the only implementor that answers it.
@@ -167,6 +169,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
     }
     when (val sheet = state.sheet) {
         null -> Unit
+
         is Sheet.New -> {
             val node = herd.nodes.firstOrNull { it.id == sheet.nodeId } ?: return
             NewSheet(
@@ -192,6 +195,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 agentArgs = state.agentArgs,
             )
         }
+
         is Sheet.Actions -> {
             val pane = herd.panes.firstOrNull { it.id == sheet.paneId } ?: return
             PaneActionsSheet(
@@ -207,6 +211,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 tools = { surfaces.Tools(pane.id, state::closeSheet) },
             )
         }
+
         is Sheet.Menu -> {
             val pane = herd.panes.firstOrNull { it.id == sheet.paneId } ?: return
             PaneMenu(

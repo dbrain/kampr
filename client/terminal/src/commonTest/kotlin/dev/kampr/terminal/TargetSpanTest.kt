@@ -3,8 +3,8 @@ package dev.kampr.terminal
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.wire.Cursor
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.render.GridPoint
 import dev.kampr.terminal.render.LogicalText
@@ -15,11 +15,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-private fun rowsOf(cols: Int, vararg lines: String): SurfaceRows =
-    SurfaceRows(gridOf(cols, lines.size, lines.mapIndexed { row, text -> RowDiff(row, listOf(Run(0, text))) }))
+private fun rowsOf(cols: Int, vararg lines: String): SurfaceRows = SurfaceRows(gridOf(cols, lines.size, lines.mapIndexed { row, text -> RowDiff(row, listOf(Run(0, text))) }))
 
-private fun runRow(cols: Int, vararg runs: Run): SurfaceRows =
-    SurfaceRows(gridOf(cols, 1, listOf(RowDiff(0, runs.toList()))))
+private fun runRow(cols: Int, vararg runs: Run): SurfaceRows = SurfaceRows(gridOf(cols, 1, listOf(RowDiff(0, runs.toList()))))
 
 private fun gridOf(cols: Int, rows: Int, data: List<RowDiff>): PaneState {
     val pane = PaneState("n/w1:p1", StyleTable())

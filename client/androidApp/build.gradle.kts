@@ -105,8 +105,7 @@ val versionProps = Properties().apply {
 
 // Release signing never lives in the repo: a Gradle property (~/.gradle/gradle.properties)
 // wins, an environment variable is the CI fallback.
-fun configValue(property: String, environment: String): Provider<String> =
-    providers.gradleProperty(property).orElse(providers.environmentVariable(environment))
+fun configValue(property: String, environment: String): Provider<String> = providers.gradleProperty(property).orElse(providers.environmentVariable(environment))
 
 val releaseStoreFile = configValue("kamprReleaseStoreFile", "KAMPR_RELEASE_STORE_FILE")
     .map { rootProject.file(it) }

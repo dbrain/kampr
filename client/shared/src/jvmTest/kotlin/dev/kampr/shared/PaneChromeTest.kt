@@ -66,8 +66,7 @@ private class ChromeProbe : PaneSurfaces {
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 
     @Composable
-    override fun Zoom(pane: PaneState, modifier: Modifier) =
-        Box(modifier.size(40.dp).named(ZOOM_PROBE))
+    override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(40.dp).named(ZOOM_PROBE))
 }
 
 private fun tokens() = themeOf("soft").on(Ground.Dark).let { spec ->

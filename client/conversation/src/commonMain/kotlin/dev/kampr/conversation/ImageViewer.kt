@@ -26,11 +26,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.GlyphTarget
-import androidx.compose.ui.semantics.Role
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalSafeArea
@@ -157,8 +157,12 @@ fun ImageViewer(
                     detail?.let { KText(it, tokens.type.micro, tokens.color.mute) }
                 }
                 GlyphTarget(
-                    ConversationIcons.close, "Close $headline", tokens.color.mute,
-                    onClose, target = LANDSCAPE_TOUCH, glyph = 14.dp,
+                    ConversationIcons.close,
+                    "Close $headline",
+                    tokens.color.mute,
+                    onClose,
+                    target = LANDSCAPE_TOUCH,
+                    glyph = 14.dp,
                 )
             }
             Column(

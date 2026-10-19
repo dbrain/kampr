@@ -4,10 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.PaneGone
@@ -31,7 +32,6 @@ import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
-import androidx.compose.ui.unit.Density
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,8 +64,11 @@ private class KeyRowSpy : PaneSurfaces {
         private set
 
     @Composable override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = Box(modifier)
+
     @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(40.dp))
+
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         keyRow = true
         Box(modifier)
@@ -184,8 +187,12 @@ class PaneClosedTest {
     fun theClosedHeaderIsAnArtboard() {
         for ((name, gone) in listOf("pane-closed" to PaneGone.Shell, "pane-node-gone" to PaneGone.Node)) {
             render(
-                360.dp, 800.dp, themeOf("soft"), TypeScale.Phone,
-                File("build/artboards/$name.png"), density = Density(3f),
+                360.dp,
+                800.dp,
+                themeOf("soft"),
+                TypeScale.Phone,
+                File("build/artboards/$name.png"),
+                density = Density(3f),
             ) {
                 Bars {
                     CompositionLocalProvider(LocalManage provides AllowManage) {

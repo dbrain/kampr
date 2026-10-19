@@ -118,7 +118,8 @@ class SidebarRoomTest {
             if (width < LANDSCAPE_TOUCH || height < LANDSCAPE_TOUCH) squished += "$label ${width}x$height"
         }
         assertEquals(
-            emptyList(), squished,
+            emptyList(),
+            squished,
             "the sidebar header does not fit $SIDEBAR_WIDTH and these controls absorbed it: $squished",
         )
     }

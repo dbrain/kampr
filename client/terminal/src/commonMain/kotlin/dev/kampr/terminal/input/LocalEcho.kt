@@ -51,8 +51,7 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
 
     fun col(i: Int): Int = cols[firstShown + i]
 
-    fun caret(actual: Cursor): Cursor =
-        if (shown == 0) actual else Cursor(cols[pending - 1] + 1, rows[pending - 1], actual.visible)
+    fun caret(actual: Cursor): Cursor = if (shown == 0) actual else Cursor(cols[pending - 1] + 1, rows[pending - 1], actual.visible)
 
     fun typed(text: String, caret: Cursor, width: Int) {
         if (text.isEmpty()) return

@@ -10,13 +10,13 @@ import dev.kampr.shared.net.decodeQrLuminance
 import dev.kampr.shared.net.pairingScanAvailable
 import dev.kampr.shared.util.joinLink
 import dev.kampr.shared.util.qrEncode
-import java.net.HttpURLConnection
-import java.net.URL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.net.HttpURLConnection
+import java.net.URL
 
 // The three things a phone can answer and a host cannot: whether there is an authenticator to
 // ask, whether this build declares the app half of its asset links, and what it is signed with.

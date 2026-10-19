@@ -12,8 +12,7 @@ import kotlin.test.assertNull
 private const val BEGAN = "2026-08-20T09:00:00Z"
 private val AT = requireNotNull(parseIsoMillis(BEGAN))
 
-private fun tool(id: String, name: String, state: String, at: String? = BEGAN) =
-    Turn(id, "assistant", at, listOf(Block.Tool(name, "something", null, state)))
+private fun tool(id: String, name: String, state: String, at: String? = BEGAN) = Turn(id, "assistant", at, listOf(Block.Tool(name, "something", null, state)))
 
 class WorkingStripTest {
     // Named by what the transcript says is happening, never by a word invented to fill the line.

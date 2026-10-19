@@ -23,50 +23,50 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.layout.Measurable
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
+import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.PickedFile
 import dev.kampr.shared.platform.filePickAvailable
-import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LabelText
-import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.ui.LocalConnectionStatus
-import dev.kampr.shared.ui.answering
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
-import dev.kampr.shared.ui.GlyphTarget
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.answering
 import dev.kampr.shared.ui.asHeading
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
@@ -76,11 +76,11 @@ import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.talks
-import kotlin.io.encoding.Base64
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.io.encoding.Base64
 
 // Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
 // on a long answer opened at the start of that answer — which read as "somewhere above the
@@ -294,8 +294,11 @@ fun ConversationView(
     LaunchedEffect(aimAt) {
         val target = aimAt ?: return@LaunchedEffect
         following = false
-        if (stillness) listState.scrollToItem(target + leading)
-        else listState.animateScrollToItem(target + leading)
+        if (stillness) {
+            listState.scrollToItem(target + leading)
+        } else {
+            listState.animateScrollToItem(target + leading)
+        }
     }
 
     // The walk to a hit older than anything this client holds: the same `convo.load` paging the
@@ -406,6 +409,7 @@ fun ConversationView(
                 )
                 return
             }
+
             is AttachmentState.Text -> {
                 FileViewer(
                     att = att,
@@ -418,6 +422,7 @@ fun ConversationView(
                 )
                 return
             }
+
             // Dropped out of the held set while it was open. Nothing reaches this today — the only
             // thing that evicts is another picture being opened, and none can be while this one is
             // — but the alternative to saying so is a blank pane with no way off it. Cleared in an
@@ -490,8 +495,17 @@ fun ConversationView(
                     older = whole == null && pageable,
                     reaching = reaching,
                     listing = listing,
-                    onQuery = { query = it; standingOn = null },
-                    onSearching = { searching = it; if (!it) { query = ""; listing = false } },
+                    onQuery = {
+                        query = it
+                        standingOn = null
+                    },
+                    onSearching = {
+                        searching = it
+                        if (!it) {
+                            query = ""
+                            listing = false
+                        }
+                    },
                     onStep = { step ->
                         if (results.isNotEmpty()) {
                             val from = if (focus >= 0) focus else results.lastIndex
@@ -509,7 +523,7 @@ fun ConversationView(
             // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
             // list only holds the items it has composed, so a drag reaches as far as the reader has
             // scrolled and no further — the alternative is laying an unbounded transcript out at once.
-            }, transcript = {
+        }, transcript = {
             // The matches instead of the transcript, while the reader asked for that. Outside the
             // selection container and outside the list below it: it is a list of controls, and a
             // drag across it is a scroll rather than a copy.
@@ -522,11 +536,14 @@ fun ConversationView(
                     now = now,
                     whole = whole != null,
                     found = whole?.total,
-                    onPick = { at -> standingOn = results[at].turn; listing = false },
+                    onPick = { at ->
+                        standingOn = results[at].turn
+                        listing = false
+                    },
                 )
                 return@ConversationColumn
             }
-        SelectionContainer(Modifier.fillMaxSize()) {
+            SelectionContainer(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
                     if (turns.isEmpty()) {
                         KText(
@@ -550,7 +567,10 @@ fun ConversationView(
                             )
                             .onSizeChanged { viewport = it.height },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                            start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp,
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = 12.dp,
+                            bottom = 16.dp,
                         ),
                         // None. A block is one box drawn a piece at a time, and a gap between the
                         // pieces is a gap in the box — the foot of each block pays the space that
@@ -632,7 +652,6 @@ fun ConversationView(
                     )
                 }
             }
-
         }, composer = {
             val answer = answering(LocalConnectionStatus.current, pane.undelivered)
             val type = { keys: List<String> -> keys.forEach { io.send(ClientMsg.InputText(pane.id, it)) } }
@@ -651,7 +670,9 @@ fun ConversationView(
                 onKeys = type,
                 draft = pane.draft,
                 onDraft = { pane.draft = it },
-                onAttach = if (io.readOnly || !filePickAvailable) null else {
+                onAttach = if (io.readOnly || !filePickAvailable) {
+                    null
+                } else {
                     {
                         scope.launch {
                             val picked = pickFile() ?: return@launch
@@ -694,17 +715,16 @@ internal fun ConversationColumn(
     Layout(contents = listOf(composer, bar, transcript), modifier = modifier) { (composerM, barM, transcriptM), constraints ->
         val width = constraints.maxWidth
         val room = constraints.maxHeight
-        fun slot(measurables: List<Measurable>, height: Int, exact: Boolean = false) =
-            measurables.map {
-                it.measure(
-                    Constraints(
-                        minWidth = width,
-                        maxWidth = width,
-                        minHeight = if (exact) height else 0,
-                        maxHeight = height,
-                    )
-                )
-            }
+        fun slot(measurables: List<Measurable>, height: Int, exact: Boolean = false) = measurables.map {
+            it.measure(
+                Constraints(
+                    minWidth = width,
+                    maxWidth = width,
+                    minHeight = if (exact) height else 0,
+                    maxHeight = height,
+                ),
+            )
+        }
 
         val composed = slot(composerM, room)
         val afterComposer = (room - composed.sumOf { it.height }).coerceAtLeast(0)
@@ -714,9 +734,18 @@ internal fun ConversationColumn(
 
         layout(width, room) {
             var y = 0
-            barred.forEach { it.place(0, y); y += it.height }
-            body.forEach { it.place(0, y); y += it.height }
-            composed.forEach { it.place(0, y); y += it.height }
+            barred.forEach {
+                it.place(0, y)
+                y += it.height
+            }
+            body.forEach {
+                it.place(0, y)
+                y += it.height
+            }
+            composed.forEach {
+                it.place(0, y)
+                y += it.height
+            }
         }
     }
 }
@@ -739,11 +768,9 @@ internal const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
 // arrived — quiet everywhere else by design — and an error the operator has not read is not
 // something to sweep away with an action that has nothing to do with it. The next handover clears
 // it, which is the press that was going to fix it anyway.
-internal fun handoverAfterSend(handover: Handover): Handover =
-    if (handover is Handover.Refused) handover else Handover.Idle
+internal fun handoverAfterSend(handover: Handover): Handover = if (handover is Handover.Refused) handover else Handover.Idle
 
-internal fun handoverAfter(handover: Handover, refusal: String?): Handover =
-    if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
+internal fun handoverAfter(handover: Handover, refusal: String?): Handover = if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
 
 internal fun handoverOf(pane: PaneState, io: PaneIo, picked: PickedFile): Handover {
     val name = picked.name?.takeIf { it.isNotBlank() } ?: "the file"
@@ -820,13 +847,21 @@ private fun TranscriptBar(
             // the rotated bar width rather than height, which is the axis that bar is short of.
             if (adrift) {
                 GlyphTarget(
-                    ConversationIcons.toEnd, "Go to the end of the transcript", tokens.color.accent,
-                    onEnd, target = LANDSCAPE_TOUCH, glyph = 15.dp,
+                    ConversationIcons.toEnd,
+                    "Go to the end of the transcript",
+                    tokens.color.accent,
+                    onEnd,
+                    target = LANDSCAPE_TOUCH,
+                    glyph = 15.dp,
                 )
             }
             GlyphTarget(
-                ConversationIcons.search, "Search the transcript", tokens.color.dim,
-                { onSearching(true) }, target = LANDSCAPE_TOUCH, glyph = 15.dp,
+                ConversationIcons.search,
+                "Search the transcript",
+                tokens.color.dim,
+                { onSearching(true) },
+                target = LANDSCAPE_TOUCH,
+                glyph = 15.dp,
             )
             return@Row
         }
@@ -849,11 +884,16 @@ private fun TranscriptBar(
             Modifier.announce(
                 when {
                     query.length < 2 -> "Type to search"
+
                     hits == 0 -> if (older) "No matches in the turns loaded so far" else "No matches"
+
                     reaching -> "Match ${focus + 1} of $hits, loading the turns it is in"
+
                     capped != null -> "Match ${focus + 1} of $hits listed, $capped in the transcript"
-                    else -> "Match ${focus + 1} of $hits" +
-                        if (older) " in the turns loaded so far" else ""
+
+                    else ->
+                        "Match ${focus + 1} of $hits" +
+                            if (older) " in the turns loaded so far" else ""
                 },
             ),
         )
@@ -865,20 +905,34 @@ private fun TranscriptBar(
                 if (listing) ConversationIcons.speech else ConversationIcons.file,
                 if (listing) "Back to the transcript" else "List the matches",
                 if (listing) tokens.color.accent else tokens.color.dim,
-                { onListing(!listing) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+                { onListing(!listing) },
+                target = LANDSCAPE_TOUCH,
+                glyph = 13.dp,
             )
         }
         GlyphTarget(
-            ConversationIcons.up, "Previous match", tokens.color.dim,
-            { onStep(-1) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+            ConversationIcons.up,
+            "Previous match",
+            tokens.color.dim,
+            { onStep(-1) },
+            target = LANDSCAPE_TOUCH,
+            glyph = 13.dp,
         )
         GlyphTarget(
-            ConversationIcons.down, "Next match", tokens.color.dim,
-            { onStep(1) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+            ConversationIcons.down,
+            "Next match",
+            tokens.color.dim,
+            { onStep(1) },
+            target = LANDSCAPE_TOUCH,
+            glyph = 13.dp,
         )
         GlyphTarget(
-            ConversationIcons.close, "Close search", tokens.color.mute,
-            { onSearching(false) }, target = LANDSCAPE_TOUCH, glyph = 13.dp,
+            ConversationIcons.close,
+            "Close search",
+            tokens.color.mute,
+            { onSearching(false) },
+            target = LANDSCAPE_TOUCH,
+            glyph = 13.dp,
         )
     }
 }
@@ -897,7 +951,10 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
         if (value.text.isEmpty()) KText("search the transcript", tokens.type.caption, tokens.color.mute)
         BasicTextField(
             value = value,
-            onValueChange = { value = it; onQuery(it.text) },
+            onValueChange = {
+                value = it
+                onQuery(it.text)
+            },
             modifier = Modifier.fillMaxWidth().named("Search the transcript"),
             textStyle = tokens.type.caption.copy(color = tokens.color.text),
             cursorBrush = SolidColor(tokens.color.accent),
@@ -935,7 +992,9 @@ private fun AbsentConversation(info: PaneInfo, modifier: Modifier, onTerminal: (
                 )
                 Box(Modifier.height(2.dp))
                 QuietAction(
-                    "Open the terminal view", onTerminal, Modifier.fillMaxWidth(),
+                    "Open the terminal view",
+                    onTerminal,
+                    Modifier.fillMaxWidth(),
                     label = "Open the terminal view of this pane instead",
                 )
             }

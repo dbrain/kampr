@@ -22,8 +22,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
-import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.QuietAction
@@ -31,8 +31,8 @@ import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
-import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.gestureAction
+import dev.kampr.shared.ui.modal
 import dev.kampr.shared.ui.touchable
 import dev.kampr.terminal.guard.HeldSubmit
 
@@ -108,11 +108,17 @@ fun ConfirmSheet(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     QuietAction(
-                        "Back to edit  n", onEdit, Modifier.weight(1f), vertical = 13.dp,
+                        "Back to edit  n",
+                        onEdit,
+                        Modifier.weight(1f),
+                        vertical = 13.dp,
                         label = "Back to edit — do not run it",
                     )
                     PrimaryAction(
-                        "Run it  y", onRun, Modifier.weight(1f), vertical = 13.dp,
+                        "Run it  y",
+                        onRun,
+                        Modifier.weight(1f),
+                        vertical = 13.dp,
                         label = "Run ${held.command}",
                     )
                 }

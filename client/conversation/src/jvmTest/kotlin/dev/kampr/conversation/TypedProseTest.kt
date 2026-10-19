@@ -66,7 +66,9 @@ class TypedProseTest {
             Screen(
                 paneSaying(
                     Turn(
-                        "u-1", "user", "2026-08-24T09:00:00.000Z",
+                        "u-1",
+                        "user",
+                        "2026-08-24T09:00:00.000Z",
                         listOf(Block.Md("run this:\n\n```sh\nkampr doctor\n```\n\n- and read #331\n")),
                     ),
                 ),

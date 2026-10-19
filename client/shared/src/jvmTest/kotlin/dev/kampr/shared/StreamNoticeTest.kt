@@ -26,8 +26,8 @@ import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.PaneInfo
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream

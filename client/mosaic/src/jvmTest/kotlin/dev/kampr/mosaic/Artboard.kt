@@ -32,8 +32,8 @@ import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
-import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.RowDiff
+import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Style
 import kotlinx.coroutines.CoroutineScope
@@ -57,24 +57,34 @@ private fun family(id: FamilyId): FontFamily {
     fun face(name: String, weight: FontWeight) = Font(name, File(dir, "$name.ttf").readBytes(), weight)
     return when (id) {
         FamilyId.Manrope -> FontFamily(
-            face("manrope_400", FontWeight.W400), face("manrope_500", FontWeight.W500),
-            face("manrope_600", FontWeight.W600), face("manrope_700", FontWeight.W700),
+            face("manrope_400", FontWeight.W400),
+            face("manrope_500", FontWeight.W500),
+            face("manrope_600", FontWeight.W600),
+            face("manrope_700", FontWeight.W700),
             face("manrope_800", FontWeight.W800),
         )
+
         FamilyId.IbmPlexMono -> FontFamily(
-            face("ibmplexmono_400", FontWeight.W400), face("ibmplexmono_500", FontWeight.W500),
+            face("ibmplexmono_400", FontWeight.W400),
+            face("ibmplexmono_500", FontWeight.W500),
             face("ibmplexmono_600", FontWeight.W600),
         )
+
         FamilyId.JetBrainsMono -> FontFamily(
-            face("jetbrainsmono_400", FontWeight.W400), face("jetbrainsmono_500", FontWeight.W500),
+            face("jetbrainsmono_400", FontWeight.W400),
+            face("jetbrainsmono_500", FontWeight.W500),
             face("jetbrainsmono_700", FontWeight.W700),
         )
+
         FamilyId.InstrumentSans -> FontFamily(
-            face("instrumentsans_400", FontWeight.W400), face("instrumentsans_500", FontWeight.W500),
+            face("instrumentsans_400", FontWeight.W400),
+            face("instrumentsans_500", FontWeight.W500),
             face("instrumentsans_600", FontWeight.W600),
         )
+
         FamilyId.Archivo -> FontFamily(
-            face("archivo_500", FontWeight.W500), face("archivo_700", FontWeight.W700),
+            face("archivo_500", FontWeight.W500),
+            face("archivo_700", FontWeight.W700),
             face("archivo_900", FontWeight.W900),
         )
     }
@@ -143,8 +153,13 @@ fun herdMessage(sunOnline: Boolean = true): ServerMsg.Herd = ServerMsg.Herd(
         NodeInfo(HUB, "comingclean", "local", true, 0.4, "0.8.2", "0.1.0"),
         NodeInfo(AGENTS, "comingclean/agents", "local", true, 0.6, "0.8.2", "0.1.0"),
         NodeInfo(
-            SUN, "sungrow-pi", "peer", sunOnline,
-            if (sunOnline) 208.0 else null, "0.8.2", "0.1.0",
+            SUN,
+            "sungrow-pi",
+            "peer",
+            sunOnline,
+            if (sunOnline) 208.0 else null,
+            "0.8.2",
+            "0.1.0",
             detail = if (sunOnline) null else "sungrow-pi is not connected: connection reset by peer",
         ),
         NodeInfo(NAS, "nas", "peer", true, 6.0, "0.8.2", "0.1.0"),

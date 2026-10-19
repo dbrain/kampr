@@ -18,9 +18,12 @@ fun HandoverLine(handover: Handover, to: String? = null, modifier: Modifier = Mo
     val tokens = Kampr.tokens
     val (words, tone) = when (handover) {
         Handover.Idle -> return
+
         is Handover.Going -> "sending ${handover.name}" to tokens.color.working
+
         is Handover.Sent ->
             "${handover.name} is on ${to ?: "the pane"}'s machine, and its path is typed in" to tokens.color.done
+
         is Handover.Refused -> handover.reason to tokens.color.blocked
     }
     KText(

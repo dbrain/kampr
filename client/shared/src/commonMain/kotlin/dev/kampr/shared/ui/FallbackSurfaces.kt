@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -74,6 +74,7 @@ private fun BlockView(block: Block) {
     val tokens = Kampr.tokens
     when (block) {
         is Block.Md -> KText(block.text, tokens.type.body, tokens.color.text, maxLines = 40)
+
         is Block.Code -> Surface(
             Modifier.fillMaxWidth(),
             background = tokens.color.surface2,
@@ -97,6 +98,7 @@ private fun BlockView(block: Block) {
                 )
             }
         }
+
         is Block.Tool -> Surface(
             Modifier.fillMaxWidth(),
             radius = tokens.radii.md,
@@ -117,6 +119,7 @@ private fun BlockView(block: Block) {
                 IconGlyph(KamprIcons.chevronRight, 12.dp, tokens.color.mute)
             }
         }
+
         is Block.Diff -> Surface(
             Modifier.fillMaxWidth(),
             background = tokens.color.surface2,
@@ -130,10 +133,11 @@ private fun BlockView(block: Block) {
                 maxLines = 24,
             )
         }
+
         // The fallback surface has no way to open one, and the tool card above it already says
         // an agent was launched.
         is Block.Sub -> Unit
+
         is Block.Unknown -> Unit
     }
 }
-

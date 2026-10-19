@@ -62,7 +62,7 @@ class FingerScrollPacingTest {
         var asked = 0
         var answered = 0
         for (t in 1..ms + 600) {
-            if (t <= ms && t % 8 == 0 || t == ms) {
+            if ((t <= ms && t % 8 == 0) || t == ms) {
                 val want = rows * t / ms
                 if (want > asked) drag(pump, want - asked)
                 asked = want

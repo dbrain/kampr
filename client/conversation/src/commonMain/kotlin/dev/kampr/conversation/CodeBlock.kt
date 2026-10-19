@@ -24,9 +24,9 @@ import dev.kampr.conversation.md.markUrls
 import dev.kampr.conversation.syntax.langSpec
 import dev.kampr.conversation.syntax.scan
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.Surface
+import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.named
 
 @Composable

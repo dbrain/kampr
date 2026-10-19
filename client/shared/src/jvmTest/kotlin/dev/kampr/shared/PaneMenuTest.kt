@@ -70,7 +70,11 @@ private fun InSession(sent: MutableList<ManageOp>) {
     CompositionLocalProvider(LocalTokens provides phoneTokens()) {
         Box(Modifier.fillMaxSize()) {
             PaneActionsSheet(
-                Breakpoint.Portrait, LISTED, null, { sent += it }, {},
+                Breakpoint.Portrait,
+                LISTED,
+                null,
+                { sent += it },
+                {},
                 panes = listOf(LISTED, SIBLING),
             )
         }

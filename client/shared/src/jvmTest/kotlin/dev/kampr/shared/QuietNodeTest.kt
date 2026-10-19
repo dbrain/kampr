@@ -116,8 +116,7 @@ private fun ComposeUiTest.phone(state: AppState) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.strips(words: String): Int =
-    onAllNodesWithContentDescription(words, substring = true).fetchSemanticsNodes().size
+private fun ComposeUiTest.strips(words: String): Int = onAllNodesWithContentDescription(words, substring = true).fetchSemanticsNodes().size
 
 // The operator's rule, verbatim: "i just don't want to hear about something not relevant to the
 // node im on loudly on mobile, if the thing im using disconnects thats a different thing."
