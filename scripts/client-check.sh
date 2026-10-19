@@ -12,6 +12,11 @@ cd "$(dirname "$0")/../client"
 # The QR is decoded by an independent decoder rather than asserted against the bitmap that
 # produced it. Without zbar the test skips, and this makes that skip a failure.
 export KAMPR_QR_DECODE=1
+# A workstation fixes what ktlint can fix before checking; CI only checks, so a push that skipped
+# this still fails rather than being formatted on a runner nobody reads.
+if [ -z "${CI:-}" ]; then
+  env -u GRADLE_HOME ./gradlew ktlintFormat --continue -q
+fi
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 env -u GRADLE_HOME ./gradlew -I gradle/tests-must-run.init.gradle.kts \

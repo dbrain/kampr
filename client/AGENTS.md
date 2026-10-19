@@ -12,7 +12,8 @@ is a pre-node wire fixture from the same era. Neither is on a shipping path.
 - `make check-client` (from the root) is exactly the CI client job: `check`, the bundle the node
   embeds, a debug APK, and a refusal to accept a test result served from the build cache.
 - Kotlin style is ktlint, applied to every module from `build.gradle.kts` with no baseline: the
-  tree is clean, so `ktlintCheck` must stay empty. `ktlintFormat` fixes most of what it reports.
+  tree is clean, so `ktlintCheck` must stay empty. `make check-client` runs
+  `ktlintFormat` first on a workstation (not in CI), which fixes most of what it would report.
 
 ## Traps that have cost real time
 
