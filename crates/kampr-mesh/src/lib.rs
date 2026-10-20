@@ -20,7 +20,7 @@ pub mod transport;
 pub use dial::{DialPolicy, Hub, dial, mesh_url, supervise};
 pub use handshake::{Accepted, HandshakeError, HubIdentity, MESH_PROTOCOL, Presence, accept, greet};
 pub use peers::{
-    ATT_CHUNK_BYTES, ATT_WINDOW, AttHeader, FetchError, PeerHerd, PeerState, Peers, PeersConfig, RelayError,
-    RemoteEvent, RemoteWatcher, Transfer,
+    ATT_CHUNK_BYTES, ATT_TRANSFERS, ATT_WINDOW, AttHeader, FetchError, PeerHerd, PeerState, Peers,
+    PeersConfig, RelayError, RemoteEvent, RemoteWatcher, Transfer,
 };
 pub use transport::{Heard, Incoming, Link, Outgoing};

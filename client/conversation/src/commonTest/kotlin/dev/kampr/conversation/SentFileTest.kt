@@ -41,12 +41,14 @@ class SentFileTest {
     }
 
     @Test
-    fun aSentPictureIsShownAndASentFileIsOfferedTheWayAPathOnACardIs() {
-        val pieces = groupBlocks(sentTurn("s-1", "/tmp/shot.jpg", "/home/u/report.md", "/tmp/a.zip").blocks)
+    fun sentPicturesSideBySideAreOneGalleryAndASentFileIsOfferedTheWayAPathOnACardIs() {
+        val pieces = groupBlocks(
+            sentTurn("s-1", "/tmp/before.jpg", "/tmp/after.jpg", "/home/u/report.md", "/tmp/a.zip").blocks,
+        )
         assertEquals(
             listOf(
                 Piece.Prose("Before and after."),
-                Piece.Picture(fileTarget("/tmp/shot.jpg")),
+                Piece.Gallery(listOf(fileTarget("/tmp/before.jpg"), fileTarget("/tmp/after.jpg"))),
                 Piece.Attach(fileTarget("/home/u/report.md")),
                 Piece.Attach(fileTarget("/tmp/a.zip")),
             ),

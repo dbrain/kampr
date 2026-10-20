@@ -85,13 +85,6 @@ const MISSED_PONGS: u32 = 3;
 
 const MAX_PREFS_BYTES: usize = 2048;
 
-/// Attachments this node will be chunking towards one hub at a time.
-///
-/// Each holds one decoded record until the hub has read it, and the ceiling on one is 8 MiB, so
-/// this is the memory a hub can make a peer hold — and the hub opens one per client request, so
-/// without a bound a herd's worth of phones tapping screenshots is a peer's whole heap.
-const CONCURRENT_TRANSFERS: usize = 4;
-
 /// Every `t` [`ClientMsg`] decodes, kept beside it because the enum's own refusal of an unknown
 /// variant is indistinguishable from a malformed known one.
 /// Turns in a page of a launched conversation. Larger than the pane's own page because a
@@ -1173,7 +1166,7 @@ impl Session {
             return;
         }
         self.sending.retain(|_, sending| !sending.credit.is_closed());
-        if self.sending.len() >= CONCURRENT_TRANSFERS {
+        if self.sending.len() >= kampr_mesh::ATT_TRANSFERS {
             debug!(
                 rid,
                 "refusing an attachment: this node is already sending as many as it will"

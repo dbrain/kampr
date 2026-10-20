@@ -14,7 +14,10 @@ import dev.kampr.shared.platform.decodeImage
 import dev.kampr.shared.platform.saveToDevice
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.Attachment
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.math.round
 
@@ -140,6 +143,11 @@ private fun oneDecimal(value: Double): String {
 private const val MOST_IMAGES_HELD = 4
 private const val MOST_PIXEL_BYTES_HELD = 24L * 1024 * 1024
 
+// Tiles are small enough to keep a long day's worth, and fetched two at a time because each one is
+// a full-size decode on the way to being small.
+private const val MOST_THUMBNAILS_HELD = 48
+private const val THUMBNAILS_AT_ONCE = 2
+
 @Stable
 class AttachmentStore(
     private val pane: String,
@@ -157,10 +165,44 @@ class AttachmentStore(
         private set
     private val held = ArrayDeque<String>()
     private val pixelBytes = HashMap<String, Long>()
+    private val thumbnails = mutableStateMapOf<String, Thumbnail>()
+    private val thumbnailsHeld = ArrayDeque<String>()
+    private val thumbnailFetches = Semaphore(THUMBNAILS_AT_ONCE)
 
     fun state(id: String): AttachmentState = states[id] ?: AttachmentState.Idle
 
     fun saved(id: String): String? = savedTo[id]
+
+    fun thumbnail(id: String): Thumbnail = thumbnails[id] ?: Thumbnail.Idle
+
+    suspend fun fetchThumbnail(io: PaneIo, att: Attachment) {
+        if (thumbnail(att.id).let { it is Thumbnail.Fetching || it is Thumbnail.Shown }) return
+        thumbnails[att.id] = Thumbnail.Fetching
+        // A tile that left the screen mid-fetch leaves its thumbnail to be asked for again rather
+        // than marked as fetching for ever.
+        val landed = try {
+            fetchedThumbnail(io, att)
+        } catch (e: CancellationException) {
+            thumbnails.remove(att.id)
+            throw e
+        }
+        thumbnails[att.id] = landed
+        if (landed !is Thumbnail.Shown) return
+        thumbnailsHeld.remove(att.id)
+        thumbnailsHeld.addLast(att.id)
+        while (thumbnailsHeld.size > MOST_THUMBNAILS_HELD) thumbnails.remove(thumbnailsHeld.removeFirst())
+    }
+
+    private suspend fun fetchedThumbnail(io: PaneIo, att: Attachment): Thumbnail = thumbnailFetches.withPermit {
+        when (val got = io.attachment(pane, att.id)) {
+            is AttachmentBytes.Failed -> Thumbnail.Failed(got.reason)
+
+            is AttachmentBytes.Ok -> withContext(Dispatchers.Default) {
+                decodeImage(got.bytes)?.let { Thumbnail.Shown(it.within(THUMBNAIL_PX)) }
+                    ?: Thumbnail.Failed("Those bytes are not a picture this device can read.")
+            }
+        }
+    }
 
     fun view(att: Attachment) {
         viewing = att

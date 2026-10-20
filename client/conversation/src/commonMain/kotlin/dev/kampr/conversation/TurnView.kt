@@ -50,6 +50,9 @@ sealed interface Piece {
     // nothing else says a picture was ever handed over.
     data class Picture(val att: Attachment) : Piece
 
+    // Pictures an agent sent side by side, offered as tiles to press rather than each at full width.
+    data class Gallery(val shots: List<Attachment>) : Piece
+
     // A recording a message named, offered where it named it. A row and not a fetch, which is what
     // makes it safe in an agent's reply as well as in the operator's own.
     data class Sound(val path: String) : Piece
@@ -149,10 +152,12 @@ fun groupBlocks(blocks: List<Block>, pictures: Boolean = false): List<Piece> {
                     // it reads no further than an image extension: this client's own table is what
                     // decides that a `.md` is read here rather than saved.
                     val sent = pathOfAttachmentId(att.id)?.let(::fileTarget)
-                    out += when {
-                        sent == null -> Piece.Attach(att)
-                        offerFor(sent) == AttachmentOffer.Image -> Piece.Picture(sent)
-                        else -> Piece.Attach(sent)
+                    val gallery = out.lastOrNull() as? Piece.Gallery
+                    when {
+                        sent == null -> out += Piece.Attach(att)
+                        offerFor(sent) != AttachmentOffer.Image -> out += Piece.Attach(sent)
+                        gallery != null -> out[out.lastIndex] = Piece.Gallery(gallery.shots + sent)
+                        else -> out += Piece.Gallery(listOf(sent))
                     }
                 } else {
                     // The prose stays whatever it was. A picture is added *beside* the path rather
@@ -286,6 +291,8 @@ private fun PieceView(
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
 
         is Piece.Picture -> InlinePicture(piece.att, attachments, Modifier.fillMaxWidth())
+
+        is Piece.Gallery -> Gallery(piece.shots, attachments, Modifier.fillMaxWidth())
 
         is Piece.Sound -> FileAffordance(piece.path, attachments, Modifier.fillMaxWidth())
 

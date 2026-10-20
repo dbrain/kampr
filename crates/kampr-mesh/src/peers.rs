@@ -44,6 +44,13 @@ pub const ATT_CHUNK_BYTES: usize = 64 * 1024;
 /// in-flight window that keeps a WAN round trip from costing a chunk of throughput.
 pub const ATT_WINDOW: u32 = 4;
 
+/// Attachments a peer will be chunking towards one hub at a time.
+///
+/// Each holds one decoded record until the hub has read it, and the ceiling on one is 8 MiB, so
+/// this is the memory a hub can make a peer hold. The peer refuses past it as `busy`, so the hub
+/// queues its own asks to the same number rather than turning a refusal into a 404.
+pub const ATT_TRANSFERS: usize = 4;
+
 /// Keepalive rounds a peer may leave unanswered before the link is dropped. At the default five
 /// second interval that is fifteen seconds of silence: long enough to sit out a stalled writer or
 /// a paused process, short enough that a client is told a node is gone rather than left reading a
@@ -374,6 +381,7 @@ impl Peers {
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
+            transfer_slots: Arc::new(tokio::sync::Semaphore::new(ATT_TRANSFERS)),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),
@@ -705,6 +713,7 @@ pub struct PeerLink {
     panes: Mutex<HashMap<String, Weak<RemotePane>>>,
     manages: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     transfers: Mutex<HashMap<u64, mpsc::Sender<AttEvent>>>,
+    transfer_slots: Arc<tokio::sync::Semaphore>,
     next_request: AtomicU64,
     closed: Arc<tokio::sync::Notify>,
     closed_reason: Mutex<Option<String>>,
@@ -820,6 +829,12 @@ impl PeerLink {
         id: &str,
         ceiling: u64,
     ) -> Result<Transfer, FetchError> {
+        let slot = self
+            .transfer_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the transfer slots are never closed");
         let rid = self.next_request.fetch_add(1, Ordering::Relaxed);
         // One slot per chunk the peer is allowed to have in flight, plus the two events that are
         // not chunks. A peer that fills it has sent more than it was granted, which is the one
@@ -835,6 +850,7 @@ impl PeerLink {
         }
         let mut transfer = Transfer {
             link: self.clone(),
+            _slot: slot,
             rid,
             header: AttHeader::default(),
             rx,
@@ -1141,6 +1157,7 @@ async fn revoked(store: &Store, pubkey: &str) -> bool {
 /// alive, and the peer is told to stop rather than left streaming into a hub that will discard it.
 pub struct Transfer {
     link: Arc<PeerLink>,
+    _slot: tokio::sync::OwnedSemaphorePermit,
     rid: u64,
     header: AttHeader,
     rx: mpsc::Receiver<AttEvent>,
@@ -1376,6 +1393,7 @@ mod tests {
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
+            transfer_slots: Arc::new(tokio::sync::Semaphore::new(ATT_TRANSFERS)),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
             closed_reason: Mutex::new(None),

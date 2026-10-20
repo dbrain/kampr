@@ -908,6 +908,21 @@ impl Scripted {
         }
     }
 
+    /// The next request that is not a keepalive, or `None` once the hub has said nothing for `quiet`.
+    async fn next_within(&mut self, quiet: Duration) -> Option<Value> {
+        loop {
+            let text = tokio::time::timeout(quiet, self.incoming.recv())
+                .await
+                .ok()?
+                .expect("the hub closed the link");
+            let message: Value = serde_json::from_str(&text).expect("the hub sent JSON");
+            let Some(n) = message["n"].as_u64().filter(|_| message["t"] == "ping") else {
+                return Some(message);
+            };
+            self.say(json!({ "t": "pong", "n": n })).await;
+        }
+    }
+
     /// Waits out the keepalive that has just been sent, so what follows starts a full interval
     /// away from the next one — the difference between "the hub hung up" and "the hub noticed on
     /// its next tick" is the whole of what an immediate disconnection buys.
@@ -2039,6 +2054,84 @@ async fn an_attachment_a_peer_refuses_is_the_hubs_own_one_refusal() {
     assert_eq!(
         refused.body, locally.body,
         "a relayed refusal is distinguishable from a local one",
+    );
+    hub.stop();
+}
+
+/// The operator, on a reply that sent eight screenshots: *"The node no longer has this attachment"*
+/// on a different one of them every time they came back to the pane. The peer chunks at most
+/// [`kampr_mesh::ATT_TRANSFERS`] towards a hub at once and refuses the next as `busy`, and a
+/// client opening a gallery asks for all eight together — so the hub has to queue them rather
+/// than pass the refusal on as the 404 a deleted file gets.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gallery_fetched_all_at_once_through_a_hub_arrives_whole() {
+    use base64::Engine;
+
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JGALLERY", "laptop").await;
+    let pane = "01JGALLERY/w1:p1";
+    peer.say(json!({ "t": "hello", "node_id": "01JGALLERY", "caps": { "attachments": true } }))
+        .await;
+    peer.advertise(&[("01JGALLERY", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.can_serve_attachments(pane)).await;
+
+    let token = hub.token().await;
+    let asked: Vec<_> = (0..8)
+        .map(|n| {
+            let url = format!("{}/api/attachment/{pane}/shot-{n}", hub.origin);
+            let token = token.clone();
+            tokio::spawn(async move { get(&url, &token).await })
+        })
+        .collect();
+
+    // The real peer's rule: a transfer is outstanding until it has been sent, and one past the
+    // limit is refused. Sending waits until the hub has gone quiet, so every ask that was going to
+    // arrive together has.
+    let png = b"\x89PNG\r\n\x1a\n a screenshot".to_vec();
+    let mut outstanding = Vec::new();
+    let mut served = 0;
+    while served < 8 {
+        match peer.next_within(Duration::from_millis(300)).await {
+            Some(fetch) if fetch["t"] == "att.fetch" => {
+                let rid = fetch["rid"].as_u64().expect("an rid");
+                if outstanding.len() >= kampr_mesh::ATT_TRANSFERS {
+                    peer.say(json!({ "t": "att.error", "rid": rid, "code": "busy" }))
+                        .await;
+                    served += 1;
+                } else {
+                    outstanding.push(rid);
+                }
+            }
+            Some(_) => {}
+            None if outstanding.is_empty() => break,
+            None => {
+                for rid in outstanding.drain(..) {
+                    peer.say(json!({
+                        "t": "att.open", "rid": rid, "bytes": png.len(), "kind": "image", "mime": "image/png"
+                    }))
+                    .await;
+                    peer.say(json!({
+                        "t": "att.chunk", "rid": rid, "seq": 0,
+                        "b64": base64::engine::general_purpose::STANDARD.encode(&png)
+                    }))
+                    .await;
+                    peer.say(json!({ "t": "att.end", "rid": rid })).await;
+                    served += 1;
+                }
+            }
+        }
+    }
+
+    let mut statuses = Vec::new();
+    for request in asked {
+        statuses.push(request.await.expect("the request task").status);
+    }
+    assert_eq!(
+        statuses,
+        vec![200; 8],
+        "the hub passed the peer's busy on as a missing file"
     );
     hub.stop();
 }
