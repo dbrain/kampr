@@ -160,6 +160,12 @@ pub fn count(log: &[u8]) -> Count {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn proc_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(target_os = "linux")]
 pub fn proc_alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()

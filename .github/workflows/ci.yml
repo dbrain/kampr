@@ -31,12 +31,17 @@ jobs:
   # cross-check from the Linux job: `openssl-sys`, `ring` and `aws-lc-sys` compile C, so an Apple
   # target needs an Apple toolchain. `check` rather than `build` because what escapes this way is
   # a name that does not exist on the platform, which is a typecheck away rather than a link away.
+  # Kampr sessions are the one part of kampr that runs on a Mac without herdr, and nobody who works
+  # on it has one, so their crates' tests run here too.
   darwin:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
       - run: make check-darwin
 
   client:

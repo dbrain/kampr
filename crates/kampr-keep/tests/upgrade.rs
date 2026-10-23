@@ -172,11 +172,13 @@ fn a_keeper_is_judged_by_the_binary_it_recorded_and_without_a_record_by_proc() {
     rewrite(&elsewhere);
     assert!(stale(&live.session), "the record, not /proc, says what it runs");
 
-    let mut unrecorded = real.clone();
-    unrecorded.image = None;
-    rewrite(&unrecorded);
-    assert!(!stale(&live.session), "/proc says it runs the installed binary");
-    install(Path::new(EXE), &exe);
-    assert!(stale(&live.session), "/proc says the binary was replaced");
+    if cfg!(target_os = "linux") {
+        let mut unrecorded = real.clone();
+        unrecorded.image = None;
+        rewrite(&unrecorded);
+        assert!(!stale(&live.session), "/proc says it runs the installed binary");
+        install(Path::new(EXE), &exe);
+        assert!(stale(&live.session), "/proc says the binary was replaced");
+    }
     rewrite(&real);
 }
