@@ -143,6 +143,13 @@ impl Image {
     }
 }
 
+/// A keeper that died without writing `exit.json` and left no child behind is `Lost`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ending {
+    Exited(Exit),
+    Lost,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Exit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,6 +263,19 @@ impl SessionDir {
 
     pub fn exit(&self) -> Option<Exit> {
         read_json(&self.path.join(EXIT)).ok()
+    }
+
+    /// `None` while the keeper or its child lives, and before a keeper has started at all.
+    pub fn ending(&self) -> Option<Ending> {
+        if let Some(exit) = self.exit() {
+            return Some(Ending::Exited(exit));
+        }
+        if self.keeper().is_none() || self.alive() {
+            return None;
+        }
+        // The keeper writes exit.json and then exits, so one gone by the second look may have
+        // written it after the first.
+        Some(self.exit().map_or(Ending::Lost, Ending::Exited))
     }
 
     pub fn size(&self) -> Option<Size> {

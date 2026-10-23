@@ -11,7 +11,7 @@ use kampr_core::provider::{
     RawScrollback, Reflow, split_view,
 };
 use kampr_journal::process::{Harness, PaneProcess};
-use kampr_keep::{Launch, SessionDir, Spec};
+use kampr_keep::{Ending, Launch, SessionDir, Spec};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -448,12 +448,12 @@ impl Inner {
     fn pane_info(&self, session: &SessionDir, live: Option<&Live>) -> Option<PaneInfo> {
         let spec = session.spec().ok()?;
         let keeper = session.keeper();
-        let mut exit = session.exit();
-        let gone = exit.is_none() && keeper.is_some() && !session.alive();
-        if gone {
-            exit = session.exit();
-        }
-        let lost = gone && exit.is_none();
+        let ending = session.ending();
+        let lost = ending == Some(Ending::Lost);
+        let exit = match ending {
+            Some(Ending::Exited(exit)) => Some(exit),
+            _ => None,
+        };
         let fg = match (&exit, &keeper) {
             (None, Some(k)) if !lost => procs::foreground(k.child),
             _ => None,

@@ -4,7 +4,7 @@ mod term;
 use crate::Screen;
 use crate::replay;
 use crate::screen::Feed;
-use kampr_keep::{Exit, Host, Replay, SessionDir, SizedReader};
+use kampr_keep::{Ending, Exit, Host, Replay, SessionDir, SizedReader};
 use rustix::event::{PollFd, PollFlags, poll};
 use std::fs::File;
 use std::io::{self, Read as _, Write};
@@ -309,20 +309,18 @@ impl<'a> View<'a> {
     }
 
     fn ended(&mut self) -> io::Result<Option<Exit>> {
-        if let Some(exit) = self.session.exit() {
+        Ok(match self.session.ending() {
             // The keeper writes exit.json only after the master's last byte reached the log.
-            return Ok((self.reader.end()? <= self.reader.offset()).then_some(exit));
-        }
-        if self.session.keeper().is_some() && !self.session.alive() {
-            return Ok(Some(Exit {
+            Some(Ending::Exited(exit)) => (self.reader.end()? <= self.reader.offset()).then_some(exit),
+            Some(Ending::Lost) => Some(Exit {
                 code: None,
                 signal: None,
                 status_lost: true,
                 at_unix: 0,
                 error: Some("the keeper is gone".into()),
-            }));
-        }
-        Ok(None)
+            }),
+            None => None,
+        })
     }
 
     fn holder(&self) -> String {

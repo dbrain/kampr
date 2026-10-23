@@ -45,7 +45,7 @@ check-packaging:
 # the crates Kampr sessions are made of; on Linux it proves nothing `lint` and `test` have not.
 check-darwin:
 	cargo check --workspace --all-targets
-	cargo nextest run -p kampr-keep -p kampr-native -p kampr-cli
+	cargo nextest run --no-fail-fast -p kampr-keep -p kampr-native -p kampr-cli
 
 # CI only. Each starts from a state a workstation is not in — a fresh runner's empty dist/, a
 # herdr server in the default session — and says why in its script.

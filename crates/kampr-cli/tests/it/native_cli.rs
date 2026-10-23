@@ -241,7 +241,8 @@ fn new_attaches_claims_its_size_follows_a_resize_and_leaves_with_the_status() {
     let raw = termios::tcgetattr(&term.slave).expect("termios");
     assert!(!raw.local_modes.contains(LocalModes::ICANON | LocalModes::ECHO));
     term.type_line("quit");
-    assert_eq!(term.exit_code(), 3);
+    let code = term.exit_code();
+    assert_eq!(code, 3, "{}", term.raw());
     assert!(
         term.raw().contains(&format!("kampr: {} exited 3", session.id())),
         "{}",

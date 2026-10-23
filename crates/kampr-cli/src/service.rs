@@ -200,14 +200,11 @@ fn install_launchd(
         .replace("@SOCKET@", socket.unwrap_or(&default_socket));
     std::fs::write(&path, plist).with_context(|| format!("writing {}", path.display()))?;
     quiet("launchctl", &["bootout", &format!("gui/{}/{LABEL}", uid())]);
-    run(
-        "launchctl",
-        &[
-            "bootstrap",
-            &format!("gui/{}", uid()),
-            &path.display().to_string(),
-        ],
-    )?;
+    let domain = format!("gui/{}", uid());
+    let plist_path = path.display().to_string();
+    if !try_run("launchctl", &["bootstrap", &domain, &plist_path]) {
+        eprintln!("kampr: could not load {LABEL}; run `launchctl bootstrap {domain} {plist_path}` by hand");
+    }
     Ok(Installed {
         path,
         reboot: Reboot::NeedsGuiLogin,
@@ -403,17 +400,6 @@ fn launchd_plist_path() -> Result<PathBuf> {
 
 fn uid() -> String {
     run_output("id", &["-u"]).unwrap_or_else(|_| "0".into())
-}
-
-fn run(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .with_context(|| format!("running {program}"))?;
-    if !status.success() {
-        bail!("{program} {} failed", args.join(" "));
-    }
-    Ok(())
 }
 
 /// Best effort, and noisy failure is not information: stopping a unit that was never installed is

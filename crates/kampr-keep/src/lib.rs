@@ -11,8 +11,8 @@ mod upgrade;
 
 pub use ctl::{borrow, claim_size, close, state};
 pub use dir::{
-    Exit, Host, HostGuard, How, Image, KeeperInfo, SessionDir, Size, Spec, list, list_tree, make_private_dir,
-    new_id, register_host, root,
+    Ending, Exit, Host, HostGuard, How, Image, KeeperInfo, SessionDir, Size, Spec, list, list_tree,
+    make_private_dir, new_id, register_host, root,
 };
 pub use keeper::{HANDOVER, serve};
 pub use launch::{Launch, UNIT_PREFIX, spawn, unit_name};

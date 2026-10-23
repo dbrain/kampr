@@ -8,7 +8,7 @@
 use crate::tail::Tail;
 use crate::waiting::{Waiting, mode_of, waiting};
 use kampr_core::question::{self as prompt, Mode};
-use kampr_keep::{Replay, SessionDir, SizedReader};
+use kampr_keep::{Ending, Replay, SessionDir, SizedReader};
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
@@ -164,28 +164,17 @@ impl Ladder {
         }
     }
 
-    /// A keeper that died without writing `exit.json` and left no child behind is an ending too,
-    /// with nothing known about how.
     fn ended(&self) -> Option<State> {
-        let exited = |exit: kampr_keep::Exit| State::Exited {
-            code: exit.code,
-            signal: exit.signal,
-        };
-        if let Some(exit) = self.session.exit() {
-            return Some(exited(exit));
-        }
-        if self.session.keeper().is_none() || self.session.alive() {
-            return None;
-        }
-        // The keeper writes `exit.json` and then exits, so one that was gone by the second look
-        // may have written it after the first.
-        Some(self.session.exit().map_or(
-            State::Exited {
+        Some(match self.session.ending()? {
+            Ending::Exited(exit) => State::Exited {
+                code: exit.code,
+                signal: exit.signal,
+            },
+            Ending::Lost => State::Exited {
                 code: None,
                 signal: None,
             },
-            exited,
-        ))
+        })
     }
 
     fn drain(&mut self) {

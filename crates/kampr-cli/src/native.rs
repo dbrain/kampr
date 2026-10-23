@@ -1,6 +1,6 @@
 use crate::dirs::Dirs;
 use anyhow::{Context, Result, bail};
-use kampr_keep::{Launch, SessionDir, Spec};
+use kampr_keep::{Ending, Launch, SessionDir, Spec};
 use kampr_native::{AttachOptions, Ended, NativeConfig};
 use kampr_node::{Config, ConfigError};
 use std::path::PathBuf;
@@ -118,10 +118,10 @@ pub fn ls(dirs: &Dirs) -> Result<()> {
 }
 
 fn row(session: &SessionDir, spec: &Spec, now: u64) -> [String; 6] {
-    let state = match session.exit() {
-        Some(exit) => kampr_native::exit_status(&exit),
+    let state = match session.ending() {
+        Some(Ending::Exited(exit)) => kampr_native::exit_status(&exit),
         None if session.alive() => "live".to_string(),
-        None => "gone".to_string(),
+        _ => "gone".to_string(),
     };
     let size = session.size().map_or_else(
         || format!("{}x{}", spec.cols, spec.rows),
