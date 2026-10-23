@@ -12,6 +12,7 @@ pub mod book;
 pub mod caps;
 pub mod config;
 pub mod convo;
+pub mod desk;
 pub mod git;
 pub mod herd;
 pub mod holds;

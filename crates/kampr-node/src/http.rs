@@ -704,7 +704,7 @@ pub(crate) fn transcript_of(node: &Node, pane: &str) -> Option<std::path::PathBu
     let herd = node.herd();
     let entry = herd.pane(pane)?;
     let journals = node.journals();
-    let identity = crate::convo::identity(&journals, &session.provider, &local);
+    let identity = crate::convo::identity(&journals, &session, &local);
     journals
         .locate(
             pane,
@@ -754,7 +754,7 @@ async fn warm(
         && herd.pane(pane).map(|p| p.agent_status) == Some(kampr_core::provider::AgentStatus::Blocked)
         && let Some((session, local)) = node.resolve(pane)
         && let Some(found) = crate::pending::read(
-            &session.herdr,
+            &crate::pending::Screen::of(&session, &local),
             &local,
             herd.pane(pane).and_then(|p| p.agent.as_deref()),
         )

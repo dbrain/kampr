@@ -3,6 +3,7 @@ mod doctor;
 mod herdr_bin;
 mod init;
 mod mesh;
+mod native;
 mod pairing;
 mod recovery;
 mod report;
@@ -150,6 +151,35 @@ enum Command {
         #[command(flatten)]
         dirs: Dirs,
     },
+    /// Start a session that outlives this terminal, and attach to it
+    New {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// Print the session's id and leave it running unattached
+        #[arg(short, long)]
+        detached: bool,
+        #[arg(long)]
+        cwd: Option<std::path::PathBuf>,
+        #[arg(long)]
+        label: Option<String>,
+        /// Defaults to the login shell
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// List this machine's sessions
+    Ls {
+        #[command(flatten)]
+        dirs: Dirs,
+    },
+    /// Show a session in this terminal. Closing the terminal detaches; the session keeps running
+    Attach {
+        #[command(flatten)]
+        dirs: Dirs,
+        /// A session id, or any prefix of one that names a single session
+        id: String,
+    },
+    #[command(hide = true)]
+    Keep { dir: std::path::PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -200,9 +230,35 @@ enum ServiceAction {
     Status,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Before the runtime exists: a keeper is one thread that re-execs itself (docs/17 §1), and an
+    // attach takes its terminal's signals for itself.
+    match cli.command {
+        Some(Command::Keep { dir }) => kampr_keep::serve(&dir),
+        Some(Command::New {
+            dirs,
+            detached,
+            cwd,
+            label,
+            command,
+        }) => native::new(
+            &dirs,
+            native::New {
+                detached,
+                cwd,
+                label,
+                argv: command,
+            },
+        ),
+        Some(Command::Ls { dirs }) => native::ls(&dirs),
+        Some(Command::Attach { dirs, id }) => native::attach(&dirs, &id),
+        _ => run(cli),
+    }
+}
+
+#[tokio::main]
+async fn run(cli: Cli) -> Result<()> {
     let Some(command) = cli.command else {
         return open(&cli.dirs).await;
     };
@@ -310,6 +366,9 @@ async fn main() -> Result<()> {
                 update::Update { check, version },
             )
             .await
+        }
+        Command::Keep { .. } | Command::New { .. } | Command::Ls { .. } | Command::Attach { .. } => {
+            unreachable!("served before the runtime starts")
         }
         Command::Service { action, dirs } => match action {
             ServiceAction::Install => {

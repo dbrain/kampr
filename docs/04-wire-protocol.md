@@ -48,7 +48,8 @@ hostname would buy (findings §3.7).
             "mesh": true,     // this node accepts peer links; see "The mesh"
             "find": true,     // this node answers `find`; absent means it does not — see below
             "convo.find": true,    // and the transcript search beside it, promised separately
-            "pane.grow": true },   // `pane.size` takes `grow`; a client sends none to a node without it
+            "pane.grow": true,     // `pane.size` takes `grow`; a client sends none to a node without it
+            "reflow": true },      // a hub may relay a reflowed watch as a view; see "Relay, and backpressure per hop"
   "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
                                      // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
@@ -110,7 +111,10 @@ this arrives, so a client must gate on it rather than on the role it was greeted
 ```jsonc
 { "t": "herd",
   "nodes": [ { "id": "01J...", "name": "comingclean", "kind": "local",   // "local"|"peer"
-               "online": true, "rtt_ms": 0.4, "herdr_version": "0.8.2",
+               "online": true,             // this node's *herdr* answers — see below
+               "reachable": true,          // its kampr answers; ABSENT from an older node
+               "native": true,             // it keeps native sessions; ABSENT when it does not
+               "rtt_ms": 0.4, "herdr_version": "0.8.2",
                "build": "0.1.21",          // this node's kampr build — see "Version skew"
                "update": "0.1.2",          // ABSENT unless a newer release exists — see below
                "detail": "…" } ],   // ABSENT when the node is up — see below
@@ -130,6 +134,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "cmd": "cargo",                       // the foreground job's name — ABSENT far more often than not
                "argv": "cargo test",                 // its whole command line — OFF by default, see below
                "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
+               "provider": "native",                 // ABSENT unless Kampr keeps the session — see "Native sessions"
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -152,6 +157,16 @@ so a client marks them stale and keeps its cached grids.
 
 When a node comes back the node re-sends the whole `herd`, which is the same recovery the
 "sent after `hello` and on any reconnect" rule already describes.
+
+**`online` is herdr's answer and nothing else, and it keeps that meaning.** Two other facts sit
+beside it. `reachable` is whether the node's own process answers: a local node always, a peer
+while its link is up. `native: true` says the node keeps native sessions, which need no herdr
+(see "Native sessions"). So what a pane needs is per provider: a herdr pane needs `online`, a
+native pane (`"provider": "native"`) needs only `reachable`. A machine with no herdr at all is
+`online: false, reachable: true, native: true` — serving, with a `detail` saying why herdr is not.
+`online` was not widened to "any provider serves" because every installed client reads it as
+herdr's health, and a herdr outage on a machine that also keeps native sessions would then
+vanish from all of them.
 
 **`cmd` and `argv` are what a pane is *doing*, and their absence is the normal case.** `dir-name`
 stops identifying anything once six panes share a directory, so the node reads herdr's
@@ -1124,17 +1139,23 @@ request has no say in. Everything else is `not_found`, in the one wording every 
 ```
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `bad_request` ·
 `not_found` · `revoked` · `unsupported` (the node does not implement that op) ·
-`stream_unavailable` (the herd is reachable and this pane's *screen* is not).
+`stream_unavailable` (the herd is reachable and this pane's *screen* is not) ·
+`session_unavailable` (a native session refused: it has ended, or its keeper is not answering).
 
 There is no `rate_limited` error code. Pairing throttling is an HTTP **429**, so nothing ever
 emitted one and a client written to expect it was written against a code that does not exist.
 Relayed errors are the one exception to this list being closed: a hub forwards a peer's `code`
 verbatim, so a newer peer's code reaches a client unchanged rather than being dropped.
 
-`herdr_unavailable` and `node_offline` are both emitted for a herd outage: the first names the
-cause on the connection, the second says which node went with it, and an op addressed at a pane on
-a node that is down is refused with `node_offline` rather than left to time out. **Both carry
-`node`**, the id of the node they are about:
+`herdr_unavailable` and `node_offline` are two facts, sent on their edges: `herdr_unavailable` when
+a node's herdr goes (`online` falling), `node_offline` when nothing on the node can be served any
+more — it is unreachable, or its herdr went and it keeps no native sessions. A herdr-only node
+losing its herdr therefore sends both, as it always has; a node that keeps native sessions sends
+only `herdr_unavailable`, and one first seen with no herdr but serving native sessions sends
+neither (its `herd` entry already says so). An op addressed at a herdr pane on a node that is down
+is refused with `node_offline` rather than left to time out; one addressed at a native pane is
+refused with `session_unavailable`, never a herdr code. **Both carry `node`**, the id of the node
+they are about:
 
 ```jsonc
 { "t": "error", "code": "node_offline", "message": "workbox is offline", "node": "01JWORKBOX" }
@@ -1148,7 +1169,9 @@ showed it the only way it could, as a strip over whatever screen was open — an
 operator was not looking at interrupted a pane on a different one. The node cannot know which
 pane is on screen and must not guess. A client that reads `node` should say it loudly only when
 it is about the node whose pane is in front of the operator, and otherwise leave it to the herd
-screen, where `nodes[].online` and `nodes[].detail` already say the same thing quietly.
+screen, where `nodes[].online` and `nodes[].detail` already say the same thing quietly. A native
+pane is not served by herdr, so `herdr_unavailable` about its node is not about the pane in front
+of the operator either.
 
 `stream_unavailable` is **not** an outage and is deliberately its own code: the node is answering,
 the pane list is right, and only the frames are missing. It always names a `pane`, it carries the
@@ -1169,6 +1192,9 @@ the same path but is **not** an error and does not close anything — it arrives
 
 ```jsonc
 { "t": "watch",   "pane": "01J.../w3:p2", "scrollback": true, "conversation": true }
+// Optional `reflow`: a native pane's primary screen and history re-laid at this width, without
+// touching its PTY. See "Native sessions" below. Absent is the pane's own grid, as before.
+{ "t": "watch",   "pane": "01J.../n:01k8…", "scrollback": true, "reflow": { "cols": 40 } }
 { "t": "unwatch", "pane": "01J.../w3:p2" }
 
 // Input. Exactly one of text/b64/keys. text and b64 go to pane.send_text;
@@ -1576,6 +1602,85 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 { "t": "manage", "op": "session.stop",   "node": "01J...", "name": "agents" }
 ```
 
+### Native sessions
+
+A terminal Kampr keeps itself, with no herdr behind it ([`17-native-sessions.md`](./17-native-sessions.md)).
+It is an ordinary pane in every other respect — watched, scrolled, searched, typed into and resized
+with the messages every pane takes — and its id is `<node_id>/n:<session id>`. What marks one is
+`"provider": "native"`, and the five fields beside it are present **only** on such a pane:
+
+```jsonc
+"provider": "native",
+"session_id": "01k8…",          // the keeper's own id: what `kampr attach` and `kampr ls` print
+"on_desk": "w1:p3",             // ABSENT unless a `kampr attach` in a herdr pane is showing it
+"detached": true,               // nothing is showing it anywhere but through a node
+"size_holder": "phone:pixel",   // ABSENT until somebody claims a size; "spawn", "attach:<pid>", "phone:<device>"
+"exited": { "code": 0 }         // ABSENT while it runs; `signal` instead of `code` for a kill, `{}` when
+                                // the keeper died without recording either
+```
+
+An ended session **stays listed** until it is forgotten, as a finished fleet run does.
+
+`cmd` is the PTY's foreground process. `argv` follows `[naming] send_argv` exactly as on a herdr pane,
+and so does `label` when the session was given none: a label made of the command line would be the
+command line.
+
+`agent_status` is measured from output rather than scraped: `working` while the program has written
+something in the last 1.5 s (keystroke echo excluded), `done` once that stops until something is
+typed, `idle` otherwise, and `blocked` when an agent's screen reads as one of the dialogs `pending`
+recognises. An ended session is never `working`. `agent`, and the harness behind it, come from the
+PTY's foreground process (`claude`, `codex`, `omp`, `pi`, `agy`).
+
+```jsonc
+{ "t":"manage", "op":"native.create", "node":"01J…",
+  "command":"claude --resume",        // a line for the login shell, as on fleet.run …
+  "args":["htop","-d","10"],          // … or an argv; neither is the login shell itself
+  "cwd":"/home/dbrain/dev/kampr", "label":"review",
+  "cols":100, "rows":30 }             // both or neither, 80x24 when absent
+{ "t":"manage", "op":"native.close",  "at":"01J…/n:01k8…" }   // hang it up (SIGHUP to its process group)
+{ "t":"manage", "op":"native.forget", "at":"01J…/n:01k8…" }   // delete an ENDED session and its log
+{ "t":"manage", "op":"native.desk",   "at":"01J…/n:01k8…" }   // show it in a herdr pane — not built yet
+```
+
+`native.create` acks the pane it made, as `fleet.run` does, and is routed by `node`. It also takes
+`"desk": true` with an `at` naming where on the desk to show it; until that lands the node refuses
+it, and `native.desk`, with a `bad_request` saying so. `native.forget` refuses a session that is
+still running.
+
+#### A reflowed view: `watch` with `reflow`
+
+A native pane can be watched at a width of the watcher's own (docs/17 §3). The node holds the
+program's logical lines, so it re-lays the history and the live primary screen at `reflow.cols`
+(clamped to 10–1000) for that watch alone. **Nothing reaches the PTY**: no claim, no resize, no
+`size_holder`; input is unchanged and goes to the real pane. Watchers asking the same width share
+one view, and watchers that do not ask keep the pane's own grid at the pane's own width.
+
+Every `grid.reset` on such a watch carries `reflow`, saying which grid it is:
+
+```jsonc
+{ "t": "grid.reset", "pane": "01J…/n:01k8…", "cols": 40, "rows": 24, …, "reflow": "on" }
+//   "on"           re-laid at the asked width; `rows` is the pane's own
+//   "alternate"    the pane's own grid: a full-screen program has the alternate screen
+//   "harness"      the pane's own grid: an agent wraps its own lines at the PTY's width (#588)
+//   "unsupported"  the pane's own grid: a herdr pane, or a peer's pane whose node is too old to re-lay it
+// absent on a reflowed watch: a node older than the field, which ignored the request
+```
+
+The answer can change while the watch stands (a pager starts, a shell runs `claude`), and every
+change arrives as a new `grid.reset` with the new geometry and label, and a `scrollback` of a new
+`era`, so a client replaces its history rather than appending one width's rows to another's.
+`scrollback` and `find` on a re-laid watch count rows of the re-laid width. A line that shrinks
+leaves blank rows at the bottom rather than pulling back rows already sent as history, as a
+terminal's own screen does; a program that rewrites rows high on the primary screen after they
+were sent as history leaves the old copy there.
+
+`pane.size`, `rename` and `close` on an `n:` target reach the session rather than herdr, with the
+same modes and the same ack fields. There is no desk to take a size back, so `kept` is `true`
+whenever the claim was made; `hold` is a plain claim that sticks until the next one; and `match` /
+`grow` remember the size they found and put it back on `release`, exactly as ADR 0013 describes.
+Every other op on an `n:` target is refused. **None of these ops start herdr**, and none of them need
+it: a machine whose herdr is stopped still keeps, creates and serves native sessions.
+
 ### Fleet runs
 
 One command sent to several hosts at once. Each host serves it as an ordinary pane — it is watched,
@@ -1606,7 +1711,8 @@ own workspaces:
 ```
 
 **`quiet` is not a kind of `waiting`, and a client must never render it as a question.** A node can
-read whether a job is parked on a read only for a job it forked at its own privilege (probe #334);
+read whether a job is parked on a read only through the job's keeper, its parent, and only at its
+own privilege (probes #331, #334);
 for anything else — and for every command that changes user — `/proc` refuses it outright
 (#331, #332). `quiet` is the honest answer for those, and `blind: true` says the run will never
 answer anything else. A board that added the two together would send somebody to a machine that is
@@ -1660,7 +1766,12 @@ why the run is not.
 
 The client assigns `cohort`, because a run spans hosts and no single node can name one. Setting the
 geometry here is the one place Kampr chooses a pane's size, and it is allowed because the pane is
-Kampr's own — a pty the node forked, with no desk attached (see rule 3 in `AGENTS.md`).
+Kampr's own — a native session the node started, with no desk attached (see rule 3 in `AGENTS.md`).
+
+A run is kept by a keeper of its own (`docs/17` §2), so it **survives a node restart**: the next node
+lists the same `fleet:<ULID>` pane with the same cohort, command and `started_unix`, its state read
+again within a poll, its screen rebuilt from the log. Nothing on the wire changed for this; a fleet
+pane still carries no `provider`/`session_id` fields, because it is not one the native ops address.
 
 `workspace` and `tab` on a pane are **labels for a human**; `workspace_id` and `tab_id` are what a
 `manage` op's `at` takes. A pane id carries its workspace (`w3:p2` → `w3`) but never its tab, so
@@ -1703,8 +1814,9 @@ every build before this one does. Columns are reported by nothing anywhere (#221
 on the rows — the half herdr answers honestly (#84) — and is the only evidence the width went with
 them.
 
-**`fleet.run` acks the pane it made.** A fleet run is the one creating op herdr never sees, so its
-`id` is this node's own pane id; every other creating op's comes out of the record herdr echoed.
+**`fleet.run` and `native.create` ack the pane they made.** They are the two creating ops herdr never
+sees, so their `id` is this node's own pane id; every other creating op's comes out of the record
+herdr echoed.
 
 Every `manage` op is acknowledged with `{"t":"managed","op":…,"ok":true,"id":"<new id, when one was created>"}`
 and the resulting structure change arrives as an ordinary `herd.patch`. `id` is a **node-qualified
@@ -1899,6 +2011,26 @@ The shadow is what makes the backpressure rule hold at this hop without a second
   delivered when it handed it to the hub. A client that is not draining the frames it cannot drop
   has that pane's stream ended with `stream_unavailable` rather than held without limit — the depth
   is a window, not a promise, and raising it would only widen it.
+
+**A reflowed watch is relayed as a view of its own.** A `watch` with `reflow` on a peer's pane is
+asked of the peer as a watch of the pane id with `~<cols>` appended, and the peer serves that id
+exactly as it serves a reflowed watch of the pane, addressing every frame to it. So each width is
+one more pane on the link: one `watch` per width however many of the hub's clients ask for it, its
+own shadow and stitched history, and the pane's own grid untouched for every client that asked for
+no width. The hub carries the peer's `reflow` label on each `grid.reset` and hands `find`,
+`convo.load`, `convo.sub` and `convo.find` about that client's watch to the view's id, so history
+and search count rows of the re-laid width; everything the peer says under the view's id reaches
+the client as the pane it watched. Input, sizing and every other verb still name the pane.
+
+```
+hub  → peer  { "t":"watch", "pane":"01JNODE/n:01k8…~40", "scrollback":true, "conversation":true }
+peer → hub   { "t":"grid.reset", "pane":"01JNODE/n:01k8…~40", "cols":40, …, "reflow":"on" }
+hub  → phone { "t":"grid.reset", "pane":"01JNODE/n:01k8…",    "cols":40, …, "reflow":"on" }
+```
+
+A node answers the `~` form for a hub only, and says it can with `caps.reflow` on its `hello`. A peer
+whose `hello` does not claim it is asked for the pane itself, and the hub labels every reset of that
+watch `"unsupported"`: an older node would answer the view's id with `unknown_pane`.
 
 Nothing at either hop may purge a `scrollback`: history is append-only, keyed on absolute row
 index, and no later reset repairs a hole in it. `pending` is likewise a fact about the pane rather

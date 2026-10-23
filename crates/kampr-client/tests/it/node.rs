@@ -55,6 +55,7 @@ impl Running {
         // No herdr, and no discovery of the one this machine may be running: the properties here
         // are about the socket, not about panes.
         config.herdr.socket = home.dir.path().join("no-herdr.sock").display().to_string();
+        config.native.root = home.dir.path().join("native").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         config.update.check = false;
         std::fs::create_dir_all(home.state()).expect("a state dir");

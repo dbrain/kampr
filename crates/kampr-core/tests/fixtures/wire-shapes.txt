@@ -51,6 +51,8 @@ client unwatch .t: string
 client unwatch : object
 client watch .conversation: bool
 client watch .pane: string
+client watch .reflow.cols: integer
+client watch .reflow: object
 client watch .scrollback: bool
 client watch .t: string
 client watch : object
@@ -244,6 +246,7 @@ server grid.reset .cursor: object
 server grid.reset .links: array
 server grid.reset .links[]: string
 server grid.reset .pane: string
+server grid.reset .reflow: string
 server grid.reset .rows: integer
 server grid.reset .rows_data: array
 server grid.reset .rows_data[].row: integer
@@ -276,6 +279,7 @@ server herd .nodes[].herdr_version: string
 server herd .nodes[].id: string
 server herd .nodes[].kind: string
 server herd .nodes[].name: string
+server herd .nodes[].native: bool
 server herd .nodes[].online: bool
 server herd .nodes[].reachable: bool
 server herd .nodes[].rtt_ms: float
@@ -289,7 +293,11 @@ server herd .panes[].cmd: string
 server herd .panes[].cols: integer
 server herd .panes[].converses: bool
 server herd .panes[].cwd: string
+server herd .panes[].detached: bool
 server herd .panes[].detail: string
+server herd .panes[].exited.code: integer
+server herd .panes[].exited.signal: integer
+server herd .panes[].exited: object
 server herd .panes[].fleet.blind: bool
 server herd .panes[].fleet.cohort: string
 server herd .panes[].fleet.command: string
@@ -317,8 +325,12 @@ server herd .panes[].has_conversation: bool
 server herd .panes[].id: string
 server herd .panes[].label: string
 server herd .panes[].node_id: string
+server herd .panes[].on_desk: string
+server herd .panes[].provider: string
 server herd .panes[].rows: integer
 server herd .panes[].scrollback_rows: integer
+server herd .panes[].session_id: string
+server herd .panes[].size_holder: string
 server herd .panes[].tab: string
 server herd .panes[].tab_id: string
 server herd .panes[].title: string
@@ -336,6 +348,7 @@ server herd.patch .added.nodes[].herdr_version: string
 server herd.patch .added.nodes[].id: string
 server herd.patch .added.nodes[].kind: string
 server herd.patch .added.nodes[].name: string
+server herd.patch .added.nodes[].native: bool
 server herd.patch .added.nodes[].online: bool
 server herd.patch .added.nodes[].reachable: bool
 server herd.patch .added.nodes[].rtt_ms: float
@@ -349,7 +362,11 @@ server herd.patch .added.panes[].cmd: string
 server herd.patch .added.panes[].cols: integer
 server herd.patch .added.panes[].converses: bool
 server herd.patch .added.panes[].cwd: string
+server herd.patch .added.panes[].detached: bool
 server herd.patch .added.panes[].detail: string
+server herd.patch .added.panes[].exited.code: integer
+server herd.patch .added.panes[].exited.signal: integer
+server herd.patch .added.panes[].exited: object
 server herd.patch .added.panes[].fleet.blind: bool
 server herd.patch .added.panes[].fleet.cohort: string
 server herd.patch .added.panes[].fleet.command: string
@@ -377,8 +394,12 @@ server herd.patch .added.panes[].has_conversation: bool
 server herd.patch .added.panes[].id: string
 server herd.patch .added.panes[].label: string
 server herd.patch .added.panes[].node_id: string
+server herd.patch .added.panes[].on_desk: string
+server herd.patch .added.panes[].provider: string
 server herd.patch .added.panes[].rows: integer
 server herd.patch .added.panes[].scrollback_rows: integer
+server herd.patch .added.panes[].session_id: string
+server herd.patch .added.panes[].size_holder: string
 server herd.patch .added.panes[].tab: string
 server herd.patch .added.panes[].tab_id: string
 server herd.patch .added.panes[].title: string
@@ -395,6 +416,7 @@ server herd.patch .changed.nodes[].herdr_version: string
 server herd.patch .changed.nodes[].id: string
 server herd.patch .changed.nodes[].kind: string
 server herd.patch .changed.nodes[].name: string
+server herd.patch .changed.nodes[].native: bool
 server herd.patch .changed.nodes[].online: bool
 server herd.patch .changed.nodes[].reachable: bool
 server herd.patch .changed.nodes[].rtt_ms: float
@@ -408,7 +430,11 @@ server herd.patch .changed.panes[].cmd: string
 server herd.patch .changed.panes[].cols: integer
 server herd.patch .changed.panes[].converses: bool
 server herd.patch .changed.panes[].cwd: string
+server herd.patch .changed.panes[].detached: bool
 server herd.patch .changed.panes[].detail: string
+server herd.patch .changed.panes[].exited.code: integer
+server herd.patch .changed.panes[].exited.signal: integer
+server herd.patch .changed.panes[].exited: object
 server herd.patch .changed.panes[].fleet.blind: bool
 server herd.patch .changed.panes[].fleet.cohort: string
 server herd.patch .changed.panes[].fleet.command: string
@@ -436,8 +462,12 @@ server herd.patch .changed.panes[].has_conversation: bool
 server herd.patch .changed.panes[].id: string
 server herd.patch .changed.panes[].label: string
 server herd.patch .changed.panes[].node_id: string
+server herd.patch .changed.panes[].on_desk: string
+server herd.patch .changed.panes[].provider: string
 server herd.patch .changed.panes[].rows: integer
 server herd.patch .changed.panes[].scrollback_rows: integer
+server herd.patch .changed.panes[].session_id: string
+server herd.patch .changed.panes[].size_holder: string
 server herd.patch .changed.panes[].tab: string
 server herd.patch .changed.panes[].tab_id: string
 server herd.patch .changed.panes[].title: string

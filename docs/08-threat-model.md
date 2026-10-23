@@ -176,6 +176,24 @@ sidecars, the audit log and its rotated generation, the node identity key and th
 `client.toml` are all 0600 — the WAL explicitly, because it holds pairing digests long before they
 are checkpointed into the main file.
 
+**Native sessions** ([`docs/17`](./17-native-sessions.md)) add a second uid-scoped object beside
+herdr's socket: the session root, `$XDG_RUNTIME_DIR/kampr/s`, and each keeper's `ctl.sock`, which
+hands out a dup of the session's PTY master and resizes it on request. That is boundary ④ again, owned by Kampr this time,
+and with no more authentication than herdr's: anything running as your uid can type into every
+native session. Two checks keep another uid out of it:
+
+- **The root and each session directory must be 0700 and owned by your uid, and no directory above
+  them may be writable by anyone but your uid or root unless it is sticky** (`kampr-keep/src/dir.rs`
+  `check_private`). The `/tmp/kampr-<uid>/s` fallback for a host with no `XDG_RUNTIME_DIR` is the
+  reason: another uid could create `/tmp/kampr-<uid>` first, swap in a `ctl.sock` of its own, and
+  receive every keystroke the node writes to the "master" it handed back. Spawning or listing under
+  such a root is refused.
+- **Both ends of `ctl.sock` check `SO_PEERCRED`**: the keeper serves only your uid, and a client
+  refuses a socket served by any other.
+
+Session logs are on tmpfs in the same private directory and hold everything the program printed, as
+herdr's scrollback does in memory. They end with the session or a reboot.
+
 **Not chmod'ed:** `config.toml`, which relies on its 0700 parent. It holds no secrets today (node id,
 bind, origin, `trust_proxy`, paths to TLS material) and it would be better with an explicit mode.
 

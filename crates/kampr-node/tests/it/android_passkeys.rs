@@ -61,6 +61,7 @@ impl Harness {
         config.server.bind = format!("127.0.0.1:{port}");
         config.server.origin = format!("http://127.0.0.1:{port}");
         config.herdr.socket = home.path().join("herdr.sock").display().to_string();
+        config.native.root = home.path().join("native").display().to_string();
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         tweak(&mut config);

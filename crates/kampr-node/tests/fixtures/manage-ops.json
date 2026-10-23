@@ -175,5 +175,45 @@
     "t": "manage",
     "op": "fleet.drop",
     "entry": "01JBOOK"
+  },
+  "native.create": {
+    "t": "manage",
+    "op": "native.create",
+    "node": "01JNODE",
+    "command": "claude --resume",
+    "cwd": "/home/dbrain/dev/kampr",
+    "label": "review"
+  },
+  "native.create.args": {
+    "t": "manage",
+    "op": "native.create",
+    "node": "01JNODE",
+    "args": [
+      "htop",
+      "-d",
+      "10"
+    ]
+  },
+  "native.create.desk": {
+    "t": "manage",
+    "op": "native.create",
+    "node": "01JNODE",
+    "desk": true,
+    "at": "01JNODE/w3:p2"
+  },
+  "native.close": {
+    "t": "manage",
+    "op": "native.close",
+    "at": "01JNODE/n:01k8native"
+  },
+  "native.forget": {
+    "t": "manage",
+    "op": "native.forget",
+    "at": "01JNODE/n:01k8native"
+  },
+  "native.desk": {
+    "t": "manage",
+    "op": "native.desk",
+    "at": "01JNODE/n:01k8native"
   }
 }

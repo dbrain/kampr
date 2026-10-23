@@ -63,6 +63,7 @@ object Wire {
                 rowsData = obj.decodeList<RowDiff>("rows_data"),
                 cursor = obj.decode<Cursor>("cursor") ?: Cursor(),
                 links = obj.strings("links"),
+                reflow = obj.str("reflow"),
             )
 
             "grid.patch" -> ServerMsg.GridPatch(
@@ -187,6 +188,7 @@ object Wire {
             put("pane", msg.pane)
             put("scrollback", msg.scrollback)
             put("conversation", msg.conversation)
+            msg.reflow?.let { put("reflow", buildJsonObject { put("cols", it) }) }
         }
 
         is ClientMsg.Unwatch -> buildJsonObject {

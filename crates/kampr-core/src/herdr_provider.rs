@@ -1,5 +1,6 @@
 use crate::agent_view::{DeskAgents, View};
 use crate::backoff::Backoff;
+use crate::desk::{DeskHosts, resumes};
 use crate::naming::Template;
 use crate::procfs::{Foreground, Procfs};
 use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
@@ -145,6 +146,10 @@ pub struct HerdrConfig {
     /// the herd says so. Raising the machine's alarm for that is a false one on a healthy host, and
     /// it is the line an operator reads first on the day something is actually wrong (#465).
     pub primary: bool,
+    /// The native sessions a `kampr attach` is showing in one of this herdr's panes. Such a pane is
+    /// the session's, not a pane of its own: it is left out of the herd and told the session's
+    /// status instead (docs/17 §4).
+    pub desk: Option<DeskHosts>,
 }
 
 impl Default for HerdrConfig {
@@ -162,6 +167,7 @@ impl Default for HerdrConfig {
             desk_agents: None,
             send_argv: false,
             primary: true,
+            desk: None,
         }
     }
 }
@@ -251,6 +257,7 @@ struct Inner {
     /// is how the node answers the rest, and it answers nothing where `/proc` is not readable.
     procfs: Procfs,
     reporter: Reporter,
+    desk_reporter: Reporter,
     desk_agents: DeskAgents,
     /// Whether this herdr has ever answered `pane.process_info`, which is the difference between
     /// a pane nothing has looked into and a pane nothing *can* look into. See
@@ -372,12 +379,14 @@ pub struct HerdrProvider {
     inner: Arc<Inner>,
     topology_task: tokio::task::JoinHandle<()>,
     liveness_task: tokio::task::JoinHandle<()>,
+    desk_task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for HerdrProvider {
     fn drop(&mut self) {
         self.topology_task.abort();
         self.liveness_task.abort();
+        self.desk_task.abort();
     }
 }
 
@@ -402,6 +411,7 @@ impl HerdrProvider {
             rtt: Mutex::new(Rtt::default()),
             procfs: Procfs::default(),
             reporter: Reporter::new(),
+            desk_reporter: Reporter::new(),
             desk_agents: DeskAgents::new(),
             probed: AtomicBool::new(false),
             watching: watch::channel(0).0,
@@ -410,11 +420,23 @@ impl HerdrProvider {
         });
         let topology_task = tokio::spawn(topology(inner.clone()));
         let liveness_task = tokio::spawn(liveness(inner.clone()));
+        let desk_task = tokio::spawn(desk(inner.clone()));
         Self {
             inner,
             topology_task,
             liveness_task,
+            desk_task,
         }
+    }
+
+    /// The native pane a herdr pane is showing, when it is one. Such a pane is addressed through
+    /// the session and never as itself.
+    pub fn hosting(&self, pane_id: &str) -> Option<String> {
+        self.inner.hosted().remove(pane_id)
+    }
+
+    pub async fn report_desk(&self) {
+        self.inner.report_desk().await;
     }
 
     pub fn snapshot(&self) -> Arc<Snapshot> {
@@ -551,6 +573,46 @@ impl HerdrProvider {
 }
 
 impl Inner {
+    fn hosted(&self) -> HashMap<String, String> {
+        let Some(desk) = &self.config.desk else {
+            return HashMap::new();
+        };
+        desk.on(self.herdr.socket())
+            .into_iter()
+            .map(|h| (h.herdr_pane, h.native_pane))
+            .collect()
+    }
+
+    fn refuse_hosted(&self, pane_id: &str) -> Result<()> {
+        match self.hosted().remove(pane_id) {
+            Some(native) => {
+                anyhow::bail!("{pane_id} is showing native session {native}; address that instead")
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// A pane the snapshot does not have yet (a host attached the moment herdr restored it) is left
+    /// for the next pass rather than reported into a `pane_not_found`.
+    async fn report_desk(&self) {
+        let Some(desk) = &self.config.desk else {
+            return;
+        };
+        let snapshot = self.snapshot.borrow().clone();
+        let hosted: Vec<_> = desk
+            .on(self.herdr.socket())
+            .into_iter()
+            .filter(|h| snapshot.panes.iter().any(|p| p.pane_id == h.herdr_pane))
+            .filter_map(|h| {
+                let report = desk.0.report(&h.native_pane)?;
+                Some((h, report))
+            })
+            .collect();
+        self.desk_reporter
+            .sweep_desk(&self.herdr, &hosted, resumes(&snapshot.version))
+            .await;
+    }
+
     fn sweep(&self) -> Duration {
         match *self.watching.borrow() > 0 {
             true => self.config.sweep_watched,
@@ -581,13 +643,16 @@ impl Inner {
             self.revision.send_modify(|r| *r += 1);
         }
         if let Some(template) = &self.config.report_names {
+            let hosted = self.hosted();
             let panes: Vec<PaneInfo> = snapshot
                 .panes
                 .iter()
+                .filter(|p| !hosted.contains_key(&p.pane_id))
                 .map(|p| pane_info(self, &snapshot, p))
                 .collect();
             self.reporter.sweep(&self.herdr, template, &panes).await;
         }
+        self.report_desk().await;
         self.desk_agents
             .sweep(&self.herdr, self.config.desk_agents.as_ref())
             .await;
@@ -1012,20 +1077,24 @@ fn rows_in(text: &str) -> usize {
 impl Provider for HerdrProvider {
     async fn list_panes(&self) -> Result<Vec<PaneInfo>> {
         let snapshot = self.inner.snapshot.borrow().clone();
+        let hosted = self.inner.hosted();
         Ok(snapshot
             .panes
             .iter()
+            .filter(|p| !hosted.contains_key(&p.pane_id))
             .map(|p| pane_info(&self.inner, &snapshot, p))
             .collect())
     }
 
     async fn watch_pane(&self, pane_id: &str) -> Result<PaneStream> {
+        self.inner.refuse_hosted(pane_id)?;
         let (tx, rx) = mpsc::channel(64);
         let task = tokio::spawn(supervise(self.inner.clone(), pane_id.to_string(), tx));
         Ok(PaneStream::supervised(rx, task))
     }
 
     async fn write_pane(&self, pane_id: &str, input: Input) -> Result<()> {
+        self.inner.refuse_hosted(pane_id)?;
         match input {
             // `pane.send_text` takes a JSON string, so input must be UTF-8 representable.
             // Every escape sequence herdr's key grammar rejects is (probe #8/#9).
@@ -1059,6 +1128,7 @@ impl Provider for HerdrProvider {
         /// keystroke can cost.
         const LISTED: usize = 32;
 
+        self.inner.refuse_hosted(pane_id)?;
         if query.is_empty() {
             return Ok(None);
         }
@@ -1112,6 +1182,7 @@ impl Provider for HerdrProvider {
     /// rows out of 63; the same screen split by width produced none. `column_bound` is the same
     /// accounting the emulator uses.
     async fn read_rows(&self, pane_id: &str, from: u32, to: u32) -> Result<Option<Vec<String>>> {
+        self.inner.refuse_hosted(pane_id)?;
         if to < from {
             return Ok(None);
         }
@@ -1131,6 +1202,7 @@ impl Provider for HerdrProvider {
     }
 
     async fn read_scrollback(&self, pane_id: &str) -> Result<Option<RawScrollback>> {
+        self.inner.refuse_hosted(pane_id)?;
         let snapshot = self.inner.snapshot.borrow().clone();
         let pane = snapshot.pane(pane_id).context("unknown pane")?;
         if !pane.scrollback_is_safe_to_read() {
@@ -1326,6 +1398,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
             false => None,
         },
         fleet: None,
+        native: None,
         detail: inner.stream_fault(),
     }
 }
@@ -1415,6 +1488,20 @@ async fn liveness(inner: Arc<Inner>) {
         if died {
             inner.revision.send_modify(|r| *r += 1);
         }
+    }
+}
+
+/// A session's status moving, or a `kampr attach` arriving in a pane, says nothing to herdr's
+/// event stream: only the native side sees either.
+async fn desk(inner: Arc<Inner>) {
+    let Some(desk) = inner.config.desk.clone() else {
+        return;
+    };
+    let mut changes = desk.0.changes();
+    while changes.changed().await.is_ok() {
+        tokio::time::sleep(inner.config.settle).await;
+        changes.borrow_and_update();
+        inner.report_desk().await;
     }
 }
 

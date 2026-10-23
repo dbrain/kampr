@@ -1,8 +1,9 @@
 use crate::herd::HerdModel;
+use crate::sessions::SessionNode;
 use crate::wire::Wire;
+use kampr_core::PaneRegistry;
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
-use kampr_core::{HerdrProvider, PaneRegistry};
 use kampr_journal::{
     Change, Composed, ComposerFeed, ComposerReader, FacetFeed, Facets, Harness, Journal, JournalError,
     Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, Turn, Watch,
@@ -168,12 +169,12 @@ pub struct Identity {
 /// rather than searched for, and only a hit goes on to scan the project directories. Measured on
 /// this machine at **34 us on a hit and 1.7 us on a miss**, against a loop that turns at most five
 /// times a second per watched pane — and a miss is every pane that is not an agent.
-pub fn marker_of(journals: &Journals, provider: &HerdrProvider, local: &str) -> Option<SessionMarker> {
-    journals.marker(&provider.pane_processes(local))
+pub fn marker_of(journals: &Journals, session: &SessionNode, local: &str) -> Option<SessionMarker> {
+    journals.marker(&session.pane_processes(local))
 }
 
-pub fn identity(journals: &Journals, provider: &HerdrProvider, local: &str) -> Identity {
-    let snapshot = provider.snapshot();
+pub fn identity(journals: &Journals, session: &SessionNode, local: &str) -> Identity {
+    let snapshot = session.provider.snapshot();
     let announced = snapshot
         .pane(local)
         .and_then(|p| p.agent_session.as_ref())
@@ -190,8 +191,8 @@ pub fn identity(journals: &Journals, provider: &HerdrProvider, local: &str) -> I
         // the host that owns the pane — and the marker underneath it, which is every case herdr
         // has not spoken about yet and (today) every case at all.
         announced: announced
-            .or_else(|| marker_of(journals, provider, local).map(|m| SessionRef::id(m.agent, m.session))),
-        harness: provider.agent_harness(local),
+            .or_else(|| marker_of(journals, session, local).map(|m| SessionRef::id(m.agent, m.session))),
+        harness: session.agent_harness(local),
     }
 }
 
@@ -356,8 +357,9 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut screen_status: Option<kampr_journal::StatusReader> = None;
     let mut screen_seen: Option<&'static str> = None;
 
+    let herd_pane = kampr_core::split_view(&global).0.to_string();
     loop {
-        let now = pane_of(&herd, &global, &identity, &local);
+        let now = pane_of(&herd, &herd_pane, &identity, &local);
         // A harness whose only handle on its session is the environment its tools carry (pi)
         // names it only while a tool is running; between tools the marker reads nothing, and
         // re-resolving by directory would latch onto whoever ran last in it. Keep the session the
@@ -377,7 +379,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         } else {
             now
         };
-        let status = status_of(&herd, &global);
+        let status = status_of(&herd, &herd_pane);
         let working = status == AgentStatus::Working;
         // A pane waiting on the operator is not a pane that has stopped. Its screen may be the
         // only account of the message it is asking about: a harness that writes nothing down

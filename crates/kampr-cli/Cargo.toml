@@ -23,13 +23,16 @@ kampr-client = { path = "../kampr-client" }
 kampr-core = { path = "../kampr-core" }
 kampr-fleet = { path = "../kampr-fleet" }
 kampr-herdr = { path = "../kampr-herdr" }
+kampr-keep = { path = "../kampr-keep" }
 kampr-mesh = { path = "../kampr-mesh" }
+kampr-native = { path = "../kampr-native" }
 kampr-node = { path = "../kampr-node" }
 kampr-push = { path = "../kampr-push" }
 kampr-tui = { path = "../kampr-tui" }
 openssl-sys = { workspace = true, optional = true }
 qrcode.workspace = true
 reqwest.workspace = true
+rustix = { workspace = true, features = ["fs", "pty", "termios"] }
 serde.workspace = true
 time.workspace = true
 url.workspace = true
@@ -40,6 +43,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+libc.workspace = true
 kampr-testkit = { path = "../kampr-testkit" }
 rcgen.workspace = true
 sqlx.workspace = true

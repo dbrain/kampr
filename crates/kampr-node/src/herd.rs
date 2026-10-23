@@ -76,19 +76,47 @@ impl HerdModel {
         })
     }
 
-    /// Which nodes changed their reachability between two models, newest state given.
-    pub fn reachability_changes(&self, previous: &Self) -> Vec<(String, bool)> {
-        self.nodes
-            .iter()
-            .filter(|node| {
-                previous
-                    .node(&node.id)
-                    .is_none_or(|old| old.online != node.online)
-            })
-            .filter(|node| !(previous.nodes.is_empty() && node.online))
-            .map(|node| (node.id.clone(), node.online))
-            .collect()
+    /// What changed about each node's availability between two models, newest state given.
+    ///
+    /// Two facts, because a node with native sessions keeps serving through a herdr outage:
+    /// herdr going is news for its panes, and the node going is news only when nothing on it can
+    /// be served any more. A node first seen serving says nothing; its entry already does.
+    pub fn reachability_changes(&self, previous: &Self) -> Vec<(String, Reach)> {
+        let mut changes = Vec::new();
+        for node in &self.nodes {
+            let (online, serving) = (node.online, node.is_serving());
+            let id = || node.id.clone();
+            match previous.node(&node.id) {
+                None if !serving => {
+                    if !online {
+                        changes.push((id(), Reach::HerdrDown));
+                    }
+                    changes.push((id(), Reach::Offline));
+                }
+                None if !previous.nodes.is_empty() => changes.push((id(), Reach::Back)),
+                None => {}
+                Some(old) => {
+                    if old.online && !online {
+                        changes.push((id(), Reach::HerdrDown));
+                    }
+                    if old.is_serving() && !serving {
+                        changes.push((id(), Reach::Offline));
+                    }
+                    if (!old.online && online) || (!old.is_serving() && serving) {
+                        changes.push((id(), Reach::Back));
+                    }
+                }
+            }
+        }
+        changes
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Back,
+    HerdrDown,
+    Offline,
 }
 
 /// The clock behind `updated_at` for a pane nothing better stamped.
@@ -165,6 +193,8 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
     a.name == b.name
         && a.kind == b.kind
         && a.online == b.online
+        && a.reachable == b.reachable
+        && a.native == b.native
         && a.herdr_version == b.herdr_version
         && a.build == b.build
         && a.update == b.update
@@ -188,6 +218,10 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.detail == b.detail
         && a.cmd == b.cmd
         && a.argv == b.argv
+        && a.on_desk == b.on_desk
+        && a.detached == b.detached
+        && a.size_holder == b.size_holder
+        && a.exited == b.exited
 }
 
 #[cfg(test)]
@@ -377,6 +411,77 @@ mod tests {
         assert_eq!(back, ["01J/w1:p1"], "and the job ending is a change too");
     }
 
+    /// `(online, reachable, native)` before and after, and what a client is told. `None` before is
+    /// the first herd on a connection.
+    #[test]
+    fn a_node_is_offline_only_when_nothing_on_it_can_be_served() {
+        use Reach::*;
+        let at = |state: Option<(bool, bool, bool)>| {
+            let mut model = node("0.1.0", None);
+            match state {
+                Some((online, reachable, native)) => {
+                    model.nodes[0].online = online;
+                    model.nodes[0].reachable = Some(reachable);
+                    model.nodes[0].native = native.then_some(true);
+                }
+                None => model.nodes.clear(),
+            }
+            model
+        };
+        for (what, before, after, told) in [
+            (
+                "herdr-only outage",
+                Some((true, true, false)),
+                (false, true, false),
+                &[HerdrDown, Offline][..],
+            ),
+            (
+                "herdr outage beside native",
+                Some((true, true, true)),
+                (false, true, true),
+                &[HerdrDown],
+            ),
+            (
+                "a peer's link drops",
+                Some((false, true, true)),
+                (false, false, true),
+                &[Offline],
+            ),
+            (
+                "herdr comes back",
+                Some((false, true, true)),
+                (true, true, true),
+                &[Back],
+            ),
+            (
+                "a link comes back",
+                Some((false, false, true)),
+                (false, true, true),
+                &[Back],
+            ),
+            (
+                "first seen with no herdr, serving",
+                None,
+                (false, true, true),
+                &[],
+            ),
+            (
+                "first seen with no herdr, serving nothing",
+                None,
+                (false, true, false),
+                &[HerdrDown, Offline],
+            ),
+            ("first seen up", None, (true, true, false), &[]),
+        ] {
+            let changes: Vec<Reach> = at(Some(after))
+                .reachability_changes(&at(before))
+                .into_iter()
+                .map(|(_, reach)| reach)
+                .collect();
+            assert_eq!(changes, told, "{what}");
+        }
+    }
+
     fn node(build: &str, update: Option<&str>) -> HerdModel {
         HerdModel {
             nodes: vec![NodeEntry {
@@ -385,6 +490,7 @@ mod tests {
                 kind: "local".into(),
                 online: true,
                 reachable: None,
+                native: None,
                 rtt_ms: None,
                 herdr_version: None,
                 build: Some(build.to_string()),

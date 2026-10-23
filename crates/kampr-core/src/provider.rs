@@ -16,6 +16,33 @@ pub enum AgentStatus {
     Unknown,
 }
 
+/// Which grid a watch that asked for a reflowed view is being sent (docs/17 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Reflow {
+    On,
+    Alternate,
+    /// An agent wraps its own lines at the width it was given, so re-laying them does nothing (#588).
+    Harness,
+    Unsupported,
+}
+
+/// A reflowed view is its own pane to the registry, so watchers asking the same width share one
+/// stream and one ring, and nobody else's stream is touched. `~` is in no pane id any provider mints.
+pub fn view_key(pane_id: &str, cols: u16) -> String {
+    format!("{pane_id}~{cols}")
+}
+
+pub fn split_view(key: &str) -> (&str, Option<u16>) {
+    match key.rsplit_once('~') {
+        Some((pane, cols)) => match cols.parse() {
+            Ok(cols) => (pane, Some(cols)),
+            Err(_) => (key, None),
+        },
+        None => (key, None),
+    }
+}
+
 /// What a fleet run is doing, as measured rather than as guessed.
 ///
 /// `Quiet` is deliberately not a kind of `Waiting`. Probes #331 and #332 describe hosts whose
@@ -80,6 +107,46 @@ pub struct FleetPane {
     pub started_unix: i64,
 }
 
+/// A session Kampr keeps itself (docs/17), with no herdr behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativePane {
+    pub session_id: String,
+    /// The herdr pane a `kampr attach` is showing it in, from the first live host that has one.
+    pub on_desk: Option<String>,
+    /// No live host at all: nothing is showing it anywhere but through a node.
+    pub detached: bool,
+    pub size_holder: Option<String>,
+    pub exited: Option<NativeExit>,
+    /// What the harness itself says over `OSC 7501` (#600), `None` while that channel is down.
+    pub program: Option<ProgramStatus>,
+}
+
+/// A harness's own run state, as Claude Code publishes it to a terminal that answered `OSC 7501;?`
+/// (#600). `kind` and `message` are set only on a block (`permission`, `question`, `auth`) and an
+/// error, the message already decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatus {
+    pub state: ProgramState,
+    pub kind: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+    Error,
+}
+
+/// A keeper that died without recording how its child ended has both halves `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeExit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
     pub pane_id: String,
@@ -119,6 +186,7 @@ pub struct PaneInfo {
     /// Set on a fleet run and `None` on everything herdr owns. A client groups by this rather
     /// than by parsing the pane id.
     pub fleet: Option<FleetPane>,
+    pub native: Option<NativePane>,
     /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.
@@ -283,6 +351,12 @@ pub trait Provider: Send + Sync + 'static {
         false
     }
 
+    /// Whether a view of this pane re-laid at another width can be served right now, and why not.
+    /// Answered from cached state: the node asks it on every frame of a reflowed watch.
+    fn reflow(&self, _pane_id: &str) -> Reflow {
+        Reflow::Unsupported
+    }
+
     /// Whether this implementation is the one that owns `pane_id`.
     ///
     /// Only [`Composite`] asks. The default is "yes", which makes a single provider the answer to
@@ -380,6 +454,11 @@ impl Provider for Composite {
     fn harness_owns_the_screen(&self, pane_id: &str) -> bool {
         self.route(pane_id)
             .is_ok_and(|p| p.harness_owns_the_screen(pane_id))
+    }
+
+    fn reflow(&self, pane_id: &str) -> Reflow {
+        self.route(pane_id)
+            .map_or(Reflow::Unsupported, |p| p.reflow(pane_id))
     }
 
     fn topology(&self) -> watch::Receiver<u64> {

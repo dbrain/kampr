@@ -50,7 +50,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.othersWatching
+import dev.kampr.shared.model.reflowCols
+import dev.kampr.shared.model.reflowNote
 import dev.kampr.shared.model.watchersPhrase
 import dev.kampr.shared.platform.LocalClipboardText
 import dev.kampr.shared.platform.LocalReduceMotion
@@ -492,6 +495,14 @@ fun TerminalView(
         MatchTheView(pane.id, io, view, matching, grow, viewCols, viewRows, pane.painted) {
             pane.painted && (pane.cells.cols < viewCols || pane.cells.rows < viewRows)
         }
+
+        // Looking, not claiming: the node re-lays its own copy of the screen and the PTY keeps
+        // its size (docs/17 §3), so this needs none of the hold's ceremony.
+        val paneInfo = io.info(pane.id)
+        val reflowAsked = view.reflowView ?: io.prefs(pane.id).reflow
+        val reflowTo = reflowCols(paneInfo, viewCols, deskSized, LocalMosaicCell.current, reflowAsked)
+        LaunchedEffect(pane.id, reflowTo) { io.reflow(pane.id, reflowTo) }
+        DisposableEffect(pane.id) { onDispose { io.reflow(pane.id, null) } }
 
         // **The bar is travel, never fit.** Everything above measured the view without it, because
         // a bar that took rows off `viewRows` reshaped a held pane each time columns went off screen
@@ -1349,7 +1360,7 @@ fun TerminalView(
                     null
                 } else {
                     PaneSizing(
-                        cols = cols,
+                        cols = paneInfo?.cols ?: cols,
                         rows = rows.liveRows,
                         viewCols = viewCols,
                         viewRows = viewRows,
@@ -1357,6 +1368,16 @@ fun TerminalView(
                         matching = matching,
                         canMatch = (roomToMatch || io.growsPanes) && !ownPane,
                         grows = grow,
+                        reflow = paneInfo?.takeIf { it.isNative && !LocalMosaicCell.current }?.let { info ->
+                            Reflowing(
+                                on = reflowTo != null,
+                                note = reflowTo?.let { reflowNote(pane.reflow, it, info.cols ?: cols) },
+                                onChange = { on ->
+                                    view.reflowView = on
+                                    io.send(ClientMsg.SetPrefs(pane.id, mapOf("reflow" to if (on) "on" else "off")))
+                                },
+                            )
+                        },
                     )
                 },
                 onResize = { c, r ->

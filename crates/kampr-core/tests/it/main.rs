@@ -1,3 +1,4 @@
+mod desk;
 mod events;
 mod naming;
 mod observe;

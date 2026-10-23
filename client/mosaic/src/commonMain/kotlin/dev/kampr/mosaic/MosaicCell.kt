@@ -51,6 +51,7 @@ import dev.kampr.shared.model.PaneGone
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.WatchPresence
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.serves
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
 import dev.kampr.shared.theme.BorderSpec
@@ -109,7 +110,7 @@ private fun latencyTone(node: NodeInfo?): Color {
     val color = Kampr.tokens.color
     val rtt = node?.rttMs
     return when {
-        node == null || !node.online -> color.blocked
+        node == null || !node.isServing -> color.blocked
         rtt == null -> color.mute
         rtt >= SLOW_MS -> color.working
         node.kind == "local" -> color.mute
@@ -148,7 +149,7 @@ fun MosaicCell(
     val tokens = Kampr.tokens
     val base = LocalPaneIo.current
     val io = remember(base, focused) { CellIo(base, focused) }
-    val offline = node != null && !node.online
+    val offline = node != null && !node.serves(info)
     val held = drag?.held == pane.id
     val presence = rememberWatchPresence(pane.id, info)
 

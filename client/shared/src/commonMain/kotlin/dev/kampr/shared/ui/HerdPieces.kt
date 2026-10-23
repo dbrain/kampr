@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.TriageItem
-import dev.kampr.shared.model.homeRelative
+import dev.kampr.shared.model.nativeSpoken
 import dev.kampr.shared.model.othersWatching
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
@@ -44,7 +44,7 @@ import dev.kampr.shared.wire.PaneInfo
 // The tail is the half that carries the identity: it tells `~/dev/kampr-wt2` from `~/dev/kampr`
 // and `cargo test -p kampr-tui` from `-p kampr-core`, and an end-ellipsis eats exactly that. Pane
 // names and paths lose their middle instead; everything else keeps the default.
-private val ELIDE_MIDDLE = TextOverflow.MiddleEllipsis
+internal val ELIDE_MIDDLE = TextOverflow.MiddleEllipsis
 
 @Composable
 fun statusColor(status: AgentStatus): Color {
@@ -91,6 +91,7 @@ fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     statusWord(statusOf(pane)),
     pane.cwd,
     "updated ${relativeTime(pane.updatedAt, now)}",
+    nativeSpoken(pane),
     watchersPhrase(othersWatching(pane)),
 ).joinToString(", ")
 
@@ -160,6 +161,7 @@ fun NodeCountPill(online: Int, connection: ConnectionStatus, compact: Boolean, o
 fun NodeQuiet(node: NodeInfo, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val said = when {
+        node.isServing && !node.online -> "nothing running on this machine · no herdr"
         !node.online && node.isReachable -> "herdr is not running on ${node.name} — New (+) starts it"
         !node.online -> node.detail ?: "this machine is not reachable"
         else -> "nothing running on this machine"
@@ -231,7 +233,8 @@ fun nodeReach(node: NodeInfo): String = if (node.kind == "local") "local" else "
 fun nodeFacts(node: NodeInfo, withStatus: Boolean = false): List<String> = listOfNotNull(
     if (node.kind == "local") "this machine" else "peer",
     node.session.takeIf { it != "default" }?.let { "session $it" },
-    if (withStatus) (if (node.online) "online" else "offline") else null,
+    if (withStatus) (if (node.isServing) "online" else "offline") else null,
+    "no herdr".takeIf { node.isServing && !node.online },
     node.build?.let { "kampr $it" },
     node.update?.let { "$it available" },
     node.herdrVersion?.let { "herdr $it" },
@@ -247,7 +250,7 @@ fun NodeListSheet(
 ) {
     val tokens = Kampr.tokens
     val compact = breakpoint != Breakpoint.Portrait
-    val online = nodes.count { it.online }
+    val online = nodes.count { it.isServing }
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader(
             title = "Machines",
@@ -282,8 +285,8 @@ fun NodeListSheet(
                     compact = compact,
                     trailing = {
                         Mark(
-                            if (node.online) tokens.color.done else tokens.color.blocked,
-                            if (node.online) MarkShape.Bar else MarkShape.Ring,
+                            if (node.isServing) tokens.color.done else tokens.color.blocked,
+                            if (node.isServing) MarkShape.Bar else MarkShape.Ring,
                             9.dp,
                         )
                     },
@@ -367,7 +370,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
                     if (quiet) tokens.color.dim else tokens.color.text,
                     overflow = ELIDE_MIDDLE,
                 )
-                KText(homeRelative(pane.cwd ?: ""), tokens.type.meta, tokens.color.mute, overflow = ELIDE_MIDDLE)
+                PaneSubline(pane)
             }
             WatchersTag(othersWatching(pane))
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -414,7 +417,7 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
                 if (quiet) tokens.color.dim else tokens.color.text,
                 overflow = ELIDE_MIDDLE,
             )
-            KText(homeRelative(pane.cwd ?: ""), tokens.type.meta, tokens.color.mute, overflow = ELIDE_MIDDLE)
+            PaneSubline(pane)
         }
         WatchersTag(othersWatching(pane))
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)

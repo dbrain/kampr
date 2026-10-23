@@ -32,7 +32,7 @@ ICANON describe *sudo's relay* rather than the job (#341). Reading them anyway c
 that hides the process inserts the relay that lies about the terminal, so anything inferred behind
 that wall goes on the text alone.
 
-**But a supervisor that forks the command and shares its privilege can read all of it** (#334). A
+**But a parent that forks the command and shares its privilege can read all of it** (#334). A
 prompt is `read(2)` on fd 0; `sleep` is `clock_nanosleep`; a busy loop is `running`. And on a pty
 with no *interactive* shell on it, ECHO going off is honest again (#337) — the confound #333
 describes needs a shell that is reading a line, and a fleet run's shell never is. That sentence
@@ -41,6 +41,27 @@ below has what was measured when a shell was put there on purpose.
 
 So the design inverted: **instrument from inside a pty we own, rather than inspect a pane from
 outside.**
+
+## Where a run lives
+
+A run is a native session ([`17-native-sessions.md`](./17-native-sessions.md) §2) with a `cohort` in
+its `spec.json` and no host. Its keeper forked the command, owns the pty and logs every byte, and it
+is the command's parent, so the keeper's `state` request is what reads `/proc/<pid>/{syscall,fd/0}`
+for the run and its descendants — the one reader yama lets through (#331). The node's ladder
+(`kampr-fleet/src/ladder.rs`) asks for that four times a second, reads the unterminated line off the
+log, and takes termios off a borrowed master; nothing in the node reads the pty itself. The screen,
+input and history are the native provider's, so a fleet pane is drawn, typed into and searched
+exactly like any other native session, under its old `fleet:<ULID>` id.
+
+The sessions live under `<native root>/fleet/<herdr session>/`, a root per node, so `kampr ls` and
+the native provider never list them and a named herdr session's node never serves another's runs.
+**A node restart, crash or upgrade no longer ends a run**: the next node finds each session with a
+cohort under its root and serves it again, its question re-read within a poll. A reboot still ends
+them, because the logs are on tmpfs.
+
+A run ends with its command, as a terminal closes when its program exits: a child it left behind
+that ignores the hangup no longer holds the run open, because the keeper drains for at most three
+seconds after the command is reaped and then ends the session.
 
 ## What that buys, beyond detection
 
@@ -86,12 +107,12 @@ Two traps that produced real false positives while this was built, both now test
   carriage-return handling the "prompt" is every frame glued end to end.
 
 And one race: the child parks in `read(2)` the instant it asks, which is *before* the bytes it just
-wrote reach the supervisor. A question is therefore published only after one poll of agreement with
+wrote reach the log. A question is therefore published only after one poll of agreement with
 no new bytes in between — otherwise the first prompt on every run is empty.
 
 ## Privilege
 
-A supervisor can only read a job it forked *at its own privilege*, so `sudo pacman -Syu` reports
+A keeper can only read a job it forked *at its own privilege*, so `sudo pacman -Syu` reports
 `blind: true` — an observation made over the run rather than a sample taken once, because `spawn`
 returns while the child is still this process's own un-`exec`ed copy and readable whatever it is
 about to become. The node sees nothing of the process, and everything the board knows about it comes
@@ -107,13 +128,13 @@ answerable by opening the pane.
 Closing that last case properly would mean a second binary the node starts under `sudo`, a socket
 protocol for it to report on, and a new privileged surface — for one prompt that nothing in this
 fleet produces. It is not built and there is no plan to build it. What was measured while working
-that out stands on its own: [#334](./03-probe-log.md) for why a supervisor must share the
+that out stands on its own: [#334](./03-probe-log.md) for why a reader must share the
 command's privilege at all, and [#338](./03-probe-log.md) for how such a helper would have had
 to report, should the question ever come back.
 
 ## The PATH a run is given, and why it took two goes
 
-A fleet run is forked by the node, the node is a service, and a service manager's `PATH` is not the
+A fleet run is started by the node, the node is a service, and a service manager's `PATH` is not the
 installing shell's — measured as `/usr/local/sbin:/usr/local/bin:/usr/bin` here
 ([#392](./03-probe-log.md)). So `kampr update` across the herd looked for a binary in three
 directories it was never installed into. `kampr_fleet::env` reads the operator's own shell's
@@ -165,7 +186,8 @@ and answers one host at a time.
 
 A fleet run's *history* is a different thing from a cohort, and keeping them apart is the whole of
 this design. `Herd::cohorts()` derives past runs from the panes that are still live: it dies on
-`fleet.forget` and it dies when the node restarts, because a cohort is a set of ptys. The **fleet
+`fleet.forget`, and it outlives a node restart because a cohort is a set of kept sessions, but not a
+reboot. The **fleet
 book** is a record of command *strings* — five recently run, plus however many the operator kept —
 and it is not a second source of truth about anything running.
 

@@ -199,6 +199,38 @@ sealed interface ManageOp {
     data class FleetDrop(val entry: String) : ManageOp {
         override val op: String get() = "fleet.drop"
     }
+
+    // A session Kampr keeps itself, with no herdr behind it (docs/17). `node` routes it the way it
+    // routes every other create, because `at` is only sent with `desk`; a null `command` with no
+    // `args` is the host's login shell.
+    data class NativeCreate(
+        val node: String,
+        val command: String? = null,
+        val args: List<String> = emptyList(),
+        val cwd: String? = null,
+        val label: String? = null,
+        val desk: Boolean = false,
+        val at: String? = null,
+    ) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "native.create"
+        }
+    }
+
+    data class NativeClose(val at: String) : ManageOp {
+        override val op: String get() = "native.close"
+    }
+
+    // The node refuses a live one, as `fleet.forget` does.
+    data class NativeForget(val at: String) : ManageOp {
+        override val op: String get() = "native.forget"
+    }
+
+    data class NativeDesk(val at: String) : ManageOp {
+        override val op: String get() = "native.desk"
+    }
 }
 
 fun ManageOp.fields(): JsonObject = buildJsonObject {
@@ -308,6 +340,24 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         }
 
         is ManageOp.FleetDrop -> put("entry", entry)
+
+        is ManageOp.NativeCreate -> {
+            put("node", node)
+            opt("command", command)
+            if (args.isNotEmpty()) put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            opt("cwd", cwd)
+            opt("label", label)
+            if (desk) {
+                put("desk", true)
+                opt("at", at)
+            }
+        }
+
+        is ManageOp.NativeClose -> put("at", at)
+
+        is ManageOp.NativeForget -> put("at", at)
+
+        is ManageOp.NativeDesk -> put("at", at)
 
         is ManageOp.SessionStop -> {
             put("node", node)

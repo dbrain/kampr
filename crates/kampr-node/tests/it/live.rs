@@ -18,6 +18,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+mod native;
+
 static SESSIONS_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 struct Session {
@@ -414,6 +416,7 @@ impl Harness {
         config.server.bind = format!("127.0.0.1:{port}");
         config.server.origin = format!("http://127.0.0.1:{port}");
         config.herdr.socket = session.socket.display().to_string();
+        config.native.root = "/nowhere/native".into();
         // **The same binary that started the server, verbatim.** The node resolves `herdr` through
         // `kampr_herdr::locate`, which reads `HERDR_BIN_PATH` *before* `PATH` — and herdr injects
         // that variable into every pane it runs, so a suite run from inside a herd points the node
@@ -2289,6 +2292,7 @@ async fn the_node_can_terminate_tls_itself() {
     config.server.tls.cert = cert.display().to_string();
     config.server.tls.key = key.display().to_string();
     config.herdr.socket = session.socket.display().to_string();
+    config.native.root = "/nowhere/native".into();
     config.save(&state.path().join("config")).unwrap();
 
     let node = Node::start(config, state.path()).await.unwrap();
@@ -2437,6 +2441,7 @@ async fn the_port_is_bound_before_herdr_is_needed() {
     // node that would, and a test that phoned GitHub would be one with a rate limit.
     config.update.check = false;
     config.herdr.socket = state.path().join("nothing-here.sock").display().to_string();
+    config.native.root = state.path().join("native").display().to_string();
     // Only the configured session, which does not exist. Otherwise this node discovers every
     // other test's throwaway herd and the herd is not empty for reasons that are not the point.
     config.herdr.sessions = Some(Vec::new());
@@ -2654,6 +2659,7 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
     // node that would, and a test that phoned GitHub would be one with a rate limit.
     config.update.check = false;
     config.herdr.socket = first.socket.display().to_string();
+    config.native.root = "/nowhere/native".into();
     config.herdr.sessions = Some(vec![second.name.clone()]);
     let (node, origin, server) = serve_config(config, &state).await;
 
@@ -4893,6 +4899,12 @@ async fn every_client_op_lands_on_a_real_herd() {
         "session.stop",
         "fleet.save",
         "fleet.drop",
+        // Driven against a real herd in `live::native`, which needs a native root this harness
+        // turns off.
+        "native.create",
+        "native.desk",
+        "native.close",
+        "native.forget",
     ]
     .into_iter()
     .collect();
@@ -6686,6 +6698,7 @@ async fn a_restarted_node_calls_a_quiet_conversation_as_old_as_its_transcript() 
     let mut config = Config::bootstrap("restarted");
     config.update.check = false;
     config.herdr.socket = h._session.socket.display().to_string();
+    config.native.root = "/nowhere/native".into();
     config.herdr.binary = kampr_testkit::herdr_on_path().display().to_string();
     config.herdr.sessions = Some(Vec::new());
     config.journals.home = home_path;
@@ -8563,11 +8576,11 @@ async fn what_the_pump_compares_holds_still_while_the_agent_works() {
     let (session, _) = h.node.resolve(&pane).expect("a local pane");
     let journals = h.node.journals();
 
-    let first = kampr_node::convo::identity(&journals, &session.provider, &local);
+    let first = kampr_node::convo::identity(&journals, &session, &local);
     for _ in 0..8 {
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(
-            kampr_node::convo::identity(&journals, &session.provider, &local),
+            kampr_node::convo::identity(&journals, &session, &local),
             first,
             "what the pump compares moved on its own, which re-pages the conversation"
         );
@@ -9982,6 +9995,7 @@ async fn a_named_session_closing_does_not_raise_the_alarm_for_the_machines_own_h
     let mut config = Config::bootstrap("closingnode");
     config.update.check = false;
     config.herdr.socket = mine.socket.display().to_string();
+    config.native.root = "/nowhere/native".into();
     config.herdr.sessions = Some(vec![theirs.name.clone()]);
     let (node, _origin, server) = serve_config(config, &state).await;
 

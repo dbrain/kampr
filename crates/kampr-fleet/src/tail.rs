@@ -1,6 +1,6 @@
 //! The completed lines a command has written, and the unterminated one it is sitting on.
 //!
-//! The unterminated tail is the whole reason a supervisor reads a prompt better than a screen
+//! The unterminated tail is the whole reason the log of a pty reads a prompt better than a screen
 //! scraper can: a prompt is text the command wrote and did not end with a newline, and that is
 //! true of every CLI without any of them cooperating. A screen has no such distinction — by the
 //! time bytes are cells, the newline is gone.
@@ -51,7 +51,7 @@ impl Tail {
 
     /// Every byte ever pushed, counted rather than measured off what was kept.
     ///
-    /// The supervisor uses this to tell "the output has settled" from "more is still arriving",
+    /// The ladder uses this to tell "the output has settled" from "more is still arriving",
     /// and the retained text cannot answer that: a progress bar rewrites one line forever without
     /// changing its length, and `completed` is capped.
     pub fn received(&self) -> usize {

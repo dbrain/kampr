@@ -46,6 +46,9 @@ class TerminalViewState {
     // having answered yet, which is what lets the viewport decide (ADR 0013).
     var matchView by mutableStateOf<Boolean?>(null)
 
+    // The same, for re-laying a native pane at this view's width rather than reshaping it.
+    var reflowView by mutableStateOf<Boolean?>(null)
+
     // Whether the node took this view's standing claim, as opposed to whether one was wanted.
     var matchHeld by mutableStateOf(false)
 

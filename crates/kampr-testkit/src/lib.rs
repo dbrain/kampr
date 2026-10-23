@@ -11,6 +11,9 @@
 //! every pane is blank — and reporting it as "not installed" is how that defect hides.
 
 pub mod alloc;
+mod keeper;
+
+pub use keeper::{kampr, keeper};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

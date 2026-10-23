@@ -27,6 +27,8 @@ pub struct PeerPaneCtx {
     pub wire: Arc<Wire>,
     pub global: String,
     pub conversation: bool,
+    /// The width a reflowed view was asked for, which the peer re-lays and this hub relays.
+    pub reflow: Option<u16>,
 }
 
 pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
@@ -35,10 +37,11 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         wire,
         global,
         conversation,
+        reflow,
     } = ctx;
     // Whether this client has been handed a page for this pane yet. See [`first_page`].
     let mut paged = false;
-    let mut watcher = match peers.watch(&global, conversation) {
+    let mut watcher = match watch(&peers, &global, conversation, reflow) {
         Ok(watcher) => watcher,
         Err(e) => {
             wire.error(e.code(), &e.to_string(), Some(&global));
@@ -46,7 +49,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         }
     };
     for event in watcher.initial() {
-        if !emit(&peers, &wire, &global, event, &mut paged) {
+        if !emit(&peers, &wire, &global, &watcher, event, &mut paged) {
             return;
         }
     }
@@ -77,9 +80,9 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
             if overrun {
                 return;
             }
-            watcher = rewatch(&peers, &global, conversation).await;
+            watcher = rewatch(&peers, &global, conversation, reflow).await;
             for event in watcher.initial() {
-                if !emit(&peers, &wire, &global, event, &mut paged) {
+                if !emit(&peers, &wire, &global, &watcher, event, &mut paged) {
                     return;
                 }
             }
@@ -88,12 +91,12 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         if matches!(event, RemoteEvent::Update(_)) && wire.outbox().congested() {
             let dropped = wire.outbox().purge_pane(&global);
             debug!(pane = %global, dropped, "client is behind on a relayed pane; resetting instead of buffering");
-            match resync(&wire, &global, &watcher) {
+            match resync(&wire, &global, &mut watcher) {
                 true => continue,
                 false => return,
             }
         }
-        if !emit(&peers, &wire, &global, event, &mut paged) {
+        if !emit(&peers, &wire, &global, &watcher, event, &mut paged) {
             return;
         }
     }
@@ -106,27 +109,50 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
 /// nothing at all — and giving up on that answer would lose the reader to the one instant the
 /// recovery exists for. Nothing here needs its own ceiling: this task is the watch, so it ends
 /// when the operator leaves the pane or the socket goes.
-async fn rewatch(peers: &Arc<Peers>, global: &str, conversation: bool) -> RemoteWatcher {
+async fn rewatch(peers: &Arc<Peers>, global: &str, conversation: bool, reflow: Option<u16>) -> RemoteWatcher {
     loop {
         tokio::time::sleep(PEER_RETRY).await;
-        if let Ok(watcher) = peers.watch(global, conversation) {
+        if let Ok(watcher) = watch(peers, global, conversation, reflow) {
             return watcher;
         }
     }
 }
 
-fn resync(wire: &Wire, global: &str, watcher: &RemoteWatcher) -> bool {
+fn watch(
+    peers: &Peers,
+    global: &str,
+    conversation: bool,
+    reflow: Option<u16>,
+) -> Result<RemoteWatcher, kampr_mesh::RelayError> {
+    match reflow {
+        Some(cols) => peers.watch_view(global, cols, conversation),
+        None => peers.watch(global, conversation),
+    }
+}
+
+fn resync(wire: &Wire, global: &str, watcher: &mut RemoteWatcher) -> bool {
     match watcher.resync() {
-        Some(full) => wire.send_update(global, &full),
+        Some(full) => wire.send_view(global, &full, watcher.reflow()),
         None => true,
     }
 }
 
-fn emit(peers: &Peers, wire: &Wire, global: &str, event: RemoteEvent, paged: &mut bool) -> bool {
+fn emit(
+    peers: &Peers,
+    wire: &Wire,
+    global: &str,
+    watcher: &RemoteWatcher,
+    event: RemoteEvent,
+    paged: &mut bool,
+) -> bool {
     match event {
-        RemoteEvent::Update(update) => wire.send_update(global, &update),
+        RemoteEvent::Update(update) => wire.send_view(global, &update, watcher.reflow()),
         RemoteEvent::Scrollback(doc) => wire.send_scrollback(global, &doc),
-        RemoteEvent::Passthrough(value) => {
+        RemoteEvent::Passthrough(mut value) => {
+            // A view is answered under the id it is relayed as; the client asked about the pane.
+            if value.get("pane").is_some() {
+                value["pane"] = Value::from(global);
+            }
             let value = first_page(value, paged);
             match peers.can_serve_attachments(global) {
                 true => wire.send_json(&value),

@@ -45,6 +45,15 @@ data class PaneSizing(
     val canMatch: Boolean = false,
     // The switch enlarges only what the pane is short of, rather than holding it at the view.
     val grows: Boolean = false,
+    // Only on a native pane, the one kind the node can re-lay.
+    val reflow: Reflowing? = null,
+)
+
+data class Reflowing(
+    val on: Boolean,
+    // What the node said the grid on screen is, once it is re-laid or has said why not.
+    val note: String?,
+    val onChange: (Boolean) -> Unit,
 )
 
 internal fun PaneSizing.fitIsUsable() = viewCols >= MIN_PANE_COLS && viewRows >= MIN_PANE_ROWS
@@ -135,6 +144,16 @@ internal fun ResizePanel(
                     ) + "Their screen at the desk is wrong while it is held, and the pane goes back " +
                     "to the size it was when you let go.",
                 onChange = onMatchView,
+            )
+        }
+
+        sizing.reflow?.let { reflow ->
+            Toggle(
+                on = reflow.on,
+                title = "Re-lay lines at this view's width · ${sizing.viewCols} columns",
+                detail = reflow.note ?: "Wraps the pane's lines to fit this screen without resizing the pane. " +
+                    "A full-screen program or an agent still shows at the pane's own width.",
+                onChange = reflow.onChange,
             )
         }
 

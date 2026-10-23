@@ -1,50 +1,17 @@
 //! The fleet provider as the node sees it: panes, streams, answers and grouping.
 
+use crate::{Fleet, PATIENCE, sh, typed};
 use kampr_core::provider::{AgentStatus, Input, PaneEvent, PaneInfo, Provider};
-use kampr_fleet::exec::Geometry;
-use kampr_fleet::{FleetProvider, Job, RunEvent, State, Supervisor};
+use kampr_fleet::{Geometry, Job, State};
 use std::os::unix::fs::PermissionsExt;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
-
-const PATIENCE: Duration = Duration::from_secs(10);
-
-fn provider() -> Arc<FleetProvider> {
-    Arc::new(FleetProvider::new())
-}
-
-fn sh(script: &str) -> Job {
-    Job::Argv(vec!["sh".into(), "-c".into(), script.into()])
-}
-
-/// A line the way the operator would type it into their own terminal.
-fn typed(line: &str) -> Job {
-    Job::Shell(line.into())
-}
-
-async fn wait_for(provider: &Arc<FleetProvider>, pane_id: &str, want: impl Fn(&State) -> bool) -> PaneInfo {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    let mut last = None;
-    while tokio::time::Instant::now() < deadline {
-        let panes = provider.list_panes().await.expect("a list");
-        if let Some(pane) = panes.into_iter().find(|p| p.pane_id == pane_id) {
-            let state = pane.fleet.as_ref().expect("a fleet marker").state.clone();
-            if want(&state) {
-                return pane;
-            }
-            last = Some(state);
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("{pane_id} never reached the state asked for; last was {last:?}");
-}
 
 #[tokio::test]
 async fn a_started_run_is_served_as_a_pane_carrying_its_cohort_and_its_command() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("cohort-a", &sh("echo hello; sleep 5"), None, Geometry::default())
+        .await
         .expect("a run");
 
     let panes = provider.list_panes().await.expect("a list");
@@ -68,7 +35,7 @@ async fn a_herdr_pane_carries_no_fleet_marker_so_the_two_never_mix_in_one_list()
 
 #[tokio::test]
 async fn watching_a_run_replays_what_it_already_printed_and_then_follows_it() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "c",
@@ -76,6 +43,7 @@ async fn watching_a_run_replays_what_it_already_printed_and_then_follows_it() {
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -105,7 +73,7 @@ async fn watching_a_run_replays_what_it_already_printed_and_then_follows_it() {
 #[tokio::test]
 async fn a_waiting_run_reports_blocked_so_the_existing_ordering_floats_it_to_the_top() {
     // Reuse rather than a second sort: the sidebar already puts blocked above working.
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "c",
@@ -113,10 +81,17 @@ async fn a_waiting_run_reports_blocked_so_the_existing_ordering_floats_it_to_the
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
 
-    let pane = wait_for(&provider, &pane_id, |s| matches!(s, State::Waiting(_))).await;
+    let pane = provider
+        .wait_for(&pane_id, |s| matches!(s, State::Waiting(_)))
+        .await;
     assert_eq!(pane.agent_status, AgentStatus::Blocked);
+    assert!(
+        !pane.fleet.as_ref().unwrap().blind && pane.detail.is_none(),
+        "a run its keeper can read was reported blind"
+    );
     let question = pane.fleet.unwrap().state.question().cloned().expect("a question");
     assert_eq!(question.prompt, ":: Proceed with installation? [Y/n]");
     assert_eq!(question.options().len(), 2);
@@ -125,7 +100,7 @@ async fn a_waiting_run_reports_blocked_so_the_existing_ordering_floats_it_to_the
 
 #[tokio::test]
 async fn an_answer_written_to_the_pane_reaches_the_command_and_it_finishes() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "c",
@@ -133,15 +108,18 @@ async fn an_answer_written_to_the_pane_reaches_the_command_and_it_finishes() {
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
-    wait_for(&provider, &pane_id, |s| matches!(s, State::Waiting(_))).await;
+    provider
+        .wait_for(&pane_id, |s| matches!(s, State::Waiting(_)))
+        .await;
 
     provider
         .write_pane(&pane_id, Input::Bytes(b"y\n".to_vec()))
         .await
         .expect("the answer went in");
 
-    let pane = wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let pane = provider.wait_for(&pane_id, |s| s.finished()).await;
     let state = pane.fleet.unwrap().state;
     assert!(state.succeeded(), "{state:?}");
     assert_eq!(pane.agent_status, AgentStatus::Done);
@@ -149,11 +127,12 @@ async fn an_answer_written_to_the_pane_reaches_the_command_and_it_finishes() {
 
 #[tokio::test]
 async fn a_run_that_fails_is_not_reported_as_one_that_succeeded() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("c", &sh("exit 1"), None, Geometry::default())
+        .await
         .expect("a run");
-    let pane = wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let pane = provider.wait_for(&pane_id, |s| s.finished()).await;
     let state = pane.fleet.unwrap().state;
     assert!(state.finished());
     assert!(!state.succeeded(), "exit 1 must not round to success: {state:?}");
@@ -161,30 +140,36 @@ async fn a_run_that_fails_is_not_reported_as_one_that_succeeded() {
 
 #[tokio::test]
 async fn keys_sent_as_names_reach_the_command_as_bytes() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("c", &sh("read a; exit 0"), None, Geometry::default())
+        .await
         .expect("a run");
-    wait_for(&provider, &pane_id, |s| matches!(s, State::Waiting(_))).await;
+    provider
+        .wait_for(&pane_id, |s| matches!(s, State::Waiting(_)))
+        .await;
     provider
         .write_pane(&pane_id, Input::Keys(vec!["enter".into()]))
         .await
         .expect("the key went in");
-    let pane = wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let pane = provider.wait_for(&pane_id, |s| s.finished()).await;
     assert!(pane.fleet.unwrap().state.succeeded());
 }
 
 #[tokio::test]
 async fn a_cohort_gathers_its_own_runs_and_nothing_else() {
-    let provider = provider();
+    let provider = Fleet::default();
     let a1 = provider
         .start("upgrade", &sh("sleep 4"), None, Geometry::default())
+        .await
         .expect("run");
     let a2 = provider
         .start("upgrade", &sh("sleep 4"), None, Geometry::default())
+        .await
         .expect("run");
     let b1 = provider
         .start("reboot", &sh("sleep 4"), None, Geometry::default())
+        .await
         .expect("run");
 
     let upgrade: Vec<String> = provider
@@ -207,14 +192,15 @@ async fn a_cohort_gathers_its_own_runs_and_nothing_else() {
 async fn a_run_that_is_still_going_cannot_be_forgotten() {
     // Forgetting a live run would leave nothing reading its pty and nobody able to answer it —
     // the fleet version of a node that looks healthy while a path is dead.
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("c", &sh("sleep 5"), None, Geometry::default())
+        .await
         .expect("a run");
     assert!(provider.forget(&pane_id).is_err(), "a live run was forgotten");
 
     provider.stop(&pane_id).expect("stopped");
-    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
     provider
         .forget(&pane_id)
         .expect("a finished run can be forgotten");
@@ -233,11 +219,12 @@ async fn a_run_that_is_still_going_cannot_be_forgotten() {
 async fn a_finished_run_stays_listed_until_it_is_forgotten() {
     // "How did they all go" is the other half of the board, and it is unanswerable if a pane
     // vanishes the moment it exits.
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("c", &sh("exit 0"), None, Geometry::default())
+        .await
         .expect("a run");
-    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
         provider
@@ -252,23 +239,24 @@ async fn a_finished_run_stays_listed_until_it_is_forgotten() {
 
 #[tokio::test]
 async fn the_topology_bumps_when_a_run_starts_and_when_its_state_moves() {
-    let provider = provider();
+    let provider = Fleet::default();
     let mut topology = provider.topology();
     let before = *topology.borrow_and_update();
     let pane_id = provider
         .start("c", &sh("exit 0"), None, Geometry::default())
+        .await
         .expect("a run");
     tokio::time::timeout(PATIENCE, topology.changed())
         .await
         .expect("the topology bumped")
         .expect("the channel stayed open");
     assert!(*topology.borrow() > before);
-    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
 }
 
 #[tokio::test]
 async fn writing_to_a_pane_that_is_not_a_fleet_run_is_an_error_rather_than_a_silent_success() {
-    let provider = provider();
+    let provider = Fleet::default();
     assert!(
         provider
             .write_pane("w1:p1", Input::Bytes(b"y\n".to_vec()))
@@ -295,7 +283,7 @@ async fn a_run_whose_state_cannot_be_read_says_so_instead_of_looking_idle() {
         return;
     }
 
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "c",
@@ -309,6 +297,7 @@ async fn a_run_whose_state_cannot_be_read_says_so_instead_of_looking_idle() {
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
     tokio::time::sleep(Duration::from_millis(400)).await;
 
@@ -330,13 +319,8 @@ async fn a_run_whose_state_cannot_be_read_says_so_instead_of_looking_idle() {
 }
 
 /// The half of #419 that a table test cannot reach: whether a `PATH` this process does not have
-/// actually resolves the child's program name.
-///
-/// It is not obvious that it does. `Command::new` takes a bare name and `execvp` searches the
-/// **calling** process's environment — Rust only gets this right because a `pre_exec` (which this
-/// supervisor has, for `setsid` and the controlling terminal) forces the fork/exec path, where the
-/// child's `envp` is installed before the exec. Reasoning about that would have been a guess; this
-/// runs it.
+/// actually resolves the child's program name, and whether one that does not resolve it says so in
+/// a sentence naming the `PATH` rather than in `execvp`'s (#392).
 #[tokio::test]
 async fn a_command_is_found_on_the_path_the_run_was_given_and_not_on_this_processs() {
     let dir = tempfile::tempdir().expect("a directory");
@@ -344,31 +328,29 @@ async fn a_command_is_found_on_the_path_the_run_was_given_and_not_on_this_proces
     let script = dir.path().join(name);
     std::fs::write(&script, "#!/bin/sh\necho found-on-the-given-path\n").expect("a script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let job = Job::Argv(vec![name.to_string()]);
 
-    let argv = vec![name.to_string()];
+    let elsewhere = Fleet::with_path(Some("/nonexistent-for-this-test".into()));
+    let refused = elsewhere
+        .provider
+        .start("c", &job, None, Geometry::default())
+        .await
+        .expect_err("a PATH without the directory must not resolve it");
     assert!(
-        Supervisor::spawn(&argv, None, Geometry::default(), None).is_err(),
-        "this process's own PATH must not already resolve {name}, or this proves nothing",
+        refused
+            .to_string()
+            .contains("is not on this node's fleet PATH (/nonexistent-for-this-test"),
+        "{refused}"
     );
 
     let given = format!("/nonexistent-for-this-test:{}", dir.path().display());
-    let supervisor =
-        Supervisor::spawn(&argv, None, Geometry::default(), Some(&given)).expect("a pty and a child");
-    let (tx, mut events) = mpsc::channel(64);
-    let driver = tokio::spawn(supervisor.drive(tx));
-
-    let mut seen = String::new();
-    while let Some(event) = events.recv().await {
-        if let RunEvent::Bytes(bytes) = event {
-            seen.push_str(&String::from_utf8_lossy(&bytes));
-            if seen.contains("found-on-the-given-path") {
-                break;
-            }
-        }
-    }
-    driver.abort();
-    let _ = driver.await;
-    assert!(seen.contains("found-on-the-given-path"), "{seen:?}");
+    let provider = Fleet::with_path(Some(given));
+    let pane_id = provider.run(&job).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
+    let text = provider
+        .transcript_with(&pane_id, "found-on-the-given-path")
+        .await;
+    assert!(text.contains("found-on-the-given-path"), "{text:?}");
 }
 
 /// What the operator typed, run the way their own terminal would run it.
@@ -407,12 +389,13 @@ async fn a_line_the_operator_would_type_in_their_own_shell_runs_as_one() {
     ];
 
     for (what, line, expect) in cases {
-        let provider = provider();
+        let provider = Fleet::default();
         let pane_id = provider
             .start("typed", &typed(line), Some(&cwd), Geometry::default())
+            .await
             .unwrap_or_else(|e| panic!("{what}: {line} did not start: {e}"));
-        wait_for(&provider, &pane_id, |s| s.finished()).await;
-        let text = transcript(&provider, &pane_id).await;
+        provider.wait_for(&pane_id, |s| s.finished()).await;
+        let text = provider.transcript_with(&pane_id, expect).await;
         assert!(
             text.contains(expect),
             "{what}: `{line}` should have printed {expect:?}; it printed {text:?}",
@@ -421,13 +404,14 @@ async fn a_line_the_operator_would_type_in_their_own_shell_runs_as_one() {
 
     // `~` on its own, because it must expand against the shell's `HOME` rather than against the
     // run's cwd, and a temp directory cannot stand in for it.
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start("typed", &typed("cd ~ && pwd"), Some(&cwd), Geometry::default())
+        .await
         .expect("a run");
-    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
     let home = std::env::var("HOME").expect("a home directory");
-    let text = transcript(&provider, &pane_id).await;
+    let text = provider.transcript_with(&pane_id, &home).await;
     assert!(text.contains(&home), "`cd ~ && pwd` printed {text:?}, not {home}");
 }
 
@@ -438,7 +422,7 @@ async fn a_line_the_operator_would_type_in_their_own_shell_runs_as_one() {
 /// a mid-chain failure would show five green machines that had done half the work.
 #[tokio::test]
 async fn a_chain_that_fails_in_the_middle_reports_the_failure_and_does_not_run_the_rest() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "typed",
@@ -446,14 +430,15 @@ async fn a_chain_that_fails_in_the_middle_reports_the_failure_and_does_not_run_t
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
-    let pane = wait_for(&provider, &pane_id, |s| s.finished()).await;
+    let pane = provider.wait_for(&pane_id, |s| s.finished()).await;
     let state = pane.fleet.expect("a fleet marker").state;
     assert!(
         matches!(state, State::Exited { code: Some(1), .. }),
         "a chain that stopped at `false` reported {state:?}",
     );
-    let text = transcript(&provider, &pane_id).await;
+    let text = provider.transcript_with(&pane_id, "starting").await;
     assert!(text.contains("starting"), "the chain never began: {text:?}");
     assert!(
         !text.contains("never-printed"),
@@ -475,30 +460,26 @@ async fn a_binary_that_only_the_operators_own_path_resolves_is_still_found() {
     std::fs::write(&script, "#!/bin/sh\necho found-in-local-bin\n").expect("a script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
 
-    let shell = kampr_fleet::env::login_shell();
-    let line = format!("{name} && echo after");
+    let line = typed(&format!("{name} && echo after"));
 
-    let without = Supervisor::spawn(
-        &Job::Shell(line.clone()).argv(&shell),
-        None,
-        Geometry::default(),
-        Some("/nonexistent-for-this-test"),
-    )
-    .expect("a pty and a child");
+    let without = Fleet::with_path(Some("/nonexistent-for-this-test".into()));
+    let pane_id = without.run(&line).await;
+    let state = without
+        .wait_for(&pane_id, |s| s.finished())
+        .await
+        .fleet
+        .expect("a fleet marker")
+        .state;
     assert!(
-        !drain(without).await.contains("found-in-local-bin"),
-        "this process's PATH already resolves {name}, so the other half proves nothing",
+        matches!(state, State::Exited { code: Some(127), .. }),
+        "this process's PATH already resolves {name}, so the other half proves nothing: {state:?}",
     );
 
     let given = format!("/nonexistent-for-this-test:{}", dir.path().display());
-    let with = Supervisor::spawn(
-        &Job::Shell(line).argv(&shell),
-        None,
-        Geometry::default(),
-        Some(&given),
-    )
-    .expect("a pty and a child");
-    let text = drain(with).await;
+    let with = Fleet::with_path(Some(given));
+    let pane_id = with.run(&line).await;
+    with.wait_for(&pane_id, |s| s.finished()).await;
+    let text = with.transcript_with(&pane_id, "after").await;
     assert!(text.contains("found-in-local-bin"), "the run printed {text:?}");
     assert!(text.contains("after"), "the chain after it did not run: {text:?}");
 }
@@ -508,7 +489,7 @@ async fn a_binary_that_only_the_operators_own_path_resolves_is_still_found() {
 /// would remember it that way for ever.
 #[tokio::test]
 async fn a_pane_is_labelled_with_what_was_typed_and_not_with_the_shell_wrapper() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "typed",
@@ -516,6 +497,7 @@ async fn a_pane_is_labelled_with_what_was_typed_and_not_with_the_shell_wrapper()
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
     let panes = provider.list_panes().await.expect("a list");
     let pane = panes
@@ -531,73 +513,11 @@ async fn a_pane_is_labelled_with_what_was_typed_and_not_with_the_shell_wrapper()
     provider.stop(&pane_id).expect("stopped");
 }
 
-async fn transcript(provider: &Arc<FleetProvider>, pane_id: &str) -> String {
-    provider
-        .read_scrollback(pane_id)
-        .await
-        .expect("a read")
-        .expect("a transcript")
-        .text
-}
-
-/// Everything a supervisor printed, up to the moment its command exited.
-async fn drain(supervisor: Supervisor) -> String {
-    let (tx, mut events) = mpsc::channel(256);
-    let driver = tokio::spawn(supervisor.drive(tx));
-    let mut text = String::new();
-    let seen = tokio::time::timeout(PATIENCE, async {
-        while let Some(event) = events.recv().await {
-            match event {
-                RunEvent::Bytes(bytes) => text.push_str(&String::from_utf8_lossy(&bytes)),
-                RunEvent::State(state) if state.finished() => return,
-                _ => {}
-            }
-        }
-    })
-    .await;
-    assert!(seen.is_ok(), "the run never finished; it printed {text:?}");
-    let _ = driver.await;
-    text
-}
-
-/// **A run is finished once everything it printed has been read, not once its child has exited.**
-/// The exit is seen by a poll and the output by a reader thread, so a reader behind the child —
-/// a loaded CI runner, or here a slow consumer — published `Exited` with the end of the output
-/// still in the pty, and a transcript read at that moment was missing it.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_finished_run_has_everything_it_printed() {
-    let script =
-        "echo first; sleep 0.05; echo second; sleep 0.05; echo third; sleep 0.05; echo the-last-line";
-    let argv = ["sh", "-c", script].map(String::from).to_vec();
-    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
-    let (tx, mut events) = mpsc::channel(1);
-    let driver = tokio::spawn(supervisor.drive(tx));
-    let mut text = String::new();
-    let finished = tokio::time::timeout(PATIENCE, async {
-        let mut stalled = false;
-        while let Some(event) = events.recv().await {
-            match event {
-                RunEvent::Bytes(bytes) => text.push_str(&String::from_utf8_lossy(&bytes)),
-                RunEvent::State(state) if state.finished() => return,
-                _ => {}
-            }
-            if !stalled && !text.is_empty() {
-                stalled = true;
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
-    })
-    .await;
-    driver.abort();
-    assert!(finished.is_ok(), "the run never finished");
-    assert!(text.contains("the-last-line"), "finished having printed {text:?}",);
-}
-
-/// The wait for the rest of the output is bounded: a child left behind that ignores the hangup
-/// holds the pty open, and the reader it keeps blocked would otherwise keep the run unfinished.
+/// A run ends with its command: a child left behind that ignores the hangup holds the pty open, and
+/// would otherwise keep the run unfinished for as long as it lives.
 #[tokio::test]
 async fn a_run_whose_leftover_child_holds_the_terminal_still_finishes() {
-    let provider = provider();
+    let provider = Fleet::default();
     let pane_id = provider
         .start(
             "stubborn",
@@ -605,11 +525,12 @@ async fn a_run_whose_leftover_child_holds_the_terminal_still_finishes() {
             None,
             Geometry::default(),
         )
+        .await
         .expect("a run");
     let started = tokio::time::Instant::now();
-    wait_for(&provider, &pane_id, |s| s.finished()).await;
+    provider.wait_for(&pane_id, |s| s.finished()).await;
     let waited = started.elapsed();
-    let text = transcript(&provider, &pane_id).await;
+    let text = provider.transcript_with(&pane_id, "left-behind").await;
     let pid = text.split_whitespace().skip_while(|w| *w != "left-behind").nth(1);
     if let Some(pid) = pid.and_then(|p| p.parse::<i32>().ok()) {
         unsafe { libc::kill(pid, libc::SIGKILL) };

@@ -89,6 +89,40 @@ impl Herdr {
         Ok(())
     }
 
+    /// `ok` here is no more a confirmation than it is on [`Self::report_metadata`]: the same
+    /// per-source `seq` applies, so [`Self::pane_agent`] is the read-back. `resume_argv` must start
+    /// with a plain command name; a path is refused `invalid_resume_argv` and takes the whole
+    /// report with it (#583).
+    pub async fn report_agent(
+        &self,
+        pane_id: &str,
+        source: &str,
+        agent: &str,
+        state: &str,
+        seq: u64,
+        resume_argv: Option<&[String]>,
+    ) -> Result<()> {
+        let mut params = serde_json::json!({
+            "pane_id": pane_id,
+            "source": source,
+            "agent": agent,
+            "state": state,
+            "seq": seq,
+        });
+        if let Some(argv) = resume_argv {
+            params["resume_argv"] = serde_json::json!(argv);
+        }
+        let _: serde_json::Value = self.call("pane.report_agent", params).await?;
+        Ok(())
+    }
+
+    pub async fn pane_agent(&self, pane_id: &str) -> Result<(Option<String>, AgentStatus)> {
+        let r: model::PaneReply = self
+            .call("pane.get", serde_json::json!({ "pane_id": pane_id }))
+            .await?;
+        Ok((r.pane.agent, r.pane.agent_status))
+    }
+
     /// Shapes herdr's **own** agents sidebar, at whoever's desk this session belongs to.
     ///
     /// Sortable fields are the tokens a source reported plus exactly two builtins, `agent` and

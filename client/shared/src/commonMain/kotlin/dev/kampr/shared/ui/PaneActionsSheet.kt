@@ -20,6 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.isNative
+import dev.kampr.shared.model.nativeActions
+import dev.kampr.shared.model.nativeFacts
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ManageOp
@@ -42,6 +45,7 @@ fun PaneActionsSheet(
     panes: List<PaneInfo> = emptyList(),
     onFind: (() -> Unit)? = null,
     tools: @Composable () -> Unit = {},
+    desk: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -54,7 +58,7 @@ fun PaneActionsSheet(
         when {
             !ack.ok -> refusal = ack.message ?: ack.code
             ack.op == "layout.export" -> snapshot = ack.layout
-            ack.op == "close" -> onDismiss()
+            ack.op in DISMISSING -> onDismiss()
         }
     }
 
@@ -63,78 +67,84 @@ fun PaneActionsSheet(
         onManage(op)
     }
 
+    val find = onFind?.let { go ->
+        {
+            onDismiss()
+            go()
+        }
+    }
+
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader("Actions", paneTitle(pane), null, onDismiss)
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Target(
-                    kind = "pane",
-                    name = pane.label ?: pane.id.substringAfter('/'),
-                    at = pane.id,
-                    // Only a pane's label is nullable — herdr's tab and workspace rename take a
-                    // required string, so there is nothing to clear them to.
-                    clearable = true,
-                    zoomable = true,
-                    onManage = ::send,
-                    onFind = onFind?.let { go ->
-                        {
-                            onDismiss()
-                            go()
-                        }
-                    },
-                    extra = tools,
-                )
-                pane.tabId?.let { tabId ->
+                if (pane.isNative) {
+                    NativeTarget(pane, desk, ::send, find, tools)
+                } else {
                     Target(
-                        kind = "tab",
-                        name = pane.tab ?: tabId.substringAfter('/'),
-                        at = tabId,
-                        clearable = false,
-                        zoomable = false,
-                        holds = panes.count { it.tabId == tabId },
+                        kind = "pane",
+                        name = pane.label ?: pane.id.substringAfter('/'),
+                        at = pane.id,
+                        // Only a pane's label is nullable — herdr's tab and workspace rename take a
+                        // required string, so there is nothing to clear them to.
+                        clearable = true,
+                        zoomable = true,
                         onManage = ::send,
-                    ) {
-                        Chip(
-                            "remember the splits",
-                            false,
-                            { send(ManageOp.LayoutExport(tabId)) },
-                            label = "Remember how this tab is split, so it can be put back",
-                        )
-                        snapshot?.let { tree ->
+                        onFind = find,
+                        extra = tools,
+                    )
+                    pane.tabId?.let { tabId ->
+                        Target(
+                            kind = "tab",
+                            name = pane.tab ?: tabId.substringAfter('/'),
+                            at = tabId,
+                            clearable = false,
+                            zoomable = false,
+                            holds = panes.count { it.tabId == tabId },
+                            onManage = ::send,
+                        ) {
                             Chip(
-                                "put the splits back",
+                                "remember the splits",
                                 false,
-                                { send(ManageOp.LayoutApply(tabId, tree)) },
-                                label = "Split this tab the way it was when you remembered it",
+                                { send(ManageOp.LayoutExport(tabId)) },
+                                label = "Remember how this tab is split, so it can be put back",
+                            )
+                            snapshot?.let { tree ->
+                                Chip(
+                                    "put the splits back",
+                                    false,
+                                    { send(ManageOp.LayoutApply(tabId, tree)) },
+                                    label = "Split this tab the way it was when you remembered it",
+                                )
+                            }
+                        }
+                        if (snapshot != null) {
+                            KText(
+                                "The remembered splits live on this device, and only until this sheet closes.",
+                                tokens.type.captionSmall,
+                                tokens.color.mute,
+                                maxLines = 2,
                             )
                         }
                     }
-                    if (snapshot != null) {
+                    val workspaceId = pane.workspaceId ?: workspaceIdOf(pane.id)
+                    Target(
+                        kind = "workspace",
+                        name = pane.workspace ?: "this workspace",
+                        at = workspaceId,
+                        clearable = false,
+                        zoomable = false,
+                        holds = panes.count { (it.workspaceId ?: workspaceIdOf(it.id)) == workspaceId },
+                        onManage = ::send,
+                    )
+                    if (pane.tabId == null) {
                         KText(
-                            "The remembered splits live on this device, and only until this sheet closes.",
+                            "This node does not send a tab id, so its tab cannot be addressed.",
                             tokens.type.captionSmall,
                             tokens.color.mute,
                             maxLines = 2,
                         )
                     }
-                }
-                val workspaceId = pane.workspaceId ?: workspaceIdOf(pane.id)
-                Target(
-                    kind = "workspace",
-                    name = pane.workspace ?: "this workspace",
-                    at = workspaceId,
-                    clearable = false,
-                    zoomable = false,
-                    holds = panes.count { (it.workspaceId ?: workspaceIdOf(it.id)) == workspaceId },
-                    onManage = ::send,
-                )
-                if (pane.tabId == null) {
-                    KText(
-                        "This node does not send a tab id, so its tab cannot be addressed.",
-                        tokens.type.captionSmall,
-                        tokens.color.mute,
-                        maxLines = 2,
-                    )
                 }
                 refusal?.let {
                     KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3)
@@ -142,6 +152,46 @@ fun PaneActionsSheet(
             }
             Box(Modifier.height(18.dp))
         }
+    }
+}
+
+private val DISMISSING = setOf("close", "native.close", "native.forget")
+
+private class Closing(val verb: String, val op: ManageOp) {
+    val title: String get() = verb.replaceFirstChar(Char::uppercase)
+}
+
+// A kept session has no tab, no workspace and no place on the desk until one shows it, so herdr's
+// focus, zoom and layout are absent rather than pointed at a container it is not in.
+@Composable
+private fun NativeTarget(
+    pane: PaneInfo,
+    desk: Boolean,
+    onManage: (ManageOp) -> Unit,
+    onFind: (() -> Unit)?,
+    tools: @Composable () -> Unit,
+) {
+    val actions = nativeActions(pane, desk)
+    Target(
+        kind = "session",
+        name = pane.label ?: pane.id.substringAfter('/'),
+        at = pane.id,
+        clearable = true,
+        zoomable = false,
+        onManage = onManage,
+        focusable = false,
+        close = actions.firstOrNull { it.confirm }?.let { Closing(it.verb, it.op) },
+        onFind = onFind,
+    ) {
+        tools()
+        actions.filterNot { it.confirm }.forEach { action ->
+            Chip(action.verb, false, { onManage(action.op) }, label = action.spoken)
+        }
+    }
+    val facts = nativeFacts(pane).drop(1)
+    if (facts.isNotEmpty()) {
+        val tokens = Kampr.tokens
+        KText(facts.joinToString(" · "), tokens.type.captionSmall, tokens.color.mute, maxLines = 2)
     }
 }
 
@@ -174,6 +224,8 @@ private fun Target(
     zoomable: Boolean,
     onManage: (ManageOp) -> Unit,
     holds: Int = 0,
+    focusable: Boolean = true,
+    close: Closing? = Closing("close", ManageOp.Close(at)),
     // Only a pane has a scrollback to search; a tab and a workspace do not, so they are offered
     // nothing rather than a control that would have to explain itself.
     onFind: (() -> Unit)? = null,
@@ -198,12 +250,14 @@ private fun Target(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Chip(
-                    "focus at the desk",
-                    focusing,
-                    { focusing = !focusing },
-                    label = "Focus this $kind on the machine's own screen",
-                )
+                if (focusable) {
+                    Chip(
+                        "focus at the desk",
+                        focusing,
+                        { focusing = !focusing },
+                        label = "Focus this $kind on the machine's own screen",
+                    )
+                }
                 if (zoomable) {
                     // Not "zoom". Kampr's own zoom is one screen away in the pane header, it
                     // magnifies the rendered grid, and it is announced as "Zoom, currently 1.6x" —
@@ -233,13 +287,15 @@ private fun Target(
                 }
                 extra?.invoke()
                 Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind")
-                Chip(
-                    "close",
-                    confirming,
-                    { confirming = !confirming },
-                    quiet = !confirming,
-                    label = "Close this $kind",
-                )
+                close?.let {
+                    Chip(
+                        it.verb,
+                        confirming,
+                        { confirming = !confirming },
+                        quiet = !confirming,
+                        label = "${it.title} this $kind",
+                    )
+                }
             }
             if (focusing) {
                 Row(
@@ -295,25 +351,25 @@ private fun Target(
                     )
                 }
             }
-            if (confirming) {
+            if (confirming && close != null) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f).announce("Close $kind? ${held(kind, name, holds)}. Confirm or cancel.", urgent = true)) {
-                        KText("Close $kind?", tokens.type.captionSmall, tokens.color.blocked, maxLines = 1)
+                    Column(Modifier.weight(1f).announce("${close.title} $kind? ${held(kind, name, holds)}. Confirm or cancel.", urgent = true)) {
+                        KText("${close.title} $kind?", tokens.type.captionSmall, tokens.color.blocked, maxLines = 1)
                         KText(held(kind, name, holds), tokens.type.captionSmall, tokens.color.mute, maxLines = 2)
                     }
-                    Chip("cancel", false, { confirming = false }, quiet = true, label = "Do not close it")
+                    Chip("cancel", false, { confirming = false }, quiet = true, label = "Do not ${close.verb} it")
                     Chip(
-                        "close",
+                        close.verb,
                         true,
                         {
                             confirming = false
-                            onManage(ManageOp.Close(at))
+                            onManage(close.op)
                         },
-                        label = "Confirm — close ${held(kind, name, holds)}",
+                        label = "Confirm — ${close.verb} ${held(kind, name, holds)}",
                     )
                 }
             }

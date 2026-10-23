@@ -28,6 +28,7 @@ async fn node_at(home: &Path) -> Arc<Node> {
     config.config_dir = home.join("config").display().to_string();
     config.state_dir = state_dir.display().to_string();
     config.herdr.socket = home.join("herdr.sock").display().to_string();
+    config.native.root = home.join("native").display().to_string();
     config.herdr.binary = home.join("no-such-herdr").display().to_string();
     config.herdr.sessions = Some(Vec::new());
     let node = Node::start(config, &state_dir).await.expect("a node");

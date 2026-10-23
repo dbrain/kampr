@@ -301,6 +301,35 @@ async fn the_sidebar_groups_spaces_by_node_and_keeps_an_offline_nodes_row() {
     assert!(agents.contains("herdr"), "{screen}");
 }
 
+/// A machine with no herdr still serves the sessions Kampr keeps, and drawing it offline hid the
+/// one thing on it that worked.
+#[tokio::test]
+async fn a_machine_with_no_herdr_serving_native_sessions_is_not_drawn_offline() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let mut kept = pane("01JSHED/n:01ja", "kept", Some("claude"), "idle");
+    kept["node_id"] = json!("01JSHED");
+    kept["provider"] = json!("native");
+    conn.greet(
+        json!([{
+            "id": "01JSHED", "name": "shed", "kind": "local", "online": false,
+            "reachable": true, "native": true, "detail": "herdr socket: No such file",
+        }]),
+        json!([kept]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let screen = painted(&mut app, 110, 22);
+    let spaces = screen.split("agents").next().expect("a spaces section");
+    assert!(!spaces.contains("offline"), "{screen}");
+    assert!(spaces.contains("no herdr"), "{screen}");
+    assert!(spaces.contains("▸ kept"), "{screen}");
+}
+
 #[tokio::test]
 async fn a_live_grid_reaches_the_frame() {
     let mut fake = Fake::start().await;

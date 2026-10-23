@@ -1,4 +1,4 @@
-//! The supervisor against real processes on a real pty.
+//! The ladder against real processes on a real pty, kept by a real keeper.
 //!
 //! Unit tests of `prompt::read` prove the wording is parsed; only this level proves the thing the
 //! feature rests on — that the kernel actually says "parked in a read" for a command that has
@@ -7,84 +7,59 @@
 //!
 //! Nothing here needs herdr and nothing here touches the operator's sessions.
 
-use kampr_fleet::Job;
-use kampr_fleet::exec::{Geometry, RunEvent, State, Supervisor};
+use crate::{Fleet, keeper_child, sh, typed};
+use kampr_core::provider::{Input, Provider};
+use kampr_fleet::{Job, State};
 use std::time::Duration;
-use tokio::sync::mpsc;
-
-const PATIENCE: Duration = Duration::from_secs(10);
 
 struct Run {
-    events: mpsc::Receiver<RunEvent>,
-    handle: tokio::task::JoinHandle<std::io::Result<State>>,
-    writer: kampr_fleet::exec::Writer,
-    killer: kampr_fleet::exec::Killer,
+    fleet: Fleet,
+    pane: String,
 }
 
-fn start(script: &str) -> Run {
-    spawn(&Job::Argv(vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        script.to_string(),
-    ]))
+async fn start(script: &str) -> Run {
+    spawn(&sh(script)).await
 }
 
-/// The same, through the shell a real fleet run is given: the operator's own, from `$SHELL` or
-/// their passwd entry, with neither `-l` nor `-i`. On this machine that is a `bash` whose
-/// `.bashrc` sources ble.sh, which is the whole reason these assertions exist.
-fn typed(line: &str) -> Run {
-    spawn(&Job::Shell(line.to_string()))
-}
-
-fn spawn(job: &Job) -> Run {
-    let argv = job.argv(&kampr_fleet::env::login_shell());
-    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
-    let writer = supervisor.writer();
-    let killer = supervisor.killer();
-    let (tx, events) = mpsc::channel(256);
-    let handle = tokio::spawn(supervisor.drive(tx));
-    Run {
-        events,
-        handle,
-        writer,
-        killer,
-    }
+async fn spawn(job: &Job) -> Run {
+    let fleet = Fleet::default();
+    let pane = fleet.run(job).await;
+    Run { fleet, pane }
 }
 
 impl Run {
-    /// The next state matching `want`, or a panic naming everything seen instead.
-    async fn wait_for(&mut self, want: impl Fn(&State) -> bool) -> State {
-        let mut seen = Vec::new();
-        let found = tokio::time::timeout(PATIENCE, async {
-            while let Some(event) = self.events.recv().await {
-                if let RunEvent::State(state) = event {
-                    if want(&state) {
-                        return Some(state);
-                    }
-                    seen.push(state);
-                }
-            }
-            None
-        })
-        .await;
-        match found {
-            Ok(Some(state)) => state,
-            _ => panic!("never reached the state asked for; saw {seen:?}"),
-        }
+    async fn wait_for(&self, want: impl Fn(&State) -> bool) -> State {
+        self.fleet
+            .wait_for(&self.pane, want)
+            .await
+            .fleet
+            .expect("a fleet marker")
+            .state
     }
 
-    async fn finish(self) -> State {
-        tokio::time::timeout(PATIENCE, self.handle)
+    async fn answer(&self, bytes: &[u8]) {
+        self.fleet
+            .write_pane(&self.pane, Input::Bytes(bytes.to_vec()))
             .await
-            .expect("the run ended")
-            .expect("the task did not panic")
-            .expect("the supervisor did not fail")
+            .expect("the answer went in");
+    }
+
+    async fn finish(&self) -> State {
+        self.wait_for(State::finished).await
+    }
+
+    async fn states_for(&self, within: Duration) -> Vec<State> {
+        self.fleet.states_for(&self.pane, within).await
+    }
+
+    fn hangup(&self) {
+        self.fleet.stop(&self.pane).expect("stopped");
     }
 }
 
 #[tokio::test]
 async fn a_command_sitting_at_a_prompt_is_reported_as_waiting_with_what_it_asked() {
-    let mut run = start("printf ':: Proceed with installation? [Y/n] '; read answer; echo \"got $answer\"");
+    let run = start("printf ':: Proceed with installation? [Y/n] '; read answer; echo \"got $answer\"").await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -96,7 +71,7 @@ async fn a_command_sitting_at_a_prompt_is_reported_as_waiting_with_what_it_asked
     // speak for the kernel here.
     assert!(!question.inferred, "this one should have come from /proc");
 
-    run.writer.write(b"n\n").expect("the answer went in");
+    run.answer(b"n\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -105,7 +80,7 @@ async fn a_command_sitting_at_a_prompt_is_reported_as_waiting_with_what_it_asked
 async fn a_command_doing_silent_work_is_never_reported_as_waiting() {
     // The false positive that would make every long build look like a question. `sleep` writes
     // nothing at all, which is exactly the case a quiescence-only detector gets wrong.
-    let mut run = start("sleep 2; echo done");
+    let run = start("sleep 2; echo done").await;
     let end = run.wait_for(|s| matches!(s, State::Exited { .. })).await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -113,7 +88,7 @@ async fn a_command_doing_silent_work_is_never_reported_as_waiting() {
 #[tokio::test]
 async fn a_prompt_with_echo_turned_off_is_a_secret_and_offers_no_buttons() {
     // Probe #337: on a pty with no shell on it the termios bit ble.sh ruins (#333) is honest.
-    let mut run = start("stty -echo; printf 'Password: '; read p; stty echo; echo");
+    let run = start("stty -echo; printf 'Password: '; read p; stty echo; echo").await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -121,7 +96,7 @@ async fn a_prompt_with_echo_turned_off_is_a_secret_and_offers_no_buttons() {
     assert!(question.secret(), "{:?}", question.shape);
     assert!(question.options().is_empty());
 
-    run.writer.write(b"hunter2\n").expect("the answer went in");
+    run.answer(b"hunter2\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -130,7 +105,7 @@ async fn a_prompt_with_echo_turned_off_is_a_secret_and_offers_no_buttons() {
 async fn a_prompt_nothing_recognises_is_still_reported_as_waiting_and_is_still_answerable() {
     // The fallback rung. Detection of the *wording* fails here on purpose; the host must still
     // surface as needing somebody, because that half comes from the kernel and not from a match.
-    let mut run = start("printf 'wat '; read answer; exit 7");
+    let run = start("printf 'wat '; read answer; exit 7").await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -142,7 +117,7 @@ async fn a_prompt_nothing_recognises_is_still_reported_as_waiting_and_is_still_a
         question.shape
     );
 
-    run.writer.write(b"anything\n").expect("the answer went in");
+    run.answer(b"anything\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(7), .. }), "{end:?}");
 }
@@ -150,7 +125,7 @@ async fn a_prompt_nothing_recognises_is_still_reported_as_waiting_and_is_still_a
 #[tokio::test]
 async fn the_exit_code_is_the_real_one_and_is_not_scraped_off_the_screen() {
     for expected in [0, 1, 42] {
-        let run = start(&format!("exit {expected}"));
+        let run = start(&format!("exit {expected}")).await;
         let end = run.finish().await;
         assert!(
             matches!(end, State::Exited { code: Some(c), .. } if c == expected),
@@ -163,7 +138,7 @@ async fn the_exit_code_is_the_real_one_and_is_not_scraped_off_the_screen() {
 async fn a_run_killed_by_a_signal_reports_the_signal_rather_than_a_plausible_exit_code() {
     // The `catch`/`unwrap_or` failure this project names as its most expensive: a run that died
     // must not look like one that finished.
-    let run = start("kill -TERM $$");
+    let run = start("kill -TERM $$").await;
     let end = run.finish().await;
     assert!(
         matches!(
@@ -181,9 +156,9 @@ async fn a_run_killed_by_a_signal_reports_the_signal_rather_than_a_plausible_exi
 async fn a_progress_bar_is_not_mistaken_for_a_prompt() {
     // pacman redraws downloads with \r. Every frame of the bar is unterminated text, so a naive
     // reader is looking at a "prompt" the whole time the download runs.
-    let mut run = start(
+    let run = start(
         "printf 'linux-firmware 10%%\\rlinux-firmware 60%%\\r'; sleep 1; printf 'done\\n'; printf 'Continue? [y/N] '; read a",
-    );
+    ).await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -192,61 +167,53 @@ async fn a_progress_bar_is_not_mistaken_for_a_prompt() {
         question.prompt, "Continue? [y/N]",
         "the bar's frames must not be part of the question"
     );
-    run.writer.write(b"\n").expect("the answer went in");
+    run.answer(b"\n").await;
     let _ = run.finish().await;
 }
 
 #[tokio::test]
-async fn dropping_a_supervisor_does_not_leave_the_command_running() {
-    // Found by a mutation run that hung: `spawn_blocking` cannot be cancelled, so the reader stays
-    // parked on the master fd and the child survives the task that was driving it. An orphaned
-    // `sudo pacman` holding the package database is the version of this that matters.
-    let argv = vec![
-        "sh".to_string(),
-        "-c".to_string(),
-        "printf 'waiting '; read forever".to_string(),
-    ];
-    let supervisor = Supervisor::spawn(&argv, None, Geometry::default(), None).expect("a pty and a child");
-    let pid = supervisor.pid();
-    let (tx, _events) = mpsc::channel(16);
-    let driver = tokio::spawn(supervisor.drive(tx));
+async fn a_run_outlives_the_node_that_started_it_and_the_next_one_can_still_answer_it() {
+    // A node restart is a provider dropped and another built over the same root. The keeper holds
+    // the pty, so the command never notices, and the new ladder reads its question again from the
+    // log and from the keeper's `state`.
+    let run = start("printf 'Continue? [y/N] '; read a; [ \"$a\" = y ] && exit 0 || exit 3").await;
+    run.wait_for(|s| matches!(s, State::Waiting(_))).await;
+    let child = keeper_child(&run.fleet, &run.pane).expect("a child");
 
+    let Run { fleet, pane } = run;
+    let run = Run {
+        fleet: fleet.restart(),
+        pane,
+    };
+    assert!(alive(child), "pid {child} died with the provider that started it");
+    let pane = run.fleet.pane(&run.pane).await;
+    assert_eq!(pane.fleet.as_ref().expect("a fleet marker").cohort, "c");
+    let State::Waiting(question) = run.wait_for(|s| matches!(s, State::Waiting(_))).await else {
+        unreachable!()
+    };
+    assert_eq!(question.prompt, "Continue? [y/N]");
     assert!(
-        settles(|| alive(pid)).await,
-        "the child should be running before we abort"
+        run.fleet
+            .transcript_with(&run.pane, "Continue?")
+            .await
+            .contains("Continue?"),
+        "the screen was not rebuilt from the log"
     );
-
-    driver.abort();
-    let _ = driver.await;
-    assert!(
-        settles(|| !alive(pid)).await,
-        "pid {pid} outlived the supervisor that spawned it"
-    );
+    run.answer(b"y\n").await;
+    let end = run.finish().await;
+    assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
 
 #[tokio::test]
 async fn a_run_can_be_ended_from_the_outside_while_it_sits_at_a_prompt() {
-    let mut run = start("printf 'Continue? [Y/n] '; read a");
+    let run = start("printf 'Continue? [Y/n] '; read a").await;
     let _ = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
-    run.killer.hangup();
+    run.hangup();
     let end = run.finish().await;
     assert!(
         matches!(end, State::Exited { .. }),
         "a hung-up run must report an ending, not sit in Waiting: {end:?}"
     );
-}
-
-/// Waits for a condition rather than guessing how long it takes, so a loaded machine reports a
-/// slow test and never a failing one.
-async fn settles(mut done: impl FnMut() -> bool) -> bool {
-    let deadline = tokio::time::Instant::now() + PATIENCE;
-    while tokio::time::Instant::now() < deadline {
-        if done() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    false
 }
 
 /// A pid that exists and has not become a zombie. A reaped-but-unwaited child keeps its `/proc`
@@ -271,16 +238,8 @@ async fn a_full_screen_program_is_never_reported_as_a_secret() {
         eprintln!("SKIPPED: no `less` on PATH; this assertion was NOT made");
         return;
     }
-    let mut run = start("exec less /etc/hostname");
-    let mut seen = Vec::new();
-    let collect = tokio::time::timeout(Duration::from_secs(3), async {
-        while let Some(event) = run.events.recv().await {
-            if let RunEvent::State(state) = event {
-                seen.push(state);
-            }
-        }
-    });
-    let _ = collect.await;
+    let run = start("exec less /etc/hostname").await;
+    let seen = run.states_for(Duration::from_secs(3)).await;
     for state in &seen {
         if let State::Waiting(question) = state {
             assert!(
@@ -290,8 +249,7 @@ async fn a_full_screen_program_is_never_reported_as_a_secret() {
             );
         }
     }
-    run.killer.kill();
-    let _ = run.finish().await;
+    run.hangup();
 }
 
 #[tokio::test]
@@ -303,15 +261,14 @@ async fn a_command_that_escalates_still_shows_its_password_prompt_as_a_question(
         eprintln!("SKIPPED: no `su` on PATH; this assertion was NOT made");
         return;
     }
-    let mut run = start("exec su -");
+    let run = start("exec su -").await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
     };
     assert!(question.secret(), "{:?}", question.shape);
     assert!(question.options().is_empty(), "never offer buttons for a secret");
-    run.killer.kill();
-    let _ = run.finish().await;
+    run.hangup();
 }
 
 fn which(binary: &str) -> Option<()> {
@@ -331,8 +288,8 @@ async fn a_privileged_command_at_a_yes_no_prompt_is_inferred_rather_than_called_
         eprintln!("SKIPPED: needs passwordless sudo; this assertion was NOT made");
         return;
     }
-    let mut run =
-        start("exec sudo -n sh -c 'printf \":: Proceed with installation? [Y/n] \"; read a; exit 0'");
+    let run =
+        start("exec sudo -n sh -c 'printf \":: Proceed with installation? [Y/n] \"; read a; exit 0'").await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -346,7 +303,7 @@ async fn a_privileged_command_at_a_yes_no_prompt_is_inferred_rather_than_called_
         "evidence this weak must travel labelled, not as a measurement"
     );
 
-    run.writer.write(b"n\n").expect("the answer went in");
+    run.answer(b"n\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -359,22 +316,13 @@ async fn a_privileged_command_merely_working_is_not_inferred_to_be_asking() {
         eprintln!("SKIPPED: needs passwordless sudo; this assertion was NOT made");
         return;
     }
-    let mut run = start("exec sudo -n sh -c 'printf \"linking kampr \"; sleep 4; echo done'");
-    let mut seen = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_millis(3500), async {
-        while let Some(event) = run.events.recv().await {
-            if let RunEvent::State(state) = event {
-                seen.push(state);
-            }
-        }
-    })
-    .await;
+    let run = start("exec sudo -n sh -c 'printf \"linking kampr \"; sleep 4; echo done'").await;
+    let seen = run.states_for(Duration::from_millis(3500)).await;
     assert!(
         !seen.iter().any(|s| matches!(s, State::Waiting(_))),
         "a half-written progress line was read as a question: {seen:?}"
     );
-    run.killer.kill();
-    let _ = run.finish().await;
+    run.hangup();
 }
 
 fn passwordless_sudo() -> bool {
@@ -398,7 +346,7 @@ fn passwordless_sudo() -> bool {
 /// the same pty reads `ECHO OFF, ICANON OFF` while merely sitting there, which is #333.
 #[tokio::test]
 async fn a_password_prompt_through_the_operators_own_shell_is_still_a_secret() {
-    let mut run = typed("stty -echo; printf 'Password: '; read p; stty echo; echo");
+    let run = spawn(&typed("stty -echo; printf 'Password: '; read p; stty echo; echo")).await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -409,7 +357,7 @@ async fn a_password_prompt_through_the_operators_own_shell_is_still_a_secret() {
         question.shape
     );
     assert!(question.options().is_empty());
-    run.writer.write(b"hunter2\n").expect("the answer went in");
+    run.answer(b"hunter2\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -419,7 +367,10 @@ async fn a_password_prompt_through_the_operators_own_shell_is_still_a_secret() {
 /// break — an interactive shell fails it before it asks anything at all.
 #[tokio::test]
 async fn a_shell_merely_running_a_command_is_never_reported_as_a_secret() {
-    let mut run = typed("printf 'ready\n'; sleep 1; printf 'Continue? [Y/n] '; read a; echo ok");
+    let run = spawn(&typed(
+        "printf 'ready\n'; sleep 1; printf 'Continue? [Y/n] '; read a; echo ok",
+    ))
+    .await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
@@ -430,7 +381,7 @@ async fn a_shell_merely_running_a_command_is_never_reported_as_a_secret() {
         question.shape
     );
     assert_eq!(question.options().len(), 2, "{:?}", question.shape);
-    run.writer.write(b"y\n").expect("the answer went in");
+    run.answer(b"y\n").await;
     let end = run.finish().await;
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
@@ -441,36 +392,24 @@ async fn a_shell_merely_running_a_command_is_never_reported_as_a_secret() {
 /// as long as the pipeline runs, with nothing to answer.
 #[tokio::test]
 async fn a_host_running_a_pipeline_is_not_reported_as_one_waiting_for_an_answer() {
-    let mut run = typed("sleep 2 | cat; echo done");
-    let mut seen = Vec::new();
-    let collect = tokio::time::timeout(Duration::from_secs(3), async {
-        while let Some(event) = run.events.recv().await {
-            if let RunEvent::State(state) = event {
-                let finished = state.finished();
-                seen.push(state);
-                if finished {
-                    return;
-                }
-            }
-        }
-    });
-    let _ = collect.await;
+    let run = spawn(&typed("sleep 2 | cat; echo done")).await;
+    let seen = run.states_for(Duration::from_secs(3)).await;
     assert!(
         !seen.iter().any(|s| matches!(s, State::Waiting(_))),
         "the tail of a pipeline was reported as a host asking something: {seen:?}",
     );
-    run.killer.kill();
+    run.hangup();
 }
 
 /// And the front of a pipeline, which does hold the terminal, is still a question — so the
 /// narrowing above removed a false answer rather than a true one.
 #[tokio::test]
 async fn the_end_of_a_pipeline_that_reads_the_terminal_is_still_a_question() {
-    let mut run = typed("printf 'Proceed? [Y/n] '; read a | cat; echo got");
+    let run = spawn(&typed("printf 'Proceed? [Y/n] '; read a | cat; echo got")).await;
     let state = run.wait_for(|s| matches!(s, State::Waiting(_))).await;
     let State::Waiting(question) = state else {
         unreachable!()
     };
     assert_eq!(question.prompt, "Proceed? [Y/n]");
-    run.killer.kill();
+    run.hangup();
 }

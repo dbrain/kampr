@@ -54,6 +54,7 @@ impl Harness {
         // A socket that does not exist and a binary that does not exist: this node has no herd,
         // and must not find the operator's.
         config.herdr.socket = home.path().join("herdr.sock").display().to_string();
+        config.native.root = home.path().join("native").display().to_string();
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         tweak(&mut config);

@@ -9,16 +9,15 @@ license.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 kampr-core = { path = "../kampr-core" }
-kampr-term = { path = "../kampr-term" }
+kampr-keep = { path = "../kampr-keep" }
+kampr-native = { path = "../kampr-native" }
 libc.workspace = true
 rustix.workspace = true
-serde.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-ulid.workspace = true
 
 [dev-dependencies]
+kampr-testkit = { path = "../kampr-testkit" }
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

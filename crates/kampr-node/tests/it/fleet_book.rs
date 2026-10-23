@@ -1,7 +1,7 @@
 //! The fleet book over the wire: what the node remembers about commands, and where it keeps it.
 //!
-//! Nothing here needs a herd. A fleet run is a pty the node forked rather than a pane it asked
-//! herdr for (`docs/13-fleet-runs.md`), so the herdr socket in this file deliberately does not
+//! Nothing here needs a herd. A fleet run is a native session the node started rather than a pane
+//! it asked herdr for (`docs/13-fleet-runs.md`), so the herdr socket in this file deliberately does not
 //! exist — which also means the operator's own session is never reachable from here.
 //!
 //! The load-bearing test is [`a_book_written_before_a_restart_is_there_after_it`]. "Persisted on
@@ -33,6 +33,17 @@ impl Drop for Harness {
     fn drop(&mut self) {
         self.node.shutdown();
         self.server.abort();
+        let fleets = std::fs::read_dir(self.home.path().join("native").join("fleet"));
+        for root in fleets.into_iter().flatten().flatten() {
+            for session in kampr_keep::list(&root.path()).unwrap_or_default() {
+                if let Some(keeper) = session.keeper() {
+                    unsafe {
+                        libc::kill(-(keeper.child as i32), libc::SIGKILL);
+                        libc::kill(keeper.keeper as i32, libc::SIGKILL);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -76,6 +87,9 @@ impl Harness {
         // A socket and a binary that do not exist: this node has no herd and must not find the
         // operator's (#97).
         config.herdr.socket = home.path().join("herdr.sock").display().to_string();
+        config.native.root = home.path().join("native").display().to_string();
+        config.native.keeper = kampr_testkit::keeper().display().to_string();
+        config.native.launch = "detached".into();
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         // Never read the operator's login shell for a test's `PATH`: `$SHELL -lc` is a profile

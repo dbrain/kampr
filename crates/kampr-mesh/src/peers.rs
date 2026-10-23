@@ -4,6 +4,7 @@ use crate::shadow::{History, Shadow, StyleTable};
 use crate::transport::{Incoming, Outgoing};
 use base64::Engine;
 use kampr_auth::Store;
+use kampr_core::Reflow;
 use kampr_core::registry::PaneUpdate;
 use kampr_core::scrollback::ScrollbackDoc;
 use kampr_core::wire::{Cursor, ErrorCode, HerdDelta, NodeEntry, PaneEntry, RowRuns, Styles};
@@ -258,6 +259,34 @@ impl Peers {
     pub fn watch(&self, pane: &str, conversation: bool) -> Result<RemoteWatcher, RelayError> {
         self.resolve(pane)?
             .watch(pane, conversation, self.config.pane_fanout)
+    }
+
+    /// A pane re-laid at `cols` by the peer, relayed as a pane of its own on the link (the id
+    /// [`Self::relayed_as`] names), so every watcher of one width on this hub shares one stream.
+    /// A peer whose build cannot serve one is watched as the pane itself, labelled `unsupported`.
+    pub fn watch_view(&self, pane: &str, cols: u16, conversation: bool) -> Result<RemoteWatcher, RelayError> {
+        let link = self.resolve(pane)?;
+        match link.serves_reflow() {
+            true => link.watch(
+                &kampr_core::view_key(pane, cols),
+                conversation,
+                self.config.pane_fanout,
+            ),
+            false => link
+                .watch(pane, conversation, self.config.pane_fanout)
+                .map(|watcher| watcher.labelled(Reflow::Unsupported)),
+        }
+    }
+
+    /// The id a watch of `pane` asking for `reflow` is relayed under, and so the id every verb
+    /// about that watch's grid (`find`, `convo.*`) has to name on the link to reach the same view.
+    pub fn relayed_as(&self, pane: &str, reflow: Option<u16>) -> String {
+        match reflow {
+            Some(cols) if self.link_for(pane).is_some_and(|link| link.serves_reflow()) => {
+                kampr_core::view_key(pane, cols)
+            }
+            _ => pane.to_string(),
+        }
     }
 
     /// Re-watching a relayed pane must not close it in between — the mesh twin of #252.
@@ -680,6 +709,7 @@ struct LinkState {
     find: bool,
     convo_find: bool,
     grow: bool,
+    reflow: bool,
 }
 
 impl LinkState {
@@ -809,6 +839,7 @@ impl PeerLink {
         state.find = message["caps"]["find"].as_bool().unwrap_or(false);
         state.convo_find = message["caps"]["convo.find"].as_bool().unwrap_or(false);
         state.grow = message["caps"]["pane.grow"].as_bool().unwrap_or(false);
+        state.reflow = message["caps"]["reflow"].as_bool().unwrap_or(false);
     }
 
     fn serves_find(&self) -> bool {
@@ -821,6 +852,10 @@ impl PeerLink {
 
     fn serves_grow(&self) -> bool {
         self.state.lock().unwrap().grow
+    }
+
+    fn serves_reflow(&self) -> bool {
+        self.state.lock().unwrap().reflow
     }
 
     async fn fetch_attachment(
@@ -945,6 +980,8 @@ impl PeerLink {
         }
         let remote = Arc::new(RemotePane {
             pane: pane.to_string(),
+            view: kampr_core::split_view(pane).1.is_some(),
+            label: Mutex::new(None),
             shadow: Mutex::new(Shadow::default()),
             history: Mutex::new(History::default()),
             fanout: Fanout::new(fanout),
@@ -979,12 +1016,19 @@ impl PeerLink {
         let rows = message["rows"].as_u64().unwrap_or_default() as u16;
         let rows_data: Vec<RowRuns> = from_value(message.get("rows_data"));
         let links: Vec<String> = from_value(message.get("links"));
+        // A label this build has no name for is still a peer saying which grid this is, and every
+        // one but `on` is the pane's own.
+        let label = message
+            .get("reflow")
+            .map(|label| serde_json::from_value(label.clone()).unwrap_or(Reflow::Unsupported));
         let styles = self.state.lock().unwrap();
-        let update =
-            pane.shadow
-                .lock()
-                .unwrap()
-                .reset(cols, rows, &rows_data, cursor(message), links, &styles.styles);
+        let mut shadow = pane.shadow.lock().unwrap();
+        let update = shadow.reset(cols, rows, &rows_data, cursor(message), links, &styles.styles);
+        if pane.view {
+            *pane.label.lock().unwrap() = label;
+            pane.fanout.label(label);
+        }
+        drop(shadow);
         drop(styles);
         pane.emit(RemoteEvent::Update(update));
     }
@@ -1235,6 +1279,10 @@ pub struct PeerHold {
 #[derive(Debug)]
 struct RemotePane {
     pane: String,
+    /// A reflowed view of a pane rather than the pane, so every `grid.reset` carries a label.
+    view: bool,
+    /// The label on the grid the shadow holds. Written under the shadow's lock.
+    label: Mutex<Option<Reflow>>,
     shadow: Mutex<Shadow>,
     history: Mutex<History>,
     fanout: Fanout,
@@ -1282,6 +1330,7 @@ pub struct RemoteWatcher {
     initial: Vec<RemoteEvent>,
     ready: bool,
     sent_history: u32,
+    label: Option<Reflow>,
 }
 
 impl RemoteWatcher {
@@ -1291,6 +1340,7 @@ impl RemoteWatcher {
         let shadow = pane.shadow.lock().unwrap();
         let subscriber = pane.fanout.subscribe();
         let ready = shadow.is_ready();
+        let label = *pane.label.lock().unwrap();
         let mut initial = Vec::new();
         if ready {
             initial.push(RemoteEvent::Update(shadow.full()));
@@ -1313,7 +1363,19 @@ impl RemoteWatcher {
             initial,
             ready,
             sent_history,
+            label,
         }
+    }
+
+    fn labelled(mut self, label: Reflow) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    /// What to say a `grid.reset` handed out by this watcher is, on a watch that asked for a
+    /// reflowed view: `None` for one that did not, and for a peer older than the label.
+    pub fn reflow(&self) -> Option<Reflow> {
+        self.label
     }
 
     /// What this pane looked like at the moment of joining. Empty when the hub has not yet been
@@ -1346,11 +1408,11 @@ impl RemoteWatcher {
                     self.ready |= matches!(&event, RemoteEvent::Update(u) if u.is_reset());
                     return Some(event);
                 }
+                Delivery::Label(label) => self.label = label,
                 Delivery::Resync(dropped) => {
                     debug!(pane = %self.pane.pane, dropped, "hub fan-out lagged; resetting from the shadow");
-                    let shadow = self.pane.shadow.lock().unwrap();
-                    if shadow.is_ready() {
-                        return Some(RemoteEvent::Update(shadow.full()));
+                    if let Some(full) = self.resync() {
+                        return Some(RemoteEvent::Update(full));
                     }
                 }
                 Delivery::Ended => return None,
@@ -1358,9 +1420,13 @@ impl RemoteWatcher {
         }
     }
 
-    /// The full grid the hub holds, for a client whose queue had to be purged.
-    pub fn resync(&self) -> Option<PaneUpdate> {
+    /// The full grid the hub holds, for a client whose queue had to be purged. [`Self::reflow`]
+    /// is its label from here on.
+    pub fn resync(&mut self) -> Option<PaneUpdate> {
         let shadow = self.pane.shadow.lock().unwrap();
+        if self.pane.view {
+            self.label = *self.pane.label.lock().unwrap();
+        }
         shadow.is_ready().then(|| shadow.full())
     }
 }

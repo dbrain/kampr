@@ -9,6 +9,7 @@ mod exposure;
 mod herd;
 mod host;
 mod integrations;
+mod keep;
 mod observe;
 mod origin;
 mod render;
@@ -129,6 +130,7 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.push(host::service(&config, &service).await);
     checks.push(host::linger(&service));
     checks.push(host::fleet_path(&config));
+    checks.push(keep::check(&config));
 
     // The device store is the one check that needs the database open, and a database that will
     // not open is itself the answer.

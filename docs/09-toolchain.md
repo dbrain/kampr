@@ -176,6 +176,11 @@ consequences worth knowing:
   a change to what `kampr update` does, and `crates/kampr-cli/tests/update_cli.rs` exercises it
   against a release built on disk, served by a `curl` and a `cosign` on `PATH` that answer only
   for the canonical release base — so the URL the command asks for is asserted, not assumed.
+- **Native-session keepers upgrade themselves.** The installer restarts the node, and a starting
+  node sends `SIGUSR1` to every keeper whose running image is no longer the file at its path, which
+  re-execs it with its session untouched (#589), then checks again every minute. No release step
+  signals keepers by hand ([`docs/17`](./17-native-sessions.md) §1); `kampr doctor`'s `keep` line
+  names any that are still behind.
 
 `cosign` is required here for the same reason it is required in `install.sh`: absent, there is
 nothing left that says who built the tarball, and a checksum served beside it does not.

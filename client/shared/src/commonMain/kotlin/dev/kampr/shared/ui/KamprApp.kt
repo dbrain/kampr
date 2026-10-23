@@ -222,6 +222,7 @@ internal class AppPaneIo(private val state: AppState) : PaneIo {
     override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean) = state.claimMatch(paneId, cols, rows, grow)
     override val growsPanes: Boolean get() = state.store.hello.value?.caps?.paneGrow == true
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
+    override fun reflow(paneId: String, cols: Int?) = state.connection.reflow(paneId, cols)
     override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
 }
 

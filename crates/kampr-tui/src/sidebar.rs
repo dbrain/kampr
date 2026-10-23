@@ -16,7 +16,7 @@ pub enum Row {
     Header(&'static str, String),
     Node {
         name: String,
-        online: bool,
+        serving: bool,
         detail: Option<String>,
         rtt: String,
     },
@@ -110,7 +110,8 @@ pub fn spaces(herd: &Herd) -> Vec<Row> {
     let mut rows = vec![Row::Header("spaces", String::new())];
     for group in herd.groups() {
         let node = group.node;
-        let rtt = match (node.online, node.kind.as_str(), node.rtt_ms) {
+        let serving = node.is_serving();
+        let rtt = match (serving, node.kind.as_str(), node.rtt_ms) {
             (false, _, _) => "offline".to_string(),
             (true, "local", _) => "local".to_string(),
             (true, _, Some(ms)) => format!("{ms:.0}ms"),
@@ -118,22 +119,29 @@ pub fn spaces(herd: &Herd) -> Vec<Row> {
         };
         rows.push(Row::Node {
             name: node.name.clone(),
-            online: node.online,
-            detail: node.detail.clone(),
+            serving,
+            detail: node.detail.clone().filter(|_| node.online || !serving),
             rtt,
         });
-        if !node.online {
-            let seen = group.panes.iter().filter_map(|p| clock(p)).max().unwrap_or("—");
-            let n = group.panes.len();
-            let panes = if n == 1 { "pane" } else { "panes" };
-            rows.push(Row::Absence(format!("{n} {panes} · seen {seen}")));
+        if !serving {
+            rows.push(Row::Absence(absence(&group.panes)));
             if let Some(detail) = &node.detail {
                 rows.push(Row::Absence(detail.clone()));
             }
             continue;
         }
+        let (live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = group
+            .panes
+            .iter()
+            .partition(|p| node.online || p.provider.as_deref() == Some("native"));
+        if !node.online {
+            rows.push(Row::Absence(match remembered.is_empty() {
+                true => "no herdr".to_string(),
+                false => format!("no herdr · {}", absence(&remembered)),
+            }));
+        }
         let mut workspace = None;
-        for pane in &group.panes {
+        for pane in live {
             let space = pane.workspace.clone().unwrap_or_else(|| "—".into());
             if workspace.as_deref() != Some(space.as_str()) {
                 rows.push(Row::Workspace {
@@ -151,6 +159,13 @@ pub fn spaces(herd: &Herd) -> Vec<Row> {
         }
     }
     rows
+}
+
+fn absence(panes: &[&PaneEntry]) -> String {
+    let seen = panes.iter().filter_map(|p| clock(p)).max().unwrap_or("—");
+    let n = panes.len();
+    let noun = if n == 1 { "pane" } else { "panes" };
+    format!("{n} {noun} · seen {seen}")
 }
 
 fn short(path: &str) -> &str {
@@ -246,12 +261,12 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
         }
         Row::Node {
             name,
-            online,
+            serving,
             rtt,
             detail,
         } => {
-            let dot = if *online { "●" } else { "○" };
-            let colour = match (online, detail) {
+            let dot = if *serving { "●" } else { "○" };
+            let colour = match (serving, detail) {
                 (false, _) => t.mute,
                 (true, Some(_)) => t.blocked,
                 (true, None) => t.done,
@@ -331,6 +346,81 @@ mod tests {
             ..PaneInfo::default()
         };
         PaneEntry::new("n", &info, false)
+    }
+
+    fn node(json: serde_json::Value) -> kampr_core::wire::NodeEntry {
+        serde_json::from_value(json).unwrap()
+    }
+
+    const NO_HERDR: &str = "herdr socket /run/user/1000/herdr/default.sock: No such file";
+
+    fn herd_on(node_entry: kampr_core::wire::NodeEntry) -> Herd {
+        let mut native = pane("n:01ja", AgentStatus::Unknown);
+        native.provider = Some("native".into());
+        Herd {
+            nodes: vec![node_entry],
+            panes: vec![pane("w1:p1", AgentStatus::Idle), native],
+            ..Herd::default()
+        }
+    }
+
+    fn node_rows(herd: &Herd) -> Vec<Row> {
+        spaces(herd)
+            .into_iter()
+            .skip(1)
+            .filter(|r| !matches!(r, Row::Workspace { .. }))
+            .collect()
+    }
+
+    /// A machine with no herdr and native sessions was drawn as a machine that is gone, though its
+    /// sessions worked. herdr's absence is still true, so it is said once, quietly, and the herdr
+    /// panes it still remembers are folded into that line rather than offered as live.
+    #[test]
+    fn a_machine_with_no_herdr_serving_native_sessions_reads_as_serving() {
+        let herd = herd_on(node(serde_json::json!({
+            "id": "n", "name": "shed", "kind": "peer", "online": false, "reachable": true,
+            "native": true, "rtt_ms": 12.0, "detail": NO_HERDR,
+        })));
+
+        assert_eq!(
+            node_rows(&herd),
+            [
+                Row::Node {
+                    name: "shed".into(),
+                    serving: true,
+                    detail: None,
+                    rtt: "12ms".into(),
+                },
+                Row::Absence("no herdr · 1 pane · seen —".into()),
+                Row::Pane {
+                    name: name(&herd.panes[1]),
+                    status: AgentStatus::Unknown,
+                    pane: "n/n:01ja".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_herdr_only_machine_losing_herdr_reads_exactly_as_it_did() {
+        let herd = herd_on(node(serde_json::json!({
+            "id": "n", "name": "coldbox", "kind": "peer", "online": false, "reachable": true,
+            "rtt_ms": 12.0, "detail": NO_HERDR,
+        })));
+
+        assert_eq!(
+            node_rows(&herd),
+            [
+                Row::Node {
+                    name: "coldbox".into(),
+                    serving: false,
+                    detail: Some(NO_HERDR.into()),
+                    rtt: "offline".into(),
+                },
+                Row::Absence("2 panes · seen —".into()),
+                Row::Absence(NO_HERDR.into()),
+            ]
+        );
     }
 
     /// Herdr rolls a tab up as `blocked > done > working > idle > unknown`, measured by driving

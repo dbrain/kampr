@@ -38,6 +38,7 @@ import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.serves
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.BackAction
@@ -98,7 +99,7 @@ fun MosaicSwitcher(
                     surfaces.KeyRow(pane, compact = landscape, Modifier.fillMaxWidth())
                 }
             }
-            if (node != null && !node.online) {
+            if (node != null && !node.serves(info)) {
                 Box(Modifier.fillMaxSize()) { SwitcherUnavailable(node.detail ?: "${node.name} is not connected") }
             }
         }
@@ -268,7 +269,7 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 Dot(
-                    if (node?.online == false) tokens.color.blocked else statusColor(status),
+                    if (node?.serves(info) == false) tokens.color.blocked else statusColor(status),
                     6.dp,
                     hollow = status == AgentStatus.Idle || status == AgentStatus.Unknown,
                 )

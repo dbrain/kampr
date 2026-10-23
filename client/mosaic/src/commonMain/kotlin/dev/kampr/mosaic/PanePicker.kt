@@ -70,14 +70,14 @@ fun PanePicker(
                             .fillMaxWidth()
                             .named(
                                 "${node.session} on ${node.host}, " +
-                                    (if (node.online) "online" else "offline") + ", " +
+                                    (if (node.isServing) "online" else "offline") + ", " +
                                     formatLatency(node.rttMs),
                             )
                             .padding(start = 20.dp, end = 20.dp, bottom = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Dot(if (node.online) tokens.color.done else tokens.color.blocked, 6.dp)
+                        Dot(if (node.isServing) tokens.color.done else tokens.color.blocked, 6.dp)
                         LabelText(node.session, tokens.type.micro, tokens.color.dim)
                         KText(
                             listOfNotNull(

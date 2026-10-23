@@ -81,12 +81,13 @@ fn spawn_pump(
     let handle = tokio::spawn(pump_pane(PaneStreamCtx {
         registry,
         // Nothing in this test reaches herdr; a socket that does not exist proves it.
-        herdr: kampr_herdr::Herdr::new("/nonexistent/kampr-test.sock"),
+        screen: kampr_node::pending::Screen::Herdr(kampr_herdr::Herdr::new("/nonexistent/kampr-test.sock")),
         herd: herd_rx,
         wire,
         global: "01J/w1:p1".into(),
         local: "w1:p1".into(),
         scrollback: false,
+        reflow: None,
     }));
     (handle, herd_tx)
 }

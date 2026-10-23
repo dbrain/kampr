@@ -129,6 +129,8 @@ data class NodeInfo(
     // it, for which `online` is the only answer available. **Last on purpose**: the artboards
     // build a NodeInfo positionally.
     val reachable: Boolean? = null,
+    // Native sessions need no herdr, so `online: false` with this set is a machine still serving.
+    val native: Boolean? = null,
 ) {
     // The fallback is not `online`. A local node is answering by construction — it is the socket
     // this device is talking over, and a node that could not answer would not be in this frame —
@@ -136,6 +138,8 @@ data class NodeInfo(
     // refused a cold local host on any node too old to send `reachable`, which is the machine
     // #324/#325 exist for.
     val isReachable: Boolean get() = reachable ?: (kind == "local" || online)
+
+    val isServing: Boolean get() = isReachable && (online || native == true)
 
     // A named session is its own herdr server and joins the herd as its own node, named
     // `<host>/<session>`; the primary session carries the bare host name.
@@ -191,7 +195,17 @@ data class PaneInfo(
     // Present only on a fleet run, and its presence is what files the pane under the fleet board
     // instead of beside the operator's own workspaces.
     val fleet: FleetInfo? = null,
+    // Present only on a Kampr-kept session (docs/17), which herdr neither spawned nor knows about.
+    val provider: String? = null,
+    @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("on_desk") val onDesk: String? = null,
+    val detached: Boolean = false,
+    @SerialName("size_holder") val sizeHolder: String? = null,
+    val exited: NativeExit? = null,
 )
+
+@Serializable
+data class NativeExit(val code: Int? = null, val signal: Int? = null)
 
 // "This pane can be talked to as a conversation", read off both halves. Both move during a session
 // and in both directions, so it is asked on every composition rather than at open. Every surface
@@ -433,6 +447,8 @@ sealed interface ServerMsg {
         val rowsData: List<RowDiff>,
         val cursor: Cursor,
         val links: List<String>,
+        // On a watch that asked for a reflow only: "on", or why this is the pane's own grid.
+        val reflow: String? = null,
     ) : ServerMsg
 
     data class GridPatch(
@@ -607,13 +623,18 @@ data class PanePrefs(val values: Map<String, String> = emptyMap()) {
     // viewport decides (ADR 0013). A default that overrode an answer already given would be the
     // surprise the whole feature is shaped around avoiding.
     val matchView: Boolean? get() = values["match"]?.let { it == "on" }
+
+    // Three states for the same reason as `match`: `null` lets the view decide.
+    val reflow: Boolean? get() = values["reflow"]?.let { it == "on" }
 }
 
 sealed interface ClientMsg {
+    // `reflow` asks for a native pane re-laid at this many columns, without touching its PTY.
     data class Watch(
         val pane: String,
         val scrollback: Boolean = true,
         val conversation: Boolean = true,
+        val reflow: Int? = null,
     ) : ClientMsg
 
     data class Unwatch(val pane: String) : ClientMsg

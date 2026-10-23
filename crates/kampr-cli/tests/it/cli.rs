@@ -12,7 +12,21 @@ pub(crate) struct Cli {
     pub(crate) nowhere: std::path::PathBuf,
     binary: std::path::PathBuf,
     env: Vec<(String, String)>,
+    keep: tempfile::TempDir,
     _dir: tempfile::TempDir,
+}
+
+impl Drop for Cli {
+    fn drop(&mut self) {
+        for session in kampr_keep::list(self.keep.path()).unwrap_or_default() {
+            if let Some(keeper) = session.keeper() {
+                unsafe {
+                    libc::kill(-(keeper.child as i32), libc::SIGKILL);
+                    libc::kill(keeper.keeper as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
 }
 
 impl Cli {
@@ -26,8 +40,17 @@ impl Cli {
             nowhere: dir.path().join("nowhere"),
             binary: std::path::PathBuf::from(env!("CARGO_BIN_EXE_kampr")),
             env: Vec::new(),
+            // ctl.sock must fit in sun_path, so not under a long TMPDIR.
+            keep: tempfile::Builder::new()
+                .prefix("kd")
+                .tempdir_in("/tmp")
+                .expect("a keep root"),
             _dir: dir,
         }
+    }
+
+    pub(crate) fn keep_root(&self) -> &Path {
+        self.keep.path()
     }
 
     /// A kampr somewhere other than the build directory, for the questions that are about where
@@ -89,6 +112,9 @@ impl Cli {
             .env("DBUS_SESSION_BUS_ADDRESS", self.bus())
             .env("DBUS_SYSTEM_BUS_ADDRESS", self.bus())
             .env("KAMPR_LINGER_DIR", self.nowhere.join("linger"))
+            // A node or a doctor reading the operator's sessions would answer their terminals.
+            .env("KAMPR_KEEP_ROOT", self.keep.path())
+            .env("KAMPR_KEEP_LAUNCH", "detached")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1060,13 +1086,9 @@ fn service_install_records_the_herdr_it_resolved_rather_than_leaving_a_bare_name
         "nothing to resolve, so nothing is written down"
     );
 
-    let found = Cli {
-        env: vec![
-            ("PATH".into(), prefix.bin().display().to_string()),
-            ("HOME".into(), prefix.home()),
-        ],
-        ..cli
-    };
+    let found = cli
+        .with_env("PATH", &prefix.bin().display().to_string())
+        .with_env("HOME", &prefix.home());
     let out = found.run(&["service", "install"]);
     let said = format!("{}{}", stdout(&out), stderr(&out));
     assert!(said.contains(&herdr.display().to_string()), "{said}");
@@ -1076,4 +1098,73 @@ fn service_install_records_the_herdr_it_resolved_rather_than_leaving_a_bare_name
         "the unit's manager has its own PATH, so the path is recorded where every entry point \
          reads it"
     );
+}
+
+/// **A keeper runs the binary it was started from until it is told to re-exec**, so replacing
+/// `kampr` upgrades every node and no session. The doctor is where that shows, with the one signal
+/// that fixes it; and once the keeper has taken the signal, it stops saying so.
+#[test]
+fn doctor_counts_the_sessions_kept_and_names_a_keeper_whose_binary_was_replaced() {
+    let bin = tempfile::tempdir().unwrap();
+    let kampr = bin.path().join("kampr");
+    std::fs::copy(env!("CARGO_BIN_EXE_kampr"), &kampr).unwrap();
+    let cli = Cli::new().binary(&kampr);
+    cli.init();
+    let keep = |cli: &Cli| check(&cli.json(&["doctor", "--json"]), "keep").clone();
+
+    let none = keep(&cli);
+    assert_eq!(none["status"], "ok", "{none:#}");
+    assert!(
+        none["detail"].as_str().unwrap().contains("no sessions"),
+        "{none:#}"
+    );
+
+    let spawn = |argv: &[&str]| {
+        kampr_keep::spawn(
+            cli.keep_root(),
+            kampr_keep::Spec::new(argv.iter().map(|a| a.to_string()).collect()),
+            kampr_keep::Launch::Detached,
+            &kampr,
+        )
+        .expect("a session")
+    };
+    let live = spawn(&["sleep", "600"]);
+    let ended = spawn(&["true"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while ended.exit().is_none() {
+        assert!(std::time::Instant::now() < deadline, "`true` never ended");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let fresh = keep(&cli);
+    assert_eq!(fresh["status"], "ok", "{fresh:#}");
+    let detail = fresh["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("2 kept") && detail.contains("1 live") && detail.contains("1 ended"),
+        "{detail}"
+    );
+
+    let keeper = live.keeper().expect("a keeper");
+    std::fs::copy(env!("CARGO_BIN_EXE_kampr"), bin.path().join("kampr.new")).unwrap();
+    std::fs::rename(bin.path().join("kampr.new"), &kampr).unwrap();
+    let stale = keep(&cli);
+    assert_eq!(stale["status"], "warn", "{stale:#}");
+    assert!(stale["detail"].as_str().unwrap().contains(live.id()), "{stale:#}");
+    assert!(
+        stale["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("kill -USR1 {}", keeper.keeper)),
+        "a detached keeper is no unit's: {stale:#}"
+    );
+
+    unsafe { libc::kill(keeper.keeper as i32, libc::SIGUSR1) };
+    while live.keeper().is_none_or(|k| k.how != kampr_keep::How::ReExec) {
+        assert!(
+            std::time::Instant::now() < deadline + std::time::Duration::from_secs(5),
+            "never re-exec'd"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let upgraded = keep(&cli);
+    assert_eq!(upgraded["status"], "ok", "{upgraded:#}");
 }

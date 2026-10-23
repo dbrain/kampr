@@ -551,8 +551,8 @@ private fun MachineCard(node: NodeInfo) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Mark(
-                if (node.online) tokens.color.done else tokens.color.blocked,
-                if (node.online) MarkShape.Bar else MarkShape.Ring,
+                if (node.isServing) tokens.color.done else tokens.color.blocked,
+                if (node.isServing) MarkShape.Bar else MarkShape.Ring,
                 9.dp,
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {

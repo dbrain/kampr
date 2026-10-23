@@ -72,6 +72,7 @@ class KamprConnection(
     // and the last viewer to let go is the one that stops the stream. Watching by owner is what
     // makes "removing a cell unwatches" true without it also unwatching what is still on screen.
     private val watched = LinkedHashMap<String, MutableSet<String>>()
+    private val reflowFor = HashMap<String, Int>()
     private var pingSeq = 0
     private val pingSentAt = HashMap<Int, Double>()
     private var capsWanted = false
@@ -131,13 +132,22 @@ class KamprConnection(
         val owners = watched.getOrPut(pane) { LinkedHashSet() }
         val first = owners.isEmpty()
         owners += owner
-        if (first) send(ClientMsg.Watch(pane, scrollback, conversation))
+        if (first) send(ClientMsg.Watch(pane, scrollback, conversation, reflowFor[pane]))
+    }
+
+    // One grid per pane per socket, so a reflow is the pane's watch re-sent at a new width. The node
+    // re-attaches a re-watch rather than re-opening it (#252), so changing the width costs a reset.
+    fun reflow(pane: String, cols: Int?) {
+        if (reflowFor[pane] == cols) return
+        if (cols == null) reflowFor.remove(pane) else reflowFor[pane] = cols
+        if (pane in watched) send(ClientMsg.Watch(pane, reflow = cols))
     }
 
     fun unwatch(pane: String, owner: String = DEFAULT_OWNER) {
         val owners = watched[pane] ?: return
         if (!owners.remove(owner) || owners.isNotEmpty()) return
         watched.remove(pane)
+        reflowFor.remove(pane)
         store.releaseConversation(pane)
         send(ClientMsg.Unwatch(pane))
     }
@@ -229,7 +239,7 @@ class KamprConnection(
                 capsAskedAt = 0.0
                 probeArmed = false
                 while (wake.tryReceive().isSuccess) { }
-                for (pane in watched.keys) outbox.trySend(ClientMsg.Watch(pane))
+                for (pane in watched.keys) outbox.trySend(ClientMsg.Watch(pane, reflow = reflowFor[pane]))
                 for (frame in incoming) {
                     heard()
                     val text = (frame as? Frame.Text)?.readText() ?: continue

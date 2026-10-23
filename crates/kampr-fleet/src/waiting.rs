@@ -1,18 +1,19 @@
 //! Whether a job is parked waiting for somebody to type something.
 //!
-//! **This only ever works from the job's own parent, at the job's own privilege** (probe #334).
+//! **This only ever works from the job's own ancestor, at the job's own privilege** (probe #334).
 //! From outside — which is where the node stands for every herdr pane — `/proc/<pid>/syscall` is
 //! EPERM under yama `ptrace_scope=1` (#331), and a job running as root refuses `wchan` and `fd/0`
 //! as well, so the node can read *nothing at all* about a `sudo pacman` (#332). That is why a
-//! fleet run is a pty this process owns rather than a pane herdr forked, and why the supervisor
-//! cannot follow a command that escalates: such a run is reported blind and read off its screen.
+//! fleet run is a native session whose keeper forked it (docs/17), and why the keeper's `state`
+//! reads these files rather than the node: it is the ancestor. It cannot follow a command that
+//! escalates either, so such a run is reported blind and read off its screen.
 //!
 //! The three-state answer is the point. `Unknown` is a real answer and it is not `Busy`: the
 //! caller renders it as quiet, never as a question, because a host that is merely unreadable must
 //! not present itself as one that is asking (#233 is the same lesson from the other end).
 
 use kampr_core::question::Mode;
-use std::path::{Path, PathBuf};
+use kampr_keep::{Proc, ProcState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Waiting {
@@ -57,105 +58,52 @@ const READS_FD0: &[u64] = &[
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const READS_FD0: &[u64] = &[];
 
-#[derive(Debug, Clone)]
-pub struct Procfs {
-    root: PathBuf,
+/// The state of the run's child, or of the deepest descendant of it that has an opinion, from the
+/// keeper's `state` reply: the keeper is the child's parent, and only an ancestor may read these
+/// files (#331).
+///
+/// A command is often a tree — `sudo` forks `pacman`, a wrapper execs the real binary, a shell runs
+/// a pipeline — and the thing holding the terminal is the leaf, not the root. The root is usually
+/// in `ppoll` or `wait4`, which is honestly `Busy` and would mask the leaf's answer.
+///
+/// `tty` is the run's own pty, and checking it is what keeps a **pipeline** honest. Measured:
+/// `bash -c 'sleep 30 | cat'` parks `cat` in `splice(2)` on **fd 0**, and fd 0 there is the pipe
+/// rather than the terminal — the exact shape rung 1 recognises, with nobody waiting for the
+/// operator at all. Requiring the descriptor to resolve to the run's own pty can only remove such
+/// an answer and never add one.
+pub fn waiting(state: &ProcState) -> Waiting {
+    if READS_FD0.is_empty() {
+        return Waiting::Unknown;
+    }
+    let mut answer = Waiting::Unknown;
+    for proc in &state.procs {
+        match one(proc, state.tty.as_deref()) {
+            Waiting::Waiting => return Waiting::Waiting,
+            Waiting::Busy => answer = Waiting::Busy,
+            Waiting::Unknown => {}
+        }
+    }
+    answer
 }
 
-impl Default for Procfs {
-    fn default() -> Self {
-        Self::at("/proc")
+fn one(proc: &Proc, tty: Option<&str>) -> Waiting {
+    let Some(raw) = proc.syscall.as_deref() else {
+        return Waiting::Unknown;
+    };
+    match parse_syscall(raw) {
+        Waiting::Waiting if !reads_the_terminal(proc, tty) => Waiting::Busy,
+        answer => answer,
     }
 }
 
-impl Procfs {
-    pub fn at(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    /// The state of `pid`, or of the deepest descendant of it that has an opinion.
-    ///
-    /// A command is often a tree — `sudo` forks `pacman`, a wrapper execs the real binary, a
-    /// shell runs a pipeline — and the thing holding the terminal is the leaf, not the root. The
-    /// root is usually in `ppoll` or `wait4`, which is honestly `Busy` and would mask the leaf's
-    /// answer.
-    ///
-    /// `tty` is this run's own pty, and passing it is what keeps a **pipeline** honest. Measured:
-    /// `bash -c 'sleep 30 | cat'` parks `cat` in `splice(2)` on **fd 0**, and fd 0 there is the
-    /// pipe rather than the terminal — the exact shape rung 1 recognises, with nobody waiting for
-    /// the operator at all. Requiring the descriptor to resolve to the run's own pty can only
-    /// remove such an answer and never add one.
-    pub fn waiting(&self, pid: u32, tty: Option<&str>) -> Waiting {
-        if READS_FD0.is_empty() {
-            return Waiting::Unknown;
-        }
-        let mut answer = Waiting::Unknown;
-        for candidate in self.tree(pid, 0) {
-            match self.one(candidate, tty) {
-                Waiting::Waiting => return Waiting::Waiting,
-                Waiting::Busy => answer = Waiting::Busy,
-                Waiting::Unknown => {}
-            }
-        }
-        answer
-    }
-
-    fn one(&self, pid: u32, tty: Option<&str>) -> Waiting {
-        let Some(raw) = self.read(pid, "syscall") else {
-            return Waiting::Unknown;
-        };
-        match parse_syscall(&raw) {
-            Waiting::Waiting if !self.reads_the_terminal(pid, tty) => Waiting::Busy,
-            answer => answer,
-        }
-    }
-
-    /// Whether this job's fd 0 is the run's own pty.
-    ///
-    /// An unreadable link is taken as the terminal, which leaves the answer exactly where it was
-    /// before this check existed: a job whose `syscall` can be read but whose `fd/0` cannot is a
-    /// shape [#332](../../../docs/03-probe-log.md) says does not occur — an escalated job refuses
-    /// both together — so treating it as a refusal would only ever lose a real signal.
-    fn reads_the_terminal(&self, pid: u32, tty: Option<&str>) -> bool {
-        let Some(tty) = tty else { return true };
-        match std::fs::read_link(self.root.join(pid.to_string()).join("fd").join("0")) {
-            Ok(target) => target == Path::new(tty),
-            Err(_) => true,
-        }
-    }
-
-    fn tree(&self, pid: u32, depth: usize) -> Vec<u32> {
-        let mut found = vec![pid];
-        if depth >= 4 {
-            return found;
-        }
-        for child in self.children(pid) {
-            found.extend(self.tree(child, depth + 1));
-        }
-        found
-    }
-
-    fn children(&self, pid: u32) -> Vec<u32> {
-        let dir = self.root.join(pid.to_string()).join("task");
-        let Ok(threads) = std::fs::read_dir(&dir) else {
-            return Vec::new();
-        };
-        let mut pids: Vec<u32> = threads
-            .flatten()
-            .filter_map(|thread| std::fs::read_to_string(thread.path().join("children")).ok())
-            .flat_map(|text| {
-                text.split_ascii_whitespace()
-                    .filter_map(|p| p.parse::<u32>().ok())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        pids.sort_unstable();
-        pids.dedup();
-        pids
-    }
-
-    fn read(&self, pid: u32, name: &str) -> Option<String> {
-        std::fs::read_to_string(self.root.join(pid.to_string()).join(name)).ok()
+/// An unreadable link is taken as the terminal, which leaves the answer exactly where it was
+/// before this check existed: a job whose `syscall` can be read but whose `fd/0` cannot is a shape
+/// #332 says does not occur — an escalated job refuses both together — so treating it as a
+/// refusal would only ever lose a real signal.
+fn reads_the_terminal(proc: &Proc, tty: Option<&str>) -> bool {
+    match (tty, proc.fd0.as_deref()) {
+        (Some(tty), Some(fd0)) => fd0 == tty,
+        _ => true,
     }
 }
 
@@ -190,7 +138,7 @@ fn parse_hex(field: &str) -> Option<u64> {
 /// What the pty's line discipline is set to.
 ///
 /// **Only trustworthy on a pty with no *interactive* shell on it**: ble.sh leaves an ordinary
-/// interactive pane with ECHO already off (#333), so this is a question the supervisor may ask of
+/// interactive pane with ECHO already off (#333), so this is a question a fleet run may ask of
 /// its own pty and nothing may ask of a herdr pane. The confound needs the `i` in `$-` to exist —
 /// measured, with `bash -c` on a fleet pty reading ECHO on at idle and ECHO off with ICANON on at
 /// a real password prompt, exactly as a pty with nothing on it does — which is why the shell a
@@ -207,7 +155,6 @@ pub fn mode_of(fd: std::os::fd::BorrowedFd<'_>) -> Option<Mode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn a_job_parked_in_read_on_fd_zero_is_waiting() {
@@ -261,98 +208,76 @@ mod tests {
         assert_eq!(parse_syscall("garbage"), Waiting::Unknown);
     }
 
+    fn proc(pid: u32, syscall: Option<&str>, fd0: Option<&str>) -> Proc {
+        Proc {
+            pid,
+            children: Vec::new(),
+            stat: None,
+            syscall: syscall.map(str::to_string),
+            wchan: None,
+            fd0: fd0.map(str::to_string),
+        }
+    }
+
+    /// Each tree is the keeper's walk of a real shape: `sudo` over `pacman` (#334), a pipeline
+    /// whose tail reads a pipe, its front reading the terminal, and a job whose `fd/0` was
+    /// unreadable (#332 says that cannot happen alone, so it must not lose the answer).
     #[test]
-    fn the_leaf_of_the_tree_decides_not_the_relay_above_it() {
-        let temp = tempdir();
-        let root = temp.path();
-        // sudo(100) in ppoll, pacman(101) parked in read(0) — the shape probe #334 measured.
-        write_proc(root, 100, "271 0x0 0x2 0x0", &[101]);
-        write_proc(root, 101, "0 0x0 0x55d3 0x400", &[]);
-        assert_eq!(Procfs::at(root).waiting(100, None), Waiting::Waiting);
-    }
-
-    #[test]
-    fn a_tree_that_is_entirely_busy_says_busy() {
-        let temp = tempdir();
-        let root = temp.path();
-        write_proc(root, 200, "271 0x0 0x2 0x0", &[201]);
-        write_proc(root, 201, "230 0x0 0x0 0x0", &[]);
-        assert_eq!(Procfs::at(root).waiting(200, None), Waiting::Busy);
-    }
-
-    #[test]
-    fn a_tree_nothing_can_be_read_from_stays_unknown() {
-        let temp = tempdir();
-        let root = temp.path();
-        assert_eq!(Procfs::at(root).waiting(999, None), Waiting::Unknown);
-    }
-
-    /// A shell running a pipeline parks the tail of it in a read on fd 0 that is a **pipe**, and
-    /// nobody is waiting for the operator. Measured: `bash -c 'sleep 30 | cat'` reads
-    /// `275 0x0 …` — the same line `cat` at a terminal produces — with `fd/0` pointing at
-    /// `pipe:[690464455]`. Rung 1 keyed on the syscall alone calls that host a question.
-    #[test]
-    fn a_pipeline_reading_a_pipe_is_not_a_host_waiting_for_the_operator() {
-        let temp = tempdir();
-        let root = temp.path();
-        write_proc(root, 300, "61 0xffffffffffffffff 0x0", &[301, 302]);
-        write_proc(root, 301, "230 0x0 0x0 0x0", &[]);
-        write_proc(root, 302, "275 0x0 0x0 0x4", &[]);
-        point_fd0(root, 302, "pipe:[690464455]");
-        assert_eq!(Procfs::at(root).waiting(300, Some("/dev/pts/8")), Waiting::Busy);
-    }
-
-    /// And the front of the same pipeline, which does hold the terminal, still is one.
-    #[test]
-    fn the_end_of_a_pipeline_that_holds_the_terminal_is_still_a_question() {
-        let temp = tempdir();
-        let root = temp.path();
-        write_proc(root, 400, "61 0xffffffffffffffff 0x0", &[401, 402]);
-        write_proc(root, 401, "275 0x0 0x0 0x4", &[]);
-        point_fd0(root, 401, "/dev/pts/8");
-        write_proc(root, 402, "275 0x0 0x0 0x4", &[]);
-        point_fd0(root, 402, "pipe:[690475056]");
-        assert_eq!(
-            Procfs::at(root).waiting(400, Some("/dev/pts/8")),
-            Waiting::Waiting
-        );
-    }
-
-    /// A job whose `fd/0` cannot be read at all is left exactly where it was before the check
-    /// existed. #332 measured that an escalated job refuses `syscall` and `fd/0` together, so
-    /// this combination does not arise — and reading it as a refusal would only lose a signal.
-    #[test]
-    fn a_descriptor_that_cannot_be_read_leaves_the_answer_where_it_was() {
-        let temp = tempdir();
-        let root = temp.path();
-        write_proc(root, 500, "0 0x0 0x55d3 0x400", &[]);
-        assert_eq!(
-            Procfs::at(root).waiting(500, Some("/dev/pts/8")),
-            Waiting::Waiting
-        );
-    }
-
-    /// Removed when it goes out of scope. A test that leaves a directory in `/tmp` for every run
-    /// is a test that litters the machine it is measuring.
-    fn tempdir() -> tempfile::TempDir {
-        tempfile::tempdir().expect("temp dir")
-    }
-
-    fn write_proc(root: &Path, pid: u32, syscall: &str, children: &[u32]) {
-        let dir = root.join(pid.to_string());
-        std::fs::create_dir_all(dir.join("task").join(pid.to_string())).expect("proc dir");
-        std::fs::write(dir.join("syscall"), syscall).expect("syscall");
-        let kids = children
-            .iter()
-            .map(|c| c.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        std::fs::write(dir.join("task").join(pid.to_string()).join("children"), kids).expect("children");
-    }
-
-    fn point_fd0(root: &Path, pid: u32, at: &str) {
-        let fds = root.join(pid.to_string()).join("fd");
-        std::fs::create_dir_all(&fds).expect("fd dir");
-        std::os::unix::fs::symlink(at, fds.join("0")).expect("fd 0");
+    fn the_tree_is_read_leaf_first_and_only_a_read_of_the_terminal_is_a_question() {
+        let tty = Some("/dev/pts/8");
+        let cases: &[(&str, Vec<Proc>, Waiting)] = &[
+            (
+                "sudo relaying for pacman parked in read(0)",
+                vec![
+                    proc(100, Some("271 0x0 0x2 0x0"), None),
+                    proc(101, Some("0 0x0 0x55d3 0x400"), None),
+                ],
+                Waiting::Waiting,
+            ),
+            (
+                "a tree that is entirely busy",
+                vec![
+                    proc(200, Some("271 0x0 0x2 0x0"), None),
+                    proc(201, Some("230 0x0 0x0 0x0"), None),
+                ],
+                Waiting::Busy,
+            ),
+            (
+                "nothing readable at all",
+                vec![proc(999, None, None)],
+                Waiting::Unknown,
+            ),
+            ("no processes left", Vec::new(), Waiting::Unknown),
+            (
+                "`sleep 30 | cat`: cat in splice on a pipe",
+                vec![
+                    proc(300, Some("61 0xffffffffffffffff 0x0"), Some("/dev/pts/8")),
+                    proc(301, Some("230 0x0 0x0 0x0"), Some("/dev/pts/8")),
+                    proc(302, Some("275 0x0 0x0 0x4"), Some("pipe:[690464455]")),
+                ],
+                Waiting::Busy,
+            ),
+            (
+                "the front of a pipeline holding the terminal",
+                vec![
+                    proc(400, Some("61 0xffffffffffffffff 0x0"), Some("/dev/pts/8")),
+                    proc(401, Some("275 0x0 0x0 0x4"), Some("/dev/pts/8")),
+                    proc(402, Some("275 0x0 0x0 0x4"), Some("pipe:[690475056]")),
+                ],
+                Waiting::Waiting,
+            ),
+            (
+                "a descriptor that could not be read",
+                vec![proc(500, Some("0 0x0 0x55d3 0x400"), None)],
+                Waiting::Waiting,
+            ),
+        ];
+        for (what, procs, want) in cases {
+            let state = ProcState {
+                tty: tty.map(str::to_string),
+                procs: procs.clone(),
+            };
+            assert_eq!(waiting(&state), *want, "{what}");
+        }
     }
 }

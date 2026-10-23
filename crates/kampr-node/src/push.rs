@@ -341,9 +341,17 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 async fn question_for(sessions: &Sessions, global: &str, agent: Option<&str>) -> Option<String> {
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
-    pending::read(&session.herdr, &local, agent)
-        .await
-        .map(|p| p.question)
+    let screen = pending::Screen::of(&session, &local);
+    if let Some(found) = pending::read(&screen, &local, agent).await {
+        return Some(found.question);
+    }
+    match screen {
+        pending::Screen::Native(native) => native
+            .program(&local)
+            .filter(|p| p.state == kampr_core::provider::ProgramState::Blocked)
+            .and_then(|p| p.message),
+        pending::Screen::Herdr(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -396,8 +404,61 @@ mod tests {
     fn sessions() -> Arc<Sessions> {
         let mut config = Config::bootstrap("push");
         config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
+        config.native.root = "/nowhere/native".into();
         config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
         Sessions::open(&config)
+    }
+
+    async fn asked_of_native(script: &str) -> Option<String> {
+        let root = tempfile::Builder::new().prefix("kp").tempdir_in("/tmp").unwrap();
+        let mut config = Config::bootstrap("push");
+        config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
+        config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
+        config.native.root = root.path().display().to_string();
+        config.native.keeper = kampr_testkit::keeper().display().to_string();
+        config.native.launch = "detached".into();
+        let sessions = Sessions::open(&config);
+        let native = sessions.primary().native.clone().expect("a native provider");
+        let pane = native
+            .create(kampr_native::NewSession {
+                argv: ["sh", "-c", script].map(String::from).to_vec(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
+            .await
+            .expect("a session");
+        let global = sessions.primary().global_pane(&pane);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let asked = loop {
+            let asked = question_for(&sessions, &global, Some("claude")).await;
+            if asked.is_some() || tokio::time::Instant::now() > deadline {
+                break asked;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        native.close(&pane).expect("hung up");
+        native.shutdown();
+        asked
+    }
+
+    /// A blocked native session's notification carries its question, read off the screen the
+    /// node keeps for it: there is no herdr here to ask. Where the screen shows no dialog the
+    /// detector reads, it is what the harness said it is waiting for over `OSC 7501` (#600).
+    #[tokio::test]
+    async fn a_native_sessions_question_is_read_off_its_own_screen_or_its_own_report() {
+        for (script, want) in [
+            (
+                "printf 'Allow this command?\\n\\n1) Yes\\n2) No\\n'; exec sleep 600",
+                "Allow this command?",
+            ),
+            (
+                "printf '\\033]7501;state=blocked:app=claude-code:kind=question:msg=YW5zd2VyOiBQaWNrIG9uZQ==\\007'; exec sleep 600",
+                "answer: Pick one",
+            ),
+        ] {
+            assert_eq!(asked_of_native(script).await.as_deref(), Some(want), "{script}");
+        }
     }
 
     struct Watched {

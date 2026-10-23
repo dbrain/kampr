@@ -1,0 +1,27 @@
+[package]
+name = "kampr-keep"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kampr-keep"
+path = "src/bin/kampr-keep.rs"
+test = false
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+rustix = { workspace = true, features = ["fs", "event", "net", "pty", "termios", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
+rustix.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

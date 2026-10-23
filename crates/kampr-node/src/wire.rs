@@ -48,6 +48,18 @@ impl Wire {
         self.emit(pane, encoder.encode(pane, update))
     }
 
+    /// `reflow` labels every `grid.reset` of a watch that asked for a reflowed view.
+    pub fn send_view(&self, pane: &str, update: &PaneUpdate, reflow: Option<kampr_core::Reflow>) -> bool {
+        let mut encoder = self.encoder.lock().unwrap();
+        let mut messages = encoder.encode(pane, update);
+        for message in &mut messages {
+            if let ServerMsg::GridReset { reflow: label, .. } = message {
+                *label = reflow;
+            }
+        }
+        self.emit(pane, messages)
+    }
+
     pub fn send_scrollback(&self, pane: &str, doc: &ScrollbackDoc) -> bool {
         let mut encoder = self.encoder.lock().unwrap();
         self.emit(pane, encoder.encode_scrollback(pane, doc))

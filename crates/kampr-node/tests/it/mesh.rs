@@ -20,6 +20,8 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
+mod reflow;
+
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 static SESSIONS_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -160,7 +162,28 @@ impl Running {
         Self::spawn(home, name, home.dir.path().join("no-herdr.sock"), false).await
     }
 
+    /// A peer with no herdr at all and native sessions kept under `root`.
+    async fn native(home: &Home, name: &str, root: &std::path::Path) -> Self {
+        let socket = home.dir.path().join("no-herdr.sock");
+        Self::spawn_with(home, name, socket, false, |config| {
+            config.native.root = root.display().to_string();
+            config.native.keeper = kampr_testkit::keeper().display().to_string();
+            config.native.launch = "detached".into();
+        })
+        .await
+    }
+
     async fn spawn(home: &Home, name: &str, socket: PathBuf, panes: bool) -> Self {
+        Self::spawn_with(home, name, socket, panes, |_| {}).await
+    }
+
+    async fn spawn_with(
+        home: &Home,
+        name: &str,
+        socket: PathBuf,
+        panes: bool,
+        tweak: impl FnOnce(&mut Config),
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -171,6 +194,7 @@ impl Running {
         config.config_dir = home.config().display().to_string();
         config.state_dir = home.state().display().to_string();
         config.herdr.socket = socket.display().to_string();
+        config.native.root = "/nowhere/native".into();
         // The same binary `Session::start` spawned the server with. `kampr_herdr::locate` reads
         // `HERDR_BIN_PATH` before `PATH`, herdr injects it into every pane it runs, and
         // `terminal session observe` is version-locked (#516) — so a suite run from inside a herd
@@ -184,6 +208,7 @@ impl Running {
         // default, so a mesh test has to open it as an operator would.
         config.mesh.accept = true;
         config.limits.client_queue = 64;
+        tweak(&mut config);
         config.save(&home.config()).expect("a config");
 
         let origin = config.origin();
@@ -235,6 +260,15 @@ impl Running {
 
     async fn connect(&self) -> Socket {
         let token = self.token().await;
+        self.socket_for(&token).await
+    }
+
+    async fn client(&self) -> crate::native::Client {
+        let token = self.token().await;
+        crate::native::Client::over(self.socket_for(&token).await, token)
+    }
+
+    async fn socket_for(&self, token: &str) -> Socket {
         let url = self.origin.replacen("http", "ws", 1) + "/ws";
         let mut request = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
         request.headers_mut().insert(
@@ -2648,4 +2682,151 @@ async fn era_of(
 struct RelayedRing {
     era: u64,
     marked: bool,
+}
+
+struct Keepers(PathBuf);
+
+impl Drop for Keepers {
+    fn drop(&mut self) {
+        for session in kampr_keep::list(&self.0).unwrap_or_default() {
+            if let Some(keeper) = session.keeper() {
+                unsafe {
+                    libc::kill(-(keeper.child as i32), libc::SIGKILL);
+                    libc::kill(keeper.keeper as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// A hub with no herdr and a peer with no herdr but a native root, joined and serving.
+struct NativeMesh {
+    hub: Running,
+    peer: Running,
+    peer_node_id: String,
+    _keepers: Keepers,
+    _homes: (Home, Home, tempfile::TempDir),
+}
+
+impl NativeMesh {
+    async fn start() -> Self {
+        let hub_home = Home::new();
+        let peer_home = Home::new();
+        let root = tempfile::Builder::new()
+            .prefix("kmn")
+            .tempdir_in("/tmp")
+            .expect("a native root");
+        let keepers = Keepers(root.path().to_path_buf());
+        let hub = Running::hub(&hub_home, "front").await;
+        let now = kampr_auth::now();
+        let code = hub
+            .node
+            .auth
+            .store()
+            .mesh()
+            .invite(now, now + 600)
+            .await
+            .expect("a join code");
+        let peer_node_id = peer_home.settle("laptop");
+        join(&peer_home, "laptop", &peer_node_id, &hub.origin, &code).await;
+        let peer = Running::native(&peer_home, "laptop", root.path()).await;
+        herd_becomes(&hub.node, 45, |herd| {
+            herd.nodes.iter().any(|n| n.id == peer_node_id && n.is_serving())
+        })
+        .await;
+        Self {
+            hub,
+            peer,
+            peer_node_id,
+            _keepers: keepers,
+            _homes: (hub_home, peer_home, root),
+        }
+    }
+
+    fn stop(self) {
+        let Self { hub, peer, .. } = self;
+        peer.stop();
+        hub.stop();
+    }
+}
+
+/// **A machine with no herdr is still a machine in the herd.** Its native sessions are made, watched,
+/// typed into, sized and hung up through a hub that has no herdr either, and nothing on the way
+/// calls the peer offline.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_peer_with_no_herdr_serves_its_native_sessions_through_the_hub() {
+    let mesh = NativeMesh::start().await;
+    let (hub, peer_node_id) = (&mesh.hub, mesh.peer_node_id.clone());
+    let entry = hub.node.herd().node(&peer_node_id).cloned().expect("the peer");
+    assert_eq!(
+        (entry.online, entry.reachable, entry.native),
+        (false, Some(true), Some(true)),
+        "{entry:?}"
+    );
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    until(&mut client, "herd", 10).await;
+    send(
+        &mut client,
+        json!({ "t": "manage", "op": "native.create", "node": peer_node_id, "args": ["cat"] }),
+    )
+    .await;
+    let ack = until(&mut client, "managed", 25).await;
+    assert_eq!(ack["ok"], true, "{ack}");
+    let pane = ack["id"].as_str().expect("a pane id").to_string();
+    assert!(pane.starts_with(&format!("{peer_node_id}/n:")), "{pane}");
+    herd_becomes(&hub.node, 30, |herd| {
+        herd.pane(&pane)
+            .is_some_and(|p| p.provider.as_deref() == Some("native"))
+    })
+    .await;
+
+    send(&mut client, json!({ "t": "watch", "pane": pane })).await;
+    let reset = until(&mut client, "grid.reset", 20).await;
+    assert_eq!(reset["pane"], pane.as_str());
+    let marker = format!("kampr-native-{}", std::process::id());
+    send(
+        &mut client,
+        json!({ "t": "input", "pane": pane, "text": format!("{marker}\r") }),
+    )
+    .await;
+    assert!(
+        saw(&mut client, &marker, 25).await,
+        "the peer's native session never echoed {marker} back through the hub"
+    );
+
+    send(
+        &mut client,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "cols": 100, "rows": 30 }),
+    )
+    .await;
+    let sized = until(&mut client, "managed", 25).await;
+    assert_eq!(sized["ok"], true, "{sized}");
+    herd_becomes(&hub.node, 30, |herd| {
+        herd.pane(&pane)
+            .is_some_and(|p| p.cols == Some(100) && p.rows == 30)
+    })
+    .await;
+
+    send(
+        &mut client,
+        json!({ "t": "manage", "op": "native.close", "at": pane }),
+    )
+    .await;
+    let closed = until(&mut client, "managed", 25).await;
+    assert_eq!(closed["ok"], true, "{closed}");
+    herd_becomes(&hub.node, 30, |herd| {
+        herd.pane(&pane).is_some_and(|p| p.exited.is_some())
+    })
+    .await;
+
+    send(&mut client, json!({ "t": "input", "pane": pane, "text": "late" })).await;
+    let refused = refusal(&mut client, &pane, "session_unavailable", 20).await;
+    assert!(
+        refused["message"].as_str().unwrap_or_default().contains("ended"),
+        "{refused}"
+    );
+
+    mesh.stop();
 }

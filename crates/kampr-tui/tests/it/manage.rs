@@ -932,6 +932,112 @@ async fn an_offline_peer_is_still_not_somewhere_to_put_a_workspace() {
 }
 
 #[tokio::test]
+async fn a_run_on_every_node_counts_the_nodes_it_will_run_on_not_the_ones_with_herdr_up() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([
+            node("01JNODE", "comingclean", true),
+            { "id": "01JBARE", "name": "barebox", "kind": "peer", "online": false,
+              "reachable": true, "native": true },
+            { "id": "01JGONE", "name": "gonebox", "kind": "peer", "online": false, "reachable": false }
+        ]),
+        json!([pane("01JNODE/w1:p1", "herdr", None, "idle")]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    shifted(&mut app, 'e');
+    let asked = painted(&mut app, 110, 24);
+    assert!(asked.contains("all 2 "), "{asked}");
+    typed(&mut app, "uptime");
+    tap(&mut app, KeyCode::Enter);
+    let mut nodes = vec![conn.op().await["node"].clone(), conn.op().await["node"].clone()];
+    nodes.sort_by_key(|n| n.to_string());
+    assert_eq!(nodes, vec![json!("01JBARE"), json!("01JNODE")]);
+}
+
+#[tokio::test]
+async fn a_kampr_session_can_be_started_on_a_node_with_no_herdr_and_its_pane_shown_or_forgotten() {
+    let native = |id: &str, extra: Value| {
+        let mut p = pane(id, "herdr", None, "idle");
+        p["provider"] = json!("native");
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    };
+    let cases = [
+        (
+            json!({ "detached": true }),
+            'h',
+            json!({ "op": "native.desk", "at": "01JNODE/n:s1" }),
+        ),
+        (
+            json!({ "detached": true, "exited": { "code": 0 } }),
+            'x',
+            json!({ "op": "native.forget", "at": "01JNODE/n:s1" }),
+        ),
+    ];
+    for (extra, key, want) in cases {
+        let mut fake = Fake::start().await;
+        let client = Arc::new(fake.client());
+        let mut events = client.events();
+        let mut conn = fake.accept().await;
+        conn.greet(
+            json!([
+                { "id": "01JNODE", "name": "comingclean", "kind": "local", "online": true, "native": true },
+                { "id": "01JBARE", "name": "barebox", "kind": "peer", "online": false,
+                  "reachable": true, "native": true },
+                { "id": "01JHERD", "name": "herdbox", "kind": "peer", "online": true, "reachable": true }
+            ]),
+            json!([native("01JNODE/n:s1", extra)]),
+            "full",
+            true,
+        );
+        until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+        let mut app = app(&client);
+        bare(&mut app);
+
+        shifted(&mut app, 'n');
+        ch(&mut app, 'p');
+        let picked = painted(&mut app, 110, 24);
+        assert!(picked.contains("barebox"), "{picked}");
+        assert!(
+            !picked.contains("herdbox"),
+            "a node with no native sessions was offered:\n{picked}"
+        );
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        shifted(&mut app, 'n');
+        ch(&mut app, 'p');
+        let row = picked
+            .lines()
+            .find(|l| l.contains("barebox"))
+            .and_then(|l| l.chars().find(char::is_ascii_digit))
+            .expect("barebox has a key");
+        ch(&mut app, row);
+        typed(&mut app, "claude");
+        tap(&mut app, KeyCode::Enter);
+        let sent = conn.op().await;
+        assert_eq!(
+            (&sent["op"], &sent["node"], &sent["command"]),
+            (&json!("native.create"), &json!("01JBARE"), &json!("claude"))
+        );
+
+        shifted(&mut app, 'n');
+        ch(&mut app, key);
+        let sent = conn.op().await;
+        assert_eq!((&sent["op"], &sent["at"]), (&want["op"], &want["at"]), "{sent}");
+    }
+}
+
+#[tokio::test]
 async fn the_client_asks_a_node_what_it_can_be_told_to_make_and_routes_the_answer() {
     let mut fake = Fake::start().await;
     let client = Arc::new(fake.client());

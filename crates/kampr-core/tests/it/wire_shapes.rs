@@ -116,6 +116,15 @@ fn pane(question: Question) -> PaneEntry {
         cmd: Some("claude".into()),
         argv: Some("claude --x".into()),
         title: Some("title".into()),
+        provider: Some("native".into()),
+        session_id: Some("01k".into()),
+        on_desk: Some("w1:p3".into()),
+        detached: Some(false),
+        size_holder: Some("phone:pixel".into()),
+        exited: Some(ExitEntry {
+            code: Some(0),
+            signal: Some(9),
+        }),
     }
 }
 
@@ -126,6 +135,7 @@ fn node() -> NodeEntry {
         kind: "local".into(),
         online: true,
         reachable: Some(true),
+        native: Some(true),
         rtt_ms: Some(1.5),
         herdr_version: Some("0.9.1".into()),
         build: Some("0.1.0".into()),
@@ -284,6 +294,7 @@ fn server() -> Vec<ServerMsg> {
             rows_data: runs(),
             cursor: cursor(),
             links: vec!["https://example.com".into()],
+            reflow: Some(kampr_core::Reflow::On),
         },
         ServerMsg::GridPatch {
             pane: pane(),
@@ -354,6 +365,7 @@ fn client() -> Vec<ClientMsg> {
             pane: pane(),
             scrollback: true,
             conversation: true,
+            reflow: Some(ReflowAsk { cols: 40 }),
         },
         ClientMsg::Unwatch { pane: pane() },
         ClientMsg::AnswerSubmit { pane: pane() },

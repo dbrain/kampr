@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
+import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.NodeInfo
@@ -209,6 +210,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 onFind = { state.openFind(pane.id) }
                     .takeIf { state.store.hello.value?.caps?.find == true },
                 tools = { surfaces.Tools(pane.id, state::closeSheet) },
+                desk = herd.hasDesk(pane.nodeId),
             )
         }
 
@@ -222,7 +224,10 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 onManage = state::manage,
                 onOpen = { state.openPane(pane.id) },
                 onDismiss = state::closeSheet,
+                desk = herd.hasDesk(pane.nodeId),
             )
         }
     }
 }
+
+private fun Herd.hasDesk(nodeId: String): Boolean = nodes.firstOrNull { it.id == nodeId }?.hasDesk == true

@@ -135,8 +135,8 @@ private fun RailNodeMark(node: NodeInfo, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Mark(
-            if (node.online) tokens.color.dim else tokens.color.blocked,
-            if (node.online) MarkShape.Bar else MarkShape.Ring,
+            if (node.isServing) tokens.color.dim else tokens.color.blocked,
+            if (node.isServing) MarkShape.Bar else MarkShape.Ring,
             10.dp,
         )
     }

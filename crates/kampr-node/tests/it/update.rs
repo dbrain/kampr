@@ -126,6 +126,7 @@ impl Harness {
         config.server.origin = format!("http://127.0.0.1:{port}");
         // No herd of any kind: this node must not find the operator's.
         config.herdr.socket = home.path().join("herdr.sock").display().to_string();
+        config.native.root = home.path().join("native").display().to_string();
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         tweak(&mut config);

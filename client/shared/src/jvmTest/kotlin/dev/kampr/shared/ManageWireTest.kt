@@ -95,6 +95,17 @@ class ManageWireTest {
         "fleet.save" to ManageOp.FleetSave(args = listOf("kampr", "update"), label = "update everything"),
         "fleet.save.entry" to ManageOp.FleetSave(entry = "01JBOOK"),
         "fleet.drop" to ManageOp.FleetDrop("01JBOOK"),
+        "native.create" to ManageOp.NativeCreate(
+            node = "01JNODE",
+            command = "claude --resume",
+            cwd = "/home/dbrain/dev/kampr",
+            label = "review",
+        ),
+        "native.create.args" to ManageOp.NativeCreate(node = "01JNODE", args = listOf("htop", "-d", "10")),
+        "native.create.desk" to ManageOp.NativeCreate(node = "01JNODE", desk = true, at = "01JNODE/w3:p2"),
+        "native.close" to ManageOp.NativeClose("01JNODE/n:01k8native"),
+        "native.forget" to ManageOp.NativeForget("01JNODE/n:01k8native"),
+        "native.desk" to ManageOp.NativeDesk("01JNODE/n:01k8native"),
     )
 
     private fun encoded(op: ManageOp) = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.Manage(op))) as JsonObject

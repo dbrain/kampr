@@ -1374,3 +1374,97 @@ async fn a_peer_with_no_attachment_route_is_refused_rather_than_asked() {
         "the hub asked a peer it already knew could not answer",
     );
 }
+
+async fn reflowing_peer(peers: &Arc<Peers>, store: &Store, reflow: bool) -> Peer {
+    let mut peer = join(peers, store, KEY, "01JA", "laptop").await;
+    peer.send(json!({ "t": "hello", "node_id": "01JA", "caps": { "reflow": reflow } }))
+        .await;
+    peer.send(herd("01JA", &["n:s1"])).await;
+    settle(peers, |h| !h.panes.is_empty()).await;
+    for _ in 0..100 {
+        if peers.relayed_as("01JA/n:s1", Some(40)) != "01JA/n:s1" || !reflow {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    peer
+}
+
+fn labelled(mut reset: Value, label: &str) -> Value {
+    reset["reflow"] = json!(label);
+    reset
+}
+
+/// A reflowed view is a pane of its own on the link: one ask per width however many watch it, its
+/// frames kept apart from the pane's own, and the label the peer put on each reset carried with it.
+#[tokio::test]
+async fn a_reflowed_view_is_its_own_stream_on_the_link_shared_by_every_watcher_of_its_width() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = reflowing_peer(&peers, &store, true).await;
+
+    let mut first = peers.watch_view("01JA/n:s1", 40, false).expect("a view");
+    let asked = peer.request_but_ping().await;
+    assert_eq!(
+        (asked["t"].clone(), asked["pane"].clone()),
+        (json!("watch"), json!("01JA/n:s1~40")),
+        "{asked}"
+    );
+    let mut second = peers.watch_view("01JA/n:s1", 40, false).expect("a view");
+    let mut plain = peers.watch("01JA/n:s1", false).expect("the pane");
+    let asked = peer.request_but_ping().await;
+    assert_eq!(
+        asked["pane"], "01JA/n:s1",
+        "a second watcher of the width asked again: {asked}"
+    );
+
+    peer.send(labelled(reset("01JA/n:s1~40", "narrow"), "on")).await;
+    peer.send(reset("01JA/n:s1", "wide")).await;
+    for watcher in [&mut first, &mut second] {
+        assert_eq!(text_of(&next_update(watcher).await)[0], "narrow  ");
+        assert_eq!(watcher.reflow(), Some(kampr_core::Reflow::On));
+    }
+    assert_eq!(text_of(&next_update(&mut plain).await)[0], "wide    ");
+    assert_eq!(plain.reflow(), None);
+
+    peer.send(labelled(reset("01JA/n:s1~40", "full"), "alternate"))
+        .await;
+    assert_eq!(text_of(&next_update(&mut first).await)[0], "full    ");
+    assert_eq!(first.reflow(), Some(kampr_core::Reflow::Alternate));
+
+    let mut late = peers.watch_view("01JA/n:s1", 40, false).expect("a view");
+    assert_eq!(
+        late.reflow(),
+        Some(kampr_core::Reflow::Alternate),
+        "a joiner is told what the shadow is"
+    );
+    let Some(RemoteEvent::Update(update)) = late.initial().into_iter().next() else {
+        panic!("a joiner got no grid");
+    };
+    assert_eq!(text_of(&update)[0], "full    ");
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(200), peer.request_but_ping())
+            .await
+            .ok(),
+        None,
+        "a joiner of a width already relayed asked the peer again",
+    );
+}
+
+/// A peer whose build has never heard of a view would answer one with `unknown_pane`, or with
+/// nothing: it is asked for the pane, and the hub says the grid is the pane's own.
+#[tokio::test]
+async fn a_peer_that_cannot_reflow_is_watched_as_the_pane_and_labelled_unsupported() {
+    let store = store().await;
+    let peers = peers();
+    let mut peer = reflowing_peer(&peers, &store, false).await;
+
+    let mut watcher = peers.watch_view("01JA/n:s1", 40, false).expect("a watch");
+    let asked = peer.request_but_ping().await;
+    assert_eq!(asked["pane"], "01JA/n:s1", "{asked}");
+    assert_eq!(asked.get("reflow"), None, "{asked}");
+    assert_eq!(peers.relayed_as("01JA/n:s1", Some(40)), "01JA/n:s1");
+    peer.send(reset("01JA/n:s1", "wide")).await;
+    assert_eq!(text_of(&next_update(&mut watcher).await)[0], "wide    ");
+    assert_eq!(watcher.reflow(), Some(kampr_core::Reflow::Unsupported));
+}

@@ -1,6 +1,7 @@
 use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{Cursor, Encoder, HerdDelta, PaneEntry, ServerMsg};
 use kampr_term::{Cell, CellAttrs, Color, RowDiff};
+use serde_json::json;
 
 fn cell(ch: char, fg: Color) -> Cell {
     Cell {
@@ -299,6 +300,64 @@ fn a_pane_with_no_foreground_job_omits_the_field_rather_than_sending_an_empty_on
     .unwrap();
     assert_eq!(busy["cmd"], "cargo");
     assert_eq!(busy["argv"], "cargo test");
+}
+
+/// A native session's facts ride only on a native pane, so a herdr pane's record is the one every
+/// installed client already reads, byte for byte.
+#[test]
+fn a_native_pane_says_so_and_a_herdr_pane_carries_none_of_it() {
+    use kampr_core::provider::{NativeExit, NativePane};
+    let herdr = PaneInfo {
+        pane_id: "w3:p2".into(),
+        rows: 30,
+        ..PaneInfo::default()
+    };
+    let plain = serde_json::to_value(PaneEntry::new("01J", &herdr, false)).unwrap();
+    for field in [
+        "provider",
+        "session_id",
+        "on_desk",
+        "detached",
+        "size_holder",
+        "exited",
+    ] {
+        assert!(plain.get(field).is_none(), "{field}: {plain}");
+    }
+    for (desk, exited, want) in [
+        (
+            None,
+            None,
+            json!({ "provider": "native", "session_id": "01k", "detached": true, "size_holder": "spawn" }),
+        ),
+        (
+            Some("w1:p3"),
+            Some(NativeExit {
+                code: None,
+                signal: Some(1),
+            }),
+            json!({ "provider": "native", "session_id": "01k", "on_desk": "w1:p3", "detached": false,
+                    "size_holder": "spawn", "exited": { "signal": 1 } }),
+        ),
+    ] {
+        let native = PaneInfo {
+            pane_id: "n:01k".into(),
+            native: Some(NativePane {
+                session_id: "01k".into(),
+                on_desk: desk.map(str::to_string),
+                detached: desk.is_none(),
+                size_holder: Some("spawn".into()),
+                exited,
+                program: None,
+            }),
+            ..herdr.clone()
+        };
+        let entry = serde_json::to_value(PaneEntry::new("01J", &native, false)).unwrap();
+        for (field, value) in want.as_object().unwrap() {
+            assert_eq!(&entry[field], value, "{field}: {entry}");
+        }
+        assert_eq!(entry.get("on_desk").is_some(), desk.is_some(), "{entry}");
+        assert_eq!(entry.get("exited").is_some(), exited.is_some(), "{entry}");
+    }
 }
 
 /// Probe #223: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The

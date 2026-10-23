@@ -1,9 +1,11 @@
 use crate::caps::{SessionEntry, SessionListError, sessions as list_sessions};
 use crate::config::Config;
+use kampr_core::desk::{Desk, DeskHosts};
 use kampr_core::registry::RegistryConfig;
 use kampr_core::{Composite, HerdrConfig, HerdrProvider, PaneRegistry};
 use kampr_fleet::FleetProvider;
 use kampr_herdr::Herdr;
+use kampr_native::NativeProvider;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -15,6 +17,7 @@ use tracing::{info, warn};
 /// separate node in the herd model rather than more panes on this one. Polled rather than
 /// subscribed because sessions are created by the CLI and are absent from the socket API.
 const DISCOVERY_POLL: Duration = Duration::from_secs(15);
+const KEEPER_UPGRADES: Duration = Duration::from_secs(60);
 
 /// One herdr session: its own socket, its own provider, its own emulators.
 ///
@@ -27,15 +30,26 @@ pub struct SessionNode {
     pub node_name: String,
     pub herdr: Herdr,
     pub provider: Arc<HerdrProvider>,
-    /// Runs this node forked itself. Kept beside the herdr provider rather than inside it: a fleet
-    /// run is not a herdr pane and must not appear in the operator's own workspaces (probe #331).
+    /// Runs this node started, each kept by a keeper of its own. Kept beside the herdr provider
+    /// rather than inside it: a fleet run is not a herdr pane and must not appear in the operator's
+    /// own workspaces (probe #331).
     pub fleet: Arc<FleetProvider>,
+    /// Only on the primary: a native session belongs to the machine, not to a herdr server.
+    pub native: Option<Arc<NativeProvider>>,
     pub registry: Arc<PaneRegistry>,
 }
 
 impl SessionNode {
-    fn open(config: &Config, name: &str, socket: PathBuf, primary: bool) -> Arc<Self> {
+    fn open(
+        config: &Config,
+        name: &str,
+        socket: PathBuf,
+        primary: bool,
+        desk: Option<Arc<NativeProvider>>,
+    ) -> Arc<Self> {
         let herdr = Herdr::new(&socket);
+        let native = primary.then(|| native_provider(config)).flatten();
+        let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
             herdr.clone(),
             HerdrConfig {
@@ -44,16 +58,24 @@ impl SessionNode {
                 report_names: config.naming.reporting(),
                 desk_agents: config.naming.desk_agents(),
                 primary,
+                desk: desk.map(|native| DeskHosts(native as Arc<dyn Desk>)),
                 ..HerdrConfig::default()
             },
         ));
-        let fleet = Arc::new(FleetProvider::with_path(
+        let fleet = Arc::new(FleetProvider::new(
+            fleet_root(config, name),
             Some(config.fleet.path.clone()).filter(|p| !p.is_empty()),
         ));
-        // Fleet first: it answers `owns` only for runs it is actually running, so herdr stays the
+        // Native and fleet first: each answers `owns` only for its own panes, so herdr stays the
         // catch-all for everything else.
+        let mut providers: Vec<Arc<dyn kampr_core::Provider>> = Vec::new();
+        if let Some(native) = &native {
+            providers.push(native.clone());
+        }
+        providers.push(fleet.clone());
+        providers.push(provider.clone());
         let registry = PaneRegistry::with_config(
-            Composite::new(vec![fleet.clone(), provider.clone()]),
+            Composite::new(providers),
             RegistryConfig {
                 scrollback_max_rows: config.limits.scrollback_max_rows,
                 ..RegistryConfig::default()
@@ -74,8 +96,29 @@ impl SessionNode {
             herdr,
             provider,
             fleet,
+            native,
             registry,
         })
+    }
+
+    pub fn pane_processes(&self, local: &str) -> Vec<kampr_journal::process::PaneProcess> {
+        match self.native_of(local) {
+            Some(native) => native.pane_processes(local),
+            None => self.provider.pane_processes(local),
+        }
+    }
+
+    pub fn agent_harness(&self, local: &str) -> kampr_journal::Harness {
+        match self.native_of(local) {
+            Some(native) => native.agent_harness(local),
+            None => self.provider.agent_harness(local),
+        }
+    }
+
+    pub fn native_of(&self, local: &str) -> Option<&NativeProvider> {
+        self.native
+            .as_deref()
+            .filter(|_| local.starts_with(kampr_native::PREFIX))
     }
 
     pub fn online(&self) -> bool {
@@ -101,6 +144,62 @@ impl SessionNode {
     }
 }
 
+/// A node whose native root cannot be made still serves its herd; it only has no sessions of
+/// its own.
+fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
+    let built = config.native.resolve().and_then(|mut native| {
+        native.send_argv = config.naming.send_argv;
+        native.blocked = Some(Arc::new(|agent: Option<&str>, screen: &str| {
+            crate::pending::detect_for(agent, screen).is_some()
+        }));
+        NativeProvider::new(native)
+    });
+    match built {
+        Ok(native) => {
+            let native = Arc::new(native);
+            upgrade_keepers(&native);
+            Some(native)
+        }
+        Err(e) => {
+            warn!(error = %format!("{e:#}"), "native sessions are unavailable on this node");
+            None
+        }
+    }
+}
+
+// A node starts after every `kampr update`, so this pass is the release's keeper upgrade; the
+// period catches a binary replaced under a node that keeps running (#589).
+fn upgrade_keepers(native: &Arc<NativeProvider>) {
+    let alive = Arc::downgrade(native);
+    kampr_keep::upgrade_while(native.root().to_path_buf(), KEEPER_UPGRADES, move |upgraded| {
+        match upgraded {
+            Ok(ids) if !ids.is_empty() => {
+                info!(sessions = %ids.join(", "), "re-exec'd keepers into the installed binary")
+            }
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "checking native session keepers for upgrades"),
+        }
+        alive.strong_count() > 0
+    });
+}
+
+/// A root per node, so neither the native provider nor a sibling node lists another's runs.
+fn fleet_root(config: &Config, name: &str) -> anyhow::Result<kampr_native::NativeConfig> {
+    let mut native = config.native.resolve()?;
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    native.root = native.root.join("fleet").join(name);
+    Ok(native)
+}
+
 /// Every herdr session this node serves, with the configured one first.
 pub struct Sessions {
     config: Config,
@@ -117,7 +216,7 @@ impl Sessions {
             "" => Herdr::discover().map_or_else(|_| default_socket(), |h| h.socket().to_path_buf()),
             path => PathBuf::from(path),
         };
-        let primary = SessionNode::open(config, &session_name_of(&socket), socket, true);
+        let primary = SessionNode::open(config, &session_name_of(&socket), socket, true, None);
         Arc::new(Self {
             config: config.clone(),
             all: RwLock::new(vec![primary.clone()]),
@@ -196,7 +295,13 @@ impl Sessions {
             if socket == self.primary.herdr.socket() {
                 continue;
             }
-            let session = SessionNode::open(&self.config, &entry.name, socket, false);
+            let session = SessionNode::open(
+                &self.config,
+                &entry.name,
+                socket,
+                false,
+                self.primary.native.clone(),
+            );
             info!(session = %entry.name, node = %session.node_id, "serving a herdr session");
             self.all.write().unwrap().push(session);
             changed = true;
@@ -298,12 +403,14 @@ mod tests {
         let mut config = Config::bootstrap("host");
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/herdr.sock".into();
+        config.native.root = "/nowhere/native".into();
         let primary = id == "01J";
         SessionNode::open(
             &config,
             if primary { "default" } else { "agents" },
             "/nowhere/herdr.sock".into(),
             primary,
+            None,
         )
     }
 
@@ -334,6 +441,7 @@ mod tests {
         let mut config = Config::bootstrap("host");
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/default/herdr.sock".into();
+        config.native.root = "/nowhere/native".into();
         Sessions::open(&config)
     }
 

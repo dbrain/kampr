@@ -235,6 +235,11 @@ impl Node {
         for task in self.tasks.lock().unwrap().iter() {
             task.abort();
         }
+        // Its tail threads would otherwise outlive this node and go on answering a session's
+        // terminal queries beside whichever node replaces it.
+        if let Some(native) = &self.primary().native {
+            native.shutdown();
+        }
     }
 
     pub fn node_id(&self) -> &str {
@@ -543,7 +548,7 @@ impl Conversations {
         if !journals.serves(info.agent.as_deref()) {
             return None;
         }
-        let mut announced = crate::convo::identity(journals, &session.provider, &info.pane_id).announced;
+        let mut announced = crate::convo::identity(journals, session, &info.pane_id).announced;
         // The herd model's half of the stickiness the pump applies: a harness that names its
         // session only from the environment its tools carry (pi) reads nothing between tools, and
         // re-resolving by directory would latch onto whoever ran last in it. Keep the session the
@@ -711,6 +716,7 @@ async fn build_model(
             // This process is answering by definition — it is the one assembling the message. A
             // herdr that is down takes the panes and leaves the node able to run a fleet command.
             reachable: Some(true),
+            native: session.native.as_ref().map(|_| true),
             // **Not a call of its own.** The provider's sweep round-trips this herdr already, so
             // the number is read rather than asked for — one `ping` per session per rebuild was
             // 19/min with four panes busy, for a figure the node was in a position to know
@@ -739,7 +745,7 @@ async fn build_model(
             // The harness's own name for the session, off the marker it writes by pid (#311) —
             // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
             // affordable once per pane per rebuild.
-            let marker = journals.marker(&session.provider.pane_processes(&info.pane_id));
+            let marker = journals.marker(&session.pane_processes(&info.pane_id));
             // And the name the session actually goes by, off the transcript the pane is already
             // known to be on — folded from the byte the last rebuild reached rather than read
             // whole. A pane with no transcript yet has only what the marker says.
@@ -769,8 +775,12 @@ async fn build_model(
             // terminal title. omp publishes its run state there and herdr carries no manifest for
             // it, so an omp pane reports `idle` through a whole working turn and through an
             // approval dialog — measured, with `agent explain` returning no rules ([#485](#)).
-            let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
-            entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
+            // A native harness that reports over `OSC 7501` is a step ahead of its marker (#610),
+            // and the only one of the two that tells done and errors from idle (#600).
+            if info.native.as_ref().is_none_or(|n| n.program.is_none()) {
+                let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
+                entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
+            }
             entry.updated_at = conversation_moved(spoken, marker.as_ref());
             panes.push(entry);
         }
@@ -909,6 +919,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::bootstrap("testnode");
         config.herdr.socket = dir.path().join("herdr.sock").display().to_string();
+        config.native.root = dir.path().join("native").display().to_string();
         let sessions = Sessions::open(&config);
 
         let mut changes = herd_changes(&sessions);

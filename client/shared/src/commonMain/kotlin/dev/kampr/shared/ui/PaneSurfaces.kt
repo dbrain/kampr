@@ -90,6 +90,9 @@ interface PaneIo {
     // and a refusal is a strip over the pane on a phone whose operator asked for nothing.
     val growsPanes: Boolean get() = false
 
+    // The width this view wants a native pane re-laid at, or `null` for the pane's own grid.
+    fun reflow(paneId: String, cols: Int?) = Unit
+
     fun releaseMatch(paneId: String, linger: Boolean = true) = send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
 
     // The bytes behind a transcript attachment, on demand and over HTTP rather than over the

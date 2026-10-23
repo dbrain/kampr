@@ -1,4 +1,5 @@
 use crate::peers::RemoteEvent;
+use kampr_core::Reflow;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
@@ -31,6 +32,8 @@ pub enum Delivery {
     Event(RemoteEvent),
     /// Grid frames were dropped for this watcher; it rejoins at one full grid from the shadow.
     Resync(usize),
+    /// What the peer says the `grid.reset` behind it is, on a reflowed view.
+    Label(Option<Reflow>),
     Ended,
 }
 
@@ -49,12 +52,22 @@ impl Fanout {
     }
 
     pub fn send(&self, event: RemoteEvent) {
+        self.push(Queued::Event(event));
+    }
+
+    /// Undroppable, so a watcher that lost the grid frames around it still learns which grid the
+    /// shadow it is reset from holds.
+    pub fn label(&self, label: Option<Reflow>) {
+        self.push(Queued::Label(label));
+    }
+
+    fn push(&self, queued: Queued) {
         self.subscribers
             .lock()
             .unwrap()
             .retain(|weak| match weak.upgrade() {
                 Some(subscriber) => {
-                    subscriber.push(event.clone(), self.cap);
+                    subscriber.push(queued.clone(), self.cap);
                     true
                 }
                 None => false,
@@ -99,10 +112,11 @@ struct Queue {
     overrun: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Queued {
     Event(RemoteEvent),
     Resync(usize),
+    Label(Option<Reflow>),
 }
 
 impl Subscriber {
@@ -132,16 +146,17 @@ impl Subscriber {
         match queue.events.pop_front() {
             Some(Queued::Event(event)) => Some(Delivery::Event(event)),
             Some(Queued::Resync(dropped)) => Some(Delivery::Resync(dropped)),
+            Some(Queued::Label(label)) => Some(Delivery::Label(label)),
             None => queue.ended.then_some(Delivery::Ended),
         }
     }
 
-    fn push(&self, event: RemoteEvent, cap: usize) {
+    fn push(&self, queued: Queued, cap: usize) {
         let mut queue = self.queue.lock().unwrap();
         if queue.ended {
             return;
         }
-        queue.events.push_back(Queued::Event(event));
+        queue.events.push_back(queued);
         if queue.events.len() > cap {
             queue.coalesce();
         }
@@ -168,7 +183,7 @@ impl Queue {
         }
         match self.events.iter_mut().find_map(|q| match q {
             Queued::Resync(already) => Some(already),
-            Queued::Event(_) => None,
+            Queued::Event(_) | Queued::Label(_) => None,
         }) {
             Some(already) => *already += dropped,
             // Behind whatever survived, so the grid a watcher rejoins at is never applied before

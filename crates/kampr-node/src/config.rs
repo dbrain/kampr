@@ -39,6 +39,39 @@ pub struct Config {
     pub naming: Naming,
     #[serde(default)]
     pub fleet: Fleet,
+    #[serde(default)]
+    pub native: Native,
+}
+
+/// Sessions Kampr keeps itself (docs/17). Both empty is the default and the right answer outside
+/// a test: `kampr-keep`'s own root, and this binary as the keeper.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Native {
+    pub root: String,
+    pub keeper: String,
+    /// The binary a desk pane runs `attach` from; empty is the keeper.
+    pub attach: String,
+    /// `systemd`, `detached`, or empty for `kampr-keep`'s own choice.
+    pub launch: String,
+}
+
+impl Native {
+    /// What the node, `kampr new/ls/attach` and `kampr doctor` all read, so they agree on where
+    /// the sessions are.
+    pub fn resolve(&self) -> anyhow::Result<kampr_native::NativeConfig> {
+        let configured = |s: &str| Some(PathBuf::from(s)).filter(|p| !p.as_os_str().is_empty());
+        let mut native = kampr_native::NativeConfig::new(configured(&self.root), configured(&self.keeper))?;
+        if let Some(attach) = configured(&self.attach) {
+            native.attach = attach;
+        }
+        native.launch = match self.launch.as_str() {
+            "systemd" => Some(kampr_native::Launch::Systemd),
+            "detached" => Some(kampr_native::Launch::Detached),
+            _ => None,
+        };
+        Ok(native)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -390,6 +423,7 @@ impl Config {
             update: Update::default(),
             naming: Naming::default(),
             fleet: Fleet::default(),
+            native: Native::default(),
         }
     }
 

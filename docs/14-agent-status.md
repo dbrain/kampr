@@ -232,6 +232,23 @@ support as "not planned". MCP is agent→tools; its notifications are scoped to 
 call, so it can never report "idle" or "blocked at a prompt", and it must be installed into the
 agent's config.
 
+### A native session's layer 0: Claude's own `OSC 7501`
+
+A session Kampr keeps itself (`docs/17`) owns its terminal, so it can answer what Claude Code asks
+a terminal. Claude 2.1.308 asks `OSC 7501;?` at boot and, answered, publishes its state on that
+channel in the same write as the screen change (#600): `idle`, `working`, `blocked` with its kind
+(`permission`, `question`, `auth`) and the decoded message, `done`, `error`, and `clear` on exit.
+That is ahead of the marker (3–20 ms behind the screen, #610) and the only source of the five that
+tells `done` and an error from `idle`. It needs no hook and no configuration.
+
+For a native pane it sits above layer 1: while the channel is up, `state.rs` does not overlay the
+marker or the title on it, and `kampr-native` does not run its screen dialog detector or its 1.5 s
+output window. `done` stays until somebody types into the session from a node, the error is shown
+as `idle` (the wire has no error state), and a restarted node rebuilds the last state from the log.
+A session that never negotiated falls back to all of them. A herdr pane cannot have this layer:
+herdr answers DA1 and not 7501 (#611), and the query is asked once, at boot. A native session
+*hosted* in a herdr pane does, because `kampr attach` answers 7501 ahead of herdr's DA1 (#612).
+
 ### Cross-agent coverage — measured
 
 Three of the four publish a live status transparently. The ladder is per-harness by design;

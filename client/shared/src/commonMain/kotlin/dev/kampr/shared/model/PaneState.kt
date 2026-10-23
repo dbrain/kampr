@@ -284,6 +284,10 @@ class PaneState(val id: String, val styles: StyleTable) {
         private set
     var stale by mutableStateOf(false)
 
+    // What the node said the last grid is, on a watch that asked for a reflowed one.
+    var reflow by mutableStateOf<String?>(null)
+        private set
+
     // **Whether the transcript on screen has been confirmed against the node on this connection.**
     // The grid and the conversation are served by different machinery and only one of them is
     // warm: a pane's stream is held across a re-watch by the registry (#252), so the terminal
@@ -375,6 +379,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         cells.clear()
         for (row in msg.rowsData) cells.apply(row)
         cursor = msg.cursor
+        reflow = msg.reflow
         // A reset carries the pane's whole link table from index 0, because a full repaint clears
         // herdr's; only a patch carries the suffix.
         links.clear()

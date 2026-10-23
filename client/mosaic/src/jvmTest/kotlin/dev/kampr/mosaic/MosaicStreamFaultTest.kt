@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -27,6 +28,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 private val NODE = NodeInfo(id = "01JNODE", name = "comingclean", kind = "local", online = true)
+
+private val NATIVE_NODE =
+    NodeInfo(id = "01JNODE", name = "shed", kind = "peer", online = false, detail = "no herdr socket", reachable = true, native = true)
 
 private const val DETAIL = "No pane on this node can show a screen: Kampr cannot run herdr."
 
@@ -99,5 +103,37 @@ class MosaicStreamFaultTest {
             0,
             onAllNodesWithContentDescription("has no picture", substring = true).fetchSemanticsNodes().size,
         )
+    }
+
+    private fun ComposeUiTest.cell(info: PaneInfo, node: NodeInfo) {
+        setContent {
+            CompositionLocalProvider(LocalTokens provides cellTokens(), LocalPaneIo provides ArtboardIo) {
+                MosaicCell(
+                    PaneState(info.id, StyleTable()),
+                    info,
+                    node,
+                    focused = true,
+                    surfaces = Blank,
+                    onFocus = {},
+                    onRemove = {},
+                    modifier = Modifier.size(420.dp, 300.dp),
+                )
+            }
+        }
+        waitForIdle()
+    }
+
+    // A machine with no herdr still serves the sessions Kampr keeps itself, so washing them over
+    // as unavailable hid the one thing on it that worked.
+    @Test
+    fun aNativePaneOnAMachineWithNoHerdrIsNotWashedOver() = runComposeUiTest {
+        cell(cellPane(null).copy(id = "01JNODE/n:01ja", provider = "native", sessionId = "01ja"), NATIVE_NODE)
+        assertEquals(0, onAllNodesWithContentDescription("is unavailable", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aHerdrPaneOnThatMachineStillIs() = runComposeUiTest {
+        cell(cellPane(null), NATIVE_NODE)
+        onNodeWithContentDescription("shed is unavailable", substring = true).assertExists()
     }
 }

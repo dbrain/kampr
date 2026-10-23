@@ -45,6 +45,16 @@ class NodeFailureTest {
         assertTrue(saidOutLoud(failure(OFFLINE), THERE), "the pane in hand went away in silence")
     }
 
+    // A native session has no herdr behind it, so herdr going on its machine is news for the
+    // herd screen and not for the session in hand. The machine going is still news for both.
+    @Test
+    fun aHerdrOutageIsNotSaidOverANativeSessionOnThatNode() {
+        val herdr = failure("""{"t":"error","code":"herdr_unavailable","message":"herdr went","node":"01JTHERE"}""")
+        assertFalse(saidOutLoud(herdr, "01JTHERE/n:01k8abc"), "a herdr outage interrupted a native session")
+        assertTrue(saidOutLoud(herdr, THERE))
+        assertTrue(saidOutLoud(failure(OFFLINE), "01JTHERE/n:01k8abc"))
+    }
+
     // Auth, a revocation, the socket itself: there is nowhere quieter for these to go.
     @Test
     fun aRefusalAboutNeitherAPaneNorANodeIsLoudWherever() {

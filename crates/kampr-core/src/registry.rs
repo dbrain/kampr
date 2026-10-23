@@ -390,8 +390,18 @@ impl PaneRegistry {
     /// Counted rather than read off the refcount, because a [`PaneHold`] is a strong reference
     /// that nobody is looking through: the herd carries this number.
     pub fn watcher_count(&self, pane_id: &str) -> usize {
-        self.lookup(pane_id)
-            .map_or(0, |e| e.watchers.load(Ordering::Relaxed) as usize)
+        let panes = self.panes.lock().unwrap();
+        panes
+            .iter()
+            .filter(|(key, _)| crate::provider::split_view(key).0 == pane_id)
+            .filter_map(|(_, entry)| entry.upgrade())
+            .filter(|entry| entry.feeding())
+            .map(|e| e.watchers.load(Ordering::Relaxed) as usize)
+            .sum()
+    }
+
+    pub fn reflow(&self, pane_id: &str) -> crate::provider::Reflow {
+        self.provider.reflow(pane_id)
     }
 
     /// Bumps whenever a viewer joins or leaves any pane.

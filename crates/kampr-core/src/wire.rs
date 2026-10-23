@@ -172,6 +172,11 @@ pub struct NodeEntry {
     /// [`Self::is_reachable`] rather than directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reachable: Option<bool>,
+    /// Whether this node keeps native sessions (docs/17). Those need no herdr, so a node with
+    /// `online: false` and this set is serving them; `online` keeps meaning herdr for every client
+    /// that reads it that way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,6 +312,30 @@ pub struct PaneEntry {
     /// used to leave to the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// `"native"` on a session Kampr keeps itself (docs/17), and absent on everything herdr owns.
+    /// The five fields after it are present only beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_desk: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_holder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exited: Option<ExitEntry>,
+}
+
+/// **A signal is reported as a signal**, as on a fleet run, and a keeper that died without
+/// recording either is `{}`: ended, how unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,6 +422,15 @@ impl PaneEntry {
             cmd: p.cmd.clone(),
             argv: p.argv.clone(),
             title: None,
+            provider: p.native.as_ref().map(|_| "native".to_string()),
+            session_id: p.native.as_ref().map(|n| n.session_id.clone()),
+            on_desk: p.native.as_ref().and_then(|n| n.on_desk.clone()),
+            detached: p.native.as_ref().map(|n| n.detached),
+            size_holder: p.native.as_ref().and_then(|n| n.size_holder.clone()),
+            exited: p.native.as_ref().and_then(|n| n.exited).map(|e| ExitEntry {
+                code: e.code,
+                signal: e.signal,
+            }),
         }
     }
 
@@ -423,6 +461,11 @@ impl NodeEntry {
     /// fleet command, so this is the question a fan-out asks — never `online`.
     pub fn is_reachable(&self) -> bool {
         self.reachable.unwrap_or(self.online)
+    }
+
+    /// Whether anything on this node can be served: its herdr's panes, or its native sessions.
+    pub fn is_serving(&self) -> bool {
+        self.is_reachable() && (self.online || self.native == Some(true))
     }
 }
 
@@ -538,6 +581,9 @@ pub enum ServerMsg {
         rows_data: Vec<RowRuns>,
         cursor: Cursor,
         links: Vec<String>,
+        /// Only on a pane whose `watch` asked for a reflowed view: whether this grid is one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reflow: Option<crate::provider::Reflow>,
     },
     #[serde(rename = "grid.patch")]
     GridPatch {
@@ -749,6 +795,14 @@ pub enum ErrorCode {
     /// counts what would go; a client that knows this code offers the group close, and one that
     /// does not renders the sentence, which the wire's rule already required of it.
     WorkspaceGroupCloseRequired,
+    /// A native session refused what was asked of it: it has ended, or its keeper is not
+    /// answering. Never herdr's fault, so never `herdr_unavailable`.
+    SessionUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReflowAsk {
+    pub cols: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -761,6 +815,10 @@ pub enum ClientMsg {
         scrollback: bool,
         #[serde(default)]
         conversation: bool,
+        /// A native pane's primary screen and history re-laid at this width, without touching
+        /// the PTY (docs/17 §3). Absent is the pane's own grid.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reflow: Option<ReflowAsk>,
     },
     #[serde(rename = "unwatch")]
     Unwatch { pane: String },
@@ -1025,6 +1083,7 @@ impl Encoder {
                 rows_data: rows,
                 cursor: *cursor,
                 links: links.as_ref().clone(),
+                reflow: None,
             },
             PaneUpdate::Patch {
                 cursor, new_links, ..

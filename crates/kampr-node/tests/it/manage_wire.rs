@@ -156,3 +156,23 @@ fn the_ops_addressed_at_a_node_carry_one() {
         assert!(op(case).at.is_none(), "{case} must not carry an `at`");
     }
 }
+
+/// `native.create` is routed by `node` like every create, and `at` comes only with `desk`.
+#[test]
+fn a_native_create_is_routed_by_its_node_and_carries_what_to_run() {
+    let typed = op("native.create");
+    assert_eq!(typed.node.as_deref(), Some("01JNODE"));
+    assert_eq!(typed.at, None);
+    assert_eq!(typed.command.as_deref(), Some("claude --resume"));
+    assert_eq!(typed.label.as_deref(), Some("review"));
+    assert_eq!(
+        kampr_node::manage::native_argv(&op("native.create.args")),
+        vec!["htop".to_string(), "-d".into(), "10".into()]
+    );
+    let desk = op("native.create.desk");
+    assert_eq!(desk.desk, Some(true));
+    assert_eq!(desk.at.as_deref(), Some("01JNODE/w3:p2"));
+    for case in ["native.close", "native.forget", "native.desk"] {
+        assert_eq!(op(case).at.as_deref(), Some("01JNODE/n:01k8native"), "{case}");
+    }
+}

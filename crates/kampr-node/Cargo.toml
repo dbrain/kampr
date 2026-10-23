@@ -18,6 +18,8 @@ kampr-herdr = { path = "../kampr-herdr" }
 kampr-journal = { path = "../kampr-journal" }
 kampr-push = { path = "../kampr-push" }
 kampr-mesh = { path = "../kampr-mesh" }
+kampr-keep = { path = "../kampr-keep" }
+kampr-native = { path = "../kampr-native" }
 kampr-term = { path = "../kampr-term" }
 mime_guess.workspace = true
 rust-embed.workspace = true
@@ -38,6 +40,7 @@ url.workspace = true
 
 [dev-dependencies]
 kampr-testkit = { path = "../kampr-testkit" }
+libc.workspace = true
 async-trait.workspace = true
 getrandom.workspace = true
 rcgen.workspace = true

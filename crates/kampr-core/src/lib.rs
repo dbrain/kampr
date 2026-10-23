@@ -8,7 +8,9 @@
 
 pub mod agent_view;
 pub mod backoff;
+pub mod desk;
 pub mod herdr_provider;
+pub mod keys;
 pub mod local_node;
 pub mod naming;
 pub mod procfs;
@@ -24,7 +26,8 @@ pub use backoff::Backoff;
 pub use herdr_provider::{HerdrConfig, HerdrProvider};
 pub use naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
 pub use provider::{
-    Composite, FleetPane, FleetState, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback,
+    Composite, FleetPane, FleetState, Input, NativeExit, NativePane, PaneEvent, PaneInfo, PaneStream,
+    Provider, RawScrollback, Reflow, split_view, view_key,
 };
 pub use question::{Question, Shape};
 pub use registry::{PaneRegistry, PaneUpdate, Screen, Watcher};

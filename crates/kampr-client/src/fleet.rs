@@ -5,7 +5,7 @@
 //! running a command on a machine nobody meant to include.
 
 use crate::herd::Herd;
-use kampr_core::wire::PaneEntry;
+use kampr_core::wire::{NodeEntry, PaneEntry};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -33,10 +33,7 @@ pub fn fan_out(command: &str, herd: &Herd) -> Result<Vec<Value>, FanOutError> {
     }
     balanced(line)?;
     let cohort = ulid::Ulid::generate().to_string();
-    let ops: Vec<Value> = herd
-        .nodes
-        .iter()
-        .filter(|node| node.is_reachable())
+    let ops: Vec<Value> = targets(herd)
         .map(|node| {
             json!({
                 "op": "fleet.run",
@@ -50,6 +47,10 @@ pub fn fan_out(command: &str, herd: &Herd) -> Result<Vec<Value>, FanOutError> {
         return Err(FanOutError::NowhereToRun);
     }
     Ok(ops)
+}
+
+pub fn targets(herd: &Herd) -> impl Iterator<Item = &NodeEntry> {
+    herd.nodes.iter().filter(|node| node.is_reachable())
 }
 
 /// The one thing checked before a line reaches five machines: that its quotes close.

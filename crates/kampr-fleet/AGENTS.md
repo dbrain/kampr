@@ -1,6 +1,6 @@
 # kampr-fleet
 
-One command across the herd: a pty the node forks, the waiting ladder, the fleet provider.
+One command across the herd: a native session with a cohort, the waiting ladder, the fleet provider.
 `docs/13-fleet-runs.md` is the design.
 
 ## Traps that have cost real time
@@ -8,8 +8,11 @@ One command across the herd: a pty the node forks, the waiting ladder, the fleet
 - **A pane's state can only be read by its own parent, at its own privilege.**
   `/proc/<pid>/syscall` is EPERM to anything that did not fork the job (#331), and a job running as
   root refuses `wchan` and `fd/0` too (#332) — so the node can see *nothing* about a `sudo` command
-  in a herdr pane. This is why a fleet run is a pty the node forked rather than a pane it asked
-  herdr for.
+  in a herdr pane. This is why a fleet run is a native session, whose keeper forked it and answers
+  `state` with those reads, rather than a pane the node asked herdr for. The node never reads the
+  pty either: the log is the keeper's, and a borrowed master is for writes and `tcgetattr` only.
+- **A run outlives the node.** Tests that start one must kill its keeper on the way out (see
+  `tests/it/main.rs`), because dropping the provider deliberately leaves it running.
 - **ble.sh leaves an idle pane's tty with ECHO already off** (#333), so the termios bit that looks
   like a definitive password signal means nothing on a shell pane. It is honest on a pty with no
   shell on it (#337) — and on a fleet run's, which does have one: ble.sh declines to load into any

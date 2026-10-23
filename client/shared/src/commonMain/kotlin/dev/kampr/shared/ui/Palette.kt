@@ -40,7 +40,7 @@ fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean): List<PaletteI
         add(place("Appearance", "theme and mode", Screen.Appearance, "theme dark light colour"))
         add(place("Notifications", "push and alerts", Screen.Notifications, "push alerts"))
         if (canCreate) {
-            for (node in herd.nodes.filter { it.online }) {
+            for (node in herd.nodes.filter { it.isServing }) {
                 add(
                     PaletteItem(
                         "New on ${node.name}",

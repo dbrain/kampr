@@ -29,6 +29,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.NativeAction
+import dev.kampr.shared.model.isNative
+import dev.kampr.shared.model.nativeActions
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ManageOp
@@ -57,12 +60,14 @@ fun PaneMenu(
     onManage: (ManageOp) -> Unit,
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
+    desk: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val title = paneTitle(pane)
     var refusal by remember { mutableStateOf<String?>(null) }
     var step by remember(pane.id) { mutableStateOf(MenuStep.Verbs) }
     var label by remember(pane.id) { mutableStateOf(TextFieldValue(pane.label ?: pane.id.substringAfter('/'))) }
+    var confirming by remember(pane.id) { mutableStateOf<NativeAction?>(null) }
 
     LaunchedEffect(outcome) {
         val ack = outcome ?: return@LaunchedEffect
@@ -74,7 +79,20 @@ fun PaneMenu(
             MenuStep.Verbs -> {
                 MenuItem("Open", "Open $title", onClick = onOpen)
                 MenuItem("Rename…", "Rename $title") { step = MenuStep.Rename }
-                MenuItem("Close", "Close $title", danger = true) { step = MenuStep.Close }
+                if (pane.isNative) {
+                    nativeActions(pane, desk).forEach { action ->
+                        MenuItem(action.verb.replaceFirstChar(Char::uppercase), action.spoken, danger = action.confirm) {
+                            if (action.confirm) {
+                                confirming = action
+                                step = MenuStep.Close
+                            } else {
+                                onManage(action.op)
+                            }
+                        }
+                    }
+                } else {
+                    MenuItem("Close", "Close $title", danger = true) { step = MenuStep.Close }
+                }
             }
 
             MenuStep.Rename -> {
@@ -99,15 +117,26 @@ fun PaneMenu(
             }
 
             MenuStep.Close -> {
-                // Herdr names the thing and counts it before it will act — `Close workspace?` over
-                // `bravo — 1 pane` (#426). One pane is one pane, so the count is the name.
-                Column(Modifier.announce("Close pane? $title. Confirm or cancel.", urgent = true)) {
-                    MenuNote("Close pane?")
-                    MenuNote(title, loud = true)
-                }
-                MenuRow {
-                    Chip("cancel", false, { step = MenuStep.Verbs }, quiet = true, label = "Do not close $title")
-                    Chip("close", true, { onManage(ManageOp.Close(pane.id)) }, label = "Confirm — close $title")
+                val action = confirming
+                if (action != null) {
+                    Column(Modifier.announce("${action.spoken}? Confirm or cancel.", urgent = true)) {
+                        MenuNote("${action.spoken}?", loud = true)
+                    }
+                    MenuRow {
+                        Chip("cancel", false, { step = MenuStep.Verbs }, quiet = true, label = "Do not ${action.verb} $title")
+                        Chip(action.verb, true, { onManage(action.op) }, label = "Confirm — ${action.spoken}")
+                    }
+                } else {
+                    // Herdr names the thing and counts it before it will act — `Close workspace?` over
+                    // `bravo — 1 pane` (#426). One pane is one pane, so the count is the name.
+                    Column(Modifier.announce("Close pane? $title. Confirm or cancel.", urgent = true)) {
+                        MenuNote("Close pane?")
+                        MenuNote(title, loud = true)
+                    }
+                    MenuRow {
+                        Chip("cancel", false, { step = MenuStep.Verbs }, quiet = true, label = "Do not close $title")
+                        Chip("close", true, { onManage(ManageOp.Close(pane.id)) }, label = "Confirm — close $title")
+                    }
                 }
             }
         }

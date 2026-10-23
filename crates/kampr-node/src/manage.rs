@@ -1,6 +1,7 @@
 use crate::caps::SessionEntry;
 use kampr_core::wire::ErrorCode;
 use kampr_herdr::Herdr;
+use kampr_native::{NativeProvider, NewSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -78,6 +79,9 @@ pub struct ManageOp {
     /// to carry a sentence as well as a code.
     #[serde(default)]
     pub group: Option<bool>,
+    /// `native.create` showing the new session on the desk as well, beside `at`.
+    #[serde(default)]
+    pub desk: Option<bool>,
 }
 
 /// The smallest pane `pane.size` will produce.
@@ -178,6 +182,35 @@ fn fleet_geometry(op: &ManageOp) -> Result<kampr_fleet::Geometry, ManageError> {
     })
 }
 
+fn is_native_op(op: &str) -> bool {
+    op.starts_with("native.")
+}
+
+/// `command` is a line for the login shell, `args` an argv; neither is the login shell itself.
+pub fn native_argv(op: &ManageOp) -> Vec<String> {
+    let shell = kampr_native::login_shell();
+    if let Some(line) = op.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        return vec![shell, "-lc".into(), line.to_string()];
+    }
+    match op.args.clone().filter(|a| !a.is_empty()) {
+        Some(argv) => argv,
+        None => vec![shell, "-l".into()],
+    }
+}
+
+fn native_geometry(op: &ManageOp) -> Result<(u16, u16), ManageError> {
+    let (cols, rows) = match (op.cols, op.rows) {
+        (Some(cols), Some(rows)) => checked_size(cols, rows)?,
+        (None, None) => (MIN_COLS, MIN_ROWS),
+        _ => {
+            return Err(ManageError::BadRequest(
+                "a native session takes both `cols` and `rows` or neither".into(),
+            ));
+        }
+    };
+    Ok((cols as u16, rows as u16))
+}
+
 /// Sixteen times the worst stop measured in #241, and a thousand times the worst create in #240.
 const SESSION_SETTLE: Duration = Duration::from_secs(5);
 const SESSION_POLL: Duration = Duration::from_millis(20);
@@ -256,6 +289,9 @@ pub struct Manager<'a> {
     /// than at its next interval (ADR 0014). Nothing here reads a size back out of it and nothing
     /// here resizes through it.
     pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
+    pub native: Option<&'a std::sync::Arc<NativeProvider>>,
+    /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
+    pub holder: &'a str,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -304,10 +340,23 @@ impl Manager<'_> {
             // Fleet ops never touch herdr, so they never wake one. A host the operator has not
             // opened a terminal on is still a host they can run a command across.
             "fleet.run" | "fleet.stop" | "fleet.forget" => Ok(Managed {
-                reply: self.fleet_op(op)?,
+                reply: self.fleet_op(op).await?,
+                settle: None,
+            }),
+            // Native sessions are this machine's, not herdr's, so none of their ops wake it.
+            _ if is_native_op(&op.op) || self.native_target(op).is_some() => Ok(Managed {
+                reply: self.native_op(op).await?,
                 settle: None,
             }),
             _ => {
+                if !crate::desk::about_the_desk(&op.op)
+                    && let Ok(Target::Pane(pane)) = self.target(op)
+                    && let Some(native) = self.provider.hosting(&pane)
+                {
+                    return Err(ManageError::BadRequest(format!(
+                        "{pane} is showing native session {native}; address that instead"
+                    )));
+                }
                 self.wake().await?;
                 Ok(Managed {
                     reply: self.structural(op).await?,
@@ -322,7 +371,7 @@ impl Manager<'_> {
     /// There is no `fleet.answer`: an answer is `input` to the pane, the same message that reaches
     /// every other pane in the herd. A second way to type into a terminal is a second thing to get
     /// wrong, and the first one already carries a phone's reply across the mesh.
-    fn fleet_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
+    async fn fleet_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
         match op.op.as_str() {
             "fleet.run" => {
                 let job = fleet_job(op).ok_or_else(|| {
@@ -340,6 +389,7 @@ impl Manager<'_> {
                 let pane = self
                     .fleet
                     .start(&cohort, &job, op.cwd.as_deref(), geometry)
+                    .await
                     .map_err(|e| ManageError::BadRequest(e.to_string()))?;
                 Ok(json!({ "pane_id": pane, "cohort": cohort }))
             }
@@ -359,6 +409,184 @@ impl Manager<'_> {
             }
             other => Err(ManageError::BadRequest(format!("{other} is not a fleet op"))),
         }
+    }
+
+    fn native_target(&self, op: &ManageOp) -> Option<String> {
+        let local = op.at.as_deref()?.strip_prefix(self.node_id)?.strip_prefix('/')?;
+        local.starts_with(kampr_native::PREFIX).then(|| local.to_string())
+    }
+
+    async fn native_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
+        let native = self
+            .native
+            .ok_or_else(|| ManageError::BadRequest("this node does not keep native sessions".into()))?;
+        if op.op == "native.create" {
+            let beside = match op.desk {
+                Some(true) => {
+                    let beside = self.target(op)?;
+                    self.wake().await?;
+                    Some(beside)
+                }
+                _ => None,
+            };
+            let (cols, rows) = native_geometry(op)?;
+            let pane = native
+                .create(NewSession {
+                    argv: native_argv(op),
+                    cwd: op.cwd.clone(),
+                    label: op.label.clone(),
+                    cols,
+                    rows,
+                    ..NewSession::default()
+                })
+                .await
+                .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
+            let Some(beside) = beside else {
+                return Ok(json!({ "pane_id": pane }));
+            };
+            let desk = self.show_on_desk(native, &pane, Some(beside)).await?;
+            return Ok(json!({ "pane_id": pane, "desk": desk }));
+        }
+        let pane = self.native_target(op).ok_or_else(|| match op.at.as_deref() {
+            Some(at) => ManageError::UnknownTarget(at.to_string()),
+            None => ManageError::BadRequest(format!("{} needs `at`", op.op)),
+        })?;
+        if native.session(&pane).is_none() {
+            return Err(ManageError::UnknownTarget(op.at.clone().unwrap_or_default()));
+        }
+        let failed = |e: anyhow::Error| ManageError::BadRequest(format!("{e:#}"));
+        match op.op.as_str() {
+            "native.close" | "close" => native.close(&pane).map_err(failed)?,
+            "native.forget" => native.forget(&pane).map_err(failed)?,
+            "rename" => native.rename(&pane, op.label.as_deref()).map_err(failed)?,
+            "pane.size" => return self.size_native(op, &pane, native).await,
+            "native.desk" => {
+                let desk = self.show_on_desk(native, &pane, None).await?;
+                return Ok(json!({ "pane_id": pane, "desk": desk }));
+            }
+            other => {
+                return Err(ManageError::BadRequest(format!(
+                    "{other} does not apply to a native session"
+                )));
+            }
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    /// The one native op that wakes herdr. With nothing to stand beside, herdr splits its focused
+    /// pane, and the focus stays where it was.
+    async fn show_on_desk(
+        &self,
+        native: &NativeProvider,
+        pane: &str,
+        beside: Option<Target>,
+    ) -> Result<String, ManageError> {
+        let session = native
+            .session(pane)
+            .ok_or_else(|| ManageError::UnknownTarget(pane.to_string()))?;
+        if !session.alive() {
+            return Err(ManageError::BadRequest(format!("{pane} has ended")));
+        }
+        self.wake().await?;
+        let mut params = json!({ "direction": "right", "focus": false });
+        match beside {
+            Some(Target::Pane(id)) => params["target_pane_id"] = json!(id),
+            Some(Target::Workspace(id)) => params["workspace_id"] = json!(id),
+            Some(Target::Tab(tab)) => {
+                let snapshot = self
+                    .herdr
+                    .snapshot()
+                    .await
+                    .map_err(|e| ManageError::Herdr(e.to_string()))?;
+                let id = snapshot
+                    .panes
+                    .iter()
+                    .find(|p| p.tab_id == tab)
+                    .map(|p| p.pane_id.clone())
+                    .ok_or_else(|| ManageError::UnknownTarget(tab.clone()))?;
+                params["target_pane_id"] = json!(id);
+            }
+            None => {}
+        }
+        let split = self.call("pane.split", params).await?;
+        let desk = split["pane"]["pane_id"]
+            .as_str()
+            .ok_or_else(|| ManageError::Herdr(format!("pane.split named no pane: {split}")))?
+            .to_string();
+        self.herdr
+            .send_text(&desk, &native.attach_line(session.id()))
+            .await
+            .map_err(|e| ManageError::Herdr(e.to_string()))?;
+        Ok(desk)
+    }
+
+    /// `pane.size`'s modes on a session Kampr keeps. There is no controller to claim and no desk to
+    /// take the size back (#19 is herdr's), so a size sticks until the next claim and `match` only
+    /// has to remember what to put back.
+    async fn size_native(
+        &self,
+        op: &ManageOp,
+        pane: &str,
+        native: &NativeProvider,
+    ) -> Result<Value, ManageError> {
+        let failed = |e: anyhow::Error| ManageError::BadRequest(format!("{e:#}"));
+        let mode = op.mode.as_deref().unwrap_or("once");
+        if mode == "release" {
+            let was_held = native.let_go(pane, op.lease).await.map_err(failed)?;
+            let rows = native.size(pane).map(|(_, rows)| rows);
+            return Ok(json!({ "pane_id": pane, "held": false, "was_held": was_held, "rows": rows }));
+        }
+        if !matches!(mode, "hold" | "once" | "match" | "grow") {
+            return Err(ManageError::BadRequest(format!("unknown size mode {mode}")));
+        }
+        let (cols, rows) = match (op.cols, op.rows) {
+            (Some(c), Some(r)) => (c, r),
+            _ => return Err(ManageError::BadRequest("pane.size needs cols and rows".into())),
+        };
+        let (cols, rows) = match mode {
+            "grow" => {
+                let own = op
+                    .lease
+                    .and_then(|token| Some((token, native.found_under(pane, token)?)));
+                let base = match own {
+                    Some((_, found)) => found,
+                    None => native
+                        .size(pane)
+                        .ok_or_else(|| ManageError::UnknownTarget(pane.to_string()))?,
+                };
+                match grown(base, (cols, rows))? {
+                    Some(target) => target,
+                    None => {
+                        let was_held = match own {
+                            Some((token, _)) => native.let_go(pane, Some(token)).await.map_err(failed)?,
+                            None => false,
+                        };
+                        return Ok(json!({ "pane_id": pane, "cols": base.0, "rows": base.1,
+                                          "held": false, "was_held": was_held }));
+                    }
+                }
+            }
+            _ => checked_size(cols, rows)?,
+        };
+        let (cols, rows) = (cols as u16, rows as u16);
+        if matches!(mode, "match" | "grow") {
+            let (token, found) = native.hold(pane, cols, rows, self.holder).await.map_err(failed)?;
+            return Ok(json!({
+                "pane_id": pane, "cols": cols, "rows": rows,
+                "held": true, "matched": true, "lease": token,
+                "found_cols": found.0, "found_rows": found.1,
+            }));
+        }
+        native.unhold(pane);
+        native
+            .resize(pane, cols, rows, self.holder)
+            .await
+            .map_err(failed)?;
+        let measured = native.size(pane).map(|(_, rows)| rows);
+        Ok(json!({
+            "pane_id": pane, "cols": cols, "rows": rows,
+            "held": mode == "hold", "kept": measured == Some(rows), "measured_rows": measured,
+        }))
     }
 
     fn fleet_target(&self, op: &ManageOp) -> Result<String, ManageError> {
@@ -1049,7 +1277,7 @@ fn layout_root(layout: Option<&Value>) -> Result<Value, ManageError> {
 /// widening the search, because `pane.size` answers a top-level `pane_id` too and it creates
 /// nothing — an `id` there would tell a client to wait for a herd patch that is never coming.
 pub fn created_id(op: &str, reply: &Value) -> Option<String> {
-    if op == "fleet.run" {
+    if op == "fleet.run" || op == "native.create" {
         return reply["pane_id"].as_str().map(str::to_string);
     }
     for (record, field) in [

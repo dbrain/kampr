@@ -261,18 +261,18 @@ private fun MosaicStatus(
             KText(
                 listOfNotNull(
                     node.name,
-                    if (node.online) formatLatency(node.rttMs) else "offline",
+                    if (node.isServing) formatLatency(node.rttMs) else "offline",
                     node.build.takeIf { skewed },
                 ).joinToString(" "),
                 tokens.type.meta,
                 when {
-                    !node.online -> tokens.color.blocked
+                    !node.isServing -> tokens.color.blocked
                     skewed -> tokens.color.working
                     else -> tokens.color.mute
                 },
                 Modifier.announce(
                     when {
-                        !node.online -> "${node.name} is offline"
+                        !node.isServing -> "${node.name} is offline"
                         skewed -> "${node.name} is on build ${node.build}, which differs from this client"
                         else -> "${node.name}, ${formatLatency(node.rttMs)}"
                     },

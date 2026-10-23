@@ -1,4 +1,5 @@
 use crate::convo::{self, ConvoCtx};
+use crate::herd::Reach;
 use crate::manage::{self, ManageOp, Managed, Manager, Settle};
 use crate::outbox::{Frame, Outbox};
 use crate::pending;
@@ -43,6 +44,9 @@ const SCROLLBACK_FLOOR: Duration = Duration::from_millis(100);
 /// How often, and how many times, a blocked pane is re-read for a question its screen had not
 /// finished painting. Bounded so a harness whose dialog Kampr cannot parse costs a handful of
 /// reads rather than one every half second for as long as it sits there.
+/// How soon a reflowed watch notices that a harness started or a full-screen program took the
+/// screen when the pane said nothing else; output re-checks at once.
+const REFLOW_RECHECK: Duration = Duration::from_secs(1);
 const PENDING_RETRY: Duration = Duration::from_millis(500);
 const PENDING_ATTEMPTS: u32 = 12;
 
@@ -310,6 +314,7 @@ struct PaneHandle {
     tasks: Vec<JoinHandle<()>>,
     scrollback: bool,
     conversation: bool,
+    reflow: Option<u16>,
     convo: convo::Open,
     /// What this pane's conversation cost to open, on loan from the node for as long as this
     /// handle holds the pane and handed back when it drops. See [`crate::warm`].
@@ -426,12 +431,17 @@ enum MatchLease {
         global: String,
         token: u64,
     },
+    Native {
+        native: Arc<kampr_native::NativeProvider>,
+        local: String,
+        token: u64,
+    },
 }
 
 impl MatchLease {
     fn token(&self) -> u64 {
         match self {
-            Self::Local { token, .. } | Self::Peer { token, .. } => *token,
+            Self::Local { token, .. } | Self::Peer { token, .. } | Self::Native { token, .. } => *token,
         }
     }
 }
@@ -441,6 +451,14 @@ impl Drop for MatchLease {
         match self {
             Self::Local { node, local, token } => {
                 node.holds.let_go(local, *token);
+            }
+            Self::Native { native, local, token } => {
+                let (native, local, token) = (native.clone(), local.clone(), *token);
+                tokio::spawn(async move {
+                    if let Err(e) = native.let_go(&local, Some(token)).await {
+                        warn!(pane = %local, error = %format!("{e:#}"), "letting go of a matched native session");
+                    }
+                });
             }
             Self::Peer {
                 node,
@@ -715,7 +733,11 @@ impl Session {
                 pane,
                 scrollback,
                 conversation,
-            } => self.watch(&pane, scrollback, conversation).await,
+                reflow,
+            } => {
+                self.watch(&pane, scrollback, conversation, reflow.map(|r| r.cols))
+                    .await
+            }
             ClientMsg::Unwatch { pane } => self.unwatch(&pane),
             ClientMsg::Input {
                 pane,
@@ -744,17 +766,24 @@ impl Session {
         }
     }
 
-    async fn watch(&mut self, pane: &str, scrollback: bool, conversation: bool) {
-        let Some((session, local)) = self.node.resolve(pane) else {
-            self.watch_peer(pane, scrollback, conversation).await;
+    async fn watch(&mut self, pane: &str, scrollback: bool, conversation: bool, reflow: Option<u16>) {
+        // A hub relays a reflowed view as a pane of its own on the link, so watchers of different
+        // widths on it are different streams here too. See [`kampr_mesh::Peers::watch_view`].
+        let (target, view) = match self.caller {
+            Caller::Hub => kampr_core::split_view(pane),
+            _ => (pane, None),
+        };
+        let reflow = view.or(reflow);
+        let Some((session, local)) = self.node.resolve(target) else {
+            self.watch_peer(pane, scrollback, conversation, reflow).await;
             return;
         };
-        if self.node.herd().pane(pane).is_none() {
+        if self.node.herd().pane(target).is_none() {
             self.wire
                 .error(ErrorCode::UnknownPane, "no such pane", Some(pane));
             return;
         }
-        if !session.online() {
+        if !session.online() && !local.starts_with(kampr_native::PREFIX) {
             self.wire.error(
                 ErrorCode::NodeOffline,
                 "the herdr serving this pane is not reachable",
@@ -767,7 +796,7 @@ impl Session {
         self.audit(
             "watch",
             Some(pane),
-            Some(json!({ "scrollback": scrollback, "conversation": conversation })),
+            Some(json!({ "scrollback": scrollback, "conversation": conversation, "reflow": reflow })),
         );
         let hold = hand_over(
             &mut self.panes,
@@ -777,12 +806,13 @@ impl Session {
         );
         let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
             registry: session.registry.clone(),
-            herdr: session.herdr.clone(),
+            screen: pending::Screen::of(&session, &local),
             herd: self.node.subscribe_herd(),
             wire: self.wire.clone(),
             global: pane.to_string(),
             local: local.clone(),
             scrollback,
+            reflow,
         }))];
         // Taken from the node rather than made here: on a re-watch this is the transcript already
         // found, already parsed and already folded, and taking it is what makes it this handle's
@@ -791,10 +821,10 @@ impl Session {
         let convo = warm.lock().unwrap().journal.clone();
         let followed = convo::followed();
         if conversation {
-            let provider = session.provider.clone();
             let for_identity = self.node.journals();
             let for_marker = self.node.journals();
-            let marker_provider = session.provider.clone();
+            let identity_session = session.clone();
+            let marker_session = session.clone();
             let held = self
                 .held
                 .entry(pane.to_string())
@@ -805,8 +835,8 @@ impl Session {
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
                 herd: self.node.subscribe_herd(),
-                identity: Box::new(move |local| convo::identity(&for_identity, &provider, local)),
-                describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_provider, local)),
+                identity: Box::new(move |local| convo::identity(&for_identity, &identity_session, local)),
+                describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_session, local)),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
                 local,
@@ -824,6 +854,7 @@ impl Session {
                 tasks,
                 scrollback,
                 conversation,
+                reflow,
                 convo,
                 warm,
                 warmth: self.node.convo_warmth.clone(),
@@ -835,7 +866,7 @@ impl Session {
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
     /// at it, so this costs the WAN hop nothing beyond the first watcher.
-    async fn watch_peer(&mut self, pane: &str, scrollback: bool, conversation: bool) {
+    async fn watch_peer(&mut self, pane: &str, scrollback: bool, conversation: bool, reflow: Option<u16>) {
         if self.node.peers.state(pane) == kampr_mesh::PeerState::Unknown {
             self.wire.error(
                 ErrorCode::UnknownPane,
@@ -847,12 +878,14 @@ impl Session {
         self.audit(
             "watch",
             Some(pane),
-            Some(json!({ "scrollback": scrollback, "conversation": conversation, "peer": true })),
+            Some(json!({
+                "scrollback": scrollback, "conversation": conversation, "reflow": reflow, "peer": true
+            })),
         );
         let hold = hand_over(
             &mut self.panes,
             self.wire.outbox(),
-            Streams::Peer(&self.node.peers, pane),
+            Streams::Peer(&self.node.peers, &self.node.peers.relayed_as(pane, reflow)),
             pane,
         );
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
@@ -861,6 +894,7 @@ impl Session {
                 wire: self.wire.clone(),
                 global: pane.to_string(),
                 conversation,
+                reflow,
             },
         ))];
         self.panes.insert(
@@ -871,6 +905,7 @@ impl Session {
                 tasks,
                 scrollback,
                 conversation,
+                reflow,
                 convo: convo::open(),
                 // A pane on another host is followed by the node that owns it — this side only
                 // relays, so there is nothing here to poll and nothing to keep warm.
@@ -880,6 +915,14 @@ impl Session {
                 _hold: hold,
             },
         );
+    }
+
+    /// What a verb about this client's watch of a peer's pane names on the link: the view it is
+    /// relayed as, when it asked for one.
+    fn relayed_as(&self, pane: &str) -> String {
+        self.node
+            .peers
+            .relayed_as(pane, self.panes.get(pane).and_then(|h| h.reflow))
     }
 
     /// Anything addressed at a pane this process does not serve goes to the node that does,
@@ -902,9 +945,10 @@ impl Session {
     /// this pane — which the request had no say in. Everything else is the ordinary refusal.
     fn convo_sub(&self, pane: &str, id: &str, before: Option<&str>) {
         if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
             self.relay_to_peer(
                 pane,
-                json!({ "t": "convo.sub", "pane": pane, "id": id, "before": before }),
+                json!({ "t": "convo.sub", "pane": via, "id": id, "before": before }),
             );
             return;
         }
@@ -976,13 +1020,22 @@ impl Session {
                 );
                 return;
             }
+            let via = self.relayed_as(pane);
             self.relay_to_peer(
                 pane,
-                json!({ "t": "find", "pane": pane, "query": query, "backward": backward, "from": from }),
+                json!({ "t": "find", "pane": via, "query": query, "backward": backward, "from": from }),
             );
             return;
         };
-        match session.registry.find(&local, query, backward, from).await {
+        // A reflowed watch scrolls rows of its own width, and `from_bottom` is counted in them.
+        let local = kampr_core::split_view(&local).0.to_string();
+        let key = match self.panes.get(pane).and_then(|h| h.reflow) {
+            Some(cols) if session.registry.reflow(&local) == kampr_core::Reflow::On => {
+                kampr_core::view_key(&local, cols)
+            }
+            _ => local.clone(),
+        };
+        match session.registry.find(&key, query, backward, from).await {
             Ok(Some(found)) => self.wire.send(&ServerMsg::Find {
                 pane: pane.into(),
                 query: query.into(),
@@ -1011,9 +1064,7 @@ impl Session {
             }),
             // `stale_content` is the pane having scrolled between the revision and the search
             // (#511). It is a retry, not a failure of the query, and the message says so.
-            Err(e) => self
-                .wire
-                .error(ErrorCode::HerdrUnavailable, &e.to_string(), Some(pane)),
+            Err(e) => self.wire.error(failure_code(&local), &e.to_string(), Some(pane)),
         };
     }
 
@@ -1031,7 +1082,8 @@ impl Session {
                 );
                 return;
             }
-            self.relay_to_peer(pane, json!({ "t": "convo.find", "pane": pane, "query": query }));
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(pane, json!({ "t": "convo.find", "pane": via, "query": query }));
             return;
         }
         // The same `confirmed` gate `convo.load` takes, and for the same reason: the handle a
@@ -1084,7 +1136,8 @@ impl Session {
         // A transcript lives on the host that runs the harness, so paging one is a question for
         // the node that owns the pane rather than for the hub relaying it.
         if self.node.resolve(pane).is_none() {
-            self.relay_to_peer(pane, json!({ "t": "convo.load", "pane": pane, "before": before }));
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(pane, json!({ "t": "convo.load", "pane": via, "before": before }));
             return;
         }
         let page = self
@@ -1302,7 +1355,7 @@ impl Session {
             None => {
                 if let Err(e) = session.registry.write(&local, input).await {
                     self.wire
-                        .error(offline_code(&session), &e.to_string(), Some(pane));
+                        .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 }
             }
         }
@@ -1411,7 +1464,7 @@ impl Session {
                 look.tick().await;
             };
             if let Err(e) = written {
-                wire.error(offline_code(&session), &e.to_string(), Some(&pane));
+                wire.error(offline_code(&session, &local), &e.to_string(), Some(&pane));
             }
         }
     }
@@ -1437,7 +1490,7 @@ impl Session {
                 }
                 pending::detect_for(hold.agent.as_deref(), &screen.rows.join("\n")).is_some()
             }
-            None => pending::read(&session.herdr, local, hold.agent.as_deref())
+            None => pending::read(&pending::Screen::of(session, local), local, hold.agent.as_deref())
                 .await
                 .is_some(),
         }
@@ -1523,7 +1576,15 @@ impl Session {
         let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
         self.audit("answer", Some(pane), Some(json!({ "key": key })));
         let keystrokes = match pending::cursor_dialogs(agent.as_deref()) {
-            true => match self.moves_to(&session.herdr, &local, agent.as_deref(), key).await {
+            true => match self
+                .moves_to(
+                    &pending::Screen::of(&session, &local),
+                    &local,
+                    agent.as_deref(),
+                    key,
+                )
+                .await
+            {
                 Some(keys) => keys,
                 None => {
                     self.wire.error(
@@ -1544,7 +1605,7 @@ impl Session {
                 .await
             {
                 self.wire
-                    .error(offline_code(&session), &e.to_string(), Some(pane));
+                    .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 return;
             }
         }
@@ -1562,12 +1623,12 @@ impl Session {
     /// its digit, and a screen with no dialog on it takes the digit Claude has always been sent.
     async fn moves_to(
         &self,
-        herdr: &kampr_herdr::Herdr,
+        screen: &pending::Screen,
         local: &str,
         agent: Option<&str>,
         key: &str,
     ) -> Option<Vec<String>> {
-        match pending::read(herdr, local, agent).await {
+        match pending::read(screen, local, agent).await {
             Some(found) if found.cursor.is_some() => cursor_moves(&found, key),
             None if agent == Some(kampr_journal::omp::AGENT) => None,
             _ => Some(numbered_keys(agent, key)),
@@ -1609,7 +1670,7 @@ impl Session {
         // dropped socket and sends it on reconnect, measured at twenty seconds. So the question
         // has to still be on the screen, or this presses Enter into whatever replaced it — a shell
         // line the operator never submitted, or an agent's prompt box they were still writing in.
-        let standing = pending::read(&session.herdr, &local, agent.as_deref()).await;
+        let standing = pending::read(&pending::Screen::of(&session, &local), &local, agent.as_deref()).await;
         if !standing.is_some_and(|p| p.multi) {
             self.wire.error(
                 ErrorCode::BadRequest,
@@ -1626,7 +1687,7 @@ impl Session {
                 .await
             {
                 self.wire
-                    .error(offline_code(&session), &e.to_string(), Some(pane));
+                    .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 return;
             }
         }
@@ -1637,13 +1698,13 @@ impl Session {
     /// away.
     async fn resync(&mut self) {
         self.wire.send(&self.node.herd().message());
-        let watched: Vec<(String, bool, bool)> = self
+        let watched: Vec<(String, bool, bool, Option<u16>)> = self
             .panes
             .iter()
-            .map(|(id, h)| (id.clone(), h.scrollback, h.conversation))
+            .map(|(id, h)| (id.clone(), h.scrollback, h.conversation, h.reflow))
             .collect();
-        for (pane, scrollback, conversation) in watched {
-            self.watch(&pane, scrollback, conversation).await;
+        for (pane, scrollback, conversation, reflow) in watched {
+            self.watch(&pane, scrollback, conversation, reflow).await;
         }
     }
 
@@ -1736,6 +1797,28 @@ impl Session {
             raw["lease"] = json!(token);
         }
 
+        let primary = self.node.primary();
+        if crate::desk::about_the_desk(&op.op)
+            && let Some(local) = op.at.as_deref().and_then(|at| primary.local_pane(at))
+            && local.starts_with(kampr_native::PREFIX)
+        {
+            let host = primary
+                .native
+                .as_ref()
+                .and_then(|native| crate::desk::host_pane(&self.node.sessions, native, &local));
+            let Some(host) = host else {
+                self.refuse(
+                    &op.op,
+                    op.at.as_deref(),
+                    ErrorCode::BadRequest,
+                    "this session is not on the desk",
+                    rid.as_ref(),
+                );
+                return;
+            };
+            raw["at"] = json!(host);
+            op.at = Some(host);
+        }
         // Every session is its own herdr server, so an op is addressed at the session that owns
         // its target rather than at whichever socket the node happens to have started with.
         let target = op.at.as_deref().or(op.node.as_deref());
@@ -1754,14 +1837,22 @@ impl Session {
             holds: &self.node.holds,
             fleet: &session.fleet,
             provider: &session.provider,
+            // A native session is the machine's, so one shown beside a pane of a named herdr
+            // session is still created by the primary's provider and named under its id.
+            native: primary.native.as_ref(),
+            holder: &format!("phone:{}", self.device.name),
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {
+                let owner = match op.op.as_str() {
+                    "native.create" => &primary,
+                    _ => &session,
+                };
                 // A session is named rather than addressed, so its name is the id; everything
                 // else herdr creates is a container this node qualifies with its own id.
                 let id = match reply["session"].as_str() {
                     Some(name) => Some(name.to_string()),
-                    None => manage::created_id(&op.op, &reply).map(|id| session.global_pane(&id)),
+                    None => manage::created_id(&op.op, &reply).map(|id| owner.global_pane(&id)),
                 };
                 let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
                 if let Some(id) = id {
@@ -1932,6 +2023,19 @@ impl Session {
         }
         let Some(at) = op.at.clone() else { return };
         match (reply["lease"].as_u64(), reply["pane_id"].as_str()) {
+            (Some(token), Some(local))
+                if local.starts_with(kampr_native::PREFIX)
+                    && let Some(native) = self.node.primary().native.clone() =>
+            {
+                self.matched.insert(
+                    at,
+                    MatchLease::Native {
+                        native,
+                        local: local.to_string(),
+                        token,
+                    },
+                );
+            }
             (Some(token), Some(local)) => {
                 self.matched.insert(
                     at,
@@ -2167,6 +2271,9 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // an unknown mode, and a refusal is a strip over a pane on a phone whose operator asked for
     // nothing.
     value["caps"]["pane.grow"] = json!(true);
+    // A hub reads this to decide whether it may relay a reflowed watch as a view of its own
+    // (`<pane>~<cols>`), which an older node would answer as an unknown pane.
+    value["caps"]["reflow"] = json!(true);
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
     // and the point of that route is that bytes never share a queue with terminal frames.
@@ -2210,20 +2317,20 @@ async fn herd_updates(
             return;
         }
         let current = rx.borrow_and_update().clone();
-        for (id, online) in current.reachability_changes(&last) {
-            let sent = if online {
+        for (id, reach) in current.reachability_changes(&last) {
+            let sent = match reach {
                 // The protocol's own recovery rule: a reconnect re-sends the whole herd, so a
                 // client that gave up on patches lands back on solid ground.
-                wire.send(&current.message())
-            } else {
-                wire.node_error(
+                Reach::Back => wire.send(&current.message()),
+                Reach::HerdrDown => wire.node_error(
                     ErrorCode::HerdrUnavailable,
                     &current
                         .node(&id)
                         .and_then(|n| n.detail.clone())
                         .unwrap_or_else(|| format!("{id} is not reachable")),
                     &id,
-                ) && wire.node_error(ErrorCode::NodeOffline, &format!("{id} is offline"), &id)
+                ),
+                Reach::Offline => wire.node_error(ErrorCode::NodeOffline, &format!("{id} is offline"), &id),
             };
             if !sent {
                 return;
@@ -2243,11 +2350,18 @@ fn pane_fault(herd: &crate::herd::HerdModel, pane: &str) -> Option<String> {
 }
 
 /// A write that failed while the session is down is the herd being unreachable, not a bad pane.
-fn offline_code(session: &crate::sessions::SessionNode) -> ErrorCode {
-    if session.online() {
-        ErrorCode::HerdrUnavailable
-    } else {
-        ErrorCode::NodeOffline
+fn offline_code(session: &crate::sessions::SessionNode, local: &str) -> ErrorCode {
+    match failure_code(local) {
+        ErrorCode::HerdrUnavailable if !session.online() => ErrorCode::NodeOffline,
+        code => code,
+    }
+}
+
+/// A native pane has no herdr behind it, only its keeper.
+fn failure_code(local: &str) -> ErrorCode {
+    match local.starts_with(kampr_native::PREFIX) {
+        true => ErrorCode::SessionUnavailable,
+        false => ErrorCode::HerdrUnavailable,
     }
 }
 
@@ -2356,12 +2470,14 @@ async fn pump_attachment(ctx: AttachmentCtx) {
 /// against a fake provider rather than only against a live herd.
 pub struct PaneStreamCtx {
     pub registry: Arc<kampr_core::PaneRegistry>,
-    pub herdr: kampr_herdr::Herdr,
+    pub screen: pending::Screen,
     pub herd: tokio::sync::watch::Receiver<Arc<crate::herd::HerdModel>>,
     pub wire: Arc<Wire>,
     pub global: String,
     pub local: String,
     pub scrollback: bool,
+    /// The width a reflowed view was asked for, if one was.
+    pub reflow: Option<u16>,
 }
 
 /// One pane's stream for one client.
@@ -2373,29 +2489,43 @@ pub struct PaneStreamCtx {
 pub async fn pump_pane(ctx: PaneStreamCtx) {
     let PaneStreamCtx {
         registry,
-        herdr,
+        screen,
         mut herd,
         wire,
         global,
         local,
         scrollback,
+        reflow,
     } = ctx;
-    let mut watcher = match registry.watch(&local).await {
+    // A reflowed view is followed only while one can be served; otherwise this socket follows the
+    // pane's own grid, which every other surface (pending, the composer) reads, and is told why.
+    let mut mode = reflow.map(|_| registry.reflow(&local));
+    let key = |mode: Option<kampr_core::Reflow>| match (reflow, mode) {
+        (Some(cols), Some(kampr_core::Reflow::On)) => kampr_core::view_key(&local, cols),
+        _ => local.clone(),
+    };
+    let mut following = key(mode);
+    let mut watcher = match registry.watch(&following).await {
         Ok(w) => w,
         Err(e) => {
-            wire.error(ErrorCode::HerdrUnavailable, &e.to_string(), Some(&global));
+            wire.error(failure_code(&local), &e.to_string(), Some(&global));
             return;
         }
     };
-    if watcher.is_ready() && !wire.send_update(&global, watcher.initial()) {
+    if watcher.is_ready() && !wire.send_view(&global, watcher.initial(), mode) {
         return;
     }
+    let mut recheck = tokio::time::interval(REFLOW_RECHECK);
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // A pane that cannot be streamed carries its reason in the herd, and the herd is state rather
     // than news: a client joining a pane that has been unstreamable for a week would otherwise be
     // handed the state with nothing saying it had arrived. So the state is read once here and the
     // transitions are announced below, which is exactly how an outage is already told.
-    let mut fault = pane_fault(&herd.borrow(), &global);
+    // A hub watches a view as a pane of its own, `<pane>~<cols>`, and is answered under that id;
+    // the herd knows the pane.
+    let herd_pane = kampr_core::split_view(&global).0.to_string();
+    let mut fault = pane_fault(&herd.borrow(), &herd_pane);
     if let Some(detail) = &fault
         && !wire.error(ErrorCode::StreamUnavailable, detail, Some(&global))
     {
@@ -2409,11 +2539,11 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     // thirty seconds. The operator's phone exists to answer blocked agents; it cannot be the last
     // thing to hear that one is. This is the same reading the fault above already does, and for
     // the same reason: the herd is state, and a client joining is arriving at it.
-    let mut blocked = herd.borrow().pane(&global).map(|p| p.agent_status)
+    let mut blocked = herd.borrow().pane(&herd_pane).map(|p| p.agent_status)
         == Some(kampr_core::provider::AgentStatus::Blocked);
     // The harness the pane is running, read once: it decides how a question is spelled and how an
     // answer is pressed, and a pane cannot change harness without the pane itself changing.
-    let harness = herd.borrow().pane(&global).and_then(|p| p.agent.clone());
+    let harness = herd.borrow().pane(&herd_pane).and_then(|p| p.agent.clone());
     // A pane can be reported blocked before its dialog has finished painting, and the question is
     // read off the screen (probe #42). Latching on the first read would leave a blocked agent with
     // no prompt strip at all until its status happened to change again, so an unproductive read is
@@ -2430,7 +2560,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         // been told, and sends no frame — so this does not add a read or a frame per watch, and
         // #448's `multi` re-arm is left exactly as it was.
         match send_pending(
-            &herdr,
+            &screen,
             &wire,
             &global,
             &local,
@@ -2448,15 +2578,37 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     // asking herdr for it again on a timer. A pane with no accumulator behind it has none, and
     // nothing on a quiet pane ever fires: the old timer rendered the whole ring every three
     // seconds per socket whether or not a row had been added to it.
-    let mut history_moved = registry.scrollback_changes(&local);
+    let mut history_moved = registry.scrollback_changes(&following);
     // Armed, because the pane may already have a ring: a client joining a pane that has scrolled
     // is arriving at history, and there is no change coming to tell it so.
     let mut history_due = scrollback;
     let mut history_at = tokio::time::Instant::now();
     let mut sent_rows = 0u32;
     let mut sent_era = 0u32;
+    // Each grid this socket switches to is a different run of rows: its era is told apart from the
+    // last one's even where both rings would call theirs zero.
+    let mut switches = 0u32;
 
     loop {
+        let now = reflow.map(|_| registry.reflow(&local));
+        if now != mode {
+            mode = now;
+            following = key(mode);
+            watcher = match registry.watch(&following).await {
+                Ok(w) => w,
+                Err(e) => {
+                    wire.error(failure_code(&local), &e.to_string(), Some(&global));
+                    return;
+                }
+            };
+            switches = switches.wrapping_add(1);
+            sent_rows = 0;
+            history_moved = registry.scrollback_changes(&following);
+            history_due = scrollback;
+            if watcher.is_ready() && !wire.send_view(&global, watcher.initial(), mode) {
+                return;
+            }
+        }
         tokio::select! {
             update = watcher.recv() => {
                 // **Never a bare `return`.** This is the one place the node learns that a pane's
@@ -2476,22 +2628,23 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if wire.outbox().congested() {
                     let dropped = wire.outbox().purge_pane(&global);
                     debug!(pane = %global, dropped, "client is behind; resetting instead of buffering");
-                    match registry.watch(&local).await {
+                    match registry.watch(&following).await {
                         Ok(fresh) => watcher = fresh,
                         Err(_) => return,
                     }
-                    if !wire.send_update(&global, watcher.initial()) {
+                    if !wire.send_view(&global, watcher.initial(), mode) {
                         return;
                     }
                     continue;
                 }
-                if !wire.send_update(&global, &update) {
+                if !wire.send_view(&global, &update, mode) {
                     return;
                 }
             }
+            _ = recheck.tick(), if reflow.is_some() => {}
             _ = ask.tick(), if asking > 0 => {
                 asking -= 1;
-                match send_pending(&herdr, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
+                match send_pending(&screen, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
                     None => return,
                     Some(published) => asking = keep_asking(published, asking),
                 }
@@ -2504,7 +2657,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             }
             _ = tokio::time::sleep_until(history_at), if scrollback && history_due => {
                 history_due = false;
-                match send_history(&registry, &wire, &global, &local, &mut sent_rows, &mut sent_era)
+                match send_history(&registry, &wire, &global, &following, switches, &mut sent_rows, &mut sent_era)
                     .await
                 {
                     None => return,
@@ -2524,7 +2677,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 }
                 let (status, detail) = {
                     let model = herd.borrow_and_update();
-                    (model.pane(&global).map(|p| p.agent_status), pane_fault(&model, &global))
+                    (model.pane(&herd_pane).map(|p| p.agent_status), pane_fault(&model, &herd_pane))
                 };
                 if detail != fault {
                     fault = detail;
@@ -2540,7 +2693,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if now_blocked != blocked {
                     blocked = now_blocked;
                     asking = if blocked { PENDING_ATTEMPTS } else { 0 };
-                    match send_pending(&herdr, &wire, &global, &local, harness.as_deref(), blocked, &mut asked).await {
+                    match send_pending(&screen, &wire, &global, &local, harness.as_deref(), blocked, &mut asked).await {
                         None => return,
                         Some(published) => asking = keep_asking(published, asking),
                     }
@@ -2571,6 +2724,7 @@ async fn send_history(
     wire: &Wire,
     global: &str,
     local: &str,
+    switches: u32,
     sent_rows: &mut u32,
     sent_era: &mut u32,
 ) -> Option<bool> {
@@ -2584,9 +2738,11 @@ async fn send_history(
     // produced (probe #498). `render_since` answers a restart with the whole ring for that reason:
     // what this socket holds is not this era's, so a tail would leave it holding the era before it
     // underneath the rows it was just sent.
-    let Ok(Some(doc)) = registry.scrollback_since(local, *sent_rows, *sent_era).await else {
+    let ring_era = sent_era.wrapping_sub(switches << 16);
+    let Ok(Some(mut doc)) = registry.scrollback_since(local, *sent_rows, ring_era).await else {
         return Some(false);
     };
+    doc.era = doc.era.wrapping_add(switches << 16);
     // `total_rows` is a depth, so the ring ends here; `sent_rows` is the same index, one message
     // ago.
     let end = doc.from_top + doc.total_rows;
@@ -2642,7 +2798,7 @@ fn keep_asking(published: bool, asking: u32) -> u32 {
 /// checkboxes off the first reading would show the same two ticked for as long as the dialog stood
 /// however many times the operator pressed.
 async fn send_pending(
-    herdr: &kampr_herdr::Herdr,
+    screen: &pending::Screen,
     wire: &Wire,
     global: &str,
     local: &str,
@@ -2651,7 +2807,7 @@ async fn send_pending(
     last: &mut Option<pending::Pending>,
 ) -> Option<bool> {
     let found = match blocked {
-        true => pending::read(herdr, local, agent).await,
+        true => pending::read(screen, local, agent).await,
         false => None,
     };
     if blocked && found.is_none() {
@@ -2934,6 +3090,7 @@ mod tests {
         arrives_at: kampr_core::provider::AgentStatus,
         herdr: Option<Arc<FakeHerdr>>,
         scrollback: bool,
+        reflow: Option<u16>,
     }
 
     impl Harness {
@@ -2972,6 +3129,7 @@ mod tests {
                 arrives_at: kampr_core::provider::AgentStatus::Unknown,
                 herdr: None,
                 scrollback: false,
+                reflow: None,
             }
         }
 
@@ -3031,17 +3189,18 @@ mod tests {
                 registry: self.registry.clone(),
                 // Nothing that does not name a herdr reaches one; a socket that does not exist
                 // proves it for every test but the arrival one.
-                herdr: kampr_herdr::Herdr::new(
+                screen: pending::Screen::Herdr(kampr_herdr::Herdr::new(
                     self.herdr
                         .as_ref()
                         .map(|h| h.socket.clone())
                         .unwrap_or_else(|| "/nonexistent/kampr-test.sock".into()),
-                ),
+                )),
                 herd: herd_rx,
                 wire: self.wire.clone(),
                 global: PANE.into(),
                 local: LOCAL.into(),
                 scrollback: self.scrollback,
+                reflow: self.reflow,
             }))];
             self.panes.insert(
                 PANE.to_string(),
@@ -3051,6 +3210,7 @@ mod tests {
                     tasks,
                     scrollback: false,
                     conversation: false,
+                    reflow: None,
                     convo: convo::open(),
                     warm: convo::warmth(),
                     warmth: Arc::new(crate::warm::ConvoWarmth::default()),
@@ -3231,6 +3391,25 @@ mod tests {
                 resets.iter().all(|text| text == "hello"),
                 "attempt {attempt}: a blank grid over a pane that had one: {resets:?}"
             );
+        }
+    }
+
+    /// A provider that cannot re-lay a pane serves its own grid to a watch that asked, and says so
+    /// on every reset; one that did not ask is told nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reflow_nobody_can_serve_is_the_pane_grid_labelled_as_such() {
+        for (asked, want) in [(Some(40), json!("unsupported")), (None, Value::Null)] {
+            let mut h = Harness::new();
+            h.reflow = asked;
+            h.watch();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            h.paint("hello").await;
+            let resets = h.published("grid.reset", 300).await;
+            assert!(!resets.is_empty(), "{asked:?}");
+            for reset in resets {
+                assert_eq!(reset["reflow"], want, "{asked:?}: {reset}");
+                assert_eq!(reset["cols"], json!(20), "{asked:?}: {reset}");
+            }
         }
     }
 

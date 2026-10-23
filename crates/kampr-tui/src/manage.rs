@@ -352,7 +352,7 @@ impl Manage {
         }
     }
 
-    /// One command, on every node that is online right now.
+    /// One command, on every node that can be reached right now.
     ///
     /// The op leaves here **unexpanded** — one `fleet.run` with a `command` and no `node` — and
     /// `kampr_client::fleet::fan_out` turns it into one op per host at the moment it is sent. The
@@ -360,7 +360,10 @@ impl Manage {
     /// actually happens; they are read from the same herd one keystroke apart.
     fn fleet_run(&self, herd: &Herd) -> Next {
         Next::Ask(Ask {
-            prompt: format!("Run what on all {} online nodes?", online(herd)),
+            prompt: format!(
+                "Run what on all {} nodes?",
+                kampr_client::fleet::targets(herd).count()
+            ),
             hint: "runs through each host's own shell — `&&`, `|`, `;`, quotes and globs all work".into(),
             op: json!({ "op": "fleet.run" }),
             field: "command",
@@ -439,6 +442,7 @@ impl Manage {
                 next,
             });
         }
+        rows.extend(native(herd, entry));
         if let Some(row) = self.sessions() {
             rows.push(row);
         }
@@ -1177,6 +1181,50 @@ fn reachable(herd: &Herd) -> Vec<&NodeEntry> {
         .collect()
 }
 
+fn native(herd: &Herd, entry: Option<&PaneEntry>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let nodes: Vec<&NodeEntry> = herd
+        .nodes
+        .iter()
+        .filter(|n| n.is_reachable() && n.native == Some(true))
+        .collect();
+    if !nodes.is_empty() {
+        rows.push(Row {
+            key: Some('p'),
+            label: "kampr".into(),
+            note: "a session Kampr keeps, herdr or not".into(),
+            next: on_a_node(&nodes, "new kampr session on", |node| {
+                Next::Ask(Ask {
+                    prompt: format!("What runs in the new session on {node}?"),
+                    hint: "enter with nothing typed starts the login shell".into(),
+                    op: json!({ "op": "native.create", "node": node }),
+                    field: "command",
+                    empty: Empty::Omit,
+                })
+            }),
+        });
+    }
+    let Some(entry) = entry.filter(|e| e.provider.as_deref() == Some("native")) else {
+        return rows;
+    };
+    if entry.exited.is_some() {
+        rows.push(Row {
+            key: Some('x'),
+            label: "forget".into(),
+            note: "delete this ended session and its log".into(),
+            next: Next::Send(json!({ "op": "native.forget", "at": entry.id })),
+        });
+    } else if entry.detached == Some(true) {
+        rows.push(Row {
+            key: Some('h'),
+            label: "on desk".into(),
+            note: "open it in a herdr pane".into(),
+            next: Next::Send(json!({ "op": "native.desk", "at": entry.id })),
+        });
+    }
+    rows
+}
+
 fn on_a_node(nodes: &[&NodeEntry], what: &str, then: impl Fn(&str) -> Next) -> Next {
     if let [only] = nodes {
         return then(&only.id);
@@ -1267,8 +1315,4 @@ fn title_of(action: Action) -> String {
         _ => "manage",
     }
     .to_string()
-}
-
-fn online(herd: &Herd) -> usize {
-    herd.nodes.iter().filter(|n| n.online).count()
 }

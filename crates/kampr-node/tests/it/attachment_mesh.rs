@@ -152,6 +152,7 @@ impl Peer {
         // Nothing here reaches herdr: the pane is published rather than discovered, which is all
         // the route that resolves a transcript ever reads.
         config.herdr.socket = state.path().join("no-herdr.sock").display().to_string();
+        config.native.root = state.path().join("native").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         let node = Node::start(config, state.path()).await.expect("a node");
 

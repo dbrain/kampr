@@ -25,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.hasDesk
+import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.util.bypassesSafety
@@ -38,7 +40,7 @@ import dev.kampr.shared.wire.SessionInfo
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.workspaceIdOf
 
-private enum class Step { Menu, Workspace, Tab, Worktree, Session, Node }
+private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Node }
 
 private enum class Pick { Workspace, Split, Agent }
 
@@ -54,7 +56,7 @@ private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 // already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
 // `layout.export` answers with the caller's own container.
 private const val PANE_SPLIT = "pane.split"
-private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.")
+private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", ManageOp.NativeCreate.OP)
 
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
@@ -104,6 +106,8 @@ fun NewSheet(
     var branch by remember { mutableStateOf(TextFieldValue()) }
     var base by remember { mutableStateOf(TextFieldValue()) }
     var sessionName by remember { mutableStateOf(TextFieldValue()) }
+    var nativeCommand by remember { mutableStateOf(TextFieldValue()) }
+    var nativeDesk by remember { mutableStateOf(false) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
@@ -179,6 +183,8 @@ fun NewSheet(
     val workspaceId = pane?.workspaceId ?: pane?.id?.let(::workspaceIdOf)
     val trimmedCwd = cwd.text.trim().ifEmpty { null }
     val trimmedLabel = label.text.trim().ifEmpty { null }
+    // A kept session is not in a herdr container, so there is nothing of its to split beside.
+    val deskAt = pane?.takeUnless { it.isNative }?.id
 
     val action: Pair<String, (() -> Unit)?> = when (step) {
         Step.Menu -> when (pick) {
@@ -246,6 +252,20 @@ fun NewSheet(
             }
             )
 
+        Step.Native -> "Start Kampr session" to {
+            val desk = nativeDesk && node.hasDesk
+            run(
+                ManageOp.NativeCreate(
+                    nodeId,
+                    command = nativeCommand.text.trim().ifEmpty { null },
+                    cwd = trimmedCwd,
+                    label = trimmedLabel,
+                    desk = desk,
+                    at = deskAt.takeIf { desk },
+                ),
+            )
+        }
+
         // The rows are the action: picking one is the whole step, and a button under them would
         // be one that is never the thing to press.
         Step.Node -> "" to null
@@ -267,6 +287,7 @@ fun NewSheet(
                 Step.Tab -> "Tab"
                 Step.Worktree -> "Worktree"
                 Step.Session -> "Named session"
+                Step.Native -> "Kampr session"
                 Step.Node -> "Machine"
             },
             subtitle = listOfNotNull("on ${node.name}", pane?.workspace).joinToString(" · "),
@@ -339,6 +360,7 @@ fun NewSheet(
                             iconTint = null,
                             title = machine.name,
                             subtitle = when {
+                                cold && machine.isServing -> "no herdr here — a Kampr session needs none"
                                 cold -> "herdr is not running here — making something starts it"
                                 !machine.online -> machine.detail ?: "unreachable"
                                 machine.id == node.id -> "what this sheet is aimed at"
@@ -416,6 +438,18 @@ fun NewSheet(
                     LabelledField("label", "mesh-auth", label) { label = it }
                     Note("Herdr's own git support: a worktree for the branch, and a workspace opened on it.")
                 }
+
+                Step.Native -> NativeSessionFields(
+                    command = nativeCommand,
+                    onCommand = { nativeCommand = it },
+                    cwd = cwd,
+                    onCwd = { cwd = it },
+                    label = label,
+                    onLabel = { label = it },
+                    desk = nativeDesk.takeIf { node.hasDesk },
+                    onDesk = { nativeDesk = it },
+                    beside = pane?.takeUnless { it.isNative }?.let(::paneTitle),
+                )
 
                 Step.Session -> Fields {
                     LabelledField("name", "agents", sessionName) { sessionName = it }
@@ -731,6 +765,14 @@ private fun Elsewhere(
 
     SheetSection("somewhere else", compact)
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        SheetCard(
+            icon = null,
+            iconTint = null,
+            title = "Kampr session",
+            subtitle = "a command kept by Kampr, no herdr needed",
+            compact = compact,
+            onClick = { onStep(Step.Native) },
+        )
         SheetCard(
             icon = null,
             iconTint = null,

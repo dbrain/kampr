@@ -1,7 +1,9 @@
 use kampr_core::prompt::{is_chrome, marked_option as marked, numbered_option as numbered, unbox};
 use kampr_core::wire::PendingOption;
 use kampr_herdr::Herdr;
+use kampr_native::NativeProvider;
 use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq)]
 pub struct Pending {
@@ -40,17 +42,43 @@ impl PartialEq for Pending {
 /// `tool_use` and its result (probe #42). So the wording has to come from the pane, and `source`
 /// on the wire says so. Codex does publish an unmatched call while it waits (probe #43), but the
 /// wire shape is identical either way, so the screen path is the one implementation.
-pub async fn read(herdr: &Herdr, pane_id: &str, agent: Option<&str>) -> Option<Pending> {
-    let reply: Value = herdr
-        .call(
-            "pane.read",
-            serde_json::json!({
-                "pane_id": pane_id, "source": "visible", "format": "text", "strip_ansi": true
-            }),
-        )
-        .await
-        .ok()?;
-    detect_for(agent, reply["read"]["text"].as_str()?)
+pub async fn read(screen: &Screen, pane_id: &str, agent: Option<&str>) -> Option<Pending> {
+    let text = match screen {
+        Screen::Herdr(herdr) => {
+            let reply: Value = herdr
+                .call(
+                    "pane.read",
+                    serde_json::json!({
+                        "pane_id": pane_id, "source": "visible", "format": "text", "strip_ansi": true
+                    }),
+                )
+                .await
+                .ok()?;
+            reply["read"]["text"].as_str()?.to_string()
+        }
+        Screen::Native(native) => native.visible(pane_id)?,
+    };
+    detect_for(agent, &text)
+}
+
+/// Where a pane's visible screen is read from: a native session is never herdr's to read.
+#[derive(Clone)]
+pub enum Screen {
+    Herdr(Herdr),
+    Native(Arc<NativeProvider>),
+}
+
+impl Screen {
+    pub fn of(session: &crate::sessions::SessionNode, local: &str) -> Self {
+        match session
+            .native
+            .clone()
+            .filter(|_| local.starts_with(kampr_native::PREFIX))
+        {
+            Some(native) => Self::Native(native),
+            None => Self::Herdr(session.herdr.clone()),
+        }
+    }
 }
 
 /// The detector this harness's screen is read with.

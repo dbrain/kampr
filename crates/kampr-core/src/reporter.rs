@@ -10,10 +10,11 @@
 //! was well-formed, not that it landed: a stale `seq` is dropped silently and answered `ok` all
 //! the same. So every report is confirmed by reading `pane.get` back, and nothing else counts.
 
+use crate::desk::{DeskReport, Hosting, herdr_state};
 use crate::naming::{Fields, Template};
 use crate::provider::PaneInfo;
-use kampr_herdr::Herdr;
-use std::collections::{BTreeMap, HashMap};
+use kampr_herdr::{AgentStatus, Herdr};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
@@ -82,7 +83,61 @@ impl Reporter {
                 Err(e) => debug!(pane = %pane.pane_id, error = %e, "could not report this pane's name"),
             }
         }
-        self.forget(panes);
+        self.keep(panes.iter().map(|p| p.pane_id.as_str()).collect());
+    }
+
+    /// The herdr panes showing a native session, told what Kampr knows about it. Not behind
+    /// `report_names`: the pane is one Kampr put there, and without a report herdr has no agent
+    /// on it at all (#576). The host's pid is in what was sent because a herdr restart brings the
+    /// pane back under the same id with the report gone (#583) and a new `kampr attach` in it.
+    pub async fn sweep_desk(&self, herdr: &Herdr, hosted: &[(Hosting, DeskReport)], resume: bool) {
+        for (host, report) in hosted {
+            let pane = host.herdr_pane.as_str();
+            let argv = resume.then_some(report.resume_argv.as_slice());
+            let sent = format!(
+                "{}\0{}\0{}\0{}\0{argv:?}",
+                host.host_pid,
+                report.agent,
+                herdr_state(report.status),
+                report.title
+            );
+            if self.already_sent(pane, &sent) {
+                continue;
+            }
+            match self.report_desk(herdr, pane, report, argv).await {
+                Ok(Reported::Applied) => {
+                    self.settled(pane, &sent, true);
+                }
+                Ok(Reported::NotApplied) => {
+                    if self.settled(pane, &sent, false) {
+                        warn!(pane, session = %host.native_pane, "herdr accepted this desk pane's report and is showing another");
+                    }
+                }
+                Err(e) => debug!(pane, error = %e, "could not report the session this desk pane shows"),
+            }
+        }
+        self.keep(hosted.iter().map(|(h, _)| h.herdr_pane.as_str()).collect());
+    }
+
+    pub async fn report_desk(
+        &self,
+        herdr: &Herdr,
+        pane_id: &str,
+        report: &DeskReport,
+        resume_argv: Option<&[String]>,
+    ) -> anyhow::Result<Reported> {
+        let seq = self.next_seq(pane_id);
+        let state = herdr_state(report.status);
+        herdr
+            .report_agent(pane_id, SOURCE, &report.agent, state, seq, resume_argv)
+            .await?;
+        let (agent, showing) = herdr.pane_agent(pane_id).await?;
+        let agent = agent.as_deref() == Some(report.agent.as_str()) && shows(state, showing);
+        let title = self.report(herdr, pane_id, &report.title).await?;
+        Ok(match agent && title == Reported::Applied {
+            true => Reported::Applied,
+            false => Reported::NotApplied,
+        })
     }
 
     /// One pane, reported and then **read back**, because `ok` is not confirmation (probe #295).
@@ -138,11 +193,19 @@ impl Reporter {
         first
     }
 
-    fn forget(&self, panes: &[PaneInfo]) {
-        let live: std::collections::HashSet<&str> = panes.iter().map(|p| p.pane_id.as_str()).collect();
+    fn keep(&self, live: HashSet<&str>) {
         self.state
             .lock()
             .unwrap()
             .retain(|id, _| live.contains(id.as_str()));
     }
+}
+
+fn shows(state: &str, showing: AgentStatus) -> bool {
+    matches!(
+        (state, showing),
+        ("working", AgentStatus::Working)
+            | ("blocked", AgentStatus::Blocked)
+            | ("idle", AgentStatus::Idle | AgentStatus::Done)
+    )
 }
