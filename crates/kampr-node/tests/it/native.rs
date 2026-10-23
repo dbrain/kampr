@@ -56,10 +56,17 @@ fn kill_keepers(root: &Path) {
 
 impl Harness {
     async fn start() -> Self {
-        let home = tempfile::Builder::new()
+        Self::start_in(Self::home()).await
+    }
+
+    fn home() -> tempfile::TempDir {
+        tempfile::Builder::new()
             .prefix("kn")
             .tempdir_in("/tmp")
-            .expect("a home");
+            .expect("a home")
+    }
+
+    async fn start_in(home: tempfile::TempDir) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -301,6 +308,13 @@ impl Client {
             .await;
     }
 
+    async fn gone(&mut self, id: &str) {
+        self.until(&format!("{id} gone from the herd"), |c| {
+            (!c.panes.contains_key(id)).then_some(())
+        })
+        .await;
+    }
+
     async fn type_text(&mut self, id: &str, text: &str) {
         self.send(json!({ "t": "input", "pane": id, "text": text })).await;
     }
@@ -421,6 +435,24 @@ async fn a_session_made_over_the_wire_is_a_pane_that_echoes_what_is_typed() {
         .await;
 }
 
+/// A shell is never what a pane is running, as on a herdr pane (`procfs.rs`): a client reads a
+/// `cmd` as "something other than the shell is listening", and scrolls it with cursor keys that a
+/// shell's line editor takes as its history.
+#[tokio::test]
+async fn a_shell_at_its_prompt_names_no_job_and_the_job_it_runs_is_named() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let id = client.create(&["sh", "-i"], json!({})).await;
+    client.watch(&id, false).await;
+    client.shows(&id, "$").await;
+    client.pane(&id, |p| p["cmd"].is_null()).await;
+
+    client.type_text(&id, "cat\r").await;
+    client.pane(&id, |p| p["cmd"] == "cat").await;
+    client.type_text(&id, "\x04").await;
+    client.pane(&id, |p| p["cmd"].is_null()).await;
+}
+
 #[tokio::test]
 async fn a_size_asked_for_reaches_the_pty_and_a_matched_one_is_put_back() {
     let h = Harness::start().await;
@@ -507,7 +539,7 @@ async fn history_and_search_reach_rows_long_gone_from_the_screen() {
 }
 
 #[tokio::test]
-async fn a_closed_session_stays_listed_as_ended_until_it_is_forgotten() {
+async fn a_session_closed_on_purpose_leaves_the_herd_once_it_ends() {
     let h = Harness::start().await;
     let mut client = h.client().await;
     let id = client.create(&["cat", "/dev/stdin"], json!({})).await;
@@ -530,18 +562,63 @@ async fn a_closed_session_stays_listed_as_ended_until_it_is_forgotten() {
 
     let closed = client.manage(json!({ "op": "native.close", "at": id })).await;
     assert_eq!(closed["ok"], json!(true), "{closed}");
-    let pane = client.pane(&id, |p| p.get("exited").is_some()).await;
-    assert_eq!(pane["exited"], json!({ "signal": 1 }), "{pane}");
-    assert_ne!(pane["agent_status"], "working", "{pane}");
-
-    let forgot = client.manage(json!({ "op": "native.forget", "at": id })).await;
-    assert_eq!(forgot["ok"], json!(true), "{forgot}");
-    client
-        .until("the pane gone from the herd", |c| {
-            (!c.panes.contains_key(&id)).then_some(())
-        })
-        .await;
+    client.gone(&id).await;
     assert!(!session_of(&h.root(), &id).path().exists());
+}
+
+/// A program that finished cleanly is gone, as a herdr pane is when its shell exits. One that
+/// failed is kept, so its exit status can be read, until somebody forgets it.
+#[tokio::test]
+async fn a_clean_exit_leaves_the_herd_and_a_failed_one_stays_until_forgotten() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let clean = client.create(&["sh", "-c", "read x; exit 0"], json!({})).await;
+    let failed = client.create(&["sh", "-c", "read x; exit 3"], json!({})).await;
+    for id in [&clean, &failed] {
+        client.pane(id, |p| p["cmd"].is_null()).await;
+        client.type_text(id, "\r").await;
+    }
+    client.gone(&clean).await;
+    assert!(!session_of(&h.root(), &clean).path().exists());
+
+    let pane = client.pane(&failed, |p| p.get("exited").is_some()).await;
+    assert_eq!(pane["exited"], json!({ "code": 3 }), "{pane}");
+    assert_ne!(pane["agent_status"], "working", "{pane}");
+    let forgot = client
+        .manage(json!({ "op": "native.forget", "at": failed }))
+        .await;
+    assert_eq!(forgot["ok"], json!(true), "{forgot}");
+    client.gone(&failed).await;
+    assert!(!session_of(&h.root(), &failed).path().exists());
+}
+
+#[tokio::test]
+async fn a_session_that_ended_cleanly_while_no_node_ran_is_gone_when_one_starts() {
+    let home = Harness::home();
+    let root = home.path().join("native");
+    let ended = |code: i32| {
+        let spec = kampr_keep::Spec::new(vec!["sh".into(), "-c".into(), format!("exit {code}")]);
+        let session = kampr_keep::spawn(
+            &root,
+            spec,
+            kampr_keep::Launch::Detached,
+            &kampr_testkit::keeper(),
+        )
+        .expect("a keeper");
+        let deadline = std::time::Instant::now() + SOON;
+        while session.exit().is_none() {
+            assert!(std::time::Instant::now() < deadline, "exit {code} never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        format!("{NODE}/n:{}", session.id())
+    };
+    let (clean, failed) = (ended(0), ended(3));
+
+    let h = Harness::start_in(home).await;
+    let mut client = h.client().await;
+    client.pane(&failed, |p| p.get("exited").is_some()).await;
+    assert!(!client.panes.contains_key(&clean), "{:?}", client.panes.keys());
+    assert!(!session_of(&h.root(), &clean).path().exists());
 }
 
 #[tokio::test]
@@ -839,7 +916,7 @@ async fn native_ops_refuse_what_they_cannot_do_and_never_ask_herdr() {
     client.pane(&id, |p| p["label"] == "renamed").await;
     let closed = client.manage(json!({ "op": "close", "at": id })).await;
     assert_eq!(closed["ok"], json!(true), "{closed}");
-    client.pane(&id, |p| p.get("exited").is_some()).await;
+    client.gone(&id).await;
 }
 
 /// The harness is read off the PTY's foreground process, and a dialog on an agent's screen is a
@@ -1031,7 +1108,7 @@ async fn a_node_with_no_herdr_is_serving_and_every_native_failure_says_what_fail
     );
     assert!(node["herdr_version"].is_null(), "{node}");
 
-    let id = client.create(&["cat"], json!({})).await;
+    let id = client.create(&["sh", "-c", "cat; exit 1"], json!({})).await;
     client.watch(&id, false).await;
     client.type_text(&id, "typed\r").await;
     client
@@ -1045,8 +1122,7 @@ async fn a_node_with_no_herdr_is_serving_and_every_native_failure_says_what_fail
     assert_eq!(sized["ok"], json!(true), "{sized}");
     client.pane(&id, |p| p["cols"] == 90 && p["rows"] == 28).await;
 
-    let closed = client.manage(json!({ "op": "native.close", "at": id })).await;
-    assert_eq!(closed["ok"], json!(true), "{closed}");
+    client.type_text(&id, "\u{4}").await;
     client.pane(&id, |p| p.get("exited").is_some()).await;
     client.type_text(&id, "too late\r").await;
     let refused = client

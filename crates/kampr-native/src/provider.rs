@@ -25,6 +25,8 @@ pub const PREFIX: &str = "n:";
 const READ_CAP: u32 = 1000;
 /// The herdr provider's cap on listed hits, for the same reason: `total` still counts them all.
 const LISTED: usize = 32;
+/// Left in a session by `close`, so its end is one somebody asked for and not one to read about.
+const CLOSED: &str = "closed";
 
 /// The node's screen-reading dialog detector, handed in because it lives above this crate.
 pub type Blocked = Arc<dyn Fn(Option<&str>, &str) -> bool + Send + Sync>;
@@ -42,6 +44,9 @@ pub struct NativeConfig {
     /// `[naming] send_argv`: a command line can carry a password, so it is not on the wire unless
     /// the operator says so, here as on a herdr pane.
     pub send_argv: bool,
+    /// Whether a session closed on purpose or ended with status 0 is forgotten by itself. A fleet
+    /// run is kept over the same keepers and its board needs every end it had.
+    pub forget_ended: bool,
 }
 
 impl NativeConfig {
@@ -52,7 +57,7 @@ impl NativeConfig {
         };
         let keeper = match keeper {
             Some(keeper) => keeper,
-            None => own_exe()?,
+            None => kampr_keep::own_exe().context("finding this binary")?,
         };
         Ok(Self {
             root,
@@ -61,6 +66,7 @@ impl NativeConfig {
             launch: None,
             blocked: None,
             send_argv: false,
+            forget_ended: false,
         })
     }
 }
@@ -176,7 +182,10 @@ impl NativeProvider {
 
     pub fn close(&self, pane: &str) -> Result<()> {
         let session = self.require(pane)?;
-        kampr_keep::close(&session).with_context(|| format!("hanging up {pane}"))
+        std::fs::write(session.path().join(CLOSED), b"").with_context(|| format!("marking {pane} closed"))?;
+        kampr_keep::close(&session).with_context(|| format!("hanging up {pane}"))?;
+        self.inner.sweep(&session);
+        Ok(())
     }
 
     /// Refuses a live session, as `fleet.forget` does: forgetting one would leave a program
@@ -186,14 +195,7 @@ impl NativeProvider {
         if session.alive() {
             bail!("{pane} is still running; close it first");
         }
-        if let Some(live) = self.inner.lives.lock().unwrap().remove(session.id()) {
-            live.stop();
-        }
-        self.inner.holds.lock().unwrap().remove(pane);
-        std::fs::remove_dir_all(session.path())
-            .with_context(|| format!("removing {}", session.path().display()))?;
-        self.inner.bump();
-        Ok(())
+        self.inner.forget(&session)
     }
 
     pub async fn resize(&self, pane: &str, cols: u16, rows: u16, holder: &str) -> Result<()> {
@@ -372,10 +374,50 @@ impl Inner {
             .clone()
     }
 
+    fn forget(&self, session: &SessionDir) -> Result<()> {
+        if let Some(live) = self.lives.lock().unwrap().remove(session.id()) {
+            live.stop();
+        }
+        self.holds
+            .lock()
+            .unwrap()
+            .remove(&format!("{PREFIX}{}", session.id()));
+        match std::fs::remove_dir_all(session.path()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", session.path().display()));
+            }
+            _ => {}
+        }
+        self.bump();
+        Ok(())
+    }
+
+    /// A session that ended because somebody closed it, or whose program finished cleanly, has
+    /// nothing left to say, as a herdr pane is gone when its shell exits. A failure is kept so its
+    /// status can be read, until somebody forgets it.
+    fn sweep(&self, session: &SessionDir) {
+        if !self.config.forget_ended {
+            return;
+        }
+        let Some(exit) = session.exit() else {
+            return;
+        };
+        if exit.code != Some(0) && !session.path().join(CLOSED).exists() {
+            return;
+        }
+        if let Err(e) = self.forget(session) {
+            tracing::warn!(session = session.id(), error = %format!("{e:#}"), "cannot forget an ended session");
+        }
+    }
+
     fn rescan(&self) {
         let Ok(found) = kampr_keep::list(&self.config.root) else {
             return;
         };
+        for session in &found {
+            self.sweep(session);
+        }
+        let found: Vec<SessionDir> = found.into_iter().filter(|s| s.path().exists()).collect();
         let ids: BTreeSet<String> = found.iter().map(|s| s.id().to_string()).collect();
         // An ended session is replayed when somebody looks at it, not at every node start.
         for session in found.into_iter().filter(|s| s.exit().is_none()) {
@@ -397,7 +439,7 @@ impl Inner {
         for change in &changes {
             match change {
                 Change::Sessions => self.rescan(),
-                Change::Session(_) => {}
+                Change::Session(id) => self.sweep(&SessionDir::at(self.config.root.join(id))),
             }
         }
         self.bump();
@@ -464,14 +506,15 @@ impl Inner {
             cols: Some(cols),
             rows,
             scrollback_rows,
-            cmd: Some(match &fg {
-                Some(fg) => fg.name.clone(),
-                None => spec
-                    .argv
-                    .first()
-                    .map(|a| a.rsplit('/').next().unwrap_or(a).to_string())
-                    .unwrap_or_default(),
-            }),
+            cmd: match &fg {
+                Some(fg) => procs::job(fg),
+                None => Some(
+                    spec.argv
+                        .first()
+                        .map(|a| a.rsplit('/').next().unwrap_or(a).to_string())
+                        .unwrap_or_default(),
+                ),
+            },
             argv: self.config.send_argv.then(|| match &fg {
                 Some(fg) if !fg.argv.is_empty() => fg.argv.join(" "),
                 _ => argv_line.clone(),
@@ -703,15 +746,4 @@ pub fn login_shell() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/bin/sh".to_string())
-}
-
-/// `kampr update` replaces the binary in place, so `/proc/self/exe` names it ` (deleted)` until the
-/// node restarts — and a keeper started from that name would not start at all.
-fn own_exe() -> Result<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let link = std::fs::read_link("/proc/self/exe").context("reading /proc/self/exe")?;
-    Ok(match link.as_os_str().as_bytes().strip_suffix(b" (deleted)") {
-        Some(stripped) => PathBuf::from(std::ffi::OsStr::from_bytes(stripped)),
-        None => link,
-    })
 }

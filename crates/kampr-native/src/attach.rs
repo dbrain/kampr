@@ -8,6 +8,7 @@ use kampr_keep::{Exit, Host, Replay, SessionDir, SizedReader};
 use rustix::event::{PollFd, PollFlags, poll};
 use std::fs::File;
 use std::io::{self, Read as _, Write};
+use std::ops::Range;
 use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -200,7 +201,7 @@ impl<'a> View<'a> {
             match self.reader.read(&mut buf)? {
                 Replay::Data(n) => {
                     let fed = self.screen.feed(&buf[..n]);
-                    self.answer(from, &fed)?;
+                    self.answer(from, &fed, false)?;
                 }
                 Replay::Resize(to) => self.screen.resize(to.cols, to.rows),
                 Replay::Truncated { .. } => self.resume()?,
@@ -217,9 +218,17 @@ impl<'a> View<'a> {
                 Replay::Data(n) => {
                     let bytes = &buf[..n];
                     let fed = self.screen.feed(bytes);
-                    self.answer(from, &fed)?;
+                    let hidden = self.answer(from, &fed, self.passthrough)?;
                     if self.passthrough {
-                        self.out.write_all(bytes)?;
+                        let mut at = 0;
+                        for cut in hidden {
+                            if cut.start < at {
+                                continue;
+                            }
+                            self.out.write_all(&bytes[at..cut.start])?;
+                            at = cut.end;
+                        }
+                        self.out.write_all(&bytes[at..])?;
                         self.host_alt = self.screen.alternate_screen();
                     } else {
                         dirty = true;
@@ -256,27 +265,47 @@ impl<'a> View<'a> {
     /// answer for none at all (#600), so the answer goes to the master before the bytes that asked
     /// reach this terminal. A query is ours once it ends past the offset we registered at, and of
     /// several attaches the lowest pid answers; the node answers the rest (`live.rs`).
-    fn answer(&self, from: u64, fed: &Feed) -> io::Result<()> {
-        for ask in fed.asked.iter().filter(|a| a.program) {
+    ///
+    /// Every other question is the terminal's, but only if it sees it: bytes read while catching up
+    /// or painted cropped are never `forwarded`, and the node leaves a query past our offset to us,
+    /// so those are answered here from the emulator, as the node would have. Passed through by an
+    /// attach that is not the answerer, a question is cut out of what its terminal is shown, so
+    /// that a session on two desks hears one answer, not two; those cuts are returned.
+    fn answer(&self, from: u64, fed: &Feed, forwarded: bool) -> io::Result<Vec<Range<usize>>> {
+        let mut hidden = Vec::new();
+        if fed.asked.is_empty() {
+            return Ok(hidden);
+        }
+        let Ok(hosts) = self.session.hosts_settled() else {
+            return Ok(hidden);
+        };
+        for ask in &fed.asked {
             let end = from + ask.end as u64;
             if end <= self.answers_from {
                 continue;
             }
-            let Ok(hosts) = self.session.hosts_settled() else {
-                continue;
-            };
-            let answerer = hosts
+            let Some(answerer) = hosts
                 .iter()
                 .find(|h| h.answers_from.is_some() && h.covers(end))
-                .map(|h| h.pid);
-            if answerer == Some(std::process::id()) {
-                match (&*self.master).write_all(&fed.replies[ask.reply.clone()]) {
-                    Err(e) if e.raw_os_error() != Some(libc::EIO) => return Err(e),
-                    _ => {}
+                .map(|h| h.pid)
+            else {
+                continue;
+            };
+            if answerer == std::process::id() {
+                if ask.program || !forwarded {
+                    match (&*self.master).write_all(&fed.replies[ask.reply.clone()]) {
+                        Err(e) if e.raw_os_error() != Some(libc::EIO) => return Err(e),
+                        _ => {}
+                    }
                 }
+            } else if forwarded
+                && !ask.program
+                && let Some(span) = &ask.span
+            {
+                hidden.push(span.clone());
             }
         }
-        Ok(())
+        Ok(hidden)
     }
 
     fn ended(&mut self) -> io::Result<Option<Exit>> {

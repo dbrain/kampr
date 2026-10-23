@@ -535,6 +535,10 @@ server styles .styles[].hidden: bool
 server styles .styles[].italic: bool
 server styles .styles[].reverse: bool
 server styles .styles[].strike: bool
+server styles .styles[].ul.k: string
+server styles .styles[].ul.v: array
+server styles .styles[].ul.v[]: integer
+server styles .styles[].ul: object
 server styles .styles[].underline: bool
 server styles .styles[]: object
 server styles .t: string

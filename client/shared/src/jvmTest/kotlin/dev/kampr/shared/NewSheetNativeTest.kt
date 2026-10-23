@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -26,7 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-private val DESKED = NodeInfo(id = "01JNODE", name = "comingclean", kind = "local")
+private val DESKED = NodeInfo(id = "01JNODE", name = "comingclean", kind = "local", native = true)
 private val DESKLESS = DESKED.copy(online = false)
 private val FROM = PaneInfo(
     id = "01JNODE/w3:p2",
@@ -79,7 +80,7 @@ class NewSheetNativeTest {
         open(sheet)
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
-        assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(DESKED.id)), sheet.sent)
+        assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(DESKED.id, desk = true)), sheet.sent)
 
         sheet.outcome.value = ServerMsg.Managed(op = "native.create", ok = true, id = "01JNODE/n:01ja")
         waitForIdle()
@@ -96,23 +97,36 @@ class NewSheetNativeTest {
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
         assertEquals(
-            listOf<ManageOp>(ManageOp.NativeCreate(DESKED.id, command = "cargo test && make", cwd = FROM.cwd)),
+            listOf<ManageOp>(
+                ManageOp.NativeCreate(DESKED.id, command = "cargo test && make", cwd = FROM.cwd, desk = true, at = FROM.id),
+            ),
             sheet.sent,
         )
     }
 
+    // The operator, on 0.1.119: *"default kampr attached for all sessions unless that breaks
+    // functionality"*. It is beside the pane the sheet was opened from, and off is one tap.
     @Test
-    fun showingItOnTheDeskSplitsBesideThePaneTheSheetWasOpenedFrom() = runComposeUiTest {
+    fun theDeskIsShownByDefaultBesideThePaneTheSheetWasOpenedFrom() = runComposeUiTest {
         val sheet = NativeSheet(pane = FROM)
         open(sheet)
-        onNodeWithContentDescription(DESK_TOGGLE, substring = true).performSemanticsAction(SemanticsActions.OnClick)
-        waitForIdle()
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
         assertEquals(
             listOf<ManageOp>(ManageOp.NativeCreate(DESKED.id, cwd = FROM.cwd, desk = true, at = FROM.id)),
             sheet.sent,
         )
+    }
+
+    @Test
+    fun turningTheDeskOffKeepsItOffTheDesk() = runComposeUiTest {
+        val sheet = NativeSheet(pane = FROM)
+        open(sheet)
+        onNodeWithContentDescription(DESK_TOGGLE, substring = true).performSemanticsAction(SemanticsActions.OnClick)
+        waitForIdle()
+        onNodeWithContentDescription(START).performClick()
+        waitForIdle()
+        assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(DESKED.id, cwd = FROM.cwd)), sheet.sent)
     }
 
     @Test
@@ -123,6 +137,30 @@ class NewSheetNativeTest {
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(DESKLESS.id)), sheet.sent)
+    }
+
+    @Test
+    fun aMachineTooOldToKeepSessionsSaysSoRatherThanOfferingOne() = runComposeUiTest {
+        setContent {
+            CompositionLocalProvider(LocalTokens provides phoneTokens()) {
+                Box(Modifier.size(420.dp, 1200.dp)) {
+                    NewSheet(
+                        breakpoint = Breakpoint.Portrait,
+                        node = DESKED.copy(native = null),
+                        pane = null,
+                        nodes = listOf(DESKED.copy(native = null)),
+                        caps = null,
+                        outcome = null,
+                        onManage = {},
+                        onNode = {},
+                        onNodePicker = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        onNodeWithContentDescription("needs Kampr 0.1.119 on comingclean", substring = true).assertExists()
+        onNodeWithContentDescription("Kampr session,", substring = true).assertHasNoClickAction()
     }
 
     @Test

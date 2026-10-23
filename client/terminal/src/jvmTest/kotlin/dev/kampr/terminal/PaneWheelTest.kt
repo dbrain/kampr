@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
@@ -40,6 +41,22 @@ private class AgentIo(
     override fun prefs(paneId: String) = PanePrefs()
     override fun info(paneId: String) = PaneInfo(paneId, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)
 }
+
+// The app's own lookup: the pane as the herd last described it, from the store every frame and
+// patch lands in.
+private class StoreIo(private val store: KamprStore) : PaneIo {
+    val typed = mutableListOf<String>()
+    override fun send(msg: ClientMsg) {
+        if (msg is ClientMsg.InputText) typed += msg.text
+    }
+    override fun prefs(paneId: String) = PanePrefs()
+    override fun info(paneId: String) = store.paneInfo(paneId)
+}
+
+private fun herdOf(agent: String?, cmd: String?) = ServerMsg.Herd(
+    nodes = emptyList(),
+    panes = listOf(PaneInfo(Phone.PANE, "node", agent = agent, cmd = cmd, cols = 94, rows = 40)),
+)
 
 // A pane with no ring behind it, which is the one in the report: a harness on the alternate screen
 // draws one viewport and keeps nothing above it.
@@ -291,5 +308,32 @@ class PaneWheelTest {
         assertEquals(session.view.maxScroll, session.view.scrollY, "the surface never reached its end")
         assertTrue(io.typed.isNotEmpty(), "the surface ran out and the notch went nowhere")
         assertTrue(io.typed.all { it.startsWith(WHEEL_UP) }, "a spent surface sent something other than wheel-up")
+    }
+
+    // The report on 0.1.119: *"scrolling to top or bottom of claude ends up scrolling through
+    // history in the chat input"*. Claude ignores a wheel report at either end of its transcript
+    // and recalls its prompt history on a cursor key (#613), so the keys were cursor keys. A pane
+    // is opened before its harness is known — the job is named at once, the agent once it is
+    // detected — and the patch that names the agent moves nothing on screen, so a surface that
+    // read the herd only when a frame recomposed it kept the dialect it chose before Claude was
+    // known, for as long as Claude sat idle.
+    @Test
+    fun aHarnessNamedAfterThePaneOpenedIsScrolledAsThatHarness() = runComposeUiTest {
+        val store = KamprStore()
+        store.accept(herdOf(agent = null, cmd = "claude"))
+        val io = StoreIo(store)
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(noRing(), session, io = io)
+
+        store.accept(herdOf(agent = "claude", cmd = "claude"))
+        waitForIdle()
+        repeat(TO_THE_END) { wheel(-1f) }
+        dragDown()
+        repeat(TO_THE_END) { wheel(1f) }
+        assertTrue(io.typed.isNotEmpty(), "the pane was given no scroll at all")
+        assertTrue(
+            io.typed.none { it.startsWith(KEY_UP) || it.startsWith(KEY_DOWN) },
+            "Claude was sent cursor keys, which walk its prompt history: ${io.typed.first().drop(1)}",
+        )
     }
 }

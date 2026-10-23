@@ -39,7 +39,7 @@ impl Spec {
             id: new_id(),
             argv,
             cwd: None,
-            env: std::env::vars().collect(),
+            env: inherited(std::env::vars()),
             cols: 80,
             rows: 24,
             label: None,
@@ -48,6 +48,57 @@ impl Spec {
             cohort: None,
         }
     }
+}
+
+/// What a terminal, a multiplexer or a harness set to name the session they are running. Copied
+/// into a new session they name the wrong one, and one of them is a token: `CLAUDECODE` alone makes
+/// a `claude` started there refuse to run as if nested.
+const SESSION_SCOPED: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+    "KAMPR_SESSION_ID",
+    // The journal names an omp/pi pane's conversation by these, read live out of
+    // `/proc/<pid>/environ`: inherited, a shell would be taken for the conversation it came from.
+    "PI_SESSION_FILE",
+    "PI_SUBAGENT_PARENT_SESSION",
+    "PI_SESSION_ID",
+    "TMUX",
+    "TMUX_PANE",
+    "STY",
+    "WINDOW",
+    "WINDOWID",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "WEZTERM_PANE",
+    "ALACRITTY_WINDOW_ID",
+    "TERM_SESSION_ID",
+    "ATUIN_SESSION",
+    "ATUIN_SHLVL",
+    "ATUIN_TMUX_POPUP",
+    "BLE_SESSION_ID",
+    "PWD",
+    "OLDPWD",
+    "SHLVL",
+    "_",
+];
+const SESSION_SCOPED_PREFIXES: &[&str] = &["HERDR_", "VSCODE_"];
+
+fn inherited(vars: impl IntoIterator<Item = (String, String)>) -> Vec<(String, String)> {
+    vars.into_iter()
+        .filter(|(k, _)| {
+            !SESSION_SCOPED.contains(&k.as_str()) && !SESSION_SCOPED_PREFIXES.iter().any(|p| k.starts_with(p))
+        })
+        .collect()
 }
 
 pub fn new_id() -> String {
@@ -71,6 +122,25 @@ pub struct KeeperInfo {
     pub exe: String,
     pub started_unix: u64,
     pub how: How,
+    /// The file at `exe` when this keeper started. `None` from a keeper older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Image>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    pub dev: u64,
+    pub ino: u64,
+}
+
+impl Image {
+    pub fn of(meta: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,4 +391,50 @@ pub(crate) fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inherited;
+
+    #[test]
+    fn a_new_session_inherits_the_environment_but_not_the_session_it_was_made_from() {
+        let vars = [
+            "PATH",
+            "HOME",
+            "SSH_AUTH_SOCK",
+            "CLAUDE_CODE_DISABLE_MOUSE_CLICKS",
+            "CLAUDECODE",
+            "CLAUDE_PID",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "PI_SESSION_FILE",
+            "PI_SUBAGENT_PARENT_SESSION",
+            "PI_SESSION_ID",
+            "TMUX",
+            "TMUX_PANE",
+            "KAMPR_SESSION_ID",
+            "HERDR_PANE_ID",
+            "ATUIN_SESSION",
+            "BLE_SESSION_ID",
+            "VSCODE_IPC_HOOK_CLI",
+            "PWD",
+            "OLDPWD",
+            "SHLVL",
+            "_",
+        ]
+        .map(|k| (k.to_string(), "v".to_string()));
+        let kept: Vec<String> = inherited(vars).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            kept,
+            [
+                "PATH",
+                "HOME",
+                "SSH_AUTH_SOCK",
+                "CLAUDE_CODE_DISABLE_MOUSE_CLICKS"
+            ]
+        );
+    }
 }

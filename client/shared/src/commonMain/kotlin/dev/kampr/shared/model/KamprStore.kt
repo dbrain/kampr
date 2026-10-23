@@ -43,6 +43,19 @@ class KamprStore {
     private val _herd = MutableStateFlow(Herd())
     val herd: StateFlow<Herd> = _herd.asStateFlow()
 
+    // The same herd as snapshot state, because [paneInfo] is read during composition and a
+    // `StateFlow.value` read there subscribes to nothing. A patch that only names a pane's agent
+    // moves nothing on screen, so a surface that read the flow kept whatever it had decided before
+    // the harness was known: Claude, opened before herdr labelled it, was scrolled with cursor
+    // keys that walk its prompt history (#613).
+    private var herdNow by mutableStateOf(Herd())
+
+    // Snapshot first: a collector of `herd` may run inside the flow's write and read [paneInfo].
+    private fun publish(next: Herd) {
+        herdNow = next
+        _herd.value = next
+    }
+
     private val _failure = MutableStateFlow<ServerMsg.Failure?>(null)
     val failure: StateFlow<ServerMsg.Failure?> = _failure.asStateFlow()
 
@@ -135,7 +148,7 @@ class KamprStore {
 
     fun pane(id: String): PaneState = paneStates.getOrPut(id) { PaneState(id, styles) }
 
-    fun paneInfo(id: String): PaneInfo? = _herd.value.panes.firstOrNull { it.id == id }
+    fun paneInfo(id: String): PaneInfo? = herdNow.panes.firstOrNull { it.id == id }
 
     fun blocked(): List<PaneInfo> = _herd.value.panes.filter { statusOf(it) == AgentStatus.Blocked }
 
@@ -211,7 +224,7 @@ class KamprStore {
     }
 
     fun markStale() {
-        _herd.value = _herd.value.copy(stale = true)
+        publish(_herd.value.copy(stale = true))
         paneStates.values.forEach { it.markStale() }
     }
 
@@ -263,14 +276,14 @@ class KamprStore {
 
             is ServerMsg.Herd -> {
                 val before = _herd.value
-                _herd.value = Herd(msg.nodes, msg.panes, stale = false, known = true)
+                publish(Herd(msg.nodes, msg.panes, stale = false, known = true))
                 noteMovement(before)
                 dropRepairedFault()
             }
 
             is ServerMsg.HerdPatch -> {
                 val before = _herd.value
-                _herd.value = _herd.value.applyPatch(msg)
+                publish(_herd.value.applyPatch(msg))
                 noteMovement(before)
                 dropRepairedFault()
             }

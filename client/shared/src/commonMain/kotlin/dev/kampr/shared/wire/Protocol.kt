@@ -23,6 +23,8 @@ data class Style(
     val reverse: Boolean = false,
     val strike: Boolean = false,
     val hidden: Boolean = false,
+    // SGR 58. The default is the text's own colour.
+    val ul: ColorSpec = ColorSpec.Default,
 )
 
 @Serializable

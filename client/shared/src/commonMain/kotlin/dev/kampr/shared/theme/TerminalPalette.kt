@@ -106,6 +106,12 @@ class TerminalPalette(private val skin: TerminalSkin) {
         }
     }
 
+    // Null when the line is the text's own colour, which the shaped run already draws.
+    fun underline(style: Style): Color? = when {
+        !style.underline || style.hidden || style.ul == ColorSpec.Default -> null
+        else -> resolve(style.ul, skin.ink)
+    }
+
     fun background(style: Style): Color = if (style.reverse) resolve(style.fg, skin.ink) else resolve(style.bg, skin.ground)
 }
 

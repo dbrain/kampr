@@ -70,6 +70,7 @@ fn one_pane(rect: Rect) -> Layout {
         panes: vec![Placed {
             pane: "01JNODE/w1:p1".to_string(),
             rect,
+            inner: body,
             ring: 0,
             placement: Some(Placement {
                 history: Rect::new(body.x, body.y, body.width, 0),
@@ -1051,6 +1052,7 @@ fn chrome() -> Layout {
     layout.panes.push(Placed {
         pane: "01JNODE/w1:p2".to_string(),
         rect: Rect::new(50, 1, 20, 10),
+        inner: Rect::new(51, 2, 18, 8),
         ring: 0,
         placement: Some(Placement {
             history: Rect::new(51, 2, 18, 0),

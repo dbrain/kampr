@@ -43,7 +43,7 @@ class WireTest {
     fun colourSpecsDecodeAllThreeShapes() {
         val msg = Wire.decode(
             """{"t":"styles","from":12,"styles":[
-               {"fg":{"k":"r","v":[255,120,0]},"bg":{"k":"d"},"bold":true,"underline":true},
+               {"fg":{"k":"r","v":[255,120,0]},"bg":{"k":"d"},"bold":true,"underline":true,"ul":{"k":"i","v":9}},
                {"fg":{"k":"i","v":214}},
                {"fg":{"k":"weird"}}]}""",
         ) as ServerMsg.Styles
@@ -53,6 +53,8 @@ class WireTest {
         assertTrue(msg.styles[0].bold)
         assertTrue(msg.styles[0].underline)
         assertEquals(false, msg.styles[0].italic)
+        assertEquals(ColorSpec.Indexed(9), msg.styles[0].ul)
+        assertEquals(ColorSpec.Default, msg.styles[1].ul, "no underline colour is the text's own")
         assertEquals(ColorSpec.Indexed(214), msg.styles[1].fg)
         assertEquals(ColorSpec.Default, msg.styles[2].fg)
     }

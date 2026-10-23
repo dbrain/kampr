@@ -10,6 +10,7 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.SeenDone
 import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.fleetTargets
+import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.model.readDone
 import dev.kampr.shared.model.unreadDone
@@ -42,6 +43,7 @@ import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
@@ -136,7 +138,16 @@ private const val RECENT_ADDRESSES = 5
 // it is that the operator lands on the herd, which is where they were.
 private const val CREATE_OPEN_WINDOW_MS = 15_000.0
 
-private const val WORKSPACE_CREATE = "workspace.create"
+// The desk is the extra half of a quick session. Herdr not answering is no reason to lose the
+// session itself, so the press is asked again without it.
+private const val DESK_UNAVAILABLE = "herdr_unavailable"
+
+// A node from before 0.1.119 keeps no sessions and does not say `native`, so its + makes the
+// workspace it always did: a herd is upgraded a host at a time.
+fun quickSessionOp(node: NodeInfo): ManageOp = when (node.native) {
+    true -> ManageOp.NativeCreate(node.id, desk = node.hasDesk)
+    else -> ManageOp.WorkspaceCreate(node.id)
+}
 
 class AppState(
     private val scope: CoroutineScope,
@@ -462,30 +473,44 @@ class AppState(
     // The + beside a machine. There is no sheet in front of this one, so the two things a sheet
     // does for a create — open what it made, and say when the node refused — are both here.
     //
-    // Nothing is filled in on purpose: a workspace with no label and no directory is herdr's own
-    // default, which is a shell in the operator's home. Everything that has a decision in it is
-    // still behind the bar's +.
-    fun quickWorkspace(nodeId: String) {
+    // Nothing is filled in on purpose: a session with no command and no directory is the login
+    // shell in the operator's home, shown on the desk too wherever the machine has one. Everything
+    // that has a decision in it is still behind the bar's +.
+    fun quickSession(nodeId: String) {
         if (!store.canManage) return
+        val node = store.herd.value.nodes.firstOrNull { it.id == nodeId } ?: NodeInfo(nodeId)
+        ask(QuickSession(quickSessionOp(node), wallClockMillis() + CREATE_OPEN_WINDOW_MS))
+    }
+
+    private fun ask(press: QuickSession) {
         // A stale ack from an earlier op would otherwise be read as this one's.
         store.clearManaged()
-        quickWorkspaceBy = wallClockMillis() + CREATE_OPEN_WINDOW_MS
-        manage(ManageOp.WorkspaceCreate(nodeId))
+        quickSession = press
+        manage(press.op)
     }
 
     // Bounded for the same reason `creating` is: nothing settles a structural op before its ack,
     // and an intent nobody cancelled would one day act on somebody else's.
-    private var quickWorkspaceBy: Double? = null
+    private data class QuickSession(val op: ManageOp, val by: Double)
 
-    private fun quickWorkspaceAcked(ack: ServerMsg.Managed) {
-        val deadline = quickWorkspaceBy ?: return
-        if (ack.op != WORKSPACE_CREATE) return
-        quickWorkspaceBy = null
-        if (wallClockMillis() > deadline) return
+    private var quickSession: QuickSession? = null
+
+    private fun quickSessionAcked(ack: ServerMsg.Managed) {
+        val press = quickSession ?: return
+        if (ack.op != press.op.op) return
+        quickSession = null
+        if (wallClockMillis() > press.by) return
         // A press that silently does nothing is the worst of the three endings, and the node's
-        // refusal is the only thing that knows why — a cold host that could not be started, a
-        // machine that has gone since the herd was drawn.
-        if (ack.ok) opening(ack.id) else store.noteRefusal(ack)
+        // refusal is the only thing that knows why — a keeper that would not start, a machine that
+        // has gone since the herd was drawn.
+        when {
+            ack.ok -> opening(ack.id)
+
+            press.op is ManageOp.NativeCreate && press.op.desk && ack.code == DESK_UNAVAILABLE ->
+                ask(press.copy(op = press.op.copy(desk = false)))
+
+            else -> store.noteRefusal(ack)
+        }
     }
 
     // Whether the find bar is up, and for which pane. Held here rather than in the bar so that
@@ -742,7 +767,7 @@ class AppState(
                 reconcileNotifications(it)
             }
         }
-        scope.launch { store.managed.collect { ack -> ack?.let(::quickWorkspaceAcked) } }
+        scope.launch { store.managed.collect { ack -> ack?.let(::quickSessionAcked) } }
     }
 }
 

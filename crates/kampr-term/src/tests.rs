@@ -552,6 +552,30 @@ fn a_colon_separated_subparameter_is_not_a_parameter_of_its_own() {
     assert!(!row[3].attrs.underline, "4:0 turns it off");
 }
 
+/// SGR 58 in every spelling a program uses, and the two ways it ends: 59, and a reset.
+#[test]
+fn an_underline_colour_is_held_in_every_spelling_until_59_or_a_reset() {
+    let mut t = Emulator::new(20, 1);
+    t.feed(b"\x1b[4;58;2;10;20;30mA\x1b[58;5;196mB\x1b[58:2::1:2:3mC\x1b[58:5:9mD\x1b[59mE");
+    t.feed(b"\x1b[58;5;4mF\x1b[0mG");
+    let row = t.grid().row(0);
+    let ul: Vec<Color> = row[..7].iter().map(|c| c.attrs.ul).collect();
+    assert_eq!(
+        ul,
+        [
+            Color::Rgb(10, 20, 30),
+            Color::Indexed(196),
+            Color::Rgb(1, 2, 3),
+            Color::Indexed(9),
+            Color::Default,
+            Color::Indexed(4),
+            Color::Default,
+        ]
+    );
+    assert!(row[4].attrs.underline, "59 ends the colour, not the underline");
+    assert_eq!(row[0].fg, Color::Default, "58's colour is not the text's");
+}
+
 /// What a scrollback ring sizes its grid from. Under by one column wraps a row and loses one off
 /// the top of the document, with every row index still claiming otherwise.
 #[test]

@@ -33,10 +33,17 @@ pub struct CellAttrs {
     pub strike: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// SGR 58's underline colour; the default is the text's own.
+    #[serde(skip_serializing_if = "is_default")]
+    pub ul: Color,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_default(c: &Color) -> bool {
+    *c == Color::Default
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

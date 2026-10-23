@@ -52,8 +52,10 @@ pub struct Feed {
 }
 
 /// One question in a feed: where it ended in the bytes fed, and where its answer is in `replies`.
+/// `span` is all of its bytes, `None` for a question not wholly in this feed.
 #[derive(Debug)]
 pub(crate) struct Asked {
+    pub span: Option<std::ops::Range<usize>>,
     pub end: usize,
     pub program: bool,
     pub reply: std::ops::Range<usize>,
@@ -145,11 +147,13 @@ impl Screen {
             self.processor.advance(&mut self.term, &piece[..n]);
             rest = &rest[n..];
             let found = self.found.take();
+            let end = bytes.len() - rest.len();
             for ask in &found.asks {
                 let start = replies.len();
                 replies.push_str(&answer::answer(&self.term, ask));
                 asked.push(Asked {
-                    end: bytes.len() - rest.len(),
+                    span: span(bytes, end),
+                    end,
                     program: *ask == answer::Ask::Program,
                     reply: start..replies.len(),
                 });
@@ -445,6 +449,44 @@ impl Screen {
             grid.update_history(self.window);
             grid.update_history(self.window + PIECE + u16::MAX as usize);
             self.known = self.window;
+        }
+    }
+}
+
+/// A query has no ESC inside it but its own introducer and an `ST` terminator, since an ESC
+/// anywhere else would have ended it before it was dispatched. `vte` dispatches an OSC at the
+/// `ST`'s ESC, so its `\\` is still to come.
+fn span(bytes: &[u8], end: usize) -> Option<std::ops::Range<usize>> {
+    let (body, stop) = match bytes[..end].strip_suffix(b"\x1b") {
+        Some(body) if bytes.get(end) == Some(&b'\\') => (body, end + 1),
+        Some(_) => return None,
+        None => (&bytes[..end], end),
+    };
+    body.iter().rposition(|&b| b == 0x1b).map(|start| start..stop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Screen;
+
+    #[test]
+    fn a_question_spans_its_own_bytes_unless_one_feed_does_not_hold_them_all() {
+        for (feeds, want) in [
+            (&[&b"ab\x1b[0mcd\x1b[c"[..]][..], vec![Some(8..11)]),
+            (
+                &[&b"x\x1b]11;?\x07y\x1b[?2026$p"[..]][..],
+                vec![Some(1..8), Some(9..18)],
+            ),
+            (&[&b"\x1b]10;?;?\x1b\\z"[..]][..], vec![Some(0..10), Some(0..10)]),
+            (&[&b"ok\x1b["[..], &b"5n."[..]][..], vec![None]),
+            (&[&b"\x1b]11;?\x1b"[..], &b"\\"[..]][..], vec![None]),
+        ] {
+            let mut screen = Screen::new(80, 24, 0);
+            let mut got = Vec::new();
+            for feed in feeds {
+                got.extend(screen.feed(feed).asked.iter().map(|a| a.span.clone()));
+            }
+            assert_eq!(got, want, "{feeds:?}");
         }
     }
 }

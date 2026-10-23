@@ -114,7 +114,7 @@ class Claude:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "HERDR_", "ANTHROPIC"))}
         env |= {"CLAUDE_CONFIG_DIR": cfg, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}", "ANTHROPIC_API_KEY": KEY,
                 "DISABLE_TELEMETRY": "1", "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+                "TERM": "xterm-256color", "COLORTERM": "truecolor"} | ({"CLAUDE_CODE_DISABLE_MOUSE_CLICKS": "true"} if os.environ.get("KWE_NOCLICKS") else {})
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)

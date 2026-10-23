@@ -119,6 +119,8 @@ fn mismatch(got: &Emulator, want: &Reference) -> Option<String> {
                 Some("text")
             } else if (k.fg, k.bg) != (colour(v.fg), colour(v.bg)) {
                 Some("colour")
+            } else if k.attrs.ul != v.underline_color().map(colour).unwrap_or_default() {
+                Some("underline colour")
             } else if (
                 k.attrs.bold,
                 k.attrs.dim,
@@ -255,11 +257,12 @@ fn colours() -> Vec<u8> {
 }
 
 /// What herdr's stream carried and vt100 dropped: strikethrough, concealed text, every underline
-/// style (which `kampr-term` holds as one), and OSC 8 links in both terminators.
+/// style (which `kampr-term` holds as one) and its colour, and OSC 8 links in both terminators.
 fn styles() -> Vec<u8> {
     let mut out =
         b"\x1b[H\x1b[2J\x1b[9mstruck\x1b[29m \x1b[8mhidden\x1b[28m \x1b[4:3mcurly\x1b[4:0m ".to_vec();
-    out.extend(b"\x1b[21mdouble\x1b[24m \x1b[1;9;31mall\x1b[0m\r\n");
+    out.extend(b"\x1b[21mdouble\x1b[24m \x1b[1;9;31mall\x1b[0m ");
+    out.extend(b"\x1b[4:3;58:2::200:10:10mred curl\x1b[59m \x1b[4;58;5;33mblue\x1b[0m\r\n");
     out.extend(b"\x1b]8;;https://a.example/x\x1b\\a link\x1b]8;;\x1b\\ plain ");
     out.extend(b"\x1b]8;id=7;https://b.example/?q=1\x07\x1b[32mgreen link\x1b[0m\x1b]8;;\x07\r\n");
     out.extend(b"\x1b]8;;https://a.example/x\x1b\\again\x1b]8;;\x1b\\\x1b[3;3H\x1b[9mover\x1b[0m");
@@ -356,7 +359,7 @@ fn every_frame_rebuilds_alacrittys_screen_in_kampr_term() {
             ("wide glyphs and marks", 40, 8, wide()),
             ("256 and truecolour, erases on a colour", 50, 14, colours()),
             (
-                "strikethrough, concealed, underline styles and links",
+                "strikethrough, concealed, underline styles and colours, and links",
                 40,
                 8,
                 styles(),

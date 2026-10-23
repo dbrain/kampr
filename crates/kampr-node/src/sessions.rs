@@ -149,6 +149,7 @@ impl SessionNode {
 fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
     let built = config.native.resolve().and_then(|mut native| {
         native.send_argv = config.naming.send_argv;
+        native.forget_ended = true;
         native.blocked = Some(Arc::new(|agent: Option<&str>, screen: &str| {
             crate::pending::detect_for(agent, screen).is_some()
         }));

@@ -188,11 +188,20 @@ native session. Two checks keep another uid out of it:
   reason: another uid could create `/tmp/kampr-<uid>` first, swap in a `ctl.sock` of its own, and
   receive every keystroke the node writes to the "master" it handed back. Spawning or listing under
   such a root is refused.
-- **Both ends of `ctl.sock` check `SO_PEERCRED`**: the keeper serves only your uid, and a client
-  refuses a socket served by any other.
+- **Both ends of `ctl.sock` check the peer's uid** (`SO_PEERCRED`, `getpeereid` on macOS): the
+  keeper serves only your uid, and a client refuses a socket served by any other.
 
 Session logs are on tmpfs in the same private directory and hold everything the program printed, as
 herdr's scrollback does in memory. They end with the session or a reboot.
+
+**The environment a session starts with is on disk only until the child has it.** `spec.json` carries
+the creator's environment to the keeper, which may be started by systemd with nothing else in
+common with the shell that ran `kampr new`, so tokens exported there pass through it. The keeper
+blanks it the moment the child is spawned, and nothing reads it after: a restarted or upgraded
+keeper takes the child over and never spawns again. What a terminal, multiplexer or harness set to
+name the session it was running (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, its messaging token,
+`TMUX`, `HERDR_*`, …) is never copied at all (`kampr-keep/src/dir.rs` `SESSION_SCOPED`). The child's
+own `/proc/<pid>/environ` is readable by your uid either way, as every process's is.
 
 **Not chmod'ed:** `config.toml`, which relies on its 0700 parent. It holds no secrets today (node id,
 bind, origin, `trust_proxy`, paths to TLS material) and it would be better with an explicit mode.

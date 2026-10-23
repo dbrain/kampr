@@ -297,19 +297,22 @@ impl App {
         });
     }
 
+    /// Whether this window holds `pane` at its own `cols` by `rows`, or will once the size settles.
+    pub(super) fn matches(&self, pane: &str, cols: u16, rows: u16) -> bool {
+        self.options.match_view
+            && !self.unmatched.contains(pane)
+            && cols >= MATCH_MIN_COLS
+            && rows >= MATCH_MIN_ROWS
+            && self
+                .client
+                .state()
+                .herd
+                .pane(pane)
+                .is_some_and(|entry| entry.fleet.is_none())
+    }
+
     fn matching_step(&mut self, pane: Option<&str>, cols: u16, rows: u16) {
-        let want = pane.filter(|pane| {
-            self.options.match_view
-                && !self.unmatched.contains(*pane)
-                && cols >= MATCH_MIN_COLS
-                && rows >= MATCH_MIN_ROWS
-                && self
-                    .client
-                    .state()
-                    .herd
-                    .pane(pane)
-                    .is_some_and(|entry| entry.fleet.is_none())
-        });
+        let want = pane.filter(|pane| self.matches(pane, cols, rows));
         let target = want.map(|pane| (pane.to_string(), cols, rows));
         if self
             .declined

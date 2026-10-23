@@ -18,6 +18,10 @@ class ResolvedStyles(private val palette: TerminalPalette) {
     var fontKey = IntArray(1)
         private set
 
+    // ARGB of an underline drawn in a colour of its own, 0 where the text's run draws it.
+    var underline = IntArray(1)
+        private set
+
     private var seen = -1
 
     val defaultBg: Int get() = bg[0]
@@ -29,13 +33,16 @@ class ResolvedStyles(private val palette: TerminalPalette) {
         fg = IntArray(size)
         bg = IntArray(size)
         fontKey = IntArray(size)
+        underline = IntArray(size)
         for (id in 0 until size) {
             val style = table[id]
             fg[id] = palette.foreground(style).toArgb()
             bg[id] = palette.background(style).toArgb()
+            val ul = palette.underline(style)
+            underline[id] = ul?.toArgb() ?: 0
             fontKey[id] = (if (style.bold) FONT_BOLD else 0) or
                 (if (style.italic) FONT_ITALIC else 0) or
-                (if (style.underline) FONT_UNDERLINE else 0) or
+                (if (style.underline && ul == null) FONT_UNDERLINE else 0) or
                 (if (style.strike) FONT_STRIKE else 0)
         }
     }

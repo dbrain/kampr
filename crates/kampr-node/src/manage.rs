@@ -261,6 +261,14 @@ pub enum Target {
     Pane(String),
 }
 
+/// Where a native session's desk pane goes. A session made with nothing to stand beside gets a
+/// workspace rather than a split of whatever the desk has focused, which would reshape somebody's
+/// layout for a session they never asked to see there.
+enum Place {
+    Beside(Option<Target>),
+    Workspace,
+}
+
 /// A global id is `<node_id>/<herdr id>`, and herdr's own ids carry their kind: `w3`, `w3:t1`,
 /// `w3:p2`. That is what lets one `close` verb reach a pane, a tab or a workspace.
 pub fn parse_target(node_id: &str, at: &str) -> Result<Target, ManageError> {
@@ -421,11 +429,14 @@ impl Manager<'_> {
             .native
             .ok_or_else(|| ManageError::BadRequest("this node does not keep native sessions".into()))?;
         if op.op == "native.create" {
-            let beside = match op.desk {
+            let place = match op.desk {
                 Some(true) => {
-                    let beside = self.target(op)?;
+                    let place = match op.at {
+                        Some(_) => Place::Beside(Some(self.target(op)?)),
+                        None => Place::Workspace,
+                    };
                     self.wake().await?;
-                    Some(beside)
+                    Some(place)
                 }
                 _ => None,
             };
@@ -441,10 +452,10 @@ impl Manager<'_> {
                 })
                 .await
                 .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
-            let Some(beside) = beside else {
+            let Some(place) = place else {
                 return Ok(json!({ "pane_id": pane }));
             };
-            let desk = self.show_on_desk(native, &pane, Some(beside)).await?;
+            let desk = self.show_on_desk(native, &pane, place, op).await?;
             return Ok(json!({ "pane_id": pane, "desk": desk }));
         }
         let pane = self.native_target(op).ok_or_else(|| match op.at.as_deref() {
@@ -461,7 +472,7 @@ impl Manager<'_> {
             "rename" => native.rename(&pane, op.label.as_deref()).map_err(failed)?,
             "pane.size" => return self.size_native(op, &pane, native).await,
             "native.desk" => {
-                let desk = self.show_on_desk(native, &pane, None).await?;
+                let desk = self.show_on_desk(native, &pane, Place::Beside(None), op).await?;
                 return Ok(json!({ "pane_id": pane, "desk": desk }));
             }
             other => {
@@ -479,7 +490,8 @@ impl Manager<'_> {
         &self,
         native: &NativeProvider,
         pane: &str,
-        beside: Option<Target>,
+        place: Place,
+        op: &ManageOp,
     ) -> Result<String, ManageError> {
         let session = native
             .session(pane)
@@ -488,6 +500,22 @@ impl Manager<'_> {
             return Err(ManageError::BadRequest(format!("{pane} has ended")));
         }
         self.wake().await?;
+        let beside = match place {
+            Place::Beside(beside) => beside,
+            Place::Workspace => {
+                let made = self
+                    .call(
+                        "workspace.create",
+                        json!({ "label": op.label, "cwd": op.cwd, "focus": false }),
+                    )
+                    .await?;
+                let desk = made["root_pane"]["pane_id"]
+                    .as_str()
+                    .ok_or_else(|| ManageError::Herdr(format!("workspace.create named no pane: {made}")))?
+                    .to_string();
+                return self.attach_on(native, &session, desk).await;
+            }
+        };
         let mut params = json!({ "direction": "right", "focus": false });
         match beside {
             Some(Target::Pane(id)) => params["target_pane_id"] = json!(id),
@@ -513,6 +541,15 @@ impl Manager<'_> {
             .as_str()
             .ok_or_else(|| ManageError::Herdr(format!("pane.split named no pane: {split}")))?
             .to_string();
+        self.attach_on(native, &session, desk).await
+    }
+
+    async fn attach_on(
+        &self,
+        native: &NativeProvider,
+        session: &kampr_keep::SessionDir,
+        desk: String,
+    ) -> Result<String, ManageError> {
         self.herdr
             .send_text(&desk, &native.attach_line(session.id()))
             .await

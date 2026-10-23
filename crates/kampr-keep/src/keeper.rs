@@ -1,6 +1,6 @@
 use crate::ctl::{HOLDER_MAX, send_fd, set_winsize};
 use crate::dir::{
-    CTL, EXIT, Exit, How, KEEPER, KeeperInfo, SIZE, SessionDir, Size, Spec, now_unix, write_json,
+    CTL, EXIT, Exit, How, Image, KEEPER, KeeperInfo, SIZE, SPEC, SessionDir, Size, Spec, now_unix, write_json,
 };
 use crate::log::{Appender, DEFAULT_CAP};
 use crate::notify::notify;
@@ -17,7 +17,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -69,7 +69,7 @@ enum Outcome {
 pub fn serve(dir: &Path) -> Result<()> {
     let dir = std::path::absolute(dir)?;
     let signals = Usr1::open()?;
-    let exe = own_exe()?;
+    let exe = sys::own_exe()?;
     let session = SessionDir::at(&dir);
     let spec = session.spec().context("reading spec.json")?;
 
@@ -105,9 +105,15 @@ pub fn serve(dir: &Path) -> Result<()> {
             exe: exe.to_string_lossy().into_owned(),
             started_unix: now_unix(),
             how,
+            image: std::fs::metadata(&exe).ok().map(|meta| Image::of(&meta)),
         },
     )?;
     if how == How::Spawn {
+        // Read once, by the spawn just made: a restarted or upgraded keeper takes the child over
+        // and never spawns again, so the environment has no reason to stay on disk.
+        let mut written = spec.clone();
+        written.env.clear();
+        write_json(&dir.join(SPEC), &written)?;
         write_json(
             &dir.join(SIZE),
             &Size {
@@ -503,8 +509,4 @@ fn reexec(exe: &Path, dir: &Path, master: BorrowedFd<'_>, child: u32) -> io::Err
     // second SIGUSR1 able to kill the new image before it blocks the signal again.
     unsafe { libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), envp_ptrs.as_ptr()) };
     io::Error::last_os_error()
-}
-
-fn own_exe() -> Result<PathBuf> {
-    Ok(sys::own_exe()?)
 }

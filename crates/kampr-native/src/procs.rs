@@ -1,3 +1,4 @@
+use kampr_core::procfs::{Procfs, is_shell};
 use kampr_journal::process::{self, PaneProcess};
 use kampr_journal::{agy, claude, codex, omp};
 
@@ -21,6 +22,20 @@ pub(crate) fn foreground(child: u32) -> Option<Foreground> {
         name: process::comm(pid)?,
         argv: cmdline(pid),
     })
+}
+
+/// A shell is never the job, as on a herdr pane: at its prompt there is none, and under ble.sh the
+/// job shares the shell's group (#297), so it is read from below the shell.
+pub(crate) fn job(fg: &Foreground) -> Option<String> {
+    if !is_shell(&fg.name) {
+        return Some(fg.name.clone());
+    }
+    Procfs::default()
+        .below(fg.pid)
+        .jobs
+        .into_iter()
+        .next()
+        .map(|job| job.name)
 }
 
 /// Matched on the process name and on the first two words of its command line, because an npm

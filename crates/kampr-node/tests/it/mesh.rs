@@ -2816,17 +2816,7 @@ async fn a_peer_with_no_herdr_serves_its_native_sessions_through_the_hub() {
     .await;
     let closed = until(&mut client, "managed", 25).await;
     assert_eq!(closed["ok"], true, "{closed}");
-    herd_becomes(&hub.node, 30, |herd| {
-        herd.pane(&pane).is_some_and(|p| p.exited.is_some())
-    })
-    .await;
-
-    send(&mut client, json!({ "t": "input", "pane": pane, "text": "late" })).await;
-    let refused = refusal(&mut client, &pane, "session_unavailable", 20).await;
-    assert!(
-        refused["message"].as_str().unwrap_or_default().contains("ended"),
-        "{refused}"
-    );
+    herd_becomes(&hub.node, 30, |herd| herd.pane(&pane).is_none()).await;
 
     mesh.stop();
 }

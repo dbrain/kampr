@@ -119,7 +119,7 @@ What each kind of restart costs, measured:
 | event | what happens | cost |
 |---|---|---|
 | node restart, crash or upgrade | the node re-reads the directory and replays each log from its newest checkpoint, each resize at its byte | none (the log is not the node's); a log trimmed past every checkpoint replays from mid-stream |
-| keeper upgrade | `SIGUSR1` after the binary is replaced, which the node sends by itself: at its start (so after every `kampr update`) and every minute, to each keeper whose `/proc/<pid>/exe` is no longer the file at its own path (#598). Same pid, same parent, no SIGHUP, no gap in 1.2 M lines (#589) | none, if the new keeper accepts the old one's handover: the master's fd number, the child pid, the log offset. Keep that format frozen |
+| keeper upgrade | `SIGUSR1` after the binary is replaced, which the node sends by itself: at its start (so after every `kampr update`) and every minute, to each keeper no longer running the file at its own path: each keeper records in `keeper.json` the file it started from (`image`, a device and inode), which a Mac can tell as well as Linux, and one from before the record is read from `/proc/<pid>/exe` (#598). Same pid, same parent, no SIGHUP, no gap in 1.2 M lines (#589) | none, if the new keeper accepts the old one's handover: the master's fd number, the child pid, the log offset. Keep that format frozen |
 | keeper crash | `Restart=always` brings it back with the master from `LISTEN_FDS`; the child blocks on the full PTY meanwhile (#590) | at most the one read in flight (13 bytes in three of five runs). The child's parent is now the user manager, so its **exit status is lost** and `exit` records only that it ended. `state` (below) is also EPERM from then on |
 | without the fd store | the child gets SIGHUP and dies (#590's control) | the session |
 
@@ -162,9 +162,12 @@ dialect and over the `vt100` it replaced:
   read history and the primary screen as the lines the program wrote, for §3;
 - the primary screen reflows on `resize` the way every modern terminal does; the alternate screen
   does not — the program redraws it. Rows already in history keep the width they were written at;
-- strikethrough, concealed text, every underline style (as underline: `kampr-term` holds one bit)
-  and OSC 8 links reach the clients. Blink and underline colour do not: alacritty has no blink
-  flag, and `kampr-term` no underline colour;
+- strikethrough, concealed text, every underline style (as underline: `kampr-term` holds one bit),
+  the underline's colour (SGR 58, as `ul` on the wire) and OSC 8 links reach the clients. herdr's
+  live stream drops that colour, so a herdr pane shows it only in rows read back through
+  `pane.read` (#614). Blink does not: alacritty parses SGR 5 and keeps nothing of it, and carrying
+  it would mean forwarding vte's whole `Handler` to `Term`. No client draws blink for either kind,
+  so the two render alike;
 - a two-column emoji made by a variation selector (`❤️`) is one column to alacritty and two to
   `kampr-term`, herdr and the program; it is drawn wide when the column after it is blank, and as
   U+FFFD otherwise, as every other glyph the two disagree on.
@@ -260,7 +263,10 @@ herdr:
 3. then, **while its tty size equals the PTY size, it passes the live bytes through verbatim**.
    herdr sees exactly what the program wrote, so herdr's own scrollback, copy mode and search
    behave as if herdr had spawned the program itself. When the sizes differ (a phone holds a size)
-   it paints from its emulator, cropped, with a one-line banner saying who holds the size;
+   it paints from its emulator, cropped, with a one-line banner saying who holds the size. The
+   program's questions then never reach its terminal, so while cropped, and while it is still
+   catching up before its first paint, the attach answers every query past its offset from its own
+   emulator, as the node would; passed through, only `OSC 7501` is its own (step 4);
 4. keystrokes are written to its borrowed master; its tty's `SIGWINCH` becomes a `resize` request to
    the keeper (§1). It also answers `OSC 7501;?` itself, written to the master as soon as it reads
    the query and **before** it forwards the bytes that asked, because herdr answers DA1 and not
@@ -275,7 +281,9 @@ registered at (`answers_from`), under a `flock` on the session's `hosts.lock`. A
 past a live host's offset is its terminal's (and its 7501 is that attach's); one that ends at or
 before every host's offset is the node's. The node decides under the same lock, after it has read
 the query out of the log, so a host registering a moment later has an offset past it and cannot
-take it away. Of several attaches, the live host with the lowest pid answers 7501. A host file with
+take it away. Of several attaches, the live host with the lowest pid answers 7501, and only its
+terminal is shown the other questions: every other attach passing the bytes through cuts each query
+out of what it writes (a query split across two reads of the log is left in). A host file with
 no `answers_from` comes from an older attach and is taken to answer everything, so an upgraded node
 never answers over it.
 
@@ -304,6 +312,11 @@ that are about the program (input, size, scrollback, close) route to the session
 phone. Restarting or upgrading herdr detaches every hosted session and kills none of them. A
 `native.desk` op splits a herdr pane and runs `kampr attach` in it again. A session started
 from the phone can live its whole life with no host at all, as fleet runs already do.
+
+The host's + in the herd starts one of these, on the desk wherever the machine has one: in a
+workspace of its own, since splitting the desk's focused pane would reshape somebody's layout. A
+session closed on purpose, or whose program exits 0, is forgotten once it ends; a failure stays,
+with its exit status, until it is forgotten.
 
 ### 5. Wire and CLI, all additive
 
@@ -403,10 +416,14 @@ session with it.
 3. ~~`kampr attach`, in a plain terminal.~~ Done, with `kampr new` and `kampr ls`.
 4. ~~Hosting in herdr: the `hosts` file, the reports, dedupe in the registry, `native.desk`.~~ Done,
    live-tested against herdr 0.9.5 including re-hosting after a stop and a SIGKILL. A restored host
-   pane on 0.9.1 is left detached rather than typed into.
+   pane on 0.9.1 is left detached rather than typed into, and stays that way by decision
+   (2026-10-23): five of the six hosts run 0.9.5, where herdr re-hosts by itself, and the cure for
+   the sixth is upgrading its herdr. Typing an attach into a restored shell is a write into a pane
+   the node did not spawn, which ADR 0015 would have to be amended for, to serve a herdr nobody runs.
 5. ~~Per-connection reflow on the wire, for everything but Claude (#588).~~ Done (§3). The phone
    asks for it by default on a native shell narrower than itself, with a switch on the size panel;
-   the terminal client does not re-lay yet.
+   the terminal client asks by the same rule for a shell wider than its box, unless it holds the
+   pane at its own size.
 6. ~~Harness status pushed into the node.~~ Done without hooks: Claude Code's own `OSC 7501`
    channel (§2), answered by the node for an unhosted session and by `kampr attach` for a hosted
    one, live-tested against herdr 0.9.5 (#611, #612). Other harnesses keep the marker, the title

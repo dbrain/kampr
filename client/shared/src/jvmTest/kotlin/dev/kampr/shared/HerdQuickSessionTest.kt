@@ -31,15 +31,15 @@ import kotlin.test.assertNull
 //
 // Two machines, because the whole point is that the + names one of them: the bar's + aims the sheet
 // at whichever node this device is connected to, and picking a different one is a step of its own.
-private val LOCAL = NodeInfo(id = "01JLOCAL", name = "comingclean", kind = "local", online = true)
-private val PEER = NodeInfo(id = "01JPEER", name = "kobo", kind = "peer", online = true)
+private val LOCAL = NodeInfo(id = "01JLOCAL", name = "comingclean", kind = "local", online = true, native = true)
+private val PEER = NodeInfo(id = "01JPEER", name = "kobo", kind = "peer", online = true, native = true)
 
 // A machine whose kampr answers and whose herdr does not. A manage op starts herdr (#324, #325), so
 // this is the host the + is *most* use on — and the one an `online` test would have hidden it from.
-private val COLD = NodeInfo(id = "01JCOLD", name = "coldbox", kind = "peer", online = false, reachable = true)
+private val COLD = NodeInfo(id = "01JCOLD", name = "coldbox", kind = "peer", online = false, reachable = true, native = true)
 
 // Not paired, not reachable: nothing to create on, so nothing to press.
-private val GONE = NodeInfo(id = "01JGONE", name = "gone", kind = "peer", online = false, reachable = false)
+private val GONE = NodeInfo(id = "01JGONE", name = "gone", kind = "peer", online = false, reachable = false, native = true)
 
 private class Spy(override val enabled: Boolean = true) : ManageIo {
     var quick: String? = null
@@ -50,20 +50,30 @@ private class Spy(override val enabled: Boolean = true) : ManageIo {
     }
 
     override fun openActions(paneId: String) = Unit
-    override fun quickWorkspace(nodeId: String) {
+    override fun quickSession(nodeId: String) {
         quick = nodeId
     }
 }
 
 @OptIn(ExperimentalTestApi::class)
-class HerdQuickWorkspaceTest {
+class HerdQuickSessionTest {
     @Test
     fun eachHostHasItsOwnPlusAndItCreatesOnThatHostWithNothingToFillIn() = runComposeUiTest {
         val spy = Spy()
         portrait(spy, LOCAL, PEER)
-        onNodeWithContentDescription("New workspace on kobo").performClick()
+        onNodeWithContentDescription("New Kampr session on kobo").performClick()
         assertEquals(PEER.id, spy.quick, "the + beside a host did not create on that host")
         assertEquals(false, spy.sheet, "the host's + opened the sheet instead of creating")
+    }
+
+    // A host on a release from before Kampr sessions gets the workspace it always made, and the
+    // label says which.
+    @Test
+    fun anOlderHostsPlusIsNamedForTheWorkspaceItMakes() = runComposeUiTest {
+        val spy = Spy()
+        portrait(spy, LOCAL, PEER.copy(native = null))
+        onNodeWithContentDescription("New workspace on kobo").performClick()
+        assertEquals(PEER.id, spy.quick)
     }
 
     // The bar's + is the fancy one and stays exactly as it was: the machine picker, the label, the
@@ -80,20 +90,20 @@ class HerdQuickWorkspaceTest {
     @Test
     fun aHostWhoseHerdrIsStoppedStillOffersItBecauseCreatingIsWhatStartsHerdr() = runComposeUiTest {
         portrait(Spy(), COLD)
-        onNodeWithContentDescription("New workspace on coldbox").assertExists()
+        onNodeWithContentDescription("New Kampr session on coldbox").assertExists()
     }
 
     @Test
     fun aMachineNothingCanBeCreatedOnDoesNotOfferIt() = runComposeUiTest {
         portrait(Spy(), GONE)
-        onNodeWithContentDescription("New workspace on gone").assertDoesNotExist()
+        onNodeWithContentDescription("New Kampr session on gone").assertDoesNotExist()
     }
 
     // A read-only device, or a node with no manage ops: absent rather than present-and-failing.
     @Test
     fun aDeviceThatCannotManageIsNotOfferedIt() = runComposeUiTest {
         portrait(Spy(enabled = false), LOCAL)
-        onNodeWithContentDescription("New workspace on comingclean").assertDoesNotExist()
+        onNodeWithContentDescription("New Kampr session on comingclean").assertDoesNotExist()
     }
 
     // The sidebar is 296 dp with two long machine names in it, and `GlyphAction`'s `Modifier.size`
@@ -120,7 +130,7 @@ class HerdQuickWorkspaceTest {
                 }
             }
         }
-        onNodeWithContentDescription("New workspace on comingclean")
+        onNodeWithContentDescription("New Kampr session on comingclean")
             .assertWidthIsAtLeast(LANDSCAPE_TOUCH)
             .assertHeightIsAtLeast(LANDSCAPE_TOUCH)
     }

@@ -262,6 +262,14 @@ observe stream and found neither `?1049` nor `?47`, and no other question herdr 
 pane on the alt screen from a pane that has simply never scrolled. That ambiguity is permanent, so
 this stays closed rather than waiting on a row that is now known not to be coming.
 
+**A native session is the exception, and the node does the re-wrapping, not the client.** It holds
+the program's logical lines and knows when the alternate screen is up (docs/17 §3), so a native
+shell wider than its box is watched with `reflow` at the box's width and arrives already laid out
+at it. The rule is the phone's: not an agent, which wraps its own lines at the PTY's width (#588),
+not a pane this window holds at its own size, and only when the box is narrower. The grid's size is
+then the one the node sent (`App::need`), and any other answer on `grid.reset` is the pane's own
+grid at the pane's own width, back on the ladder above.
+
 **Done when** a 171-column zoomed pane is legible in an 80-column terminal by some rung of that
 ladder, and the ladder says which one it used — including saying *rung 2 was refused by this
 terminal*, which on ghostty is the answer every time.

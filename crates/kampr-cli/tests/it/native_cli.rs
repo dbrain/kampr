@@ -393,6 +393,48 @@ fn an_attach_answers_osc_7501_once_and_before_its_terminal_answers_da1() {
     );
 }
 
+/// **A query is answered once, by whoever sees it.** Passed through, the terminal sees it and
+/// answers. Cropped by a phone holding the size, the attach paints from its own emulator, so the
+/// question never reaches the terminal, and the node leaves a query past a live host's offset to
+/// that host: the attach answers it. Two desks passing it through would both answer, so only the
+/// answering attach's terminal is shown the question. The program reads for long enough to see a
+/// second answer.
+#[test]
+fn a_query_is_answered_once_whether_the_attach_passes_it_through_is_cropped_or_has_company() {
+    for (case, desks) in [("passed", 1), ("cropped", 1), ("two desks", 2)] {
+        let root = Root::new();
+        let go = root.0.path().join("go");
+        let script = format!(
+            "stty -echo -icanon min 0 time 20; while [ ! -e {go} ]; do sleep 0.05; done; \
+             printf '\\033[c'; r=$(dd bs=1 count=18 2>/dev/null); \
+             printf 'GOT[%s]\\n' \"$(printf %s \"$r\" | tr '\\033' E)\"; stty min 1 time 0; exec cat",
+            go = go.display()
+        );
+        let session = root.new_detached(&script);
+        let desks: Vec<Term> = (0..desks)
+            .map(|_| {
+                let desk = Term::open_as(&root, &["attach", session.id()], 80, 24, true);
+                let me = format!("attach:{}", desk.child.id());
+                assert!(until(|| holder(&session) == me));
+                desk
+            })
+            .collect();
+        assert!(until(|| session.hosts().len() == desks.len()));
+        if case == "cropped" {
+            kampr_keep::claim_size(&session, 100, 30, "phone:test").expect("a phone's claim");
+            desks[0].shows("100x30 is held by phone:test");
+        }
+        std::fs::write(&go, b"").unwrap();
+        assert!(
+            until(|| replayed(&session).contains("GOT[")),
+            "{case}: {}",
+            replayed(&session)
+        );
+        let shown = replayed(&session);
+        assert!(shown.contains("GOT[E[?62;22c]"), "{case}: {shown}");
+    }
+}
+
 /// **A fresh attach paints the screen the session has, not the log redrawn at today's size.**
 /// After each resize the program writes output whose shape depends on the size at that moment;
 /// the attach's first paint must equal a replay that applies each resize at its byte.

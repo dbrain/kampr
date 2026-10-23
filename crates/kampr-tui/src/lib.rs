@@ -22,7 +22,7 @@ use app::{App, Options};
 use crossterm::event::{EnableBracketedPaste, Event as Term, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use kampr_client::{Client, Session};
-use render::fit::{Chrome, Need, Tty};
+use render::fit::{Chrome, Tty};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -175,7 +175,8 @@ async fn drive(
             terminal.clear()?;
         }
         terminal.draw(|frame| app.draw(frame))?;
-        fit(&mut app, &client, tty);
+        app.reflow_views();
+        fit(&mut app, tty);
         if app.quitting() {
             return Ok(());
         }
@@ -204,7 +205,7 @@ async fn drive(
     }
 }
 
-fn fit(app: &mut App, client: &Arc<Client>, tty: &mut Tty) {
+fn fit(app: &mut App, tty: &mut Tty) {
     let Some(pane) = app.focused().map(str::to_string) else {
         app.match_view(None, 0, 0);
         return;
@@ -227,15 +228,8 @@ fn fit(app: &mut App, client: &Arc<Client>, tty: &mut Tty) {
     // this window's size and asking the window to grow to the pane are the same argument had from
     // both ends, and running both is the ping-pong ADR 0013 exists to have thought about.
     app.match_view(Some(&pane), grid_cols, grid_rows);
-    let need = {
-        let state = client.state();
-        let cols = state.herd.pane(&pane).and_then(|e| e.cols);
-        let held = state.pane(&pane).map(|p| p.geometry());
-        match (cols, held) {
-            (Some(cols), Some((_, rows))) => Need { cols, rows },
-            (None, Some((cols, rows))) if cols > 0 => Need { cols, rows },
-            _ => return,
-        }
+    let Some(need) = app.need(&pane) else {
+        return;
     };
     app.fit(tty, need, chrome);
 }

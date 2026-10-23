@@ -107,7 +107,7 @@ fun NewSheet(
     var base by remember { mutableStateOf(TextFieldValue()) }
     var sessionName by remember { mutableStateOf(TextFieldValue()) }
     var nativeCommand by remember { mutableStateOf(TextFieldValue()) }
-    var nativeDesk by remember { mutableStateOf(false) }
+    var nativeDesk by remember { mutableStateOf(true) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
@@ -557,7 +557,7 @@ private fun Menu(
     if (breakpoint == Breakpoint.Portrait) {
         Column {
             Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
-            Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
+            Elsewhere(compact, node, pane, peers, pick, sessions, onStep, agent, onNodePicker)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
@@ -565,7 +565,7 @@ private fun Menu(
                 Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             }
             Column(Modifier.weight(1f)) {
-                Elsewhere(compact, pane, peers, pick, sessions, onStep, agent, onNodePicker)
+                Elsewhere(compact, node, pane, peers, pick, sessions, onStep, agent, onNodePicker)
             }
         }
     }
@@ -692,6 +692,7 @@ private fun Structure(
 @Composable
 private fun Elsewhere(
     compact: Boolean,
+    node: NodeInfo,
     pane: PaneInfo?,
     peers: List<NodeInfo>,
     pick: Pick,
@@ -769,9 +770,13 @@ private fun Elsewhere(
             icon = null,
             iconTint = null,
             title = "Kampr session",
-            subtitle = "a command kept by Kampr, no herdr needed",
+            subtitle = if (node.native == true) {
+                "a command kept by Kampr, no herdr needed"
+            } else {
+                "needs Kampr 0.1.119 on ${node.name}"
+            },
             compact = compact,
-            onClick = { onStep(Step.Native) },
+            onClick = if (node.native == true) ({ onStep(Step.Native) }) else null,
         )
         SheetCard(
             icon = null,

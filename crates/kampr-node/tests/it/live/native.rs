@@ -287,6 +287,68 @@ async fn native_desk_shows_one_pane_that_herdr_draws_as_an_agent_and_typing_reac
     d.close(&id).await;
 }
 
+/// A host's own + has no pane to stand beside, and splitting whatever the desk has focused would
+/// reshape somebody's layout for a session they did not ask to see there. It gets a workspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn native_desk_with_nothing_to_stand_beside_opens_a_workspace_of_its_own() {
+    let mut d = Desk::start("native-own-ws").await;
+    let before = d.call("session.snapshot", json!({})).await["snapshot"].clone();
+    let ack = d
+        .manage(
+            json!({ "op": "native.create", "desk": true, "node": d.h.node.node_id(),
+                        "args": ["bash", "--norc", "--noprofile"], "label": "deskrun" }),
+        )
+        .await;
+    assert_eq!(ack["ok"], true, "{ack}");
+    let id = ack["id"].as_str().expect("the session's pane id").to_string();
+    let desk = d.on_desk(&id, None).await;
+    d.reported(&desk).await;
+
+    let after = d.call("session.snapshot", json!({})).await["snapshot"].clone();
+    let workspace = |snapshot: &Value, pane: &str| {
+        snapshot["panes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|p| p["pane_id"] == pane)
+            .map(|p| p["workspace_id"].clone())
+    };
+    let mine = workspace(&after, &desk).expect("the desk pane's workspace");
+    assert!(
+        before["workspaces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|w| w["workspace_id"] != mine),
+        "{after}"
+    );
+    let count = |snapshot: &Value, key: &str| snapshot[key].as_array().map_or(0, Vec::len);
+    assert_eq!(
+        count(&after, "workspaces"),
+        count(&before, "workspaces") + 1,
+        "{after}"
+    );
+    assert_eq!(count(&after, "panes"), count(&before, "panes") + 1, "{after}");
+    assert_eq!(
+        after["focused_pane_id"], before["focused_pane_id"],
+        "making a session moved the desk's focus"
+    );
+
+    d.close(&id).await;
+    let deadline = tokio::time::Instant::now() + SOON;
+    loop {
+        let now = d.call("session.snapshot", json!({})).await["snapshot"].clone();
+        if count(&now, "workspaces") == count(&before, "workspaces") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session's workspace outlived it: {now}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn native_desk_closing_the_herdr_pane_detaches_the_session_and_native_desk_hosts_it_again() {
     let mut d = Desk::start("native-detach").await;
@@ -305,15 +367,13 @@ async fn native_desk_closing_the_herdr_pane_detaches_the_session_and_native_desk
 
     d.close(&id).await;
     let deadline = tokio::time::Instant::now() + SOON;
-    while d.entry(&id).is_some_and(|e| e.exited.is_none()) {
+    while d.entry(&id).is_some() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the closed session never exited"
+            "the closed session never left the herd"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let ack = d.manage(json!({ "op": "native.forget", "at": id })).await;
-    assert_eq!(ack["ok"], true, "{ack}");
     assert!(kampr_keep::list(d.root.path()).unwrap_or_default().is_empty());
 }
 

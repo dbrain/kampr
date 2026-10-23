@@ -163,8 +163,10 @@ impl State {
                 (4, 2..) => self.pen.attrs.underline = param[1] != 0,
                 (38, 1) => self.pen.fg = colour(&mut rest).unwrap_or(self.pen.fg),
                 (48, 1) => self.pen.bg = colour(&mut rest).unwrap_or(self.pen.bg),
+                (58, 1) => self.pen.attrs.ul = colour(&mut rest).unwrap_or(self.pen.attrs.ul),
                 (38, _) => self.pen.fg = sub_colour(param).unwrap_or(self.pen.fg),
                 (48, _) => self.pen.bg = sub_colour(param).unwrap_or(self.pen.bg),
+                (58, _) => self.pen.attrs.ul = sub_colour(param).unwrap_or(self.pen.attrs.ul),
                 _ => self.attribute(code),
             }
         }
@@ -195,6 +197,7 @@ impl State {
             39 => self.pen.fg = Color::Default,
             40..=47 => self.pen.bg = Color::Indexed((code - 40) as u8),
             49 => self.pen.bg = Color::Default,
+            59 => self.pen.attrs.ul = Color::Default,
             90..=97 => self.pen.fg = Color::Indexed((code - 90 + 8) as u8),
             100..=107 => self.pen.bg = Color::Indexed((code - 100 + 8) as u8),
             _ => {}

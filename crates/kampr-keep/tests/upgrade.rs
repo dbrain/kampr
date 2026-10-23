@@ -1,7 +1,7 @@
 mod common;
 
 use common::{EXE, Live, proc_alive, root, sh, until};
-use kampr_keep::{How, Launch, SessionDir, stale, upgrade_stale, upgrade_while};
+use kampr_keep::{How, Image, Launch, SessionDir, stale, upgrade_stale, upgrade_while};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -146,4 +146,37 @@ fn a_keeper_in_a_nested_root_is_upgraded_by_a_pass_over_the_top_one() {
         .session
         .keeper()
         .is_some_and(|k| k.how == How::ReExec)));
+}
+
+/// A Mac has no `/proc/<pid>/exe`, so a keeper records the file it started from and is judged by
+/// that; a keeper from before the record, on Linux, is still judged by `/proc`.
+#[test]
+fn a_keeper_is_judged_by_the_binary_it_recorded_and_without_a_record_by_proc() {
+    let root = root();
+    let exe = installed_keeper(root.path());
+    let live = Live::adopt(spawn_with(root.path(), &exe), Launch::Detached);
+    let path = live.session.path().join("keeper.json");
+    let real = live.session.keeper().expect("keeper.json");
+    let installed = std::fs::metadata(&exe).expect("the installed keeper");
+    assert_eq!(
+        real.image,
+        Some(Image::of(&installed)),
+        "a keeper records the binary it runs"
+    );
+    let rewrite = |info: &kampr_keep::KeeperInfo| {
+        std::fs::write(&path, serde_json::to_vec(info).expect("json")).expect("write")
+    };
+
+    let mut elsewhere = real.clone();
+    elsewhere.image = Some(Image { dev: 0, ino: 1 });
+    rewrite(&elsewhere);
+    assert!(stale(&live.session), "the record, not /proc, says what it runs");
+
+    let mut unrecorded = real.clone();
+    unrecorded.image = None;
+    rewrite(&unrecorded);
+    assert!(!stale(&live.session), "/proc says it runs the installed binary");
+    install(Path::new(EXE), &exe);
+    assert!(stale(&live.session), "/proc says the binary was replaced");
+    rewrite(&real);
 }

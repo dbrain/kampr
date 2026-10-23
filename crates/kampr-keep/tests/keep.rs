@@ -147,6 +147,22 @@ fn the_child_gets_its_session_id_and_none_of_herdrs_variables() {
     }
 }
 
+/// The environment is a spawn's input and nothing else reads it, so it is on disk only until the
+/// child has it: a token exported in the shell that ran `kampr new` is not kept in `spec.json`.
+#[test]
+fn the_environment_reaches_the_child_and_is_not_left_on_disk() {
+    let root = root();
+    let mut spec = sh(r#"stty -opost; echo "GOT=$KAMPR_TEST_SECRET"; exec cat"#);
+    spec.env.push(("KAMPR_TEST_SECRET".into(), "hunter2-kept".into()));
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+    live.wait_for_log("GOT=hunter2-kept", SOON);
+    let written = std::fs::read_to_string(live.session.path().join("spec.json")).expect("spec.json");
+    assert!(!written.contains("hunter2"), "{written}");
+    assert!(live.session.spec().expect("a spec").env.is_empty(), "{written}");
+    kampr_keep::close(&live.session).expect("close");
+    live.exit(SOON);
+}
+
 #[test]
 fn usr1_re_execs_the_keeper_with_the_same_child_and_no_lost_bytes() {
     let root = root();

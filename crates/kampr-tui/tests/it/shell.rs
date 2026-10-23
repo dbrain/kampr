@@ -1170,3 +1170,129 @@ async fn a_fresh_pane_that_grows_keeps_following_the_tail() {
         "the unscrolled pane follows the tail:\n{grown}"
     );
 }
+
+fn native(id: &str, agent: Option<&str>, cols: u16) -> Value {
+    let mut entry = pane(id, "kept", agent, "idle");
+    entry["provider"] = json!("native");
+    entry["cols"] = json!(cols);
+    entry["rows"] = json!(30);
+    entry
+}
+
+/// The reflow each `watch` this client sent for `pane` asked for, in order; `None` is a watch of
+/// the pane's own grid.
+fn reflows(frames: &[Value], pane: &str) -> Vec<Option<u64>> {
+    frames
+        .iter()
+        .filter(|f| f["t"] == json!("watch") && f["pane"] == json!(pane))
+        .map(|f| f["reflow"]["cols"].as_u64())
+        .collect()
+}
+
+fn unmatched() -> Options {
+    Options {
+        match_view: false,
+        ..Options::default()
+    }
+}
+
+async fn greeted(fake: &mut Fake, panes: Value) -> (Arc<Client>, Conn) {
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(json!([node("01JNODE", "comingclean", true)]), panes, "full");
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    (client, conn)
+}
+
+/// docs/17 §3, as the phone does it: a native shell wider than the box it is drawn in is re-laid
+/// at the box's width by the node, rather than cropped and panned, and a box that changes width
+/// asks again. Nothing reaches the PTY: the pane is still 200 columns to everyone else.
+#[tokio::test]
+async fn a_native_shell_wider_than_its_box_is_re_laid_at_the_boxs_width() {
+    let mut fake = Fake::start().await;
+    let at = "01JNODE/n:01ja";
+    let (client, mut conn) = greeted(&mut fake, json!([native(at, None, 200)])).await;
+    let mut app = App::new(client.clone(), unmatched(), Images::default());
+    app.absorb(&Event::Prefs { greeting: true });
+
+    painted(&mut app, 120, 30);
+    app.reflow_views();
+    let wide = app.layout.pane(at).expect("the pane is drawn").inner.width;
+    painted(&mut app, 100, 30);
+    app.reflow_views();
+    let narrow = app.layout.pane(at).expect("the pane is drawn").inner.width;
+    assert!(narrow < wide && wide < 200, "{narrow} {wide}");
+    let frames = conn.heard().await;
+    assert_eq!(
+        reflows(&frames, at),
+        vec![None, Some(u64::from(wide)), Some(u64::from(narrow))],
+        "{frames:?}"
+    );
+    assert!(
+        !frames.iter().any(|f| f["op"] == json!("pane.size")),
+        "re-laying is not a resize: {frames:?}"
+    );
+
+    painted(&mut app, 100, 30);
+    app.reflow_views();
+    assert_eq!(
+        reflows(&conn.heard().await, at),
+        Vec::<Option<u64>>::new(),
+        "asked again for the same width"
+    );
+}
+
+/// Re-laid, the grid the node sends is the box's width, so that is the width the pane has here:
+/// measured from the herd's 200 it would pan into nothing, wrap a copy at the wrong column and
+/// ask the terminal to grow to a pane it is already showing whole. Any other answer is the
+/// pane's own grid, at the pane's own width.
+#[tokio::test]
+async fn a_re_laid_grid_is_as_wide_as_it_was_sent_and_any_other_answer_is_the_panes_own() {
+    let mut fake = Fake::start().await;
+    let at = "01JNODE/n:01ja";
+    let (client, conn) = greeted(&mut fake, json!([native(at, None, 200)])).await;
+    let mut events = client.events();
+    let mut app = App::new(client.clone(), unmatched(), Images::default());
+    app.absorb(&Event::Prefs { greeting: true });
+    for (served, cols, want) in [("on", 60, 60), ("alternate", 200, 200), ("harness", 200, 200)] {
+        conn.send(json!({
+            "t": "grid.reset", "pane": at, "cols": cols, "rows": 30, "rows_data": [],
+            "cursor": { "col": 0, "row": 0, "visible": false }, "links": [], "reflow": served
+        }));
+        until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+        let need = app.need(at).expect("a painted pane has a size");
+        assert_eq!((need.cols, need.rows), (want, 30), "{served}");
+    }
+}
+
+/// What the phone leaves alone, left alone here: an agent wraps its own lines at the PTY's
+/// width (#588), a herdr pane cannot be re-laid, a box as wide as the pane has nothing to gain,
+/// and a pane this window holds at its own size is that size already.
+#[tokio::test]
+async fn an_agent_a_herdr_pane_a_pane_that_fits_and_a_matched_pane_are_never_re_laid() {
+    for (entry, options, width) in [
+        (native("01JNODE/n:01ja", Some("claude"), 200), unmatched(), 100),
+        (
+            {
+                let mut herdr = pane("01JNODE/w1:p1", "herdr", None, "idle");
+                herdr["cols"] = json!(200);
+                herdr
+            },
+            unmatched(),
+            100,
+        ),
+        (native("01JNODE/n:01ja", None, 40), unmatched(), 100),
+        (native("01JNODE/n:01ja", None, 200), Options::default(), 120),
+    ] {
+        let mut fake = Fake::start().await;
+        let at = entry["id"].as_str().expect("an id").to_string();
+        let (client, mut conn) = greeted(&mut fake, json!([entry])).await;
+        let mut app = App::new(client.clone(), options, Images::default());
+        app.absorb(&Event::Prefs { greeting: true });
+        painted(&mut app, width, 40);
+        app.reflow_views();
+        let asked = reflows(&conn.heard().await, &at);
+        assert_eq!(asked, vec![None], "{at} at {width} with {options:?}");
+    }
+}

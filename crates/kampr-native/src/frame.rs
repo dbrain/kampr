@@ -38,6 +38,7 @@ pub(crate) fn row_cells(row: &Row<ACell>, cols: u16, links: &mut Links) -> Vec<C
                 reverse: flags.contains(Flags::INVERSE),
                 strike: flags.contains(Flags::STRIKEOUT),
                 hidden: flags.contains(Flags::HIDDEN),
+                ul: c.underline_color().map(colour).unwrap_or_default(),
                 ..CellAttrs::default()
             },
             link: c.hyperlink().map(|h| links.id(h.uri())),
@@ -244,6 +245,7 @@ impl<'a> Writer<'a> {
         }
         sgr_colour(&mut self.out, 38, pen.fg);
         sgr_colour(&mut self.out, 48, pen.bg);
+        sgr_colour(&mut self.out, 58, a.ul);
         self.out.push(b'm');
         self.pen = Some(pen);
     }

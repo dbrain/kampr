@@ -335,7 +335,7 @@ fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KText("$reach · $latency", tokens.type.meta, tokens.color.mute)
-            QuickWorkspaceAction(node, LANDSCAPE_TOUCH)
+            QuickSessionAction(node, LANDSCAPE_TOUCH)
         }
     }
 }

@@ -10,13 +10,16 @@ fn rich() -> Vec<u8> {
     let mut out = Vec::new();
     for i in 0..120 {
         out.extend(format!("\x1b[3{}mhistory {i} {}\x1b[0m\r\n", i % 8, "w".repeat(i % 50)).as_bytes());
+        if i % 7 == 0 {
+            out.extend(format!("\x1b[4;58;5;{i}munderlined {i}\x1b[0m\r\n").as_bytes());
+        }
     }
     out.extend_from_slice(
         "\x1b]2;rich title\x07\x1b]4;3;rgb:12/34/56\x07\x1b]11;rgb:01/02/03\x07\x1b[5 q\
          \x1b[?2004h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b=\x1b[?1h\x1b[>5u\
          \x1b[3g\x1b[5G\x1bH\x1b[17G\x1bH\x1b[1;1H\
          \x1b)0\x0eqqq\x1b]8;id=x;https://k.example\x1b\\link\x1b]8;;\x1b\\ 漢字 e\u{301}\
-         \x1b[1;4;38;2;9;8;7;48;5;200m\x1b[5;7H\x1b7\x1b[2;3H\x1b[3;9r\x1b[4h\x1b[20h\x1b[?6h"
+         \x1b[1;4;38;2;9;8;7;48;5;200;58:2::4:5:6m\x1b[5;7H\x1b7\x1b[2;3H\x1b[3;9r\x1b[4h\x1b[20h\x1b[?6h"
             .as_bytes(),
     );
     out.extend_from_slice(b"wrapped wrapped wrapped wrapped wrapped wrapped wrapped\r\n");
@@ -95,6 +98,14 @@ fn a_restored_checkpoint_carries_on_exactly_as_the_screen_it_was_taken_from() {
         }
         assert!(taken >= 10, "{name}: only {taken} cuts were in ground");
     }
+    let mut live = Screen::new(60, 12, SCROLLBACK);
+    live.feed(&rich());
+    let restored =
+        Screen::from_checkpoint(&live.checkpoint().expect("a checkpoint"), SCROLLBACK).expect("loads");
+    assert!(
+        rows(&restored).contains(";58;5;42m"),
+        "an underline colour in history did not survive the checkpoint"
+    );
 }
 
 #[test]

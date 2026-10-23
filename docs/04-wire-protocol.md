@@ -214,6 +214,7 @@ this wire.
 ```
 `fg`/`bg` are `{"k":"d"}` default, `{"k":"i","v":n}` indexed 0–255, or `{"k":"r","v":[r,g,b]}`.
 Boolean attributes are omitted when false: `bold dim italic underline blink reverse strike hidden`.
+`ul` is the underline's own colour (SGR 58) in the same shape as `fg`, omitted when it is the text's.
 Style `0` is always the default pen. Ids are stable for the life of the connection.
 
 **`cols` is the pane's real PTY width, which is not always its layout rect.** In a *headless*
@@ -1636,16 +1637,21 @@ PTY's foreground process (`claude`, `codex`, `omp`, `pi`, `agy`).
   "command":"claude --resume",        // a line for the login shell, as on fleet.run …
   "args":["htop","-d","10"],          // … or an argv; neither is the login shell itself
   "cwd":"/home/dbrain/dev/kampr", "label":"review",
-  "cols":100, "rows":30 }             // both or neither, 80x24 when absent
+  "cols":100, "rows":30,              // both or neither, 80x24 when absent
+  "desk":true, "at":"01J…/w3:p2" }    // also show it in a herdr pane, beside `at`
 { "t":"manage", "op":"native.close",  "at":"01J…/n:01k8…" }   // hang it up (SIGHUP to its process group)
 { "t":"manage", "op":"native.forget", "at":"01J…/n:01k8…" }   // delete an ENDED session and its log
-{ "t":"manage", "op":"native.desk",   "at":"01J…/n:01k8…" }   // show it in a herdr pane — not built yet
+{ "t":"manage", "op":"native.desk",   "at":"01J…/n:01k8…" }   // show it in a herdr pane again
 ```
 
-`native.create` acks the pane it made, as `fleet.run` does, and is routed by `node`. It also takes
-`"desk": true` with an `at` naming where on the desk to show it; until that lands the node refuses
-it, and `native.desk`, with a `bad_request` saying so. `native.forget` refuses a session that is
-still running.
+`native.create` acks the pane it made, as `fleet.run` does, and is routed by `node`. With
+`"desk": true` it is also shown on the desk: beside `at`, or in a new workspace of its own when there
+is no `at`, never as a split of whatever the desk has focused. A desk herdr cannot give is
+`herdr_unavailable` and makes no session; the host's own + asks again without the desk.
+
+A session leaves the herd by itself once it ends after `native.close`, or when its program exits
+with status 0, as a herdr pane does when its shell exits. Any other end is kept, with its `exited`,
+until `native.forget`, which refuses a session that is still running.
 
 #### A reflowed view: `watch` with `reflow`
 

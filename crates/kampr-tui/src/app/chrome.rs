@@ -26,6 +26,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 pub struct Placed {
     pub pane: String,
     pub rect: Rect,
+    /// Inside the border, when there is one: the cells the pane's own grid has to fit.
+    pub inner: Rect,
     /// How many rows of ring sit above the live grid, which is where the surface's row numbering
     /// starts from.
     pub ring: u16,
@@ -289,10 +291,11 @@ impl App {
         let mut placed = Placed {
             pane: pane.to_string(),
             rect: area,
+            inner: area,
             ring: 0,
             placement: None,
         };
-        let (title, detail, stale, painted, geometry, entry_cols) = {
+        let (title, detail, stale, painted) = {
             let state = self.client.state();
             let entry = state.herd.pane(pane).cloned();
             let held = state.pane(pane);
@@ -301,8 +304,6 @@ impl App {
                 entry.as_ref().and_then(|e| e.detail.clone()),
                 held.is_some_and(|p| p.stale()),
                 held.is_some_and(|p| p.painted()),
-                held.map(|p| p.geometry()).unwrap_or((0, 0)),
-                entry.as_ref().and_then(|e| e.cols),
             )
         };
         let border = match focused {
@@ -327,6 +328,7 @@ impl App {
             false => Block::default().style(Style::default().bg(t.bg)),
         };
         let inner = block.inner(area);
+        placed.inner = inner;
         block.render(area, frame.buffer_mut());
         if inner.width == 0 || inner.height == 0 {
             layout.panes.push(placed);
@@ -413,11 +415,9 @@ impl App {
             layout.panes.push(placed);
             return None;
         }
-        // Never derive geometry: `cols` is absent until measured, and the layout rect is a width
-        // no row was ever wrapped at.
-        let need = fit::Need {
-            cols: entry_cols.unwrap_or(geometry.0),
-            rows: geometry.1,
+        let Some(need) = self.need(pane) else {
+            layout.panes.push(placed);
+            return None;
         };
         let ring = self.rings.get(pane).map(Vec::as_slice).unwrap_or_default();
         let history = ring.len().min(u16::MAX as usize) as u16;

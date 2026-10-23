@@ -258,6 +258,7 @@ fn server() -> Vec<ServerMsg> {
                     reverse: true,
                     strike: true,
                     hidden: true,
+                    ul: Color::Rgb(4, 5, 6),
                 },
             }],
         }),

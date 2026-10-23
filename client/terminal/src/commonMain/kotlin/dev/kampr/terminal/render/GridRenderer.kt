@@ -12,6 +12,11 @@ import dev.kampr.shared.model.appendGlyph
 import dev.kampr.terminal.input.LocalEcho
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
+
+// A sixteenth of the cell is the decoration's own weight at the phone's sizes.
+private const val UNDERLINE_THICKNESS = 16f
 
 class GridRenderer(private val cache: TextCache, private val modes: ModeSelector) {
     private var glyphs = IntArray(0)
@@ -88,6 +93,7 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
                 RenderMode.CachedRuns -> paintRuns(scope, styles, inkCol, lastCol, originX, y, cellWidth)
                 RenderMode.PerGlyph -> paintGlyphs(scope, styles, inkCol, lastCol, originX, y, cellWidth)
             }
+            paintUnderlines(scope, styles, firstCol, lastCol, originX, y, cellWidth, cellHeight)
             paintLinks(scope, firstCol, lastCol, originX, y, cellWidth, cellHeight, linkInk)
         }
         modes.endFrame(cache.hitRate)
@@ -104,6 +110,37 @@ class GridRenderer(private val cache: TextCache, private val modes: ModeSelector
             if (index in firstRow until lastRow && cursorCol in firstCol until lastCol) {
                 paintCursor(scope, rows, styles, index, cursorCol, originX, originY, cellWidth, cellHeight)
             }
+        }
+    }
+
+    // An underline in a colour of its own cannot ride the shaped run, whose decoration is the text's
+    // colour, so the run is shaped without it and the line is a rect: no shaping, and cut where
+    // the colour changes. Placed under the face's own baseline, as the decoration would be.
+    private fun paintUnderlines(
+        scope: DrawScope,
+        styles: ResolvedStyles,
+        firstCol: Int,
+        lastCol: Int,
+        originX: Float,
+        y: Float,
+        cellWidth: Float,
+        cellHeight: Float,
+    ) {
+        var col = firstCol
+        while (col < lastCol) {
+            val ink = styles.underline[styles.clamp(styleIds[col])]
+            var end = col + 1
+            while (end < lastCol && styles.underline[styles.clamp(styleIds[end])] == ink) end++
+            if (ink != 0) {
+                val thickness = max(1f, cellHeight / UNDERLINE_THICKNESS)
+                val top = min(y + cache.glyph(BLANK, 0).firstBaseline + thickness, y + cellHeight - thickness)
+                scope.drawRect(
+                    Color(ink),
+                    Offset(originX + col * cellWidth, top),
+                    Size((end - col) * cellWidth, thickness),
+                )
+            }
+            col = end
         }
     }
 

@@ -10,7 +10,9 @@
 //! reads one machine about one pane herdr has already named, and it answers nothing at all where
 //! `/proc` cannot be read.
 
-use kampr_herdr::{ForegroundProcess, model::is_shell};
+pub use kampr_herdr::model::is_shell;
+
+use kampr_herdr::ForegroundProcess;
 use std::collections::HashSet;
 use std::path::PathBuf;
 

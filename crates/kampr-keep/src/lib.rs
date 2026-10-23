@@ -11,7 +11,7 @@ mod upgrade;
 
 pub use ctl::{borrow, claim_size, close, state};
 pub use dir::{
-    Exit, Host, HostGuard, How, KeeperInfo, SessionDir, Size, Spec, list, list_tree, make_private_dir,
+    Exit, Host, HostGuard, How, Image, KeeperInfo, SessionDir, Size, Spec, list, list_tree, make_private_dir,
     new_id, register_host, root,
 };
 pub use keeper::{HANDOVER, serve};
@@ -20,3 +20,7 @@ pub use log::{DEFAULT_CAP, SEGMENT, segment_name, segments};
 pub use procs::{Proc, ProcState};
 pub use sizes::{Replay, Resize, SIZES, SizedReader, size_at, sizes};
 pub use upgrade::{stale, upgrade_stale, upgrade_while};
+
+pub fn own_exe() -> std::io::Result<std::path::PathBuf> {
+    sys::own_exe()
+}

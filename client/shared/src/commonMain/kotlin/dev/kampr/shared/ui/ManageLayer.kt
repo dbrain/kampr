@@ -42,9 +42,9 @@ interface ManageIo {
     // them are not this one's to edit; `AppManage` is the only implementor that answers it.
     fun openMenu(paneId: String, at: MenuAnchor? = null) = openActions(paneId)
 
-    // The + beside one machine: a workspace on that host, with nothing to fill in. There is no
+    // The + beside one machine: a Kampr session on that host, with nothing to fill in. There is no
     // sheet in front of it, so the ack and the refusal are both `AppState`'s to catch.
-    fun quickWorkspace(nodeId: String) = Unit
+    fun quickSession(nodeId: String) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -52,7 +52,7 @@ private object NoManage : ManageIo {
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) = Unit
     override fun openMenu(paneId: String, at: MenuAnchor?) = Unit
-    override fun quickWorkspace(nodeId: String) = Unit
+    override fun quickSession(nodeId: String) = Unit
 }
 
 val LocalManage: ProvidableCompositionLocal<ManageIo> = staticCompositionLocalOf { NoManage }
@@ -75,8 +75,8 @@ class AppManage(private val state: AppState) : ManageIo {
         state.openSheet(Sheet.Menu(paneId, at))
     }
 
-    override fun quickWorkspace(nodeId: String) {
-        state.quickWorkspace(nodeId)
+    override fun quickSession(nodeId: String) {
+        state.quickSession(nodeId)
     }
 }
 
@@ -98,20 +98,20 @@ fun NewAction(paneId: String? = null, target: Dp = TOUCH, modifier: Modifier = M
 // that is the right screen for all of those and the wrong one for "a terminal on that box", which
 // is the thing asked for most and the thing with nothing in it to decide.
 //
-// Asked of `isReachable` rather than of `online`: a manage op is served by the node, and the node
-// starts a stopped herdr for one (#324, #325), so the host this is most use on is the cold one.
+// Asked of `isReachable` rather than of `online`: a Kampr session needs only the node, so the host
+// this is most use on is the one whose herdr is cold.
 @Composable
-fun QuickWorkspaceAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = Modifier) {
+fun QuickSessionAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val manage = LocalManage.current
     if (!manage.enabled || !node.isReachable) return
     GlyphAction(
         KamprIcons.plus,
-        "New workspace on ${node.name}",
+        if (node.native == true) "New Kampr session on ${node.name}" else "New workspace on ${node.name}",
         Kampr.tokens.color.accent,
         target,
         modifier,
         chip = 22.dp,
-    ) { manage.quickWorkspace(node.id) }
+    ) { manage.quickSession(node.id) }
 }
 
 @Composable

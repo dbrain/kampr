@@ -423,6 +423,39 @@ async fn a_reconnect_keeps_the_cached_grid_marked_stale_and_swaps_on_the_reset()
     assert!(!state.pane(id).unwrap().stale(), "the reset is the swap");
 }
 
+/// A re-laid view is part of the watch, so the watch a reconnect re-issues asks for the same width,
+/// and a view put back on the pane's own grid does not come back re-laid.
+#[tokio::test]
+async fn a_reconnect_re_asks_for_the_reflow_the_watch_last_had() {
+    let mut fake = Fake::start().await;
+    let client = fake.client();
+    let mut events = client.events();
+    let id = "01JNODE/n:01ja";
+    let mut conn = fake.accept().await;
+    conn.greet(json!([node("01JNODE", "scripted")]), json!([pane(id, "01JNODE")]));
+    until(&mut events, |e| matches!(e, Event::Connected(_)).then_some(())).await;
+    assert!(client.watch(id, true, false));
+    assert_eq!(conn.recv().await.get("reflow"), None);
+    for (cols, want) in [(Some(60), json!({ "cols": 60 })), (None, Value::Null)] {
+        assert!(client.reflow(id, cols));
+        assert_eq!(conn.recv().await["reflow"], want);
+        conn.close();
+        until(&mut events, |e| {
+            matches!(e, Event::Disconnected { .. }).then_some(())
+        })
+        .await;
+        conn = fake.accept().await;
+        let again = conn.recv().await;
+        assert_eq!(
+            (&again["t"], &again["reflow"]),
+            (&json!("watch"), &want),
+            "{again}"
+        );
+        conn.greet(json!([node("01JNODE", "scripted")]), json!([pane(id, "01JNODE")]));
+        until(&mut events, |e| matches!(e, Event::Connected(_)).then_some(())).await;
+    }
+}
+
 fn text(state: &kampr_client::State, id: &str) -> String {
     state
         .pane(id)

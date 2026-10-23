@@ -122,9 +122,24 @@ impl State {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Watch {
     scrollback: bool,
     conversation: bool,
+    reflow: Option<u16>,
+}
+
+impl Watch {
+    fn frame(&self, pane: &str) -> Value {
+        let mut frame = json!({
+            "t": "watch", "pane": pane,
+            "scrollback": self.scrollback, "conversation": self.conversation
+        });
+        if let Some(cols) = self.reflow {
+            frame["reflow"] = json!({ "cols": cols });
+        }
+        frame
+    }
 }
 
 struct Inner {
@@ -194,17 +209,32 @@ impl Client {
     /// Records the watch and issues it. It is re-issued on every reconnection, so a caller states
     /// what it wants to see once.
     pub fn watch(&self, pane: &str, scrollback: bool, conversation: bool) -> bool {
-        self.inner.watched.lock().expect("watched").insert(
-            pane.to_string(),
-            Watch {
-                scrollback,
-                conversation,
-            },
-        );
-        self.send(json!({
-            "t": "watch", "pane": pane,
-            "scrollback": scrollback, "conversation": conversation
-        }))
+        let watch = Watch {
+            scrollback,
+            conversation,
+            reflow: None,
+        };
+        self.inner
+            .watched
+            .lock()
+            .expect("watched")
+            .insert(pane.to_string(), watch);
+        self.send(watch.frame(pane))
+    }
+
+    /// A watched native pane re-laid at `cols` by the node, or its own grid again with `None`
+    /// (docs/17 §3). It is the watch re-sent, which the node re-attaches rather than re-opens, so
+    /// only a change is sent: each one costs a `grid.reset`.
+    pub fn reflow(&self, pane: &str, cols: Option<u16>) -> bool {
+        let watch = {
+            let mut watched = self.inner.watched.lock().expect("watched");
+            let Some(watch) = watched.get_mut(pane).filter(|w| w.reflow != cols) else {
+                return false;
+            };
+            watch.reflow = cols;
+            *watch
+        };
+        self.send(watch.frame(pane))
     }
 
     pub fn done_read(&self, pane: &str, at: Option<&str>) -> bool {
@@ -369,18 +399,15 @@ impl Inner {
     }
 
     fn resubscribe(&self) {
-        let watched: Vec<(String, bool, bool)> = self
+        let watched: Vec<(String, Watch)> = self
             .watched
             .lock()
             .expect("watched")
             .iter()
-            .map(|(pane, w)| (pane.clone(), w.scrollback, w.conversation))
+            .map(|(pane, w)| (pane.clone(), *w))
             .collect();
-        for (pane, scrollback, conversation) in watched {
-            self.send(json!({
-                "t": "watch", "pane": pane,
-                "scrollback": scrollback, "conversation": conversation
-            }));
+        for (pane, watch) in watched {
+            self.send(watch.frame(&pane));
         }
     }
 
@@ -568,6 +595,7 @@ impl Inner {
             let State { styles, panes, .. } = &mut *state;
             let entry = panes.entry(pane.to_string()).or_default();
             entry.set_stale(false);
+            entry.set_reflow(decode(message.get("reflow")));
             entry
                 .shadow_mut()
                 .reset(cols, rows, &rows_data, cursor(message), links, styles)

@@ -13,6 +13,7 @@ use crate::sidebar;
 use crate::theme::Theme;
 use crossterm::event::KeyEvent;
 use kampr_client::{Client, Event, Managed};
+use kampr_core::provider::Reflow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -23,6 +24,9 @@ const NOTE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
 /// Rows one notch of the wheel moves. Three is what a terminal's own scrollback does, and the
 /// wheel is aiming at the same surface here.
 const WHEEL: u16 = 3;
+
+/// The node clamps a reflow to this; below it a box is a sliver, not something to read.
+const REFLOW_MIN_COLS: u16 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
@@ -655,6 +659,47 @@ impl App {
         }
         self.watching = want;
         self.read_on_screen();
+    }
+
+    /// The size of the grid the node is sending for `pane`. The herd's `cols` is the PTY's, which is
+    /// the grid's own unless the node is re-laying it at the width this client asked for; never the
+    /// layout's rect, a width no row was ever wrapped at.
+    pub fn need(&self, pane: &str) -> Option<Need> {
+        let state = self.client.state();
+        let (cols, rows) = state.pane(pane)?.geometry();
+        let cols = match state.pane(pane)?.reflow() {
+            Some(Reflow::On) => cols,
+            _ => state.herd.pane(pane).and_then(|e| e.cols).unwrap_or(cols),
+        };
+        (cols > 0).then_some(Need { cols, rows })
+    }
+
+    /// docs/17 §3, by the phone's rule: a native shell wider than the box it is drawn in is re-laid
+    /// at the box's width, rather than cropped and panned. Not an agent, which wraps its own lines
+    /// at the PTY's width (#588), and not a pane this window holds at its own size, which is that
+    /// size already. Called after every draw, since the box is only known once it is laid out; the
+    /// client sends only a change.
+    pub fn reflow_views(&mut self) {
+        let mut wanted = Vec::new();
+        for pane in &self.watching {
+            let Some(inner) = self.layout.pane(pane).map(|placed| placed.inner) else {
+                continue;
+            };
+            let focused = self.focus.as_deref() == Some(pane.as_str());
+            let held = focused && self.matches(pane, inner.width, inner.height);
+            let cols = {
+                let state = self.client.state();
+                state.herd.pane(pane).and_then(|entry| {
+                    let native = entry.provider.as_deref() == Some("native") && entry.agent.is_none();
+                    let narrower = entry.cols.is_some_and(|cols| inner.width < cols);
+                    (native && narrower && !held && inner.width >= REFLOW_MIN_COLS).then_some(inner.width)
+                })
+            };
+            wanted.push((pane.clone(), cols));
+        }
+        for (pane, cols) in wanted {
+            self.client.reflow(&pane, cols);
+        }
     }
 
     /// The fit ladder, climbed once per pane geometry and terminal size rather than per frame:

@@ -1,3 +1,4 @@
+use kampr_core::provider::Reflow;
 use kampr_core::wire::Cursor;
 use kampr_mesh::shadow::{History, Shadow};
 use kampr_term::Cell;
@@ -13,6 +14,7 @@ pub struct PaneState {
     shadow: Shadow,
     history: History,
     stale: bool,
+    reflow: Option<Reflow>,
 }
 
 impl PaneState {
@@ -34,6 +36,12 @@ impl PaneState {
     /// entry's `detail` is what says why.
     pub fn painted(&self) -> bool {
         self.shadow.is_ready()
+    }
+
+    /// Which grid a watch that asked for a reflowed view is being sent, as its last `grid.reset`
+    /// said; `None` on any other watch, and from a node older than the field.
+    pub fn reflow(&self) -> Option<Reflow> {
+        self.reflow
     }
 
     pub fn geometry(&self) -> (u16, u16) {
@@ -62,6 +70,10 @@ impl PaneState {
 
     pub(crate) fn history_mut(&mut self) -> &mut History {
         &mut self.history
+    }
+
+    pub(crate) fn set_reflow(&mut self, reflow: Option<Reflow>) {
+        self.reflow = reflow;
     }
 
     pub(crate) fn set_stale(&mut self, stale: bool) {
