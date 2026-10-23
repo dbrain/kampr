@@ -13,7 +13,7 @@ pub(crate) fn notify(message: &str, fds: &[BorrowedFd<'_>]) -> io::Result<()> {
     };
     let target = target.as_bytes();
     let addr = match target.strip_prefix(b"@") {
-        Some(name) => SocketAddrUnix::new_abstract_name(name)?,
+        Some(name) => abstract_name(name)?,
         None => SocketAddrUnix::new(target)?,
     };
     let sock = socket(AddressFamily::UNIX, SocketType::DGRAM, None)?;
@@ -30,4 +30,14 @@ pub(crate) fn notify(message: &str, fds: &[BorrowedFd<'_>]) -> io::Result<()> {
         SendFlags::empty(),
     )?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn abstract_name(name: &[u8]) -> io::Result<SocketAddrUnix> {
+    Ok(SocketAddrUnix::new_abstract_name(name)?)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn abstract_name(_: &[u8]) -> io::Result<SocketAddrUnix> {
+    Err(io::Error::from(io::ErrorKind::Unsupported))
 }

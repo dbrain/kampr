@@ -1,9 +1,5 @@
-use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
-use std::collections::{BTreeSet, HashMap};
-use std::mem::MaybeUninit;
-use std::os::fd::OwnedFd;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const STOP_POLL: Duration = Duration::from_millis(500);
@@ -37,148 +33,249 @@ pub(crate) fn spawn(root: PathBuf, mut on: impl FnMut(BTreeSet<Change>) -> bool 
         .expect("a watcher thread");
 }
 
-enum Watched {
-    Root,
-    Session(String),
-    Hosts(String),
-}
+#[cfg(target_os = "linux")]
+mod inotify_watch {
+    use super::Change;
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
+    use std::collections::{BTreeSet, HashMap};
+    use std::mem::MaybeUninit;
+    use std::os::fd::OwnedFd;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
-impl Watched {
-    fn session(&self) -> Option<&String> {
-        match self {
-            Self::Session(id) => Some(id),
-            _ => None,
+    enum Watched {
+        Root,
+        Session(String),
+        Hosts(String),
+    }
+
+    impl Watched {
+        fn session(&self) -> Option<&String> {
+            match self {
+                Self::Session(id) => Some(id),
+                _ => None,
+            }
+        }
+
+        fn hosts(&self) -> Option<&String> {
+            match self {
+                Self::Hosts(id) => Some(id),
+                _ => None,
+            }
         }
     }
 
-    fn hosts(&self) -> Option<&String> {
-        match self {
-            Self::Hosts(id) => Some(id),
-            _ => None,
-        }
-    }
-}
-
-struct Watcher {
-    root: PathBuf,
-    fd: OwnedFd,
-    watched: HashMap<i32, Watched>,
-}
-
-impl Watcher {
-    fn new(root: &Path) -> std::io::Result<Self> {
-        let fd = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
-        let wd = inotify::add_watch(
-            &fd,
-            root,
-            WatchFlags::CREATE | WatchFlags::DELETE | WatchFlags::MOVED_TO | WatchFlags::MOVED_FROM,
-        )?;
-        let mut watcher = Self {
-            root: root.to_path_buf(),
-            fd,
-            watched: HashMap::from([(wd, Watched::Root)]),
-        };
-        watcher.rescan();
-        Ok(watcher)
+    pub(super) struct Watcher {
+        root: PathBuf,
+        fd: OwnedFd,
+        watched: HashMap<i32, Watched>,
     }
 
-    /// Every directory event is followed by a rescan, because a session directory is created
-    /// before anything is written into it and the watch on it may be added after its first files.
-    fn rescan(&mut self) {
-        let Ok(entries) = std::fs::read_dir(&self.root) else {
-            return;
-        };
-        let known = |kind: fn(&Watched) -> Option<&String>, id: &str| {
-            self.watched.values().filter_map(kind).any(|w| w == id)
-        };
-        let mut added = Vec::new();
-        for entry in entries.flatten() {
-            let Some(id) = entry.file_name().to_str().map(str::to_string) else {
-                continue;
+    impl Watcher {
+        pub(super) fn new(root: &Path) -> std::io::Result<Self> {
+            let fd = inotify::init(CreateFlags::CLOEXEC | CreateFlags::NONBLOCK)?;
+            let wd = inotify::add_watch(
+                &fd,
+                root,
+                WatchFlags::CREATE | WatchFlags::DELETE | WatchFlags::MOVED_TO | WatchFlags::MOVED_FROM,
+            )?;
+            let mut watcher = Self {
+                root: root.to_path_buf(),
+                fd,
+                watched: HashMap::from([(wd, Watched::Root)]),
             };
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let files = WatchFlags::CREATE
-                | WatchFlags::DELETE
-                | WatchFlags::MOVED_TO
-                | WatchFlags::CLOSE_WRITE
-                | WatchFlags::DELETE_SELF;
-            if !known(Watched::session, &id)
-                && let Ok(wd) = inotify::add_watch(&self.fd, &path, files)
-            {
-                added.push((wd, Watched::Session(id.clone())));
-            }
-            let hosts = path.join("hosts");
-            if !known(Watched::hosts, &id)
-                && hosts.is_dir()
-                && let Ok(wd) = inotify::add_watch(&self.fd, &hosts, files)
-            {
-                added.push((wd, Watched::Hosts(id)));
-            }
+            watcher.rescan();
+            Ok(watcher)
         }
-        self.watched.extend(added);
-    }
 
-    fn next(&mut self, timeout: Duration) -> BTreeSet<Change> {
-        let mut changes = BTreeSet::new();
-        let spec = Timespec::try_from(timeout).unwrap_or(Timespec {
-            tv_sec: 0,
-            tv_nsec: 500_000_000,
-        });
-        let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
-        if !matches!(poll(&mut fds, Some(&spec)), Ok(n) if n > 0) {
-            return changes;
-        }
-        let mut buf = [MaybeUninit::<u8>::uninit(); 8192];
-        let mut reader = inotify::Reader::new(&self.fd, &mut buf);
-        let mut gone = Vec::new();
-        loop {
-            let event = match reader.next() {
-                Ok(event) => event,
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(_) => break,
+        /// Every directory event is followed by a rescan, because a session directory is created
+        /// before anything is written into it and the watch on it may be added after its first files.
+        fn rescan(&mut self) {
+            let Ok(entries) = std::fs::read_dir(&self.root) else {
+                return;
             };
-            let name = event
-                .file_name()
-                .and_then(|n| n.to_str().ok())
-                .unwrap_or_default()
-                .to_string();
-            if event.events().contains(ReadFlags::IGNORED) {
-                gone.push(event.wd());
-            }
-            match self.watched.get(&event.wd()) {
-                Some(Watched::Root) => {
-                    changes.insert(Change::Sessions);
+            let known = |kind: fn(&Watched) -> Option<&String>, id: &str| {
+                self.watched.values().filter_map(kind).any(|w| w == id)
+            };
+            let mut added = Vec::new();
+            for entry in entries.flatten() {
+                let Some(id) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
                 }
-                Some(Watched::Session(id)) => {
-                    if name.starts_with("log.") || name.starts_with("screen.") || name.ends_with(".tmp") {
-                        continue;
-                    }
-                    if name == "hosts"
-                        || name == "spec.json"
-                        || event.events().contains(ReadFlags::DELETE_SELF)
-                    {
+                let files = WatchFlags::CREATE
+                    | WatchFlags::DELETE
+                    | WatchFlags::MOVED_TO
+                    | WatchFlags::CLOSE_WRITE
+                    | WatchFlags::DELETE_SELF;
+                if !known(Watched::session, &id)
+                    && let Ok(wd) = inotify::add_watch(&self.fd, &path, files)
+                {
+                    added.push((wd, Watched::Session(id.clone())));
+                }
+                let hosts = path.join("hosts");
+                if !known(Watched::hosts, &id)
+                    && hosts.is_dir()
+                    && let Ok(wd) = inotify::add_watch(&self.fd, &hosts, files)
+                {
+                    added.push((wd, Watched::Hosts(id)));
+                }
+            }
+            self.watched.extend(added);
+        }
+
+        pub(super) fn next(&mut self, timeout: Duration) -> BTreeSet<Change> {
+            let mut changes = BTreeSet::new();
+            let spec = Timespec::try_from(timeout).unwrap_or(Timespec {
+                tv_sec: 0,
+                tv_nsec: 500_000_000,
+            });
+            let mut fds = [PollFd::new(&self.fd, PollFlags::IN)];
+            if !matches!(poll(&mut fds, Some(&spec)), Ok(n) if n > 0) {
+                return changes;
+            }
+            let mut buf = [MaybeUninit::<u8>::uninit(); 8192];
+            let mut reader = inotify::Reader::new(&self.fd, &mut buf);
+            let mut gone = Vec::new();
+            loop {
+                let event = match reader.next() {
+                    Ok(event) => event,
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(_) => break,
+                };
+                let name = event
+                    .file_name()
+                    .and_then(|n| n.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                if event.events().contains(ReadFlags::IGNORED) {
+                    gone.push(event.wd());
+                }
+                match self.watched.get(&event.wd()) {
+                    Some(Watched::Root) => {
                         changes.insert(Change::Sessions);
                     }
-                    changes.insert(Change::Session(id.clone()));
+                    Some(Watched::Session(id)) => {
+                        if name.starts_with("log.") || name.starts_with("screen.") || name.ends_with(".tmp") {
+                            continue;
+                        }
+                        if name == "hosts"
+                            || name == "spec.json"
+                            || event.events().contains(ReadFlags::DELETE_SELF)
+                        {
+                            changes.insert(Change::Sessions);
+                        }
+                        changes.insert(Change::Session(id.clone()));
+                    }
+                    Some(Watched::Hosts(id)) if !name.ends_with(".tmp") => {
+                        changes.insert(Change::Session(id.clone()));
+                    }
+                    _ => {}
                 }
-                Some(Watched::Hosts(id)) if !name.ends_with(".tmp") => {
-                    changes.insert(Change::Session(id.clone()));
-                }
-                _ => {}
             }
+            for wd in gone {
+                self.watched.remove(&wd);
+            }
+            if changes.contains(&Change::Sessions) {
+                self.rescan();
+            }
+            changes
         }
-        for wd in gone {
-            self.watched.remove(&wd);
-        }
-        if changes.contains(&Change::Sessions) {
-            self.rescan();
-        }
-        changes
     }
 }
+
+#[cfg(target_os = "linux")]
+use inotify_watch::Watcher;
+
+// No inotify: each tick compares a listing of the root, every session and its hosts with the last.
+#[cfg(not(target_os = "linux"))]
+mod poll_watch {
+    use super::Change;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    type Listing = BTreeMap<String, (Option<SystemTime>, u64)>;
+
+    pub(super) struct Watcher {
+        root: PathBuf,
+        seen: BTreeMap<String, Listing>,
+    }
+
+    impl Watcher {
+        pub(super) fn new(root: &Path) -> std::io::Result<Self> {
+            std::fs::read_dir(root)?;
+            let mut watcher = Self {
+                root: root.to_path_buf(),
+                seen: BTreeMap::new(),
+            };
+            watcher.seen = watcher.snapshot();
+            Ok(watcher)
+        }
+
+        pub(super) fn next(&mut self, timeout: Duration) -> BTreeSet<Change> {
+            std::thread::sleep(timeout.min(Duration::from_millis(100)));
+            let now = self.snapshot();
+            let mut changes = BTreeSet::new();
+            if now.keys().ne(self.seen.keys()) {
+                changes.insert(Change::Sessions);
+            }
+            for (id, files) in &now {
+                let before = self.seen.get(id);
+                if before.map(|b| b.contains_key("spec.json") || b.contains_key("hosts"))
+                    != Some(files.contains_key("spec.json") || files.contains_key("hosts"))
+                {
+                    changes.insert(Change::Sessions);
+                }
+                if before != Some(files) {
+                    changes.insert(Change::Session(id.clone()));
+                }
+            }
+            self.seen = now;
+            changes
+        }
+
+        fn snapshot(&self) -> BTreeMap<String, Listing> {
+            let Ok(entries) = std::fs::read_dir(&self.root) else {
+                return BTreeMap::new();
+            };
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| {
+                    let id = e.file_name().to_str()?.to_string();
+                    let mut files = listing(&e.path(), "");
+                    files.extend(listing(&e.path().join("hosts"), "hosts/"));
+                    Some((id, files))
+                })
+                .collect()
+        }
+    }
+
+    fn listing(dir: &Path, prefix: &str) -> Listing {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Listing::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_str()?.to_string();
+                if name.starts_with("log.") || name.starts_with("screen.") || name.ends_with(".tmp") {
+                    return None;
+                }
+                let meta = e.metadata().ok()?;
+                Some((format!("{prefix}{name}"), (meta.modified().ok(), meta.len())))
+            })
+            .collect()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+use poll_watch::Watcher;
 
 #[cfg(test)]
 mod tests {

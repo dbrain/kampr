@@ -1,12 +1,9 @@
 use crate::sizes::{Journal, Resize};
-use rustix::event::{PollFd, PollFlags, poll};
-use rustix::fs::inotify;
+use crate::sys::DirWatch;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Seek, SeekFrom, Write};
-use std::mem::MaybeUninit;
-use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const SEGMENT: u64 = 1 << 20;
 pub const DEFAULT_CAP: u64 = 32 << 20;
@@ -122,26 +119,18 @@ pub(crate) struct LogReader {
     dir: PathBuf,
     offset: u64,
     open: Option<(u64, File)>,
-    inotify: OwnedFd,
+    watch: DirWatch,
 }
 
 impl LogReader {
     pub fn at(dir: impl Into<PathBuf>, offset: u64) -> io::Result<Self> {
         let dir = dir.into();
-        let inotify = inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)?;
-        inotify::add_watch(
-            &inotify,
-            &dir,
-            inotify::WatchFlags::MODIFY
-                | inotify::WatchFlags::CREATE
-                | inotify::WatchFlags::MOVED_TO
-                | inotify::WatchFlags::DELETE_SELF,
-        )?;
+        let watch = DirWatch::open(&dir)?;
         Ok(Self {
             dir,
             offset,
             open: None,
-            inotify,
+            watch,
         })
     }
 
@@ -196,41 +185,16 @@ impl LogReader {
     }
 
     pub fn wait(&mut self, timeout: Duration) -> io::Result<bool> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            self.drain_events()?;
-            if self.end()? > self.offset {
-                return Ok(true);
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(false);
-            }
-            let spec = rustix::event::Timespec::try_from(left).map_err(io::Error::other)?;
-            let mut fds = [PollFd::new(&self.inotify, PollFlags::IN)];
-            match poll(&mut fds, Some(&spec)) {
-                Ok(0) => return Ok(self.end()? > self.offset),
-                Ok(_) => {
-                    self.drain_events()?;
-                    return Ok(self.end()? > self.offset);
-                }
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(e) => return Err(e.into()),
-            }
+        self.watch.drain()?;
+        if self.end()? > self.offset {
+            return Ok(true);
         }
-    }
-
-    fn drain_events(&self) -> io::Result<()> {
-        let mut buf = [MaybeUninit::<u8>::uninit(); 4096];
-        let mut reader = inotify::Reader::new(&self.inotify, &mut buf);
-        loop {
-            match reader.next() {
-                Ok(_) => {}
-                Err(rustix::io::Errno::AGAIN) => return Ok(()),
-                Err(rustix::io::Errno::INTR) => {}
-                Err(e) => return Err(e.into()),
-            }
+        if timeout.is_zero() {
+            return Ok(false);
         }
+        self.watch.wait(timeout)?;
+        self.watch.drain()?;
+        Ok(self.end()? > self.offset)
     }
 }
 

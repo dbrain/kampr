@@ -300,12 +300,7 @@ fn hosts_lock(session: &SessionDir) -> io::Result<fs::File> {
 }
 
 pub(crate) fn pid_alive(pid: u32) -> bool {
-    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
-    stat.rsplit_once(')')
-        .and_then(|(_, rest)| rest.split_ascii_whitespace().next())
-        .is_some_and(|state| state != "Z" && state != "X")
+    crate::sys::pid_alive(pid)
 }
 
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<T> {

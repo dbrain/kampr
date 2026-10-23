@@ -6,10 +6,11 @@ use crate::log::{Appender, DEFAULT_CAP};
 use crate::notify::notify;
 use crate::procs;
 use crate::sizes::write_size;
+use crate::sys::{self, Child, Usr1};
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::{Errno, FdFlags, fcntl_getfd, fcntl_setfd};
-use rustix::process::{Pid, PidfdFlags, WaitId, WaitIdOptions, getpid, getuid, pidfd_open, waitid};
+use rustix::process::{WaitIdOptions, getpid, getuid, waitid};
 use std::ffi::{CString, OsString};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -67,7 +68,7 @@ enum Outcome {
 
 pub fn serve(dir: &Path) -> Result<()> {
     let dir = std::path::absolute(dir)?;
-    let signals = SignalFd::usr1()?;
+    let signals = Usr1::open()?;
     let exe = own_exe()?;
     let session = SessionDir::at(&dir);
     let spec = session.spec().context("reading spec.json")?;
@@ -126,8 +127,8 @@ pub fn serve(dir: &Path) -> Result<()> {
     let tty = rustix::pty::ptsname(&master, Vec::new())
         .ok()
         .and_then(|n| n.into_string().ok());
-    let mut pidfd = Pid::from_raw(child as i32).and_then(|p| pidfd_open(p, PidfdFlags::empty()).ok());
-    let mut outcome = if pidfd.is_none() {
+    let mut watched = Child::watch(child);
+    let mut outcome = if watched.is_none() {
         Outcome::Lost
     } else {
         Outcome::Running
@@ -142,15 +143,22 @@ pub fn serve(dir: &Path) -> Result<()> {
         if left.is_some_and(|left| left.is_zero()) {
             break;
         }
-        let timeout = left.and_then(|left| Timespec::try_from(left).ok());
+        let tick = sys::TICK.filter(|_| watched.is_some());
+        let wake = match (left, tick) {
+            (Some(left), Some(tick)) => Some(left.min(tick)),
+            (left, tick) => left.or(tick),
+        };
+        let timeout = wake.and_then(|wake| Timespec::try_from(wake).ok());
         let (master_ready, ctl_ready, signal_ready, child_ready) = {
+            let signal_fd = signals.fd();
             let mut fds = vec![
                 PollFd::new(&master, PollFlags::IN),
                 PollFd::new(&listener, PollFlags::IN),
-                PollFd::new(&signals.fd, PollFlags::IN),
+                PollFd::new(&signal_fd, PollFlags::IN),
             ];
-            if let Some(pidfd) = &pidfd {
-                fds.push(PollFd::new(pidfd, PollFlags::IN));
+            let child_fd = watched.as_ref().and_then(Child::fd);
+            if let Some(fd) = &child_fd {
+                fds.push(PollFd::new(fd, PollFlags::IN));
             }
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) => {}
@@ -158,16 +166,22 @@ pub fn serve(dir: &Path) -> Result<()> {
                 Err(e) => return Err(e.into()),
             }
             let ready = |i: usize| fds.get(i).is_some_and(|f| !f.revents().is_empty());
-            (ready(0), ready(1), ready(2), ready(3))
+            (
+                ready(0),
+                ready(1),
+                ready(2),
+                ready(3) || (child_fd.is_none() && watched.is_some()),
+            )
         };
 
-        if child_ready && let Some(fd) = pidfd.take() {
-            outcome = reap(fd.as_fd());
+        if child_ready && let Some(watch) = &watched {
+            outcome = reap(watch);
             if !matches!(outcome, Outcome::Running) {
+                watched = None;
                 ended = Some(Instant::now());
             }
         }
-        if signal_ready && signals.take_usr1() {
+        if signal_ready && signals.take() {
             let err = reexec(&exe, &dir, master.as_fd(), child);
             eprintln!("kampr keep: re-exec of {} failed: {err}", exe.display());
             fcntl_setfd(&master, FdFlags::CLOEXEC)?;
@@ -191,8 +205,9 @@ pub fn serve(dir: &Path) -> Result<()> {
         }
     }
 
-    if let Some(fd) = pidfd.take() {
-        outcome = wait_for(fd.as_fd(), REAP_GRACE);
+    if let Some(watch) = watched.take() {
+        watch.settle(REAP_GRACE);
+        outcome = reap(&watch);
     }
     let (code, signal, status_lost) = match outcome {
         Outcome::Reaped { code, signal } => (code, signal, false),
@@ -257,7 +272,8 @@ fn parse_handover(value: &str) -> Result<(RawFd, u32)> {
 fn spawn_child(spec: &Spec) -> Result<Started> {
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     let program = spec.argv.first().context("the session has no command")?;
-    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)?;
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
+    fcntl_setfd(&master, FdFlags::CLOEXEC)?;
     grantpt(&master)?;
     unlockpt(&master)?;
     let name = ptsname(&master, Vec::new())?;
@@ -282,6 +298,7 @@ fn spawn_child(spec: &Spec) -> Result<Started> {
     let slave_raw = slave.as_raw_fd();
     unsafe {
         command.pre_exec(move || {
+            sys::child_pre_exec();
             if libc::setsid() < 0 || libc::ioctl(slave_raw, libc::TIOCSCTTY as _, 0) < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -320,11 +337,8 @@ fn child_env(spec: &Spec) -> Vec<(OsString, OsString)> {
     env
 }
 
-fn reap(pidfd: BorrowedFd<'_>) -> Outcome {
-    match waitid(
-        WaitId::PidFd(pidfd),
-        WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
-    ) {
+fn reap(child: &Child) -> Outcome {
+    match waitid(child.id(), WaitIdOptions::EXITED | WaitIdOptions::NOHANG) {
         Ok(Some(status)) => Outcome::Reaped {
             code: status.exit_status(),
             signal: status.terminating_signal(),
@@ -332,13 +346,6 @@ fn reap(pidfd: BorrowedFd<'_>) -> Outcome {
         Ok(None) => Outcome::Running,
         Err(_) => Outcome::Lost,
     }
-}
-
-fn wait_for(pidfd: BorrowedFd<'_>, grace: Duration) -> Outcome {
-    let timeout = Timespec::try_from(grace).ok();
-    let mut fds = [PollFd::new(&pidfd, PollFlags::IN)];
-    let _ = poll(&mut fds, timeout.as_ref());
-    reap(pidfd)
 }
 
 const DRAIN_MAX: usize = 1 << 20;
@@ -373,7 +380,7 @@ impl Keeper<'_> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(CTL_TIMEOUT))?;
         stream.set_write_timeout(Some(CTL_TIMEOUT))?;
-        if rustix::net::sockopt::socket_peercred(&stream)?.uid != getuid() {
+        if sys::peer_uid(&stream)? != getuid().as_raw() {
             return Ok(());
         }
         let mut line = String::new();
@@ -499,47 +506,5 @@ fn reexec(exe: &Path, dir: &Path, master: BorrowedFd<'_>, child: u32) -> io::Err
 }
 
 fn own_exe() -> Result<PathBuf> {
-    let link = std::fs::read_link("/proc/self/exe")?;
-    let bytes = link.as_os_str().as_bytes();
-    Ok(match bytes.strip_suffix(b" (deleted)") {
-        Some(stripped) => PathBuf::from(std::ffi::OsStr::from_bytes(stripped)),
-        None => link,
-    })
-}
-
-struct SignalFd {
-    fd: OwnedFd,
-}
-
-impl SignalFd {
-    fn usr1() -> Result<Self> {
-        unsafe {
-            let mut mask: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut mask);
-            libc::sigaddset(&mut mask, libc::SIGUSR1);
-            if libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut()) != 0 {
-                bail!("blocking SIGUSR1: {}", io::Error::last_os_error());
-            }
-            let fd = libc::signalfd(-1, &mask, libc::SFD_CLOEXEC | libc::SFD_NONBLOCK);
-            if fd < 0 {
-                bail!("signalfd: {}", io::Error::last_os_error());
-            }
-            Ok(Self {
-                fd: OwnedFd::from_raw_fd(fd),
-            })
-        }
-    }
-
-    fn take_usr1(&self) -> bool {
-        let mut got = false;
-        let mut info = [0u8; std::mem::size_of::<libc::signalfd_siginfo>()];
-        while let Ok(n) = rustix::io::read(&self.fd, &mut info) {
-            if n < info.len() {
-                break;
-            }
-            let signo = u32::from_ne_bytes([info[0], info[1], info[2], info[3]]);
-            got |= signo == libc::SIGUSR1 as u32;
-        }
-        got
-    }
+    Ok(sys::own_exe()?)
 }

@@ -96,7 +96,8 @@ impl Term {
     /// does not answer `OSC 7501;?` (#611).
     fn open_as(root: &Root, args: &[&str], cols: u16, rows: u16, answers_da1: bool) -> Self {
         use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).expect("openpt");
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("openpt");
+        rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("cloexec");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let name = ptsname(&master, Vec::new()).expect("ptsname");

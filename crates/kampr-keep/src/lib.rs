@@ -6,6 +6,7 @@ mod log;
 mod notify;
 mod procs;
 mod sizes;
+mod sys;
 mod upgrade;
 
 pub use ctl::{borrow, claim_size, close, state};

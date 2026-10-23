@@ -1,8 +1,7 @@
 use crate::dir::{CTL, SessionDir};
 use crate::procs::ProcState;
 use rustix::net::{
-    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage,
-    SendFlags, recvmsg, sendmsg,
+    RecvAncillaryBuffer, RecvAncillaryMessage, SendAncillaryBuffer, SendAncillaryMessage, recvmsg, sendmsg,
 };
 use rustix::process::{Pid, Signal, kill_process_group};
 use rustix::termios::{Winsize, tcsetwinsize};
@@ -35,7 +34,7 @@ fn request(session: &SessionDir, line: &str) -> io::Result<UnixStream> {
             Err(e) => return Err(e),
         }
     };
-    if rustix::net::sockopt::socket_peercred(&stream)?.uid != rustix::process::getuid() {
+    if crate::sys::peer_uid(&stream)? != rustix::process::getuid().as_raw() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is served by another uid", path.display()),
@@ -55,7 +54,7 @@ pub fn borrow(session: &SessionDir) -> io::Result<OwnedFd> {
         &stream,
         &mut [IoSliceMut::new(&mut byte)],
         &mut control,
-        RecvFlags::CMSG_CLOEXEC,
+        crate::sys::RECV,
     )?;
     for message in control.drain() {
         if let RecvAncillaryMessage::ScmRights(mut fds) = message
@@ -126,6 +125,6 @@ pub(crate) fn send_fd(stream: &UnixStream, fd: BorrowedFd<'_>) -> io::Result<()>
     let mut control = SendAncillaryBuffer::new(&mut space);
     let fds = [fd];
     control.push(SendAncillaryMessage::ScmRights(&fds));
-    sendmsg(stream, &[IoSlice::new(&[0])], &mut control, SendFlags::NOSIGNAL)?;
+    sendmsg(stream, &[IoSlice::new(&[0])], &mut control, crate::sys::SEND)?;
     Ok(())
 }
