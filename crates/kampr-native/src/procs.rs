@@ -119,8 +119,21 @@ mod tests {
                 Ok(())
             });
         }
-        let mut shell = command.spawn().expect("sh");
+        let shell = command.spawn().expect("sh");
         let child = shell.id();
+        // A terminal reads what the shell writes; one that does not leaves it blocked on a full pty.
+        let reader = unsafe { libc::dup(master) };
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while unsafe { libc::read(reader, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+            unsafe { libc::close(reader) };
+        });
+        let shell = std::sync::Arc::new(std::sync::Mutex::new(shell));
+        let watchdog = shell.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(30));
+            let _ = watchdog.lock().unwrap().kill();
+        });
         let named_now = || foreground(child).and_then(|fg| job(&fg));
         let until = |want: Option<&str>| {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -135,11 +148,15 @@ mod tests {
         let type_in = |bytes: &[u8]| unsafe {
             libc::write(master, bytes.as_ptr().cast(), bytes.len());
         };
+        eprintln!("at the prompt");
         assert!(until(None), "at the prompt: {:?}", named_now());
         type_in(b"cat\n");
+        eprintln!("typed cat");
         assert!(until(Some("cat")), "running cat: {:?}", named_now());
         type_in(b"\x04");
+        eprintln!("typed ctrl-d");
         assert!(until(None), "after ctrl-d: {:?}", named_now());
+        let mut shell = shell.lock().unwrap();
         let _ = shell.kill();
         let _ = shell.wait();
         unsafe {

@@ -379,6 +379,18 @@ async fn http(origin: &str, head: &str, body: &str) -> Value {
     serde_json::from_str(body.trim()).unwrap_or(Value::Null)
 }
 
+/// The herd lets a session go once its spec is deleted, which is before the rest of its directory.
+fn removed(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while path.exists() {
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 fn session_of(root: &Path, id: &str) -> kampr_keep::SessionDir {
     let local = id.rsplit_once("/n:").expect("a native id").1;
     kampr_keep::SessionDir::at(root.join(local))
@@ -589,7 +601,7 @@ async fn a_session_closed_on_purpose_leaves_the_herd_once_it_ends() {
     let closed = client.manage(json!({ "op": "native.close", "at": id })).await;
     assert_eq!(closed["ok"], json!(true), "{closed}");
     client.gone(&id).await;
-    assert!(!session_of(&h.root(), &id).path().exists());
+    assert!(removed(session_of(&h.root(), &id).path()));
 }
 
 /// A program that finished cleanly is gone, as a herdr pane is when its shell exits. One that
@@ -605,7 +617,7 @@ async fn a_clean_exit_leaves_the_herd_and_a_failed_one_stays_until_forgotten() {
         client.type_text(id, "\r").await;
     }
     client.gone(&clean).await;
-    assert!(!session_of(&h.root(), &clean).path().exists());
+    assert!(removed(session_of(&h.root(), &clean).path()));
 
     let pane = client.pane(&failed, |p| p.get("exited").is_some()).await;
     assert_eq!(pane["exited"], json!({ "code": 3 }), "{pane}");
@@ -615,7 +627,7 @@ async fn a_clean_exit_leaves_the_herd_and_a_failed_one_stays_until_forgotten() {
         .await;
     assert_eq!(forgot["ok"], json!(true), "{forgot}");
     client.gone(&failed).await;
-    assert!(!session_of(&h.root(), &failed).path().exists());
+    assert!(removed(session_of(&h.root(), &failed).path()));
 }
 
 #[tokio::test]
@@ -644,7 +656,7 @@ async fn a_session_that_ended_cleanly_while_no_node_ran_is_gone_when_one_starts(
     let mut client = h.client().await;
     client.pane(&failed, |p| p.get("exited").is_some()).await;
     assert!(!client.panes.contains_key(&clean), "{:?}", client.panes.keys());
-    assert!(!session_of(&h.root(), &clean).path().exists());
+    assert!(removed(session_of(&h.root(), &clean).path()));
 }
 
 #[tokio::test]
