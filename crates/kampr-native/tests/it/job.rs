@@ -54,9 +54,7 @@ async fn changes_to(provider: &NativeProvider, pane: &str, want: Option<&str>) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_job_that_ends_without_a_word_changes_the_herd() {
-    unsafe { std::env::set_var("KAMPR_DEBUG_JOB", "1") };
+async fn shell() -> (Root, NativeProvider, String) {
     let root = Root(
         tempfile::Builder::new()
             .prefix("kj")
@@ -80,6 +78,12 @@ async fn a_job_that_ends_without_a_word_changes_the_herd() {
         .await
         .expect("a session");
     tokio::time::sleep(Duration::from_millis(500)).await;
+    (root, provider, pane)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_that_ends_without_a_word_changes_the_herd() {
+    let (_root, provider, pane) = shell().await;
     provider
         .write_pane(&pane, Input::Bytes(b"cat\r".to_vec()))
         .await
@@ -90,4 +94,28 @@ async fn a_job_that_ends_without_a_word_changes_the_herd() {
         .await
         .expect("typed");
     changes_to(&provider, &pane, None).await;
+}
+
+/// A job read by the herd and ended before the follower next looks: what the herd was told is
+/// what has to be taken back, whether or not the follower ever saw it. Measured on CI's macOS
+/// runner, where this `cat` lived less than one look.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_the_herd_was_told_of_is_taken_back_even_if_it_ended_between_looks() {
+    let (_root, provider, pane) = shell().await;
+    for _ in 0..10 {
+        provider
+            .write_pane(&pane, Input::Bytes(b"cat\r".to_vec()))
+            .await
+            .expect("typed");
+        let deadline = Instant::now() + SOON;
+        while cmd(&provider, &pane).await.as_deref() != Some("cat") {
+            assert!(Instant::now() < deadline, "cat never ran");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        provider
+            .write_pane(&pane, Input::Bytes(b"\x04".to_vec()))
+            .await
+            .expect("typed");
+        changes_to(&provider, &pane, None).await;
+    }
 }

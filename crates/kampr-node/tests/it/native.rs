@@ -452,7 +452,6 @@ async fn a_session_made_over_the_wire_is_a_pane_that_echoes_what_is_typed() {
 /// shell's line editor takes as its history.
 #[tokio::test]
 async fn a_shell_at_its_prompt_names_no_job_and_the_job_it_runs_is_named() {
-    unsafe { std::env::set_var("KAMPR_DEBUG_JOB", "1") };
     let h = Harness::start().await;
     let mut client = h.client().await;
     let id = client.create(&["sh", "-i"], json!({})).await;

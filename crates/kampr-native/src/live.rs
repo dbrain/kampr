@@ -209,6 +209,13 @@ impl Live {
         self.topology.send_modify(|n| *n += 1);
     }
 
+    /// What the herd was last told the job is, so that [`Live::follow_job`] corrects the herd
+    /// rather than its own last look: a job that lives between two of its looks, as `cat` ended at
+    /// once by ctrl-d does, is otherwise published and never taken back.
+    pub(crate) fn published_job(&self, job: Option<(u32, Option<String>)>) {
+        self.activity.lock().unwrap().job = job;
+    }
+
     /// A job that starts or ends may print nothing the status sees, as a `cat` ended by ctrl-d
     /// does when the shell's prompt lands inside the echo window, and the herd would go on naming it.
     fn follow_job(&self) {
@@ -229,19 +236,6 @@ impl Live {
             .and_then(|k| procs::foreground(k.child))
             .map(|fg| (fg.pid, procs::job(&fg)));
         let mut activity = self.activity.lock().unwrap();
-        if std::env::var_os("KAMPR_DEBUG_JOB").is_some() {
-            use kampr_proc::Table;
-            let child = self.dir.keeper().map(|k| k.child).unwrap_or(0);
-            let t = kampr_proc::here();
-            eprintln!(
-                "follow_job: was {:?} now {:?}; child {child} tpgid {:?} children {:?} {:?}",
-                activity.job,
-                job,
-                t.tpgid(child),
-                t.children(child),
-                t.children(child).iter().map(|c| (t.comm(*c), t.argv(*c))).collect::<Vec<_>>()
-            );
-        }
         if activity.job != job {
             activity.job = job;
             drop(activity);

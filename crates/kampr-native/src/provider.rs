@@ -458,6 +458,10 @@ impl Inner {
             (None, Some(k)) if !lost => procs::foreground(k.child),
             _ => None,
         };
+        let job = fg.as_ref().map(|fg| (fg.pid, procs::job(fg)));
+        if let Some(live) = live {
+            live.published_job(job.clone());
+        }
         let harness = fg.as_ref().and_then(procs::harness);
         let agent = harness.as_ref().map(|(name, _)| name.to_string());
         let hosts = session.hosts();
@@ -506,8 +510,8 @@ impl Inner {
             cols: Some(cols),
             rows,
             scrollback_rows,
-            cmd: match &fg {
-                Some(fg) => procs::job(fg),
+            cmd: match job {
+                Some((_, job)) => job,
                 None => Some(
                     spec.argv
                         .first()
