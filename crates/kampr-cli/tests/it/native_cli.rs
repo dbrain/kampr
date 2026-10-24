@@ -73,7 +73,9 @@ impl Drop for Root {
 
 struct Term {
     master: File,
-    slave: OwnedFd,
+    // Held so the pty is not hung up between attaches.
+    _slave: OwnedFd,
+    name: std::ffi::CString,
     seen: Arc<Mutex<Vec<u8>>>,
     child: Child,
 }
@@ -137,10 +139,23 @@ impl Term {
         });
         Self {
             master,
-            slave,
+            _slave: slave,
+            name,
             seen,
             child,
         }
+    }
+
+    /// Opened afresh: macOS revokes every descriptor of a terminal whose session leader exits, and
+    /// the attach is that leader.
+    fn termios(&self) -> termios::Termios {
+        let tty = rustix::fs::open(
+            self.name.as_c_str(),
+            rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .expect("the terminal");
+        termios::tcgetattr(&tty).expect("termios")
     }
 
     fn screen(&self) -> String {
@@ -215,7 +230,7 @@ fn holder(session: &SessionDir) -> String {
 fn new_attaches_claims_its_size_follows_a_resize_and_leaves_with_the_status() {
     let root = Root::new();
     let mut term = Term::open(&root, &["new", "--", "sh", "-c", ECHO], 100, 30);
-    let cooked = termios::tcgetattr(&term.slave).expect("termios");
+    let cooked = term.termios();
     term.shows("prior-output");
     let [session] = root.sessions().try_into().expect("one session");
     assert!(until(|| holder(&session) == format!("attach:{}", term.child.id())));
@@ -238,7 +253,7 @@ fn new_attaches_claims_its_size_follows_a_resize_and_leaves_with_the_status() {
     term.type_line("size");
     term.shows("20 90");
 
-    let raw = termios::tcgetattr(&term.slave).expect("termios");
+    let raw = term.termios();
     assert!(!raw.local_modes.contains(LocalModes::ICANON | LocalModes::ECHO));
     term.type_line("quit");
     let code = term.exit_code();
@@ -248,7 +263,7 @@ fn new_attaches_claims_its_size_follows_a_resize_and_leaves_with_the_status() {
         "{}",
         term.raw()
     );
-    let after = termios::tcgetattr(&term.slave).expect("termios");
+    let after = term.termios();
     assert_eq!(after.local_modes, cooked.local_modes);
     assert_eq!(after.input_modes, cooked.input_modes);
     assert_eq!(after.output_modes, cooked.output_modes);
@@ -283,10 +298,10 @@ fn a_second_attach_takes_the_size_and_the_first_mirrors_it_under_a_banner() {
     second.shows(&format!("70x20 is held by attach:{}", first.child.id()));
     assert_eq!(session.hosts().len(), 2);
 
-    let cooked_before = termios::tcgetattr(&first.slave).expect("termios");
+    let cooked_before = first.termios();
     unsafe { libc::kill(second.child.id() as i32, libc::SIGTERM) };
     assert_eq!(second.exit_code(), 0);
-    let restored = termios::tcgetattr(&second.slave).expect("termios");
+    let restored = second.termios();
     assert!(
         restored
             .local_modes

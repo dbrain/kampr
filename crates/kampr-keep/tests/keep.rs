@@ -3,7 +3,7 @@ mod common;
 use common::{COUNTER, Live, contains, count, proc_alive, root, sh, until};
 use kampr_keep::{
     Host, How, Launch, Replay, SEGMENT, Size, SizedReader, borrow, claim_size, close, list, register_host,
-    segments, state,
+    segments,
 };
 use std::time::Duration;
 
@@ -197,6 +197,8 @@ fn usr1_re_execs_the_keeper_with_the_same_child_and_no_lost_bytes() {
     assert!(counted.lines > 30_000, "{} lines", counted.lines);
 }
 
+// `/proc/<pid>/syscall` has no macOS counterpart, and nor yet does the rest of the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn state_reads_the_childs_proc_files_as_its_ancestor() {
     let root = root();
@@ -205,7 +207,7 @@ fn state_reads_the_childs_proc_files_as_its_ancestor() {
     let mut got = None;
     assert!(
         until(SOON, || {
-            got = state(&live.session).ok();
+            got = kampr_keep::state(&live.session).ok();
             got.as_ref()
                 .and_then(|s| s.procs.first())
                 .and_then(|p| p.syscall.as_deref())

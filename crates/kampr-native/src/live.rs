@@ -1,3 +1,4 @@
+use crate::procs;
 use crate::replay::{self, Origin};
 use crate::screen::{Feed, Screen};
 use kampr_core::provider::{AgentStatus, PaneEvent, ProgramState, ProgramStatus};
@@ -48,6 +49,8 @@ struct Activity {
     done: bool,
     published: Option<AgentStatus>,
     typed_at_report: Option<u64>,
+    job_seen: Option<Instant>,
+    job: Option<(u32, Option<String>)>,
 }
 
 pub(crate) struct Joined {
@@ -206,6 +209,33 @@ impl Live {
         self.topology.send_modify(|n| *n += 1);
     }
 
+    /// A job that starts or ends may print nothing the status sees, as a `cat` ended by ctrl-d
+    /// does when the shell's prompt lands inside the echo window, and the herd would go on naming it.
+    fn follow_job(&self) {
+        let now = Instant::now();
+        {
+            let mut activity = self.activity.lock().unwrap();
+            if activity
+                .job_seen
+                .is_some_and(|at| now.saturating_duration_since(at) < TICK)
+            {
+                return;
+            }
+            activity.job_seen = Some(now);
+        }
+        let job = self
+            .dir
+            .keeper()
+            .and_then(|k| procs::foreground(k.child))
+            .map(|fg| (fg.pid, procs::job(&fg)));
+        let mut activity = self.activity.lock().unwrap();
+        if activity.job != job {
+            activity.job = job;
+            drop(activity);
+            self.bump();
+        }
+    }
+
     fn master(&self) -> std::io::Result<OwnedFd> {
         let mut master = self.master.lock().unwrap();
         if let Some(fd) = master.as_ref() {
@@ -265,6 +295,7 @@ impl Live {
                 Ok(Replay::CaughtUp) => {
                     self.caught_up();
                     self.tick();
+                    self.follow_job();
                     self.checkpoint(false);
                     if self.dir.exit().is_some() && reader.end().is_ok_and(|end| end <= reader.offset()) {
                         self.checkpoint(true);
