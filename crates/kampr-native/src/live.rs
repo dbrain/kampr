@@ -229,6 +229,9 @@ impl Live {
             .and_then(|k| procs::foreground(k.child))
             .map(|fg| (fg.pid, procs::job(&fg)));
         let mut activity = self.activity.lock().unwrap();
+        if std::env::var_os("KAMPR_DEBUG_JOB").is_some() {
+            eprintln!("follow_job: was {:?} now {:?}", activity.job, job);
+        }
         if activity.job != job {
             activity.job = job;
             drop(activity);

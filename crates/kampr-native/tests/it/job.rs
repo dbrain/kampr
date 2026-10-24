@@ -54,6 +54,7 @@ async fn changes_to(provider: &NativeProvider, pane: &str, want: Option<&str>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_that_ends_without_a_word_changes_the_herd() {
+    unsafe { std::env::set_var("KAMPR_DEBUG_JOB", "1") };
     let root = Root(
         tempfile::Builder::new()
             .prefix("kj")
