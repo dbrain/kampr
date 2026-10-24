@@ -330,6 +330,29 @@ with its exit status, until it is forgotten.
 
 `tests/it/wire_shapes.rs` covers the additions as it does today.
 
+### 6. macOS
+
+The same sessions run on a Mac, and CI's macOS job runs every test that needs no herdr, which is
+the only place any of it is exercised. What differs:
+
+- **What a node learns about a process** comes from `kampr-proc`: `/proc` on Linux, libproc and
+  `sysctl` on macOS (children, command line, name, working directory, terminal and its foreground
+  group, start, environment, open files). Claude records `procStart` on a Mac as
+  `LC_ALL=C TZ=UTC ps -o lstart=` prints it, and `kampr-proc` writes the same string.
+- **A keeper is judged stale by the file it recorded starting from** (`image`), since there is no
+  `/proc/<pid>/exe`; and it is confirmed to be that session's keeper by `KERN_PROCARGS2` and
+  `proc_pidinfo`'s working directory before it is signalled.
+- **A fleet run is read off its screen.** No kernel but Linux says which call a process is parked
+  in, so a prompt the wording rules do not recognise is not reported as waiting, and every run is
+  marked blind.
+- **A presence lock is a lock file held open**, since no macOS kernel lists its locks.
+- **A run's `PATH` adds what `-ic` adds to `-lic`**: a Mac's bash login shell never reads
+  `.bashrc`.
+- **A keeper's `ctl.sock` must fit in 104 bytes.** The default root, `/tmp/kampr-<uid>/s`, does; a
+  root under `$TMPDIR` (`/var/folders/…`) does not.
+- **Hanging up a group whose processes have all exited answers `EPERM`** rather than `ESRCH`, which
+  `close` takes as an ending.
+
 ## What the probes found
 
 Rows #575–#590, reproducible with `research/probe/native-host.py` against herdr 0.9.1 and 0.9.5,
