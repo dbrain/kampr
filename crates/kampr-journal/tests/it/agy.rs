@@ -6,7 +6,6 @@
 //! whole, because the difference between them is the reason one of them is the one opened.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -408,6 +407,7 @@ fn a_held_lock_with_no_transcript_behind_it_resolves_to_nothing() {
 /// Dropping a record is the dangerous direction, not the noisy one. A pid holding two presence
 /// locks whose second lock falls out of the view resolves to the first — the wrong-conversation
 /// answer this module exists to refuse — so a lock seen in *any* read is a lock held.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_lock_one_table_read_dropped_is_not_a_lock_released() {
     let home = presence_home("agy-dropped", &[AGY_SESSION, HELD]);
@@ -440,7 +440,9 @@ fn a_lock_one_table_read_dropped_is_not_a_lock_released() {
 /// device field is the kernel's own `major:minor` encoding, so a line the kernel wrote about a
 /// lock this process *is* holding is captured and its inode swapped, rather than the encoding
 /// being re-derived here and drifting from `presence.rs`.
+#[cfg(target_os = "linux")]
 fn fake_table(home: &Path, pid: u32, ids: &[&str]) -> String {
+    use std::os::unix::fs::MetadataExt;
     let witness_path = home.join("presence/witness.lock");
     File::create(&witness_path).unwrap();
     let witness = File::options().write(true).open(&witness_path).unwrap();

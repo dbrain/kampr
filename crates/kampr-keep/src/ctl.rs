@@ -1,5 +1,6 @@
 use crate::dir::{CTL, SessionDir};
 use crate::procs::ProcState;
+use kampr_proc::Table;
 use rustix::net::{
     RecvAncillaryBuffer, RecvAncillaryMessage, SendAncillaryBuffer, SendAncillaryMessage, recvmsg, sendmsg,
 };
@@ -116,6 +117,9 @@ pub fn close(session: &SessionDir) -> io::Result<()> {
         Pid::from_raw(keeper.child as i32).ok_or_else(|| io::Error::other("keeper.json names no child"))?;
     match kill_process_group(pid, Signal::HUP) {
         Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        // macOS refuses a group whose members have all exited and await their reaper rather than
+        // saying it has none; the session ended before it was hung up.
+        Err(rustix::io::Errno::PERM) if kampr_proc::here().argv(keeper.child).is_none() => Ok(()),
         Err(e) => Err(e.into()),
     }
 }

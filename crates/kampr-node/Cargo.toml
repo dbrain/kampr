@@ -39,6 +39,7 @@ ulid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+kampr-proc = { path = "../kampr-proc" }
 kampr-testkit = { path = "../kampr-testkit" }
 libc.workspace = true
 async-trait.workspace = true

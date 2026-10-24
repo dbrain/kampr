@@ -56,10 +56,11 @@ async fn redeeming_a_pairing_code_leaves_the_thread_that_asked_free() {
     // and a whole redemption of ~15 ms, so it sat three times above an ordinary scheduler hiccup
     // and three times below the defect. CI stalled for **5.027 ms** on a commit that changed one
     // Kotlin label, and a release stopped for it. Thousands of turns pass during a healthy
-    // redemption and none pass during one that holds this thread, so the floor has two orders of
-    // magnitude either side of it and no opinion about how fast the runner is.
+    // redemption and none pass during one that holds this thread, so the floor has room either
+    // side of it and no opinion about how fast the runner is. An Apple core derives in a few
+    // milliseconds and gave 55, which the floor still sits well below.
     assert!(
-        during > 100,
+        during > 10,
         "the derivation ran on the only thread there was: the rest of the runtime got {during} \
          turns while it worked, and its longest wait was {longest:?}"
     );

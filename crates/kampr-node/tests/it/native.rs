@@ -450,7 +450,33 @@ async fn a_shell_at_its_prompt_names_no_job_and_the_job_it_runs_is_named() {
     client.type_text(&id, "cat\r").await;
     client.pane(&id, |p| p["cmd"] == "cat").await;
     client.type_text(&id, "\x04").await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    eprintln!("{}", processes_of(&session_of(&h.root(), &id)));
     client.pane(&id, |p| p["cmd"].is_null()).await;
+}
+
+fn processes_of(session: &kampr_keep::SessionDir) -> String {
+    use kampr_proc::Table;
+    let table = kampr_proc::here();
+    let Some(child) = session.keeper().map(|k| k.child) else {
+        return "no keeper".into();
+    };
+    let mut seen = vec![child];
+    let mut at = 0;
+    let mut out = String::new();
+    while let Some(&pid) = seen.get(at) {
+        out += &format!(
+            "{pid}: comm={:?} argv={:?} tpgid={:?} tty={:?} children={:?}\n",
+            table.comm(pid),
+            table.argv(pid),
+            table.tpgid(pid),
+            table.tty(pid),
+            table.children(pid)
+        );
+        seen.extend(table.children(pid));
+        at += 1;
+    }
+    out
 }
 
 #[tokio::test]
@@ -712,7 +738,7 @@ fn osc7501_claude(dir: &Path) -> PathBuf {
     let path = dir.join("claude");
     let script = r#"#!/bin/sh
 home=$1
-start=$(cut -d' ' -f22 /proc/$$/stat)
+start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$)
 mkdir -p "$home/.claude/sessions"
 printf '{"pid":%s,"sessionId":"77777777-7777-4777-8777-777777777777","cwd":"%s","procStart":"%s","version":"2.1.308","kind":"interactive","entrypoint":"cli","status":"waiting"}' $$ "$(pwd -P)" "$start" > "$home/.claude/sessions/$$.json"
 stty -echo -icanon min 0 time 30
@@ -947,10 +973,10 @@ fn fake_claude(dir: &Path, status: &str) -> PathBuf {
         r#"#!/bin/sh
 home=$1; id=$2
 cwd=$(pwd -P)
-start=$(cut -d' ' -f22 /proc/$$/stat)
+start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$)
 project="$home/.claude/projects/$(printf %s "$cwd" | tr / -)"
 mkdir -p "$project" "$home/.claude/sessions"
-now=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+now=$(date -u +%Y-%m-%dT%H:%M:%S.999Z)
 printf '{{"type":"user","uuid":"%s-1","cwd":"%s","timestamp":"%s","message":{{"role":"user","content":"hello"}}}}\n' "$id" "$cwd" "$now" > "$project/$id.jsonl"
 printf '{{"type":"assistant","uuid":"%s-2","cwd":"%s","timestamp":"%s","message":{{"content":[{{"type":"text","text":"NATIVE TURN"}}]}}}}\n' "$id" "$cwd" "$now" >> "$project/$id.jsonl"
 printf '{{"type":"ai-title","aiTitle":"the native rewrite","sessionId":"%s"}}\n' "$id" >> "$project/$id.jsonl"
@@ -1036,7 +1062,7 @@ async fn a_dialog_on_a_native_claude_is_answered_with_the_moves_its_cursor_needs
     let claude = h.work().join("claude");
     std::fs::write(
         &claude,
-        "#!/bin/sh\ncat \"$1\"\nstty raw -echo\nk=$(head -c 4 | od -An -tx1)\nstty sane\n\
+        "#!/bin/sh\ncat \"$1\"\nstty raw -echo\nk=$(head -c 4 | od -An -tx1 | tr -s ' ' | sed 's/ *$//')\nstty sane\n\
          printf '\\nKEYS[%s]\\n' \"$k\"\nexec sleep 600\n",
     )
     .unwrap();

@@ -88,10 +88,12 @@ async fn a_waiting_run_reports_blocked_so_the_existing_ordering_floats_it_to_the
         .wait_for(&pane_id, |s| matches!(s, State::Waiting(_)))
         .await;
     assert_eq!(pane.agent_status, AgentStatus::Blocked);
-    assert!(
-        !pane.fleet.as_ref().unwrap().blind && pane.detail.is_none(),
-        "a run its keeper can read was reported blind"
-    );
+    if cfg!(target_os = "linux") {
+        assert!(
+            !pane.fleet.as_ref().unwrap().blind && pane.detail.is_none(),
+            "a run its keeper can read was reported blind"
+        );
+    }
     let question = pane.fleet.unwrap().state.question().cloned().expect("a question");
     assert_eq!(question.prompt, ":: Proceed with installation? [Y/n]");
     assert_eq!(question.options().len(), 2);
@@ -142,7 +144,12 @@ async fn a_run_that_fails_is_not_reported_as_one_that_succeeded() {
 async fn keys_sent_as_names_reach_the_command_as_bytes() {
     let provider = Fleet::default();
     let pane_id = provider
-        .start("c", &sh("read a; exit 0"), None, Geometry::default())
+        .start(
+            "c",
+            &sh("printf 'Continue? [y/N] '; read a; exit 0"),
+            None,
+            Geometry::default(),
+        )
         .await
         .expect("a run");
     provider
@@ -385,7 +392,11 @@ async fn a_line_the_operator_would_type_in_their_own_shell_runs_as_one() {
             "echo redirected > out.txt && cat out.txt",
             "redirected",
         ),
-        ("a substitution", "echo \"count $(ls *.rs | wc -l)\"", "count 2"),
+        (
+            "a substitution",
+            "echo \"count $(ls *.rs | wc -l | tr -d ' ')\"",
+            "count 2",
+        ),
     ];
 
     for (what, line, expect) in cases {

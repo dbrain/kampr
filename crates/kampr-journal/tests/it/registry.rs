@@ -356,7 +356,7 @@ fn a_pi_pane_serves_the_session_its_processes_name_despite_a_lively_cwd() {
         )
         .unwrap()
         .expect("the pane's own session resolves");
-    assert_eq!(found, own);
+    assert_eq!(found.canonicalize().unwrap(), own.canonicalize().unwrap());
 }
 
 /// The cwd handle stays for the harnesses whose process names its session on every tick: omp is
@@ -378,7 +378,7 @@ fn a_non_sticky_pane_still_resolves_from_a_lively_cwd() {
         )
         .unwrap()
         .expect("omp is not sticky, so the cwd answers");
-    assert_eq!(found, foreign);
+    assert_eq!(found.canonicalize().unwrap(), foreign.canonicalize().unwrap());
 }
 
 /// A node restart loses the in-memory record, not the file: an idle pi pane lands on the session
@@ -417,7 +417,7 @@ fn an_idle_pi_pane_after_a_node_restart_stays_on_its_last_seen_session() {
         .locate("n/w1:p1", Some("pi"), None, Some(&cwd), &Harness::Unknown)
         .unwrap()
         .expect("the record of the last run is the pane's own");
-    assert_eq!(found, own);
+    assert_eq!(found.canonicalize().unwrap(), own.canonicalize().unwrap());
 }
 
 /// The record is what keeps a restarted idle pi pane off the neighbour's transcript: the

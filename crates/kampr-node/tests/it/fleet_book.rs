@@ -49,7 +49,12 @@ impl Drop for Harness {
 
 impl Harness {
     async fn start() -> Self {
-        let home = tempfile::tempdir().expect("a home");
+        // A keeper's ctl.sock must fit in sun_path, which macOS caps at 104 bytes and its TMPDIR
+        // alone nearly fills.
+        let home = tempfile::Builder::new()
+            .prefix("kb")
+            .tempdir_in("/tmp")
+            .expect("a home");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -60,7 +65,13 @@ impl Harness {
     /// The same state directory, a new process's worth of node. The listener is rebound to the
     /// port the first one had so a caller keeps one origin across the restart.
     async fn restart(mut self) -> Self {
-        let home = std::mem::replace(&mut self.home, tempfile::tempdir().expect("a spare"));
+        let home = std::mem::replace(
+            &mut self.home,
+            tempfile::Builder::new()
+                .prefix("kb")
+                .tempdir_in("/tmp")
+                .expect("a spare"),
+        );
         let port = self.port;
         drop(self);
         // The old server's socket is closed in `Drop`; the kernel may take a moment to say so.

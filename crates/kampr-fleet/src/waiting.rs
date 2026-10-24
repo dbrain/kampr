@@ -35,7 +35,7 @@ pub enum Waiting {
 /// `splice` is here because coreutils `cat` parks there rather than in `read`, with fd 0 still in
 /// the first argument (#335) — the syscall is the implementation's choice and the fd is the
 /// invariant.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const READS_FD0: &[u64] = &[
     0,   // read
     17,  // pread64
@@ -45,7 +45,7 @@ const READS_FD0: &[u64] = &[
     327, // preadv2
 ];
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const READS_FD0: &[u64] = &[
     63,  // read
     65,  // readv
@@ -55,7 +55,9 @@ const READS_FD0: &[u64] = &[
     286, // preadv2
 ];
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+// No kernel but Linux says which call a process is parked in, so elsewhere a run is read off its
+// screen and called blind.
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 const READS_FD0: &[u64] = &[];
 
 /// The state of the run's child, or of the deepest descendant of it that has an opinion, from the
@@ -152,7 +154,8 @@ pub fn mode_of(fd: std::os::fd::BorrowedFd<'_>) -> Option<Mode> {
     })
 }
 
-#[cfg(test)]
+// Lines captured on x86_64 Linux, numbered by its syscall table.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
     use super::*;
 

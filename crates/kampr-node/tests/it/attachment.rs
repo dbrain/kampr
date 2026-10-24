@@ -681,14 +681,20 @@ async fn a_file_at_the_ceiling_crosses_the_local_route_whole() {
     );
 }
 
-/// `VmHWM`, the high-water mark, so a buffer that has already been freed is still counted.
+/// The high-water mark in KiB, so a buffer that has already been freed is still counted. Linux
+/// reports `ru_maxrss` in KiB and macOS in bytes.
 fn peak_rss() -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .expect("a Linux /proc")
-        .lines()
-        .find_map(|line| line.strip_prefix("VmHWM:"))
-        .and_then(|v| v.split_whitespace().next()?.parse().ok())
-        .expect("VmHWM")
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+        0
+    );
+    let peak = unsafe { usage.assume_init() }.ru_maxrss as u64;
+    if cfg!(target_os = "macos") {
+        peak / 1024
+    } else {
+        peak
+    }
 }
 
 /// The wiring for the expansion, measured through the route rather than under it: the home a

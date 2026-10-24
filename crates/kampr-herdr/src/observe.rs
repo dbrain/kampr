@@ -140,7 +140,11 @@ mod tests {
         assert!(said.contains("not an executable file"), "{said}");
 
         // An exec bit on something that is not a program — a truncated download, a binary for
-        // another architecture. It gets as far as execve, so the os error is the diagnosis.
+        // another architecture. It gets as far as execve, so the os error is the diagnosis. macOS
+        // spawns with posix_spawn, which reports it only once the child has gone.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
         let junk = dir.path().join("herdr");
         std::fs::write(&junk, [0u8, 1, 2, 3]).expect("a file");
         #[cfg(unix)]

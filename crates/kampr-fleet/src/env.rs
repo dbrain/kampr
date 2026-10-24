@@ -27,9 +27,12 @@
 //! | `bash -ic` | `~/.local/bin`, **`~/.nvm/.../bin`, `~/go/bin`, `~/dev/houseofdoge/hod-scripts`**, the Android SDK, then the system three |
 //! | `bash -lic` | the union of both, and the only reading that is a superset of the shell the operator types into |
 //!
-//! So `-lic` is asked first and `-lc` is the fallback for a shell that will not take it. The two
-//! run concurrently under one deadline, because a fallback that only starts when the first has
-//! given up doubles the worst case at node start.
+//! So `-lic` is asked first and `-lc` is the fallback for a shell that will not take it. `-ic` is
+//! asked as well and whatever it adds is appended, because the union above is a distribution's
+//! doing: Arch's `.bash_profile` sources `.bashrc`, and a Mac's does not, so there a login shell
+//! never reads it and CI's macOS runner resolves directories in its terminal that `-lic` lacks.
+//! All three run concurrently under one deadline, because a fallback that only starts when the
+//! first has given up doubles the worst case at node start.
 //!
 //! The stderr of an interactive shell with no tty is noisy — `cannot set terminal process group`,
 //! `no job control in this shell`, `stty: standard input` — and it is discarded, as it already
@@ -54,6 +57,9 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 /// half this herd (#419). `-lc` is what answers on a shell that refuses `-i` with no tty, and it
 /// is what this read has always done.
 const READINGS: [&str; 2] = ["-lic", "-lc"];
+
+/// Asked beside them, and only ever added to the answer.
+const INTERACTIVE: &str = "-ic";
 
 /// Asked between NUL markers, because a profile prints things and an interactive one prints more.
 const PROBE: &str = "printf '\\0%s\\0' \"$PATH\"";
@@ -206,11 +212,15 @@ fn passwd_shell() -> Option<String> {
 /// `direnv` line, and an interactive shell's own hello. What is wanted is between the two NULs and
 /// everything else on the stream is somebody saying hello.
 fn capture(shell: &str) -> Option<String> {
+    capture_with(shell, ask)
+}
+
+fn capture_with(shell: &str, ask: fn(&str, &str) -> Option<String>) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     // On threads, and abandoned rather than killed if they overrun: `output()` drains the child's
     // pipes, which is what stops a chatty profile from deadlocking the read, and a child left to
     // finish a profile costs one short-lived process against a node that hangs.
-    for (rank, flags) in READINGS.iter().enumerate() {
+    for (rank, flags) in READINGS.iter().chain([&INTERACTIVE]).enumerate() {
         let shell = shell.to_string();
         let flags = flags.to_string();
         let tx = tx.clone();
@@ -222,23 +232,30 @@ fn capture(shell: &str) -> Option<String> {
 
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     let mut best: Option<(usize, String)> = None;
-    for _ in 0..READINGS.len() {
+    let mut interactive: Option<String> = None;
+    for _ in 0..=READINGS.len() {
         let Ok((rank, answer)) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
             break;
         };
         let Some(answer) = answer else { continue };
-        if best.as_ref().is_none_or(|(seen, _)| rank < *seen) {
+        if rank == READINGS.len() {
+            interactive = Some(answer);
+        } else if best.as_ref().is_none_or(|(seen, _)| rank < *seen) {
             best = Some((rank, answer));
         }
-        // Nothing can beat the first reading, so waiting for the other is waiting for nothing.
-        if rank == 0 {
+        // Nothing can beat the first reading, and the interactive one only adds to it.
+        if best.as_ref().is_some_and(|(rank, _)| *rank == 0) && interactive.is_some() {
             break;
         }
     }
-    best.map(|(rank, answer)| {
-        debug!(%shell, flags = READINGS[rank], "read a PATH");
-        answer
-    })
+    let Some((rank, mut path)) = best else {
+        return interactive;
+    };
+    debug!(%shell, flags = READINGS[rank], "read a PATH");
+    if let Some(interactive) = interactive {
+        path = once_each(&format!("{path}:{interactive}"));
+    }
+    Some(path)
 }
 
 fn ask(shell: &str, flags: &str) -> Option<String> {
@@ -426,7 +443,7 @@ mod tests {
     /// A tool the operator installed works in their terminal and was invisible to a fleet run,
     /// because the reading was `-lc` and the directory is added by `.bashrc`. So the assertion is
     /// about *their* shell rather than about a string: whatever an interactive shell has and a
-    /// login shell does not, the first reading in [`READINGS`] must carry.
+    /// login shell does not, the reading a run is given must carry.
     ///
     /// **From a cleared environment, which is the whole point.** A shell inherits the `PATH` it
     /// was started with and appends to it, so asking any of these from a terminal answers with the
@@ -437,10 +454,9 @@ mod tests {
     /// whose `.bashrc` adds no directory cannot fail this however it is broken, and a test that
     /// says `ok` for that reason is the [#233](../../../docs/03-probe-log.md) shape again.
     #[test]
-    fn the_first_reading_asked_for_carries_what_the_operators_own_terminal_resolves() {
-        let shell = login_shell();
-        let from_a_service_manager = |flags: &str| -> Option<String> {
-            let out = std::process::Command::new(&shell)
+    fn the_reading_a_run_is_given_carries_what_the_operators_own_terminal_resolves() {
+        fn from_a_service_manager(shell: &str, flags: &str) -> Option<String> {
+            let out = std::process::Command::new(shell)
                 .env_clear()
                 .env("HOME", std::env::var("HOME").unwrap_or_default())
                 .args([flags, PROBE])
@@ -452,11 +468,12 @@ mod tests {
                 .success()
                 .then(|| between_markers(&String::from_utf8_lossy(&out.stdout)))
                 .flatten()
-        };
+        }
+        let shell = login_shell();
         let (Some(first), Some(interactive), Some(login)) = (
-            from_a_service_manager(READINGS[0]),
-            from_a_service_manager("-ic"),
-            from_a_service_manager("-lc"),
+            capture_with(&shell, from_a_service_manager),
+            from_a_service_manager(&shell, INTERACTIVE),
+            from_a_service_manager(&shell, "-lc"),
         ) else {
             eprintln!("SKIPPED: {shell} did not answer all three readings; nothing was asserted");
             return;

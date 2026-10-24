@@ -42,11 +42,15 @@ pub fn flocks(table: &str) -> Vec<(u32, u32, u32, u64)> {
 /// More than one held lock is a shape nothing observed produces, and there is no way to tell
 /// which of them the operator is looking at, so it answers nothing rather than guessing.
 pub fn holder(presence: &Path, pid: u32) -> Option<String> {
-    holder_from(presence, pid, || std::fs::read_to_string(LOCK_TABLE).ok())
+    only(held(presence, pid))
 }
 
 pub fn holder_from(presence: &Path, pid: u32, table: impl FnMut() -> Option<String>) -> Option<String> {
-    let mut held = held_from(presence, pid, table).into_iter();
+    only(held_from(presence, pid, table))
+}
+
+fn only(held: Vec<String>) -> Option<String> {
+    let mut held = held.into_iter();
     let one = held.next()?;
     held.next().is_none().then_some(one)
 }

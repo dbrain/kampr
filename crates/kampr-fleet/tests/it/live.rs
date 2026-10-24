@@ -68,8 +68,10 @@ async fn a_command_sitting_at_a_prompt_is_reported_as_waiting_with_what_it_asked
     assert_eq!(question.options().len(), 2, "{:?}", question.shape);
     assert!(!question.secret());
     // Measured rather than guessed: a same-uid child is readable, so the screen never had to
-    // speak for the kernel here.
-    assert!(!question.inferred, "this one should have come from /proc");
+    // speak for the kernel here. Only Linux says which call a process is parked in.
+    if cfg!(target_os = "linux") {
+        assert!(!question.inferred, "this one should have come from /proc");
+    }
 
     run.answer(b"n\n").await;
     let end = run.finish().await;
@@ -101,6 +103,8 @@ async fn a_prompt_with_echo_turned_off_is_a_secret_and_offers_no_buttons() {
     assert!(matches!(end, State::Exited { code: Some(0), .. }), "{end:?}");
 }
 
+// The kernel's half, which only Linux has.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_prompt_nothing_recognises_is_still_reported_as_waiting_and_is_still_answerable() {
     // The fallback rung. Detection of the *wording* fails here on purpose; the host must still
@@ -219,13 +223,8 @@ async fn a_run_can_be_ended_from_the_outside_while_it_sits_at_a_prompt() {
 /// A pid that exists and has not become a zombie. A reaped-but-unwaited child keeps its `/proc`
 /// entry, so existence alone would call every finished run alive.
 fn alive(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
-    let Some(after_comm) = stat.rsplit_once(") ") else {
-        return false;
-    };
-    !matches!(after_comm.1.split_whitespace().next(), Some("Z") | None)
+    use kampr_proc::Table;
+    kampr_proc::here().argv(pid).is_some()
 }
 
 #[tokio::test]

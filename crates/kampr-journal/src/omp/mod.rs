@@ -758,8 +758,12 @@ pub fn pi_queued(screen: &[&str]) -> Vec<Queued> {
 
 /// A session file rather than one of the transcripts it launched: `sessions/<bucket>/<file>.jsonl`
 /// exactly, where a subagent's is `sessions/<bucket>/<session>/<name>.jsonl`.
+/// Compared canonical: on macOS `/var` is `/private/var`, and the path a process names in its
+/// environment or holds open need not be spelled the way this root was.
 fn is_session_file(sessions: &Path, path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "jsonl") && path.parent().and_then(Path::parent) == Some(sessions)
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    path.extension().is_some_and(|e| e == "jsonl")
+        && path.parent().and_then(Path::parent).map(canonical) == Some(canonical(sessions))
 }
 
 /// `<timestamp>_<id>.jsonl` — the id is what `--resume` takes and what a pane announces.
@@ -1296,7 +1300,11 @@ mod tests {
         );
         assert_eq!(bucket(Some(home), temp, home), "-");
         assert_eq!(bucket(Some(home), temp, Path::new("/var/lib/x")), "--var-lib-x--");
-        // Measured: the bucket omp made for this repo's own scratch project.
+        // Measured: the bucket omp made for this repo's own scratch project, where `/tmp` is not a
+        // link to `/private/tmp` as it is on macOS.
+        if Path::new("/tmp").canonicalize().ok().as_deref() != Some(temp) {
+            return;
+        }
         assert_eq!(
             bucket(
                 Some(home),

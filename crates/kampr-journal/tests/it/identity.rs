@@ -434,6 +434,7 @@ fn transcript(cwd: &str, pad: usize, at: u64) -> String {
 /// `/proc/<pid>/stat` is what Claude records as `procStart`, and reading field 21 or 23 instead
 /// would produce a plausible number that never matches anything. Checked against this test's own
 /// process, and against `/proc/self/stat` read a second way.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_process_start_is_read_from_the_field_claude_records() {
     let me = std::process::id();
@@ -472,6 +473,7 @@ fn a_process_start_is_read_from_the_field_claude_records() {
 ///
 /// So it is derived instead from field 22 against `/proc/uptime`, both counted from the same boot
 /// clock, and this asserts that over every process on the machine rather than over one.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_process_start_is_when_the_process_started_and_not_when_procfs_minted_its_directory() {
     let hz = seconds_per_tick();
@@ -500,6 +502,7 @@ fn a_process_start_is_when_the_process_started_and_not_when_procfs_minted_its_di
     assert!(checked > 10, "only {checked} processes were readable");
 }
 
+#[cfg(target_os = "linux")]
 fn field_22(pid: u32) -> Option<f64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat[stat.rfind(") ")? + 2..]
@@ -509,6 +512,7 @@ fn field_22(pid: u32) -> Option<f64> {
         .ok()
 }
 
+#[cfg(target_os = "linux")]
 fn uptime() -> Option<f64> {
     std::fs::read_to_string("/proc/uptime")
         .ok()?
@@ -518,6 +522,7 @@ fn uptime() -> Option<f64> {
         .ok()
 }
 
+#[cfg(target_os = "linux")]
 fn seconds_per_tick() -> f64 {
     let ticks = String::from_utf8(
         std::process::Command::new("getconf")
