@@ -382,12 +382,7 @@ impl Inner {
             .lock()
             .unwrap()
             .remove(&format!("{PREFIX}{}", session.id()));
-        match std::fs::remove_dir_all(session.path()) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(e).with_context(|| format!("removing {}", session.path().display()));
-            }
-            _ => {}
-        }
+        remove_settled(session.path()).with_context(|| format!("removing {}", session.path().display()))?;
         self.bump();
         Ok(())
     }
@@ -745,9 +740,65 @@ fn visible(s: &Screen) -> String {
     s.read_rows(end, end + rows - 1).unwrap_or_default().join("\n")
 }
 
+/// A session that has just ended is still being written to as it goes: the keeper takes its socket
+/// down and the follower lays its last checkpoint, and a removal racing either fails part way and
+/// leaves a directory nothing lists or forgets again.
+fn remove_settled(path: &Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.exists() => return Ok(()),
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 pub fn login_shell() -> String {
     std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/bin/sh".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_settled;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn a_directory_still_being_written_to_is_removed_once_its_writers_stop() {
+        let root = tempfile::tempdir().expect("a root");
+        let dir = root.path().join("01ja");
+        std::fs::create_dir(&dir).expect("a session");
+        for n in 0..200 {
+            std::fs::write(dir.join(format!("seg-{n}")), b"x").expect("a file");
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (dir, stop) = (dir.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let mut n = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::write(dir.join(format!("late-{n}")), b"x");
+                    n += 1;
+                }
+            })
+        };
+        let stopper = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                stop.store(true, Ordering::Relaxed);
+            })
+        };
+        remove_settled(&dir).expect("removed");
+        stopper.join().unwrap();
+        writer.join().unwrap();
+        assert!(!dir.exists());
+    }
 }
