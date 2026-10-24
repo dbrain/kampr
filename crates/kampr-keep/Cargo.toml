@@ -12,6 +12,7 @@ test = false
 
 [dependencies]
 anyhow.workspace = true
+kampr-proc = { path = "../kampr-proc" }
 libc.workspace = true
 rustix = { workspace = true, features = ["fs", "event", "net", "pty", "termios", "process"] }
 serde.workspace = true

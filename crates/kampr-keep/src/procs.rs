@@ -1,3 +1,4 @@
+use kampr_proc::Table;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -32,19 +33,21 @@ pub(crate) fn read(child: u32, tty: Option<String>) -> ProcState {
 }
 
 fn walk(pid: u32, depth: usize, out: &mut Vec<Proc>) {
-    let base = format!("/proc/{pid}");
-    let Ok(stat) = fs::read_to_string(format!("{base}/stat")) else {
+    let table = kampr_proc::here();
+    if table.comm(pid).is_none() {
         return;
-    };
+    }
+    // stat, syscall, wchan and fd/0 are Linux's own, and what the fleet's `waiting` reads.
+    let base = format!("/proc/{pid}");
     let children = if depth < DEPTH {
-        children(&base)
+        table.children(pid)
     } else {
         Vec::new()
     };
     out.push(Proc {
         pid,
         children: children.clone(),
-        stat: Some(stat.trim_end().to_string()),
+        stat: read_trimmed(&format!("{base}/stat")),
         syscall: read_trimmed(&format!("{base}/syscall")),
         wchan: read_trimmed(&format!("{base}/wchan")),
         fd0: fs::read_link(format!("{base}/fd/0"))
@@ -54,24 +57,6 @@ fn walk(pid: u32, depth: usize, out: &mut Vec<Proc>) {
     for child in children {
         walk(child, depth + 1, out);
     }
-}
-
-fn children(base: &str) -> Vec<u32> {
-    let Ok(threads) = fs::read_dir(format!("{base}/task")) else {
-        return Vec::new();
-    };
-    let mut pids: Vec<u32> = threads
-        .flatten()
-        .filter_map(|t| fs::read_to_string(t.path().join("children")).ok())
-        .flat_map(|text| {
-            text.split_ascii_whitespace()
-                .filter_map(|p| p.parse().ok())
-                .collect::<Vec<u32>>()
-        })
-        .collect();
-    pids.sort_unstable();
-    pids.dedup();
-    pids
 }
 
 fn read_trimmed(path: &str) -> Option<String> {

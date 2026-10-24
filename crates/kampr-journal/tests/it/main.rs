@@ -12,6 +12,7 @@ mod harness_facets;
 mod identity;
 mod live;
 mod omp;
+mod presence;
 mod probe_search;
 mod registry;
 mod scratch;

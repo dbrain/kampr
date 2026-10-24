@@ -2500,6 +2500,7 @@ dependencies = [
  "futures-util",
  "kampr-herdr",
  "kampr-journal",
+ "kampr-proc",
  "kampr-term",
  "kampr-testkit",
  "serde",
@@ -2550,6 +2551,7 @@ name = "kampr-journal"
 version = "0.1.119"
 dependencies = [
  "base64 0.23.1",
+ "kampr-proc",
  "libc",
  "memchr",
  "serde",
@@ -2563,6 +2565,7 @@ name = "kampr-keep"
 version = "0.1.119"
 dependencies = [
  "anyhow",
+ "kampr-proc",
  "libc",
  "rustix",
  "serde",
@@ -2604,6 +2607,7 @@ dependencies = [
  "kampr-core",
  "kampr-journal",
  "kampr-keep",
+ "kampr-proc",
  "kampr-term",
  "kampr-testkit",
  "libc",
@@ -2664,6 +2668,14 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "url",
+]
+
+[[package]]
+name = "kampr-proc"
+version = "0.1.119"
+dependencies = [
+ "libc",
+ "tempfile",
 ]
 
 [[package]]

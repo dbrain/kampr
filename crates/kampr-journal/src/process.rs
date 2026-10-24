@@ -1,4 +1,4 @@
-use std::path::Path;
+use kampr_proc::Table;
 use std::time::{Duration, SystemTime};
 
 /// The harness process a pane is running.
@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneProcess {
     pub pid: u32,
-    /// Field 22 of `/proc/<pid>/stat`, which is what Claude records verbatim as `procStart`.
-    /// Comparing it is what separates a live process from the dead one whose pid it inherited.
+    /// What Claude records verbatim as `procStart` ([`kampr_proc::Start::token`]). Comparing it
+    /// is what separates a live process from the dead one whose pid it inherited.
     pub start: Option<String>,
     /// When the process started. For the harnesses that publish no process-to-session map at all,
     /// this is still a bound worth having: a transcript whose last word was written before the
@@ -22,8 +22,8 @@ pub struct PaneProcess {
 
 /// When a process started, and the answer that is neither an instant nor "it has gone".
 ///
-/// **`Unknown` is not "long ago" and it is not "just now".** A host with no procfs — every darwin
-/// build ships without one — a pid that has already been reaped, a read the kernel refuses: each
+/// **`Unknown` is not "long ago" and it is not "just now".** A host that cannot describe its
+/// processes, a pid that has already been reaped, a read the kernel refuses: each
 /// of them means *nothing has been learned*, and a caller that folds that into an instant answers
 /// a question it cannot answer ([#233](#)). Every branch has to be named at the call site, which
 /// is the point of it being an enum rather than an `Option` somebody can `unwrap_or`.
@@ -57,14 +57,18 @@ impl Started {
 }
 
 impl PaneProcess {
-    /// Reads what procfs knows about a live local pid. Every field can come back unanswered
-    /// because a platform without procfs must degrade to a weaker rule rather than to no
+    /// Reads what this host knows about a live local pid. Every field can come back unanswered
+    /// because a host that cannot see must degrade to a weaker rule rather than to no
     /// conversation at all.
     pub fn look_up(pid: u32) -> Self {
+        let start = kampr_proc::here().start(pid);
         Self {
             pid,
-            start: start_ticks(pid),
-            started: started_at(pid),
+            started: match start.as_ref().and_then(|s| s.at) {
+                Some(at) => Started::At(at),
+                None => Started::Unknown,
+            },
+            start: start.map(|s| s.token),
         }
     }
 
@@ -79,72 +83,21 @@ impl PaneProcess {
     }
 }
 
-/// What `/proc/<pid>/comm` calls a process, which is the same name herdr labels a pane with
-/// (probe #75) and is read here rather than taken from herdr — a pane herdr can only describe as
-/// `bash` (#297) still has its own harness named honestly in procfs.
+/// What the kernel calls a process, which is the same name herdr labels a pane with (probe #75)
+/// and is read here rather than taken from herdr — a pane herdr can only describe as `bash`
+/// (#297) still has its own harness named honestly here.
 pub fn comm(pid: u32) -> Option<String> {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    Some(comm.trim_end().to_string())
+    kampr_proc::here().comm(pid)
 }
 
 /// Whether this host answers questions about a process at all.
 ///
 /// A pid with no start time means two different things, and only one of them is a harness that
-/// has gone: with procfs it is a pid that is not there, and without procfs it is every pid there
-/// has ever been. Refusing them all on a host that can read none would be refusing every
-/// conversation on it.
+/// has gone: on a host that can see it is a pid that is not there, and on one that cannot it is
+/// every pid there has ever been. Refusing them all on a host that can read none would be
+/// refusing every conversation on it.
 pub fn observable() -> bool {
-    Path::new("/proc/self/stat").is_file()
-}
-
-/// Field 22 of `/proc/<pid>/stat`, read past the comm field so a process named `a) b` cannot
-/// shift the count.
-fn start_ticks(pid: u32) -> Option<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let fields = &stat[stat.rfind(") ")? + 2..];
-    fields.split_whitespace().nth(19).map(str::to_string)
-}
-
-/// The process's age subtracted from now: field 22 of `/proc/<pid>/stat` against `/proc/uptime`,
-/// both of which are counted from the same boot clock.
-///
-/// **It is emphatically not the `/proc/<pid>` directory's mtime, which is what this used to read.**
-/// procfs stamps that inode when the *dentry* is instantiated, not when the process forks, and it
-/// is instantiated again after every eviction — so it is the process's start only for a process
-/// nobody has evicted since. Measured on this machine at 14 days of uptime: **426 of 545 live pids
-/// disagreed with their own start by more than five seconds**, and the disagreeing ones clustered
-/// onto a handful of microsecond-identical stamps (141 pids sharing one, eight days after the boot
-/// they all started at). `init` read as eleven hours younger than the machine, `herdr` as six days
-/// younger. Always younger, which is the direction that takes a live launch off the running list.
-///
-/// `btime` + ticks — what `ps` does — is the other way to a wall clock and it carries a constant
-/// error: 0.92 s here, being the whole-second floor `btime` is recorded at plus fourteen days of
-/// the wall clock drifting away from `CLOCK_BOOTTIME`. Subtracting the age from `now` carries
-/// neither, and lands inside **0.5 ms** of a fork bracketed by two `clock_gettime` calls.
-fn started_at(pid: u32) -> Started {
-    match age_of(pid).and_then(|age| SystemTime::now().checked_sub(age)) {
-        Some(at) => Started::At(at),
-        None => Started::Unknown,
-    }
-}
-
-/// `/proc/<pid>/stat` is read before anything else so that a host with no procfs at all stops here
-/// rather than in the arithmetic. A negative age — a `/proc/uptime` read that lost a race with the
-/// fork it is being subtracted from — fails `try_from_secs_f64` and is therefore unknown.
-fn age_of(pid: u32) -> Option<Duration> {
-    let ticks = start_ticks(pid)?.parse::<f64>().ok()?;
-    let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
-    let uptime = uptime.split_whitespace().next()?.parse::<f64>().ok()?;
-    Duration::try_from_secs_f64(uptime - ticks / clock_ticks()?).ok()
-}
-
-/// Field 22 is in `USER_HZ`, which is 100 everywhere this ships and is still not a thing to
-/// assume: a wrong divisor is a start time wrong by a factor, silently.
-fn clock_ticks() -> Option<f64> {
-    match unsafe { libc::sysconf(libc::_SC_CLK_TCK) } {
-        hz if hz > 0 => Some(hz as f64),
-        _ => None,
-    }
+    kampr_proc::here().start(std::process::id()).is_some()
 }
 
 /// What a pane's host managed to learn about the harness running in it.
@@ -181,7 +134,7 @@ impl Harness {
     }
 }
 
-/// The direct children of `pid`, from procfs.
+/// The direct children of `pid`.
 ///
 /// **A harness is not always the process a pane reports.** `codex` ships a node wrapper that
 /// spawns the native binary, and it is the native one that holds the thread's writer lock — so a
@@ -189,22 +142,7 @@ impl Harness {
 /// a host that will not answer, which is the same as having no children as far as any caller is
 /// concerned.
 pub fn children(pid: u32) -> Vec<u32> {
-    let tasks = match std::fs::read_dir(format!("/proc/{pid}/task")) {
-        Ok(tasks) => tasks,
-        Err(_) => return Vec::new(),
-    };
-    let mut found = Vec::new();
-    for task in tasks.flatten() {
-        let Ok(list) = std::fs::read_to_string(task.path().join("children")) else {
-            continue;
-        };
-        for child in list.split_whitespace().filter_map(|c| c.parse().ok()) {
-            if !found.contains(&child) {
-                found.push(child);
-            }
-        }
-    }
-    found
+    kampr_proc::here().children(pid)
 }
 
 /// Whether a transcript was still being written after `since`.

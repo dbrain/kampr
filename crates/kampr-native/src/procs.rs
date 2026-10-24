@@ -1,6 +1,7 @@
-use kampr_core::procfs::{Procfs, is_shell};
+use kampr_core::procfs::{self, is_shell};
 use kampr_journal::process::{self, PaneProcess};
 use kampr_journal::{agy, claude, codex, omp};
+use kampr_proc::Table;
 
 const HARNESSES: &[&str] = &[claude::AGENT, codex::AGENT, omp::AGENT, omp::PI_AGENT, agy::AGENT];
 
@@ -13,7 +14,7 @@ pub(crate) struct Foreground {
 /// The PTY's foreground process group leader, which is what a terminal means by "the job". A
 /// group whose leader has already exited falls back to the session's own child.
 pub(crate) fn foreground(child: u32) -> Option<Foreground> {
-    let pid = match tpgid(child) {
+    let pid = match kampr_proc::here().tpgid(child) {
         Some(group) if group > 0 && process::comm(group).is_some() => group,
         _ => child,
     };
@@ -30,8 +31,7 @@ pub(crate) fn job(fg: &Foreground) -> Option<String> {
     if !is_shell(&fg.name) {
         return Some(fg.name.clone());
     }
-    Procfs::default()
-        .below(fg.pid)
+    procfs::below(&kampr_proc::here(), fg.pid)
         .jobs
         .into_iter()
         .next()
@@ -77,32 +77,12 @@ fn stem(arg: &str) -> &str {
     base.split_once('.').map_or(base, |(stem, _)| stem)
 }
 
-fn tpgid(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, rest) = stat.rsplit_once(") ")?;
-    rest.split_ascii_whitespace()
-        .nth(5)?
-        .parse::<i64>()
-        .ok()?
-        .try_into()
-        .ok()
-}
-
 fn cmdline(pid: u32) -> Vec<String> {
-    std::fs::read(format!("/proc/{pid}/cmdline"))
-        .map(|raw| {
-            raw.split(|&b| b == 0)
-                .filter(|a| !a.is_empty())
-                .map(|a| String::from_utf8_lossy(a).into_owned())
-                .collect()
-        })
-        .unwrap_or_default()
+    kampr_proc::here().argv(pid).unwrap_or_default()
 }
 
 pub(crate) fn cwd(pid: u32) -> Option<String> {
-    std::fs::read_link(format!("/proc/{pid}/cwd"))
-        .ok()
-        .map(|p| p.display().to_string())
+    kampr_proc::here().cwd(pid).map(|p| p.display().to_string())
 }
 
 #[cfg(test)]

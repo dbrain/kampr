@@ -1,6 +1,7 @@
 mod facet;
 mod record;
 
+use kampr_proc::Table;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -120,7 +121,7 @@ impl OmpAdapter {
     ///
     /// **The strongest handle any harness this crate serves publishes.** omp opens its session
     /// JSONL once and keeps the descriptor for the life of the session
-    /// (`session-storage.ts`: *"Open file once, keep fd for lifetime"*), so `/proc/<pid>/fd` is a
+    /// (`session-storage.ts`: *"Open file once, keep fd for lifetime"*), so its descriptor table is a
     /// kernel-held answer that cannot be stale: it moves with `/new`, it is gone when the process
     /// is, and nothing has to be validated against a recorded start time the way a written marker
     /// does. Measured on omp 18.1.10 in a herdr pane ([#481](#)).
@@ -131,10 +132,7 @@ impl OmpAdapter {
     fn held(&self, pid: u32) -> Option<PathBuf> {
         let sessions = self.sessions();
         let mut newest: Option<(SystemTime, PathBuf)> = None;
-        for entry in std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?.flatten() {
-            let Ok(path) = std::fs::read_link(entry.path()) else {
-                continue;
-            };
+        for path in kampr_proc::here().open_files(pid)? {
             if !is_session_file(&sessions, &path) {
                 continue;
             }
@@ -212,24 +210,16 @@ impl OmpAdapter {
     /// What the kernel still holds of a process's environment, for the two variables pi's own
     /// code puts there.
     ///
-    /// `/proc/<pid>/environ` is the environment as the kernel keeps it, and it moves with the
-    /// process: a variable the running process sets appears in it, and the whole answer is gone
-    /// when the process is. Neither can stale the way a file on disk can, which is the property
+    /// The environment as the kernel keeps it moves with the process: a variable the running
+    /// process sets appears in it, and the whole answer is gone when the process is. Neither can stale the way a file on disk can, which is the property
     /// the held descriptor has and nothing pi writes down does ([#542](#)).
     fn session_env(pid: u32) -> Option<(Option<String>, Option<String>)> {
-        let env = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
         let mut file = None;
         let mut parent = None;
-        for entry in env.split(|b| *b == 0) {
-            let Ok(text) = std::str::from_utf8(entry) else {
-                continue;
-            };
-            let Some((key, value)) = text.split_once('=') else {
-                continue;
-            };
-            match key {
-                "PI_SESSION_FILE" => file = Some(value.to_string()),
-                "PI_SUBAGENT_PARENT_SESSION" => parent = Some(value.to_string()),
+        for (key, value) in kampr_proc::here().environ(pid)? {
+            match key.as_str() {
+                "PI_SESSION_FILE" => file = Some(value),
+                "PI_SUBAGENT_PARENT_SESSION" => parent = Some(value),
                 _ => {}
             }
         }
@@ -812,23 +802,11 @@ fn flatten(path: &Path) -> String {
     path.to_string_lossy().replace(['/', '\\', ':'], "-")
 }
 
-/// `pts-3` for `/dev/pts/3`, from field 7 of `/proc/<pid>/stat`.
-///
-/// The device number rather than `fd/0`: a pane's harness is the node's own user here, but a job
-/// running as root refuses `fd/0` to anything that did not fork it (#332), and `stat` is
-/// world-readable. Only pts devices are answered, because only a pty is what a pane holds and a
-/// wrong guess here names another terminal's breadcrumb.
+/// `pts-3` for `/dev/pts/3`, `ttys003` for `/dev/ttys003`. Only a pseudo-terminal is answered,
+/// because only a pty is what a pane holds and a wrong guess here names another terminal's
+/// breadcrumb.
 fn tty_id(pid: u32) -> Option<String> {
-    tty_from_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
-}
-
-fn tty_from_stat(stat: &str) -> Option<String> {
-    const PTS_MAJOR: u32 = 136;
-    let fields = &stat[stat.rfind(") ")? + 2..];
-    let tty: u32 = fields.split_whitespace().nth(4)?.parse().ok()?;
-    let major = (tty >> 8) & 0xfff;
-    let minor = (tty & 0xff) | ((tty >> 12) & 0xfff00);
-    (major == PTS_MAJOR).then(|| format!("pts-{minor}"))
+    Some(kampr_proc::here().tty(pid)?.replace('/', "-"))
 }
 
 struct Filed {
@@ -1232,19 +1210,6 @@ mod tests {
 
     /// Verbatim `/proc/<pid>/stat` of the omp on `/dev/pts/3` that wrote
     /// `tests/fixtures/live/omp-probe.jsonl`, cut after the field this reads.
-    const OMP_STAT: &str =
-        "1423965 (omp) S 1423234 1423965 1423234 34819 1423965 4194304 242628 268753 0 2 1315 166";
-
-    #[test]
-    fn the_terminal_a_breadcrumb_is_filed_under_is_read_off_the_process() {
-        assert_eq!(tty_from_stat(OMP_STAT).as_deref(), Some("pts-3"));
-        // A process with no controlling terminal, and a comm that would shift a naive field count.
-        assert_eq!(
-            tty_from_stat("7 (a) b) S 1 7 7 0 -1 4194304 1 2 0 0 3 4").as_deref(),
-            None
-        );
-    }
-
     #[test]
     fn a_session_that_has_written_nothing_yet_is_named_by_its_breadcrumb_without_a_transcript() {
         let scratch = Scratch::new("fresh");

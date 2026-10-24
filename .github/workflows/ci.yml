@@ -31,8 +31,8 @@ jobs:
   # cross-check from the Linux job: `openssl-sys`, `ring` and `aws-lc-sys` compile C, so an Apple
   # target needs an Apple toolchain. `check` rather than `build` because what escapes this way is
   # a name that does not exist on the platform, which is a typecheck away rather than a link away.
-  # Kampr sessions are the one part of kampr that runs on a Mac without herdr, and nobody who works
-  # on it has one, so their crates' tests run here too.
+  # Nobody who works on kampr has a Mac, so every test that needs no herdr runs here too: this is
+  # the only place the macOS side of `kampr-proc`, the keeper and the attach is ever exercised.
   darwin:
     runs-on: macos-latest
     steps:

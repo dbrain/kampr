@@ -2,7 +2,7 @@ use crate::agent_view::{DeskAgents, View};
 use crate::backoff::Backoff;
 use crate::desk::{DeskHosts, resumes};
 use crate::naming::Template;
-use crate::procfs::{Foreground, Procfs};
+use crate::procfs::{self, Foreground};
 use crate::provider::{AgentStatus, Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
 use crate::reporter::Reporter;
 use anyhow::{Context, Result};
@@ -252,10 +252,6 @@ struct Inner {
     /// no longer matches, so an entry that outlives its process yields *nothing* instead of a
     /// stranger.
     pids: Mutex<HashMap<String, Vec<PaneProcess>>>,
-    /// This machine's own procfs. herdr answers what a pane is only where the job leaves the
-    /// shell's process group, which on a machine that sources ble.sh is never (probe #297); this
-    /// is how the node answers the rest, and it answers nothing where `/proc` is not readable.
-    procfs: Procfs,
     reporter: Reporter,
     desk_reporter: Reporter,
     desk_agents: DeskAgents,
@@ -409,7 +405,6 @@ impl HerdrProvider {
             commands: Mutex::new(HashMap::new()),
             pids: Mutex::new(HashMap::new()),
             rtt: Mutex::new(Rtt::default()),
-            procfs: Procfs::default(),
             reporter: Reporter::new(),
             desk_reporter: Reporter::new(),
             desk_agents: DeskAgents::new(),
@@ -802,12 +797,14 @@ impl Inner {
             match info {
                 Ok(info) => {
                     self.probed.store(true, Ordering::Relaxed);
-                    // Walked every sweep and never held: a `children` file goes on naming a
-                    // child that has exited, so a job named from a walk taken a minute ago is a
-                    // pane described as running something it finished.
-                    let walked = info
-                        .shell_pid
-                        .map_or_else(Foreground::default, |shell| self.procfs.below(shell));
+                    // herdr answers what a pane is only where the job leaves the shell's process
+                    // group, which on a machine that sources ble.sh is never (probe #297). Walked
+                    // every sweep and never held: a child list goes on naming a child that has
+                    // exited, so a job named from a walk taken a minute ago is a pane described as
+                    // running something it finished.
+                    let walked = info.shell_pid.map_or_else(Foreground::default, |shell| {
+                        procfs::below(&kampr_proc::here(), shell)
+                    });
                     // herdr stays the source of truth where it has one. It has none whenever the
                     // foreground process group is the shell's — a pane at its prompt, and every
                     // pane on a machine that sources ble.sh (probe #297) — and that is the only

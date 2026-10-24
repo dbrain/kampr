@@ -6,17 +6,27 @@ use std::collections::{BTreeMap, BTreeSet};
 const ALLOWED: &[(&str, &[&str])] = &[
     ("kampr-auth", &[]),
     ("kampr-herdr", &[]),
-    ("kampr-journal", &[]),
-    ("kampr-keep", &[]),
+    ("kampr-proc", &[]),
+    ("kampr-journal", &["kampr-proc"]),
+    ("kampr-keep", &["kampr-proc"]),
     ("kampr-term", &[]),
     ("kampr-testkit", &[]),
     ("kampr-push", &["kampr-auth"]),
-    ("kampr-core", &["kampr-herdr", "kampr-journal", "kampr-term"]),
+    (
+        "kampr-core",
+        &["kampr-herdr", "kampr-journal", "kampr-proc", "kampr-term"],
+    ),
     ("kampr-fleet", &["kampr-core", "kampr-keep", "kampr-native"]),
     ("kampr-mesh", &["kampr-auth", "kampr-core", "kampr-term"]),
     (
         "kampr-native",
-        &["kampr-core", "kampr-journal", "kampr-keep", "kampr-term"],
+        &[
+            "kampr-core",
+            "kampr-journal",
+            "kampr-keep",
+            "kampr-proc",
+            "kampr-term",
+        ],
     ),
     ("kampr-spike", &["kampr-herdr", "kampr-term"]),
     (

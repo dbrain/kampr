@@ -41,15 +41,6 @@ mod imp {
             .is_some_and(|state| state != "Z" && state != "X")
     }
 
-    pub fn argv(pid: u32) -> Option<Vec<Vec<u8>>> {
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-        Some(cmdline.split(|&b| b == 0).map(<[u8]>::to_vec).collect())
-    }
-
-    pub fn cwd(pid: u32) -> Option<PathBuf> {
-        Some(PathBuf::from(format!("/proc/{pid}/cwd")))
-    }
-
     pub fn child_pre_exec() {}
 
     pub struct Child {
@@ -201,58 +192,6 @@ mod imp {
         })
     }
 
-    pub fn argv(pid: u32) -> Option<Vec<Vec<u8>>> {
-        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
-        let mut len: libc::size_t = 0;
-        let mut sysctl = |buf: *mut libc::c_void, len: &mut libc::size_t| unsafe {
-            libc::sysctl(
-                mib.as_mut_ptr(),
-                mib.len() as _,
-                buf,
-                len,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if sysctl(std::ptr::null_mut(), &mut len) != 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len];
-        if sysctl(buf.as_mut_ptr().cast(), &mut len) != 0 {
-            return None;
-        }
-        buf.truncate(len);
-        super::procargs(&buf)
-    }
-
-    pub fn cwd(pid: u32) -> Option<PathBuf> {
-        use std::os::unix::ffi::OsStrExt;
-        let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
-        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-        let got = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::c_int,
-                libc::PROC_PIDVNODEPATHINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size,
-            )
-        };
-        if got != size {
-            return None;
-        }
-        let info = unsafe { info.assume_init() };
-        let path: Vec<u8> = info
-            .pvi_cdir
-            .vip_path
-            .iter()
-            .flatten()
-            .map(|&c| c as u8)
-            .take_while(|&b| b != 0)
-            .collect();
-        (!path.is_empty()).then(|| PathBuf::from(std::ffi::OsStr::from_bytes(&path)))
-    }
-
     pub fn child_pre_exec() {
         unsafe { libc::signal(libc::SIGUSR1, libc::SIG_DFL) };
     }
@@ -367,52 +306,3 @@ mod imp {
 }
 
 pub(crate) use imp::*;
-
-/// `KERN_PROCARGS2`: the argument count as a native `int`, the executable's path, NUL padding,
-/// then that many NUL-terminated arguments (and the environment, which is not read).
-#[cfg(any(test, not(target_os = "linux")))]
-fn procargs(buf: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let (count, rest) = buf.split_at_checked(size_of::<libc::c_int>())?;
-    let count = libc::c_int::from_ne_bytes(count.try_into().ok()?);
-    let path = rest.iter().position(|&b| b == 0)?;
-    let rest = &rest[path..];
-    let rest = &rest[rest.iter().position(|&b| b != 0)?..];
-    let args: Vec<Vec<u8>> = rest
-        .split(|&b| b == 0)
-        .take(usize::try_from(count).ok()?)
-        .map(<[u8]>::to_vec)
-        .collect();
-    (args.len() == count as usize).then_some(args)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::procargs;
-
-    fn laid_out(count: i32, path: &[u8], pad: usize, rest: &[u8]) -> Vec<u8> {
-        let mut buf = count.to_ne_bytes().to_vec();
-        buf.extend_from_slice(path);
-        buf.extend(std::iter::repeat_n(0, pad));
-        buf.extend_from_slice(rest);
-        buf
-    }
-
-    #[test]
-    fn a_macs_process_arguments_are_read_past_its_path_and_padding_and_not_into_its_environment() {
-        let keeper = laid_out(
-            3,
-            b"/opt/k/kampr",
-            4,
-            b"/opt/k/kampr\0keep\0/run/s/01ja\0HOME=/x\0",
-        );
-        let want: Vec<&[u8]> = vec![b"/opt/k/kampr", b"keep", b"/run/s/01ja"];
-        assert_eq!(procargs(&keeper), Some(want.iter().map(|a| a.to_vec()).collect()));
-        for short in [
-            laid_out(3, b"/k", 1, b"/k\0keep"),
-            laid_out(1, b"/k", 0, b""),
-            vec![1, 0],
-        ] {
-            assert_eq!(procargs(&short), None, "{short:?}");
-        }
-    }
-}

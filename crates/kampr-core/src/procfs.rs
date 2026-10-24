@@ -2,19 +2,19 @@
 //!
 //! herdr's `pane.process_info` gives a shell pid and gives up on the job whenever the foreground
 //! process group is the shell's own — which is every interactive shell on a machine that sources
-//! ble.sh (probe #297). The node is on that machine, as that user, so `/proc/<shell>/task/*/children`
-//! answers the question herdr declined to: `claude`, `ssh` and `herdr` are all reachable there,
-//! under shells whose child shares the shell's pgid.
+//! ble.sh (probe #297). The node is on that machine, as that user, so the shell's children answer
+//! the question herdr declined to: `claude`, `ssh` and `herdr` are all reachable there, under
+//! shells whose child shares the shell's pgid.
 //!
 //! **This is not a second herd model.** herdr owns which panes exist and what is in them; this
 //! reads one machine about one pane herdr has already named, and it answers nothing at all where
-//! `/proc` cannot be read.
+//! the machine will not describe its processes.
 
 pub use kampr_herdr::model::is_shell;
 
 use kampr_herdr::ForegroundProcess;
+use kampr_proc::Table;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 /// How far below the shell a walk goes.
 ///
@@ -44,107 +44,58 @@ pub struct Foreground {
     pub all: Vec<ForegroundProcess>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Procfs {
-    root: PathBuf,
-}
-
-impl Default for Procfs {
-    fn default() -> Self {
-        Self::at("/proc")
+/// What is running under `shell`, or nothing at all — which is the answer on a pane at its
+/// prompt, on a host that will not say, and for a pid that has already gone. All three degrade
+/// to the behaviour of a node that never looked.
+pub fn below(table: &impl Table, shell: u32) -> Foreground {
+    let mut walk = Walk {
+        table,
+        seen: HashSet::from([shell]),
+        all: Vec::new(),
+    };
+    let jobs = walk.branches(shell, 0);
+    // Read depth-first, because a branch is only resolved by following it — and offered up
+    // breadth-first, because nearness to the shell is what makes a marker this pane's.
+    walk.all.sort_by_key(|(depth, _)| *depth);
+    Foreground {
+        jobs,
+        all: walk.all.into_iter().map(|(_, process)| process).collect(),
     }
 }
 
-impl Procfs {
-    pub fn at(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
-    }
-
-    /// What is running under `shell`, or nothing at all — which is the answer on a pane at its
-    /// prompt, on a host with no procfs, and for a pid that has already gone. All three degrade
-    /// to the behaviour of a node that never looked.
-    pub fn below(&self, shell: u32) -> Foreground {
-        let mut walk = Walk {
-            procfs: self,
-            seen: HashSet::from([shell]),
-            all: Vec::new(),
-        };
-        let jobs = walk.branches(shell, 0);
-        // Read depth-first, because a branch is only resolved by following it — and offered up
-        // breadth-first, because nearness to the shell is what makes a marker this pane's.
-        walk.all.sort_by_key(|(depth, _)| *depth);
-        Foreground {
-            jobs,
-            all: walk.all.into_iter().map(|(_, process)| process).collect(),
-        }
-    }
-
-    fn dir(&self, pid: u32) -> PathBuf {
-        self.root.join(pid.to_string())
-    }
-
-    /// A process's children, gathered across every thread of it: a job forked from a shell's
-    /// non-main thread is listed under that thread and nowhere else.
-    fn children(&self, pid: u32) -> Vec<u32> {
-        let Ok(threads) = std::fs::read_dir(self.dir(pid).join("task")) else {
-            return Vec::new();
-        };
-        let mut pids: Vec<u32> = threads
-            .flatten()
-            .filter_map(|thread| std::fs::read_to_string(thread.path().join("children")).ok())
-            .flat_map(|text| {
-                text.split_ascii_whitespace()
-                    .filter_map(|pid| pid.parse::<u32>().ok())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        pids.sort_unstable();
-        pids.dedup();
-        pids
-    }
-
-    /// **The staleness guard, and the whole of it.** A child stays in its parent's `children`
-    /// file until it is reaped, so the file alone would name a job that has exited — worse than
-    /// naming none, and exactly what a pane at its prompt would then be called. A process that
-    /// has gone has no `/proc` entry to read, and one that has exited and not yet been reaped
-    /// keeps its entry but loses its command line, so a command line is the proof of life this
-    /// takes.
-    fn read(&self, pid: u32) -> Option<ForegroundProcess> {
-        let dir = self.dir(pid);
-        let raw = std::fs::read(dir.join("cmdline")).ok()?;
-        let argv: Vec<String> = raw
-            .split(|byte| *byte == 0)
-            .filter(|arg| !arg.is_empty())
-            .map(|arg| String::from_utf8_lossy(arg).into_owned())
-            .collect();
-        let first = argv.first()?;
-        // `comm` is what herdr's own names are compared against, and the kernel caps it at 15
-        // bytes — so a long binary falls back to its own argv rather than to a truncation
-        // nothing would match.
-        let name = match std::fs::read_to_string(dir.join("comm")) {
-            Ok(comm) if comm.trim().len() < 15 => comm.trim().to_string(),
-            _ => first.rsplit('/').next().unwrap_or(first).to_string(),
-        };
-        Some(ForegroundProcess {
-            pid,
-            name,
-            cmdline: Some(argv.join(" ")),
-            argv,
-        })
-    }
+/// **The staleness guard, and the whole of it.** A child stays listed under its parent until it
+/// is reaped, so the list alone would name a job that has exited — worse than naming none, and
+/// exactly what a pane at its prompt would then be called. One that has gone cannot be read, and
+/// one that has exited unreaped has lost its command line, so a command line is the proof of life
+/// this takes.
+fn read(table: &impl Table, pid: u32) -> Option<ForegroundProcess> {
+    let argv = table.argv(pid)?;
+    let first = argv.first()?;
+    // `comm` is what herdr's own names are compared against, and Linux caps it at 15 bytes — so a
+    // long binary falls back to its own argv rather than to a truncation nothing would match.
+    let name = match table.comm(pid) {
+        Some(comm) if comm.len() < 15 => comm,
+        _ => first.rsplit('/').next().unwrap_or(first).to_string(),
+    };
+    Some(ForegroundProcess {
+        pid,
+        name,
+        cmdline: Some(argv.join(" ")),
+        argv,
+    })
 }
 
-struct Walk<'a> {
-    procfs: &'a Procfs,
-    /// A `children` file is written by the kernel and cannot loop, but a walk that trusts one
-    /// unconditionally is a walk a wrong root can hang.
+struct Walk<'a, T> {
+    table: &'a T,
+    /// The kernel's child lists cannot loop, but a walk that trusts one unconditionally is a walk
+    /// a wrong root can hang.
     seen: HashSet<u32>,
     all: Vec<(usize, ForegroundProcess)>,
 }
 
-impl Walk<'_> {
+impl<T: Table> Walk<'_, T> {
     fn branches(&mut self, pid: u32, depth: usize) -> Vec<ForegroundProcess> {
-        self.procfs
+        self.table
             .children(pid)
             .into_iter()
             .flat_map(|child| self.nearest(child, depth))
@@ -161,7 +112,7 @@ impl Walk<'_> {
         if depth >= MAX_DEPTH || self.all.len() >= MAX_PROCESSES || !self.seen.insert(pid) {
             return Vec::new();
         }
-        let Some(process) = self.procfs.read(pid) else {
+        let Some(process) = read(self.table, pid) else {
             return Vec::new();
         };
         let shell = is_shell(&process.name);
@@ -177,6 +128,7 @@ impl Walk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kampr_proc::Procfs;
 
     struct Fake(tempfile::TempDir);
 
@@ -185,8 +137,8 @@ mod tests {
             Self(tempfile::tempdir().expect("tempdir"))
         }
 
-        fn procfs(&self) -> Procfs {
-            Procfs::at(self.0.path())
+        fn below(&self, shell: u32) -> Foreground {
+            below(&Procfs::at(self.0.path()), shell)
         }
 
         fn process(&self, pid: u32, argv: &[&str], children: &[u32]) {
@@ -216,12 +168,12 @@ mod tests {
     fn a_shell_with_nothing_under_it_names_no_job() {
         let fake = Fake::new();
         fake.process(1, &["bash"], &[]);
-        assert!(fake.procfs().below(1).jobs.is_empty());
+        assert!(fake.below(1).jobs.is_empty());
     }
 
     #[test]
     fn a_root_that_cannot_be_read_at_all_names_no_job_rather_than_refusing_to_answer() {
-        assert!(Procfs::at("/nowhere-at-all").below(1).jobs.is_empty());
+        assert!(below(&Procfs::at("/nowhere-at-all"), 1).jobs.is_empty());
     }
 
     #[test]
@@ -229,7 +181,7 @@ mod tests {
         let fake = Fake::new();
         fake.process(1, &["bash"], &[2, 3]);
         fake.zombie(2);
-        assert!(fake.procfs().below(1).jobs.is_empty(), "and 3 does not exist");
+        assert!(fake.below(1).jobs.is_empty(), "and 3 does not exist");
     }
 
     #[test]
@@ -238,7 +190,7 @@ mod tests {
         fake.process(1, &["bash"], &[2]);
         fake.process(2, &["bash", "/usr/bin/llm-review"], &[3]);
         fake.process(3, &["claude", "--print"], &[]);
-        let walked = fake.procfs().below(1);
+        let walked = fake.below(1);
         assert_eq!(walked.jobs.len(), 1);
         assert_eq!(walked.jobs[0].name, "claude");
         assert_eq!(
@@ -259,12 +211,7 @@ mod tests {
         fake.process(3, &["claude", "--print"], &[]);
         fake.process(4, &["ssh", "elsewhere"], &[]);
         assert_eq!(
-            fake.procfs()
-                .below(1)
-                .all
-                .iter()
-                .map(|p| p.pid)
-                .collect::<Vec<_>>(),
+            fake.below(1).all.iter().map(|p| p.pid).collect::<Vec<_>>(),
             vec![2, 4, 3],
         );
     }
@@ -275,7 +222,7 @@ mod tests {
         fake.process(1, &["bash"], &[3, 2]);
         fake.process(2, &["sleep", "9"], &[]);
         fake.process(3, &["cat"], &[]);
-        let jobs = fake.procfs().below(1).jobs;
+        let jobs = fake.below(1).jobs;
         assert_eq!(
             jobs.iter().map(|p| p.pid).collect::<Vec<_>>(),
             vec![2, 3],
@@ -289,6 +236,6 @@ mod tests {
         for pid in 1..=(MAX_DEPTH as u32 + 4) {
             fake.process(pid, &["bash"], &[pid + 1]);
         }
-        assert_eq!(fake.procfs().below(1).all.len(), MAX_DEPTH);
+        assert_eq!(fake.below(1).all.len(), MAX_DEPTH);
     }
 }

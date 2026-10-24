@@ -41,11 +41,11 @@ check-packaging:
 	python3 scripts/check-plugin-manifest.py
 
 # The release builds two Apple targets, and a Linux-only libc constant once compiled clean here
-# and failed both of them with the tag already pushed. CI runs this on macOS, tests and all, for
-# the crates Kampr sessions are made of; on Linux it proves nothing `lint` and `test` have not.
+# and failed both of them with the tag already pushed. CI runs this on macOS, every test that needs
+# no herdr included; on Linux it proves nothing `lint` and `test-fast` have not.
 check-darwin:
 	cargo check --workspace --all-targets
-	cargo nextest run --no-fail-fast -p kampr-keep -p kampr-native -p kampr-cli
+	cargo nextest run --no-fail-fast --workspace
 
 # CI only. Each starts from a state a workstation is not in — a fresh runner's empty dist/, a
 # herdr server in the default session — and says why in its script.

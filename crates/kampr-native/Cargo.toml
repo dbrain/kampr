@@ -14,6 +14,7 @@ flate2.workspace = true
 kampr-core = { path = "../kampr-core" }
 kampr-journal = { path = "../kampr-journal" }
 kampr-keep = { path = "../kampr-keep" }
+kampr-proc = { path = "../kampr-proc" }
 kampr-term = { path = "../kampr-term" }
 libc.workspace = true
 memchr.workspace = true

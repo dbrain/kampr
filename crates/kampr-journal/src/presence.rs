@@ -1,3 +1,4 @@
+use kampr_proc::Table;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -62,7 +63,34 @@ pub fn newest_holder(dir: &Path, pid: u32) -> Option<String> {
 
 /// Every lock file in `dir` that `pid` holds, newest file first.
 pub fn held(dir: &Path, pid: u32) -> Vec<String> {
-    held_from(dir, pid, || std::fs::read_to_string(LOCK_TABLE).ok())
+    match Path::new(LOCK_TABLE).exists() {
+        true => held_from(dir, pid, || std::fs::read_to_string(LOCK_TABLE).ok()),
+        false => held_open(dir, pid),
+    }
+}
+
+/// Where no kernel lists its locks, as on macOS: the lock files `pid` holds open. A harness keeps
+/// the descriptor its `flock` is on for as long as it holds it, so this answers the same question
+/// less strictly — a process queued behind the lock holds the file open too.
+pub fn held_open(dir: &Path, pid: u32) -> Vec<String> {
+    let Some(open) = kampr_proc::here().open_files(pid) else {
+        return Vec::new();
+    };
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let mut found: Vec<(std::time::SystemTime, String)> = open
+        .into_iter()
+        .filter_map(|path| {
+            let path = path.canonicalize().ok()?;
+            if path.parent()? != dir {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?.strip_suffix(".lock")?.to_string();
+            Some((std::fs::metadata(&path).ok()?.modified().ok()?, name))
+        })
+        .collect();
+    found.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    found.dedup_by(|a, b| a.1 == b.1);
+    found.into_iter().map(|(_, name)| name).collect()
 }
 
 pub fn held_from(dir: &Path, pid: u32, table: impl FnMut() -> Option<String>) -> Vec<String> {

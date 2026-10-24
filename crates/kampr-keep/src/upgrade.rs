@@ -1,10 +1,8 @@
 use crate::dir::{Image, SessionDir, list_tree};
-use crate::sys;
+use kampr_proc::Table;
 use rustix::process::{Pid, Signal, kill_process};
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -34,19 +32,20 @@ pub fn stale(session: &SessionDir) -> bool {
 // keeper.json outlives its keeper, and a reused pid could be anything of ours, a node included,
 // which SIGUSR1 would kill.
 fn keeps(pid: u32, dir: &Path) -> bool {
-    let Some(args) = sys::argv(pid) else {
+    let table = kampr_proc::here();
+    let Some(args) = table.argv(pid) else {
         return false;
     };
     let [_, keep, served, ..] = args.as_slice() else {
         return false;
     };
-    if keep != b"keep" {
+    if keep != "keep" {
         return false;
     }
-    let served = Path::new(OsStr::from_bytes(served));
+    let served = Path::new(served);
     let served = match served.is_absolute() {
         true => served.to_path_buf(),
-        false => match sys::cwd(pid) {
+        false => match table.cwd(pid) {
             Some(cwd) => cwd.join(served),
             None => return false,
         },
