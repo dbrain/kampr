@@ -230,7 +230,17 @@ impl Live {
             .map(|fg| (fg.pid, procs::job(&fg)));
         let mut activity = self.activity.lock().unwrap();
         if std::env::var_os("KAMPR_DEBUG_JOB").is_some() {
-            eprintln!("follow_job: was {:?} now {:?}", activity.job, job);
+            use kampr_proc::Table;
+            let child = self.dir.keeper().map(|k| k.child).unwrap_or(0);
+            let t = kampr_proc::here();
+            eprintln!(
+                "follow_job: was {:?} now {:?}; child {child} tpgid {:?} children {:?} {:?}",
+                activity.job,
+                job,
+                t.tpgid(child),
+                t.children(child),
+                t.children(child).iter().map(|c| (t.comm(*c), t.argv(*c))).collect::<Vec<_>>()
+            );
         }
         if activity.job != job {
             activity.job = job;

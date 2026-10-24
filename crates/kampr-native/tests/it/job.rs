@@ -47,8 +47,10 @@ async fn changes_to(provider: &NativeProvider, pane: &str, want: Option<&str>) {
         seen.push(now);
     }
     panic!(
-        "the herd never changed to {want:?}; at each change it read {seen:?}, and reads {:?} now",
-        cmd(provider, pane).await
+        "the herd never changed to {want:?}; at each change it read {seen:?}, and reads {:?} now; \
+         the screen:\n{}",
+        cmd(provider, pane).await,
+        provider.visible(pane).unwrap_or_default()
     );
 }
 
