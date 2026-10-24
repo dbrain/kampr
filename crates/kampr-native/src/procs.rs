@@ -87,7 +87,66 @@ pub(crate) fn cwd(pid: u32) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::named;
+    use super::{foreground, job, named};
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    /// The job a shell on a terminal is running, asked the way the herd asks it: through the
+    /// terminal's foreground group and, for a shell, what is below it.
+    #[test]
+    fn a_job_is_named_while_it_runs_and_not_once_it_has_ended() {
+        let (mut master, mut slave) = (0, 0);
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0);
+        let mut command = std::process::Command::new("sh");
+        command.arg("-i").env("PS1", "$ ").env("ENV", "/dev/null");
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setsid() < 0 || libc::ioctl(slave, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                for fd in 0..3 {
+                    libc::dup2(slave, fd);
+                }
+                Ok(())
+            });
+        }
+        let mut shell = command.spawn().expect("sh");
+        let child = shell.id();
+        let named_now = || foreground(child).and_then(|fg| job(&fg));
+        let until = |want: Option<&str>| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if named_now().as_deref() == want {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            false
+        };
+        let type_in = |bytes: &[u8]| unsafe {
+            libc::write(master, bytes.as_ptr().cast(), bytes.len());
+        };
+        assert!(until(None), "at the prompt: {:?}", named_now());
+        type_in(b"cat\n");
+        assert!(until(Some("cat")), "running cat: {:?}", named_now());
+        type_in(b"\x04");
+        assert!(until(None), "after ctrl-d: {:?}", named_now());
+        let _ = shell.kill();
+        let _ = shell.wait();
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+    }
 
     #[test]
     fn a_harness_is_known_by_its_name_or_by_what_its_runtime_was_handed() {

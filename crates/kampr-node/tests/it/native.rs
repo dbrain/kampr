@@ -738,7 +738,7 @@ fn osc7501_claude(dir: &Path) -> PathBuf {
     let path = dir.join("claude");
     let script = r#"#!/bin/sh
 home=$1
-start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$)
+start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$ | sed 's/^ *//; s/ *$//')
 mkdir -p "$home/.claude/sessions"
 printf '{"pid":%s,"sessionId":"77777777-7777-4777-8777-777777777777","cwd":"%s","procStart":"%s","version":"2.1.308","kind":"interactive","entrypoint":"cli","status":"waiting"}' $$ "$(pwd -P)" "$start" > "$home/.claude/sessions/$$.json"
 stty -echo -icanon min 0 time 30
@@ -973,7 +973,7 @@ fn fake_claude(dir: &Path, status: &str) -> PathBuf {
         r#"#!/bin/sh
 home=$1; id=$2
 cwd=$(pwd -P)
-start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$)
+start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$ | sed 's/^ *//; s/ *$//')
 project="$home/.claude/projects/$(printf %s "$cwd" | tr / -)"
 mkdir -p "$project" "$home/.claude/sessions"
 now=$(date -u +%Y-%m-%dT%H:%M:%S.999Z)
