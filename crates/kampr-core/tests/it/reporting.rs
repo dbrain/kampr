@@ -739,6 +739,20 @@ impl Tree {
         panic!("the tree never started");
     }
 
+    /// A forked job is still `sh` until it has exec'd, and a loaded runner walked it in that gap.
+    fn settle_on(&self, comm: &str) {
+        for _ in 0..200 {
+            let named = |pid: &u32| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim_end() == comm)
+            };
+            if self.children().iter().any(named) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the tree's job never became {comm}");
+    }
+
     fn children(&self) -> Vec<u32> {
         children_of(self.shell())
     }
@@ -986,6 +1000,7 @@ async fn a_harness_ble_sh_hides_from_herdr_is_still_the_process_the_pane_is_havi
     let harness = dir.path().join("claude");
     std::fs::copy("/usr/bin/sleep", &harness).expect("this machine has sleep");
     let tree = Tree::spawn(&format!("{} 300 &", harness.display()));
+    tree.settle_on("claude");
     let fake = FakeHerdr::start();
     fake.scraped("claude");
     fake.running(tree.as_ble_sh_reports_it());
