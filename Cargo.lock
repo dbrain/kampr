@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-auth"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-cli"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2468,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-client"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-core"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-fleet"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2534,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-herdr"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-journal"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "base64 0.23.1",
  "kampr-proc",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-keep"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "kampr-proc",
@@ -2577,7 +2577,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-mesh"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-muffit"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-native"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-node"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-proc"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "libc",
  "tempfile",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-push"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "base64 0.23.1",
  "jwt-simple",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-spike"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "kampr-herdr",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-term"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "kampr-testkit",
@@ -2743,14 +2743,14 @@ dependencies = [
 
 [[package]]
 name = "kampr-testkit"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "kampr-tui"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
