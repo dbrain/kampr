@@ -11,6 +11,7 @@ async-trait.workspace = true
 futures-util.workspace = true
 kampr-core = { path = "../kampr-core" }
 kampr-journal = { path = "../kampr-journal" }
+libc.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

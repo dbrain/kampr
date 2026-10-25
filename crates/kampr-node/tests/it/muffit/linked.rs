@@ -11,10 +11,7 @@ const ONE_PIXEL: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 fn hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .unwrap()
-        .trim()
-        .to_string()
+    kampr_muffit::this_host().expect("a hostname")
 }
 
 fn tui(pid: u32) -> Value {

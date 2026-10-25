@@ -2605,6 +2605,7 @@ dependencies = [
  "futures-util",
  "kampr-core",
  "kampr-journal",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

@@ -12,11 +12,17 @@ pub const PREFIX: &str = "m:";
 pub const AGENT: &str = "muffit";
 const TUI: &str = "tui";
 
-/// What muffit names a machine by in a client's hello: the kernel's hostname.
-fn this_host() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
+/// What muffit names a machine by in a client's hello.
+pub fn this_host() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: gethostname writes at most `buf.len()` bytes into the buffer it is given.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..end].to_vec())
         .ok()
-        .map(|h| h.trim().to_string())
         .filter(|h| !h.is_empty())
 }
 
