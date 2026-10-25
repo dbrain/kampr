@@ -26,6 +26,15 @@ pub fn on_path(binary: &str) -> Option<PathBuf> {
     })
 }
 
+/// A process that runs until killed and is named after `path`, ignoring its arguments. A script
+/// rather than a copy of `sleep`: ubuntu-26.04's coreutils is one multi-call binary that picks its
+/// tool from argv[0], so a copy named `claude` exits at once.
+pub fn named_sleeper(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, "#!/bin/sh\nwhile :; do sleep 1; done\n").expect("a named sleeper");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("executable");
+}
+
 pub fn herdr_on_path() -> PathBuf {
     match on_path("herdr") {
         Some(path) => path,

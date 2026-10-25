@@ -998,11 +998,7 @@ async fn a_harness_ble_sh_hides_from_herdr_is_still_the_process_the_pane_is_havi
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let harness = dir.path().join("claude");
-    // A script, not a copy of `sleep`: ubuntu-26.04's coreutils is one multi-call binary that picks
-    // its tool from argv[0], so a copy named `claude` exits at once.
-    std::fs::write(&harness, "#!/bin/sh\nwhile :; do sleep 1; done\n").expect("a harness");
-    std::fs::set_permissions(&harness, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("executable");
+    kampr_testkit::named_sleeper(&harness);
     let tree = Tree::spawn(&format!("{} &", harness.display()));
     tree.settle_on("claude");
     let fake = FakeHerdr::start();

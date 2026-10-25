@@ -6046,7 +6046,7 @@ impl Harnessed {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
         let binary = home.join("claude");
-        std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &binary).unwrap();
+        kampr_testkit::named_sleeper(&binary);
         Self {
             home: home.to_path_buf(),
             project,
@@ -6200,7 +6200,7 @@ async fn a_pane_herdr_has_no_rules_for_is_read_off_the_title_its_harness_writes(
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let binary = home.path().join("omp");
-    std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &binary).unwrap();
+    kampr_testkit::named_sleeper(&binary);
     let cwd = work.path().canonicalize().unwrap().display().to_string();
     let home_path = home.path().display().to_string();
     let h = harness!("omp-title", |c: &mut Config| c.journals.home = home_path);
@@ -10747,9 +10747,9 @@ async fn a_pi_pane_serves_the_session_its_environment_names() {
     let own = write_session("pane-session", "2020-01-01T00-00-00-000Z", "pane-codeword-qzx");
     let _decoy = write_session("decoy-session", "2026-01-01T00-00-00-000Z", "decoy-codeword-vwp");
 
-    // The fake pi: a `sleep` renamed to `pi`, so herdr reports it by that name.
+    // The fake pi, named `pi` so herdr reports it by that name.
     let fake_pi = home.path().join("pi");
-    std::fs::copy(kampr_testkit::on_path("sleep").expect("sleep on PATH"), &fake_pi).unwrap();
+    kampr_testkit::named_sleeper(&fake_pi);
     h._session
         .call(
             "pane.send_text",
