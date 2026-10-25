@@ -1,7 +1,7 @@
 use crate::client::{self, Client, Socket};
 use crate::live::Live;
 use crate::mapper::{self, Workers};
-use crate::wire::{PermissionPrompt, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage};
+use crate::wire::{Image, PermissionPrompt, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage};
 use kampr_journal::facet::{Running, Title, TitleSource};
 use kampr_journal::{ConvoFound, Facets, Page, Turn};
 use serde_json::json;
@@ -29,10 +29,22 @@ const CAPABILITIES: &[&str] = &[
 
 #[derive(Debug)]
 pub enum Command {
-    Input { text: String, msg_id: String },
-    Older { before: Option<String> },
-    Find { query: String, cap: usize },
-    Sub { id: String, before: Option<String> },
+    Input {
+        text: String,
+        msg_id: String,
+        images: Vec<Image>,
+    },
+    Older {
+        before: Option<String>,
+    },
+    Find {
+        query: String,
+        cap: usize,
+    },
+    Sub {
+        id: String,
+        before: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -140,8 +152,9 @@ pub struct Follow {
     pub client: Client,
     pub session: String,
     pub commands: mpsc::Receiver<Command>,
-    /// Whether the session is live. Attaching restores a stored session (kampr.md §3), so a
-    /// finished conversation is read over REST and only dialled once something makes it live.
+    /// Whether the session is live. Attaching restores a finished session (kampr.md §3), so one
+    /// that left the live list mid-watch is read over REST and only dialled once something makes
+    /// it live.
     pub alive: Box<dyn Fn() -> bool + Send>,
     /// Bumps when the daemon's session list moves, which is when `alive` may have changed.
     pub revision: tokio::sync::watch::Receiver<u64>,
@@ -284,7 +297,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     /// `Ok(None)` when the client is gone.
     async fn attach(&mut self) -> anyhow::Result<Option<Socket>> {
         let path = format!("/sessions/{}/attach", self.session);
-        let mut socket = self.client.socket(&path, CAPABILITIES).await?;
+        // Watching never holds the session: leaving can't end somebody else's (kampr.md §3).
+        let mut socket = self
+            .client
+            .socket(&path, Some("observe=true"), CAPABILITIES)
+            .await?;
         let cursor = loop {
             let frame = tokio::time::timeout(HANDSHAKE, client::next(&mut socket))
                 .await
@@ -411,8 +428,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
 
     async fn command(&mut self, command: Command, socket: &mut Option<Socket>) -> bool {
         match command {
-            Command::Input { text, msg_id } => {
-                let frame = json!({ "type": "input", "text": text, "msg_id": msg_id });
+            Command::Input { text, msg_id, images } => {
+                let mut frame = json!({ "type": "input", "text": text, "msg_id": msg_id });
+                if !images.is_empty() {
+                    frame["images"] = json!(images);
+                }
                 // Typing into a finished conversation is what restores it (docs/18), and over the
                 // socket the message keeps its msg_id.
                 if socket.is_none() {
@@ -431,7 +451,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 }
                 let sent = match socket.as_mut() {
                     Some(socket) => client::send(socket, &frame).await,
-                    None => self.client.input(&self.session, &text).await,
+                    None => {
+                        self.client
+                            .input(&self.session, &text, &images, Some(&msg_id))
+                            .await
+                    }
                 };
                 match sent {
                     Ok(()) => true,

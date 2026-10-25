@@ -85,6 +85,9 @@ pub struct ManageOp {
     /// `muffit.create`'s first message.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// `muffit.create` in a Kampr session running muffit's TUI rather than with no terminal.
+    #[serde(default)]
+    pub terminal: Option<bool>,
 }
 
 const MUFFIT_LISTED: Duration = Duration::from_secs(3);
@@ -304,6 +307,7 @@ pub struct Manager<'a> {
     pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
     pub native: Option<&'a std::sync::Arc<NativeProvider>>,
     pub muffit: Option<&'a std::sync::Arc<kampr_muffit::MuffitProvider>>,
+    pub muffit_tui: &'a str,
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
     pub holder: &'a str,
 }
@@ -450,6 +454,9 @@ impl Manager<'_> {
                 .create(cwd, op.prompt.as_deref())
                 .await
                 .map_err(failed)?;
+            if op.terminal == Some(true) {
+                return self.muffit_terminal(op, cwd, &id).await;
+            }
             // The ack is what a client waits on, so it names a pane the herd already lists.
             muffit.listed(&id, MUFFIT_LISTED).await;
             return Ok(json!({ "pane_id": kampr_muffit::pane_id(&id) }));
@@ -473,6 +480,26 @@ impl Manager<'_> {
             }
         }
         Ok(json!({ "ok": true }))
+    }
+
+    async fn muffit_terminal(&self, op: &ManageOp, cwd: &str, session: &str) -> Result<Value, ManageError> {
+        let native = self
+            .native
+            .ok_or_else(|| ManageError::BadRequest("this node does not keep native sessions".into()))?;
+        let (cols, rows) = native_geometry(op)?;
+        let line = format!("exec {} --resume {session}", self.muffit_tui);
+        let pane = native
+            .create(NewSession {
+                argv: vec![kampr_native::login_shell(), "-lc".into(), line],
+                cwd: Some(cwd.to_string()),
+                label: op.label.clone(),
+                cols,
+                rows,
+                ..NewSession::default()
+            })
+            .await
+            .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
+        Ok(json!({ "pane_id": pane }))
     }
 
     fn native_target(&self, op: &ManageOp) -> Option<String> {

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.isMuffit
 import dev.kampr.shared.wire.workspaceIdOf
 
 @Immutable
@@ -34,7 +35,13 @@ data class Herd(
 }
 
 @Immutable
-data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>)
+data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>) {
+    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit }
+
+    // Muffit sessions no terminal is showing: a daggit's wake, one the web UI or the + sheet
+    // started in the background (docs/18).
+    val background: List<PaneInfo> get() = panes.filter { it.isMuffit }
+}
 
 // The pane a `managed` ack's `id` stands for, once the herd patch carrying it has arrived.
 //

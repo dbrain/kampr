@@ -756,9 +756,9 @@ async fn warm(
     if let Some(pane) = query.pane.as_deref()
         && blocked(pane)
         && let Some((session, local)) = node.resolve(pane)
-        && let Some(muffit) = session.muffit_of(&local)
+        && let Some(link) = session.muffit_link(&local)
     {
-        if let Some(prompt) = crate::muffit::prompt(muffit, &local) {
+        if let Some(prompt) = crate::muffit::prompt(&link.provider, &link.session) {
             body["pending"] =
                 serde_json::to_value(crate::muffit::pending(pane, Some(&prompt))).unwrap_or_default();
         }

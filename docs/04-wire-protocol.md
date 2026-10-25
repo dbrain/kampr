@@ -1699,8 +1699,14 @@ arrives on the conversation frames. Its id is `<node_id>/m:<session id>` and it 
 title. A node that lists muffit sessions says `"muffit": true` on its `nodes[]` entry and
 `caps.muffit` in `hello`.
 
-A stored session (finished, nobody attached) is still a pane for seven days, `idle`. Watching it
-reads its transcript and never restarts it; typing into it does.
+Only live sessions are panes: one whose turn ended with nobody attached leaves the herd.
+
+**A terminal running muffit's TUI is that session's pane**, and the session has no `m:` pane
+beside it. The terminal keeps its own id and `provider`; `agent` is `"muffit"`, `converses` and
+`has_conversation` are true, `title` and `agent_status` are the session's. Its conversation frames,
+`pending`, `answer`, `convo.sub`, `convo.load` and `convo.find` are the muffit session's, exactly
+as below. `input` and `paste` stay the terminal's: typing goes to the TUI, and a pasted file is
+typed into it as a bracketed paste, which the TUI attaches as a picture.
 
 - **`convo` / `convo.turn`.** Turn ids are `m<seq>`; `cursor` is the oldest id served. A tool's
   result is folded into its `tool` block, revising the turn that made the call. The `live` turn
@@ -1713,18 +1719,21 @@ reads its transcript and never restarts it; typing into it does.
 - **`convo.sub`** takes a worker's session id (`<parent>.s<n>`), from the `sub` block of the
   `delegate` call that started it.
 - **`input`.** Text is held until `"\r"` and sent as one message. ctrl-c and a lone esc interrupt
-  the turn; any other escape sequence is dropped.
+  the turn; any other escape sequence is dropped. A picture `paste`d into the pane goes with the
+  next message as an image rather than as its path.
   A hub relaying `input` stamps an optional `from` naming its own client, so two people typing into
   one muffit pane through one hub each send their own message; a node trusts `from` only from a hub.
 
 ```jsonc
 { "t":"manage", "op":"muffit.create", "node":"01J…",
   "cwd":"/home/dbrain/dev/kampr",     // the node's home when absent
-  "prompt":"fix the flaky test" }     // required
+  "prompt":"fix the flaky test",      // required unless `terminal`
+  "terminal":true }                   // in a native session running the TUI
 { "t":"manage", "op":"native.close", "at":"01J…/m:06GQ…" }   // stops the session
 ```
 
-`muffit.create` acks the pane it made as `native.create` does, and is routed by `node`. `close`,
+`muffit.create` acks the pane it made as `native.create` does, and is routed by `node`: the
+native session running the TUI with `terminal`, else the session's `m:` pane. `close`,
 `native.close` and `muffit.close` stop a muffit session; every other management op is
 `bad_request` on one.
 

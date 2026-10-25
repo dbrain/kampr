@@ -1,4 +1,4 @@
-//! A muffit daemon that speaks the frames of `../muffit/docs/api/kampr.md` (wire 3.2) and records
+//! A muffit daemon that speaks the frames of `../muffit/docs/api/kampr.md` (wire 3.3) and records
 //! everything it is asked, so a test can say what the node sent it.
 
 use axum::Router;
@@ -19,6 +19,7 @@ pub const TOKEN: &str = "fake-muffit-token";
 pub struct Seen {
     pub method: String,
     pub path: String,
+    pub query: Option<String>,
     pub origin: Option<String>,
     pub authorization: Option<String>,
     pub body: Value,
@@ -64,18 +65,10 @@ pub fn session(id: &str, state: &str, title: Option<&str>) -> Value {
             "permission": null, "state": state, "title": title, "turns": 1 })
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-}
-
-/// A conversation in the store and not live: muffit lists it only under `?all=true` (kampr.md §2).
-pub fn stored(id: &str, title: &str, ago_ms: u64) -> Value {
+/// A finished conversation: in muffit's store, but not listed by `/sessions` or the stream.
+pub fn finished(id: &str, title: &str) -> Value {
     let mut row = session(id, "completed", Some(title));
     row["_live"] = json!(false);
-    row["_updated_at_ms"] = json!(now_ms() - ago_ms);
     row
 }
 
@@ -202,7 +195,6 @@ impl Fake {
                 .find(|s| s["id"] == id)
                 .expect("a session");
             row["_live"] = json!(live);
-            row["_updated_at_ms"] = json!(now_ms());
         }
         match live {
             true => self.update(id, |_| {}),
@@ -214,9 +206,11 @@ impl Fake {
         }
     }
 
-    pub fn attaches(&self, id: &str) -> usize {
-        let path = format!("/sessions/{id}/attach");
-        self.seen().iter().filter(|s| s.path == path).count()
+    /// A session that appears, the way muffit's stream tells of one.
+    pub fn insert(&self, row: Value) {
+        let id = row["id"].as_str().expect("an id").to_string();
+        self.inner.lock().unwrap().sessions.push(row);
+        self.update(&id, |_| {});
     }
 
     pub fn push(&self, frame: Value) {
@@ -247,11 +241,13 @@ async fn guard(State(fake): State<Fake>, request: Request, next: Next) -> Respon
     };
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let query = request.uri().query().map(str::to_string);
     let (parts, body) = request.into_parts();
     let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap_or_default();
     fake.inner.lock().unwrap().seen.push(Seen {
         method,
         path,
+        query,
         origin: origin.clone(),
         authorization: authorization.clone(),
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
@@ -278,19 +274,8 @@ fn live_rows(rows: &[Value]) -> Vec<Value> {
     rows.iter().filter(|r| is_live(r)).map(shown).collect()
 }
 
-async fn list(State(fake): State<Fake>, Query(query): Query<HashMap<String, String>>) -> axum::Json<Value> {
+async fn list(State(fake): State<Fake>) -> axum::Json<Value> {
     let rows = fake.inner.lock().unwrap().sessions.clone();
-    if query.get("all").map(String::as_str) == Some("true") {
-        let all: Vec<Value> = rows
-            .iter()
-            .map(|r| {
-                json!({ "branch": r["branch"], "id": r["id"], "live": is_live(r), "project": r["cwd"],
-                        "project_id": null, "state": r["state"], "title": r["title"],
-                        "updated_at_ms": r["_updated_at_ms"].as_u64().unwrap_or_else(now_ms) })
-            })
-            .collect();
-        return axum::Json(json!({ "sessions": all }));
-    }
     axum::Json(json!({ "remote": [], "sessions": live_rows(&rows) }))
 }
 
@@ -409,7 +394,13 @@ async fn stream_socket(State(fake): State<Fake>, ws: WebSocketUpgrade) -> Respon
     })
 }
 
-async fn attach_socket(State(fake): State<Fake>, Path(id): Path<String>, ws: WebSocketUpgrade) -> Response {
+async fn attach_socket(
+    State(fake): State<Fake>,
+    Path(id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let observe = query.get("observe").is_some_and(|v| v == "true");
     let row = fake
         .inner
         .lock()
@@ -421,8 +412,10 @@ async fn attach_socket(State(fake): State<Fake>, Path(id): Path<String>, ws: Web
     let Some(row) = row else {
         return (StatusCode::NOT_FOUND, "no such session").into_response();
     };
-    if !is_live(&row) {
-        fake.set_live(&id, true);
+    match (is_live(&row), observe) {
+        (true, _) => {}
+        (false, true) => return (StatusCode::NOT_FOUND, "no such live session").into_response(),
+        (false, false) => fake.set_live(&id, true),
     }
     let row = shown(&row);
     ws.on_upgrade(move |mut socket| async move {
@@ -435,7 +428,7 @@ async fn attach_socket(State(fake): State<Fake>, Path(id): Path<String>, ws: Web
             .unwrap()
             .attach_frames
             .push(serde_json::from_str(&hello).unwrap_or_default());
-        let greeting = json!({ "type": "hello", "version": 302, "cursor": 1, "session": row,
+        let greeting = json!({ "type": "hello", "version": 303, "cursor": 1, "session": row,
                                "capabilities": ["input", "interrupt", "history", "status", "subscribe"] });
         if !send(&mut socket, greeting).await {
             return;

@@ -122,48 +122,28 @@ async fn the_real_daemon_s_live_sessions_are_panes_with_readable_conversations()
 }
 
 #[tokio::test]
-async fn the_real_daemon_s_finished_conversation_is_read_through_the_node_without_restoring_it() {
+async fn the_real_daemon_s_finished_conversations_are_not_panes() {
     if !live() {
         return;
     }
     let token = token();
     let daemon = kampr_muffit::Client::new(DAEMON, &token).unwrap();
+    let h = Harness::beside(DAEMON, &token).await;
+    let mut client = h.client().await;
+    client
+        .until("the herd", |c| (!c.nodes.is_empty()).then_some(()))
+        .await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    client.pump(std::time::Duration::from_millis(200)).await;
     let live_now: Vec<String> = daemon
         .sessions()
         .await
         .expect("the daemon")
         .into_iter()
-        .map(|s| s.id)
+        .map(|s| format!("{NODE}/m:{}", s.id))
         .collect();
-    let h = Harness::beside(DAEMON, &token).await;
-    let mut client = h.client().await;
     let prefix = format!("{NODE}/m:");
-    let stored = client
-        .until("a finished conversation", |c| {
-            c.panes
-                .values()
-                .find(|p| {
-                    let id = p["id"].as_str().unwrap();
-                    id.starts_with(&prefix) && !live_now.iter().any(|l| id.ends_with(&format!("m:{l}")))
-                })
-                .cloned()
-        })
-        .await;
-    assert_eq!(stored["agent_status"], "idle", "{stored}");
-    let id = stored["id"].as_str().unwrap().to_string();
-    let session = stored["session_id"].as_str().unwrap().to_string();
-    client.watch(&id).await;
-    let page = client.convo(&id).await;
-    sane(page["turns"].as_array().expect("turns"), &id);
-    assert!(!page["turns"].as_array().unwrap().is_empty(), "{page}");
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    let live_after = daemon.sessions().await.expect("the daemon");
-    assert!(
-        !live_after.iter().any(|s| s.id == session),
-        "watching {session} restored it: the node attached"
-    );
-    eprintln!(
-        "{id}: {} turns read without attaching",
-        page["turns"].as_array().unwrap().len()
-    );
+    for id in client.panes.keys().filter(|id| id.starts_with(&prefix)) {
+        assert!(live_now.contains(id), "{id} is a pane but not live on the daemon");
+    }
 }

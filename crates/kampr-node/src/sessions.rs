@@ -39,7 +39,17 @@ pub struct SessionNode {
     pub native: Option<Arc<NativeProvider>>,
     /// Only on the primary, for the same reason: the muffit daemon is the machine's (docs/18).
     pub muffit: Option<Arc<MuffitProvider>>,
+    /// The primary's daemon on every session, since a TUI in any session's pane is its client.
+    machine_muffit: Option<Arc<MuffitProvider>>,
     pub registry: Arc<PaneRegistry>,
+}
+
+#[derive(Clone)]
+pub struct MuffitLink {
+    pub provider: Arc<MuffitProvider>,
+    pub session: String,
+    /// A terminal running the TUI, rather than a session with no terminal.
+    pub terminal: bool,
 }
 
 impl SessionNode {
@@ -49,10 +59,12 @@ impl SessionNode {
         socket: PathBuf,
         primary: bool,
         desk: Option<Arc<NativeProvider>>,
+        machine_muffit: Option<Arc<MuffitProvider>>,
     ) -> Arc<Self> {
         let herdr = Herdr::new(&socket);
         let native = primary.then(|| native_provider(config)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
+        let machine_muffit = muffit.clone().or(machine_muffit);
         let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
             herdr.clone(),
@@ -105,6 +117,7 @@ impl SessionNode {
             fleet,
             native,
             muffit,
+            machine_muffit,
             registry,
         })
     }
@@ -133,6 +146,35 @@ impl SessionNode {
         self.muffit
             .as_ref()
             .filter(|_| local.starts_with(kampr_muffit::PREFIX))
+    }
+
+    /// The muffit session a pane is: an `m:` pane's own, or the one a TUI running in a terminal
+    /// pane is showing (docs/18).
+    pub fn muffit_link(&self, local: &str) -> Option<MuffitLink> {
+        if let Some(provider) = self.muffit_of(local) {
+            return Some(MuffitLink {
+                provider: provider.clone(),
+                session: kampr_muffit::session_of(local)?.to_string(),
+                terminal: false,
+            });
+        }
+        let session = self.held_muffit(&self.pane_processes(local))?;
+        Some(MuffitLink {
+            provider: self.machine_muffit.clone()?,
+            session: session.id,
+            terminal: true,
+        })
+    }
+
+    pub fn held_muffit(
+        &self,
+        processes: &[kampr_journal::process::PaneProcess],
+    ) -> Option<kampr_muffit::wire::SessionInfo> {
+        let pids: Vec<u32> = processes.iter().map(|p| p.pid).collect();
+        if pids.is_empty() {
+            return None;
+        }
+        self.machine_muffit.as_ref()?.held_by(&pids)
     }
 
     pub fn online(&self) -> bool {
@@ -245,7 +287,7 @@ impl Sessions {
             "" => Herdr::discover().map_or_else(|_| default_socket(), |h| h.socket().to_path_buf()),
             path => PathBuf::from(path),
         };
-        let primary = SessionNode::open(config, &session_name_of(&socket), socket, true, None);
+        let primary = SessionNode::open(config, &session_name_of(&socket), socket, true, None, None);
         Arc::new(Self {
             config: config.clone(),
             all: RwLock::new(vec![primary.clone()]),
@@ -330,6 +372,7 @@ impl Sessions {
                 socket,
                 false,
                 self.primary.native.clone(),
+                self.primary.muffit.clone(),
             );
             info!(session = %entry.name, node = %session.node_id, "serving a herdr session");
             self.all.write().unwrap().push(session);
@@ -440,6 +483,7 @@ mod tests {
             if primary { "default" } else { "agents" },
             "/nowhere/herdr.sock".into(),
             primary,
+            None,
             None,
         )
     }

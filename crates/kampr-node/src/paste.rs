@@ -29,6 +29,50 @@ pub fn typed(path: &Path) -> String {
     format!("{} ", path.display())
 }
 
+/// What a paste is typed as into a terminal running muffit's TUI: a bracketed paste that is
+/// exactly one image path is what the TUI attaches as a picture rather than typing out.
+pub fn bracketed(path: &Path) -> String {
+    format!("\u{1b}[200~{}\u{1b}[201~", path.display())
+}
+
+/// The pictures pasted into a message that goes to muffit as text: each word that is one of this
+/// node's pasted images leaves the text and goes with it as an image instead.
+pub fn lift_images(state_dir: &Path, text: &str) -> (String, Vec<kampr_muffit::wire::Image>) {
+    use base64::Engine;
+    let pastes = state_dir.join("pastes");
+    let mut images = Vec::new();
+    let mut words = Vec::new();
+    for word in text.split(' ') {
+        let path = Path::new(word);
+        let image = (path.parent() == Some(pastes.as_path()))
+            .then(|| image_mime(path))
+            .flatten()
+            .and_then(|mime| Some((mime, std::fs::read(path).ok()?)));
+        match image {
+            Some((mime, body)) => images.push(kampr_muffit::wire::Image {
+                mime: mime.into(),
+                data: base64::engine::general_purpose::STANDARD.encode(body),
+            }),
+            None => words.push(word),
+        }
+    }
+    let text = match images.is_empty() {
+        true => text.to_string(),
+        false => words.join(" ").trim().to_string(),
+    };
+    (text, images)
+}
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()? {
+        "png" => Some("image/png"),
+        "jpg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub enum PasteError {
     TooLarge(u64),

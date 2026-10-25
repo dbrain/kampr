@@ -58,9 +58,21 @@ pub struct Muffit {
     /// Absent is on exactly when a token is found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// The command a new session's terminal runs muffit's TUI with; `muffit` when empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub tui: String,
 }
 
 pub const MUFFIT_URL: &str = "http://127.0.0.1:7891";
+
+impl Muffit {
+    pub fn tui_command(&self) -> &str {
+        match self.tui.trim() {
+            "" => "muffit",
+            tui => tui,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MuffitEndpoint {
@@ -615,6 +627,7 @@ mod tests {
             token: token.into(),
             token_file: token_file.into(),
             enabled,
+            ..Muffit::default()
         };
         let file = file.display().to_string();
         let found = |m: Muffit| m.resolve(home.path()).map(|e| (e.url, e.token));

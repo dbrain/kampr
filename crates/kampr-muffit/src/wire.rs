@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const WIRE_VERSION: u32 = 302;
+pub const WIRE_VERSION: u32 = 303;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,23 +41,28 @@ pub struct SessionInfo {
     pub model: Option<String>,
     #[serde(default)]
     pub permission: Option<PermissionPrompt>,
+    #[serde(default)]
+    pub clients: Vec<AttachedClient>,
 }
 
-/// A row of `GET /sessions?all=true`: a conversation in the store, live or not.
+/// Who is attached to a session, as each client named itself in its hello.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct StoredSession {
-    pub id: String,
+pub struct AttachedClient {
+    pub kind: String,
     #[serde(default)]
-    pub live: bool,
+    pub pid: Option<u32>,
     #[serde(default)]
-    pub project: Option<String>,
-    pub state: SessionState,
+    pub host: Option<String>,
     #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub branch: Option<String>,
-    #[serde(default)]
-    pub updated_at_ms: u64,
+    pub observing: bool,
+}
+
+/// A picture sent with a message: muffit shrinks it to what the model takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Image {
+    pub mime: String,
+    /// Base64.
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -215,5 +220,8 @@ pub enum ServerFrame {
 }
 
 pub fn hello(capabilities: &[&str]) -> serde_json::Value {
-    serde_json::json!({ "type": "hello", "version": WIRE_VERSION, "capabilities": capabilities })
+    serde_json::json!({
+        "type": "hello", "version": WIRE_VERSION, "capabilities": capabilities,
+        "client": { "kind": "kampr" },
+    })
 }

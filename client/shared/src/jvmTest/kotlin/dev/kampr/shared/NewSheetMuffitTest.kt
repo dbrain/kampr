@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -43,6 +44,7 @@ import kotlin.test.assertTrue
 private val NODE = NodeInfo(id = "01JNODE", name = "comingclean", kind = "local", native = true)
 private const val CARD = "Muffit session,"
 private const val START = "Start muffit session"
+private const val TERMINAL = "In a terminal."
 
 private fun hello(caps: String) = """{"t":"hello","protocol":1,"node_id":"01JNODE","node_name":"comingclean","build":"test",""" +
     """"role":"full","caps":{"manage":true$caps},"security":{"tier":0,"passkeys":false}}"""
@@ -129,36 +131,56 @@ class NewSheetMuffitTest {
         }
     }
 
+    // In a terminal by default: muffit's TUI in a Kampr session, as if typed there, and the ack
+    // names that terminal.
     @Test
-    fun theDirectoryAndPromptAreSentAndTheAckOpensWhatItMade() = runComposeUiTest {
-        val sheet = MuffitSheet()
-        open(sheet)
-        onNodeWithContentDescription("directory").performTextInput(" /home/dbrain/dev/kampr ")
-        onNodeWithContentDescription("first prompt").performTextInput("tidy the parser")
-        waitForIdle()
-        onNodeWithContentDescription(START).performClick()
-        waitForIdle()
-        val op = sheet.sent.single()
-        assertEquals("muffit.create", op.op)
-        assertEquals(
-            buildJsonObject {
-                put("node", JsonPrimitive(NODE.id))
-                put("cwd", JsonPrimitive("/home/dbrain/dev/kampr"))
-                put("prompt", JsonPrimitive("tidy the parser"))
-            },
-            op.fields(),
-        )
+    fun theDirectoryAndPromptAreSentAndTheAckOpensWhatItMade() {
+        data class Case(val background: Boolean, val terminal: Boolean, val made: String)
+        for (case in listOf(Case(false, true, "01JNODE/n:k1"), Case(true, false, "01JNODE/m:s9"))) {
+            runComposeUiTest {
+                val sheet = MuffitSheet()
+                open(sheet)
+                onNodeWithContentDescription("directory").performTextInput(" /home/dbrain/dev/kampr ")
+                onNodeWithContentDescription("first prompt").performTextInput("tidy the parser")
+                if (case.background) onNodeWithContentDescription(TERMINAL, substring = true).performClick()
+                waitForIdle()
+                onNodeWithContentDescription(START).performClick()
+                waitForIdle()
+                val op = sheet.sent.single()
+                assertEquals("muffit.create", op.op)
+                assertEquals(
+                    buildJsonObject {
+                        put("node", JsonPrimitive(NODE.id))
+                        put("cwd", JsonPrimitive("/home/dbrain/dev/kampr"))
+                        put("prompt", JsonPrimitive("tidy the parser"))
+                        if (case.terminal) put("terminal", JsonPrimitive(true))
+                    },
+                    op.fields(),
+                    "$case",
+                )
 
-        sheet.outcome.value = ServerMsg.Managed(op = "muffit.create", ok = true, id = "01JNODE/m:s9")
-        waitForIdle()
-        assertEquals(listOf("01JNODE/m:s9"), sheet.created)
-        assertTrue(sheet.dismissed)
+                sheet.outcome.value = ServerMsg.Managed(op = "muffit.create", ok = true, id = case.made)
+                waitForIdle()
+                assertEquals(listOf(case.made), sheet.created)
+                assertTrue(sheet.dismissed)
+            }
+        }
     }
 
     @Test
-    fun aSessionNeedsAPromptToStart() = runComposeUiTest {
-        val sheet = MuffitSheet()
-        open(sheet)
-        onNodeWithContentDescription(START).assertIsNotEnabled()
+    fun onlyASessionInTheBackgroundNeedsAPromptToStart() {
+        for (background in listOf(false, true)) {
+            runComposeUiTest {
+                val sheet = MuffitSheet()
+                open(sheet)
+                if (background) {
+                    onNodeWithContentDescription(TERMINAL, substring = true).performClick()
+                    waitForIdle()
+                    onNodeWithContentDescription(START).assertIsNotEnabled()
+                } else {
+                    onNodeWithContentDescription(START).assertIsEnabled()
+                }
+            }
+        }
     }
 }

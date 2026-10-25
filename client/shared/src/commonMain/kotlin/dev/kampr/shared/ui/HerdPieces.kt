@@ -170,6 +170,13 @@ fun NodeQuiet(node: NodeInfo, modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun BackgroundHeading(modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    val said = "Background · muffit"
+    KText(said, tokens.type.captionSmall, tokens.color.mute, modifier.asHeading().announce(said), maxLines = 1)
+}
+
+@Composable
 fun HerdEmpty(connection: ConnectionStatus, compact: Boolean, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val headline = connectionWord(connection) ?: "No panes yet"

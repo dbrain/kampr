@@ -12,9 +12,10 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 mod fake;
+mod linked;
 mod live;
 
-use fake::{Daemon, Fake, TOKEN, session, stored, text};
+use fake::{Daemon, Fake, TOKEN, finished, session, text};
 
 const NODE: &str = "01JMUFFITNODE";
 const SOON: Duration = Duration::from_secs(10);
@@ -39,6 +40,10 @@ impl Drop for Harness {
 
 impl Harness {
     async fn beside(url: &str, token: &str) -> Self {
+        Self::beside_with(url, token, |_| {}).await
+    }
+
+    async fn beside_with(url: &str, token: &str, tune: impl FnOnce(&mut Config)) -> Self {
         let home = tempfile::Builder::new().prefix("km").tempdir_in("/tmp").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -55,10 +60,13 @@ impl Harness {
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
         config.native.root = home.path().join("native").display().to_string();
+        config.native.keeper = kampr_testkit::keeper().display().to_string();
+        config.native.launch = "detached".into();
         config.journals.home = home.path().display().to_string();
         config.muffit.url = url.to_string();
         config.muffit.token = token.to_string();
         config.node_id = NODE.into();
+        tune(&mut config);
         config.save(&config_dir).unwrap();
         let origin = config.origin();
         let node = Node::start(config, &state_dir).await.expect("a node");
@@ -833,139 +841,32 @@ async fn two_clients_typing_through_one_hub_each_send_their_own_message() {
     drain.abort();
 }
 
-const HOUR_MS: u64 = 3_600_000;
-
-fn finished_conversations() -> Vec<Value> {
-    let mut rows = vec![
+#[tokio::test]
+async fn only_a_live_session_is_a_pane() {
+    let fake = Fake::start(vec![
         session("s1", "waiting_user", Some("live one")),
-        stored("old", "answered a minute ago", HOUR_MS),
-        stored("ancient", "last month", 8 * 24 * HOUR_MS),
-    ];
-    rows.extend((0..20).map(|n| stored(&format!("bulk{n}"), "bulk", 2 * HOUR_MS + n * 60_000)));
-    rows
-}
-
-#[tokio::test]
-async fn a_finished_conversation_is_a_pane_read_without_attaching() {
-    let fake = Fake::start(finished_conversations()).await;
-    fake.set_transcript(
-        "old",
-        (0..120)
-            .map(|n| {
-                text(
-                    n,
-                    if n % 2 == 0 { "user" } else { "assistant" },
-                    &format!("said {n}"),
-                )
-            })
-            .collect(),
-    );
-    let h = Harness::start(&fake).await;
-    let mut client = h.client().await;
-    let id = pane("old");
-    let old = client.pane(&id, |_| true).await;
-    for (field, want) in [
-        ("provider", json!("muffit")),
-        ("agent_status", json!("idle")),
-        ("has_conversation", json!(true)),
-        ("label", json!("answered a minute ago")),
-        ("cwd", json!("/srv/work")),
-    ] {
-        assert_eq!(old[field], want, "{field}: {old}");
-    }
-    client.pane(&pane("s1"), |p| p["agent_status"] == "done").await;
-    client.pane(&pane("bulk18"), |_| true).await;
-    assert!(!client.panes.contains_key(&pane("ancient")), "older than a week");
-    assert!(
-        !client.panes.contains_key(&pane("bulk19")),
-        "only the newest twenty stored conversations"
-    );
-
-    client.watch(&id).await;
-    let page = client.convo(&id).await;
-    assert_eq!(page["fresh"], json!(true));
-    assert_eq!(ids(&page)[0], "m20", "{page}");
-    client
-        .send(json!({ "t": "convo.load", "pane": id, "before": page["cursor"] }))
-        .await;
-    let older = client.convo(&id).await;
-    assert_eq!(ids(&older).len(), 20, "{older}");
-    client
-        .send(json!({ "t": "convo.find", "pane": id, "query": "said 3" }))
-        .await;
-    client.frame("a search", |f| f["t"] == "convo.find").await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        fake.attaches("old"),
-        0,
-        "looking at a conversation must not restore it"
-    );
-    assert!(
-        !client.log.iter().any(|f| f["t"] == "pending"),
-        "a stored conversation asks nothing"
-    );
-
-    fake.set_live("old", true);
-    let listed = std::time::Instant::now();
-    eventually("the watch attaches once the session is live", || {
-        (fake.attaches("old") == 1).then_some(())
-    })
+        finished("old", "answered a minute ago"),
+    ])
     .await;
-    assert!(
-        listed.elapsed() < Duration::from_secs(2),
-        "the watch moved to the socket when the stream listed it, not at its next retry"
-    );
-    eventually("attached", || (fake.attached() > 0).then_some(())).await;
-    fake.push(json!({ "type": "content", "blocks": [{ "type": "text", "text": "working on it" }] }));
-    client
-        .turn("the live turn", |t| {
-            t["id"] == "live" && !t["blocks"].as_array().unwrap().is_empty()
-        })
-        .await;
-    asked(&fake);
-}
-
-#[tokio::test]
-async fn typing_into_a_finished_conversation_restores_it_and_sends_over_the_socket() {
-    let fake = Fake::start(finished_conversations()).await;
-    fake.set_transcript("old", vec![text(1, "user", "hello")]);
-    let h = Harness::start(&fake).await;
-    let mut client = h.client().await;
-    let id = pane("old");
-    client.watch(&id).await;
-    client.convo(&id).await;
-    client.input(&id, "carry on").await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        fake.attaches("old"),
-        0,
-        "the composer's text alone restores nothing"
-    );
-    client.input(&id, "\r").await;
-    let inputs = eventually("the message over the socket", || {
-        let inputs = fake.attach_frames("input");
-        (!inputs.is_empty()).then_some(inputs)
-    })
-    .await;
-    assert_eq!(inputs[0]["text"], "carry on");
-    assert_eq!(fake.attaches("old"), 1);
-    assert!(fake.posts("/sessions/old/input").is_empty(), "{:?}", fake.seen());
-    client.pane(&id, |p| p["agent_status"] != "idle").await;
-}
-
-#[tokio::test]
-async fn a_session_that_stops_being_live_stays_a_pane() {
-    let fake = Fake::start(finished_conversations()).await;
     let h = Harness::start(&fake).await;
     let mut client = h.client().await;
     let id = pane("s1");
     client.pane(&id, |p| p["agent_status"] == "done").await;
     fake.set_live("s1", false);
-    let started = std::time::Instant::now();
-    client.pane(&id, |p| p["agent_status"] == "idle").await;
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the store is read again as soon as the stream changes"
-    );
-    assert!(client.panes.contains_key(&id));
+    client
+        .until("the finished session leaves the herd", |c| {
+            (!c.panes.contains_key(&id)).then_some(())
+        })
+        .await;
+    let settle = tokio::time::Instant::now() + Duration::from_millis(500);
+    while tokio::time::Instant::now() < settle {
+        client.pump(Duration::from_millis(50)).await;
+    }
+    for gone in [id, pane("old")] {
+        assert!(
+            !client.panes.contains_key(&gone),
+            "a finished conversation is not a pane: {:?}",
+            client.panes
+        );
+    }
 }

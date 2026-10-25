@@ -233,8 +233,14 @@ sealed interface ManageOp {
     }
 
     // docs/18. `node` routes it as it routes `native.create`; the node turns it into muffit's own
-    // `POST /sessions` and answers with the new pane's id.
-    data class MuffitCreate(val node: String, val prompt: String, val cwd: String? = null) : ManageOp {
+    // `POST /sessions` and answers with the new pane's id: a Kampr session running muffit's TUI on
+    // it when `terminal`, else the session's own pane.
+    data class MuffitCreate(
+        val node: String,
+        val prompt: String?,
+        val cwd: String? = null,
+        val terminal: Boolean = false,
+    ) : ManageOp {
         override val op: String get() = OP
 
         companion object {
@@ -372,7 +378,8 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.MuffitCreate -> {
             put("node", node)
             opt("cwd", cwd)
-            put("prompt", prompt)
+            opt("prompt", prompt)
+            if (terminal) put("terminal", true)
         }
 
         is ManageOp.SessionStop -> {

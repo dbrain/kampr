@@ -106,7 +106,7 @@ fun HerdRail(
         ) {
             for (group in herd.groups()) {
                 RailNodeMark(group.node)
-                for (pane in group.panes) {
+                for (pane in group.terminals + group.background) {
                     RailPane(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
                 }
             }

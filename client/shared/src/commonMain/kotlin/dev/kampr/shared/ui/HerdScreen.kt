@@ -97,7 +97,13 @@ fun HerdPortrait(
                             if (group.panes.isEmpty()) {
                                 NodeQuiet(group.node, Modifier.padding(start = 6.dp, bottom = 4.dp))
                             }
-                            for (pane in group.panes) {
+                            for (pane in group.terminals) {
+                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                            }
+                            if (group.background.isNotEmpty()) {
+                                BackgroundHeading(Modifier.padding(start = 6.dp, top = 6.dp))
+                            }
+                            for (pane in group.background) {
                                 PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
                             }
                         }
@@ -180,7 +186,13 @@ fun HerdLandscape(
                                         if (group.panes.isEmpty()) {
                                             NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
                                         }
-                                        for (pane in group.panes) {
+                                        for (pane in group.terminals) {
+                                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                        }
+                                        if (group.background.isNotEmpty()) {
+                                            BackgroundHeading(Modifier.padding(start = 8.dp, top = 6.dp))
+                                        }
+                                        for (pane in group.background) {
                                             PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
                                         }
                                     }
@@ -314,7 +326,13 @@ fun HerdSidebar(
                             if (group.panes.isEmpty()) {
                                 NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
                             }
-                            for (pane in group.panes) {
+                            for (pane in group.terminals) {
+                                PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                            }
+                            if (group.background.isNotEmpty()) {
+                                BackgroundHeading(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp))
+                            }
+                            for (pane in group.background) {
                                 PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
                             }
                         }

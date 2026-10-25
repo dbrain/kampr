@@ -341,8 +341,8 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 async fn question_for(sessions: &Sessions, global: &str, agent: Option<&str>) -> Option<String> {
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
-    if let Some(muffit) = session.muffit_of(&local) {
-        return crate::muffit::prompt(muffit, &local).map(|p| p.action);
+    if let Some(link) = session.muffit_link(&local) {
+        return crate::muffit::prompt(&link.provider, &link.session).map(|p| p.action);
     }
     let screen = pending::Screen::of(&session, &local);
     if let Some(found) = pending::read(&screen, &local, agent).await {

@@ -833,7 +833,14 @@ impl Session {
         let warm = self.node.convo_warmth.take(pane);
         let convo = warm.lock().unwrap().journal.clone();
         let followed = convo::followed();
-        if conversation {
+        let tui = conversation.then(|| session.muffit_link(&local)).flatten();
+        let mut muffit = None;
+        if let Some(tui) = tui {
+            let (task, commands) =
+                crate::muffit::follow(tui.provider, tui.session, self.wire.clone(), pane.to_string());
+            tasks.push(task);
+            muffit = Some(commands);
+        } else if conversation {
             let for_identity = self.node.journals();
             let for_marker = self.node.journals();
             let identity_session = session.clone();
@@ -872,7 +879,7 @@ impl Session {
                 warm,
                 warmth: self.node.convo_warmth.clone(),
                 followed,
-                muffit: None,
+                muffit,
                 _hold: hold,
             },
         );
@@ -897,7 +904,8 @@ impl Session {
             old.stop();
         }
         self.wire.outbox().resume_pane(pane);
-        let (task, commands) = crate::muffit::follow(provider, local, self.wire.clone(), pane.to_string());
+        let session = kampr_muffit::session_of(local).unwrap_or_default().to_string();
+        let (task, commands) = crate::muffit::follow(provider, session, self.wire.clone(), pane.to_string());
         self.panes.insert(
             pane.to_string(),
             PaneHandle {
@@ -943,7 +951,7 @@ impl Session {
     fn is_muffit(&self, pane: &str) -> bool {
         self.node
             .resolve(pane)
-            .is_some_and(|(session, local)| session.muffit_of(&local).is_some())
+            .is_some_and(|(session, local)| session.muffit_link(&local).is_some())
     }
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
@@ -1472,12 +1480,13 @@ impl Session {
                 Step::Interrupt => provider.client().interrupt(session).await,
                 Step::Submit(text) => {
                     let msg_id = ulid::Ulid::generate().to_string();
+                    let (text, images) = crate::paste::lift_images(&self.node.state_dir, &text);
                     match self.panes.get(pane).and_then(|h| h.muffit.as_ref()) {
                         Some(commands) => commands
-                            .send(kampr_muffit::follow::Command::Input { text, msg_id })
+                            .send(kampr_muffit::follow::Command::Input { text, msg_id, images })
                             .await
                             .map_err(|_| anyhow::anyhow!("the conversation closed")),
-                        None => provider.client().input(session, &text).await,
+                        None => provider.client().input(session, &text, &images, None).await,
                     }
                 }
             };
@@ -1637,14 +1646,14 @@ impl Session {
         if !self.may_write("paste", Some(pane)) {
             return;
         }
-        if self.node.resolve(pane).is_none() {
+        let Some((session, local)) = self.node.resolve(pane) else {
             self.audit("paste", Some(pane), Some(json!({ "peer": true })));
             self.relay_to_peer(
                 pane,
                 json!({ "t": "paste", "pane": pane, "b64": b64, "name": name }),
             );
             return;
-        }
+        };
         // The length is read off the base64 before anything is allocated, so a body claiming a
         // gigabyte costs a comparison rather than a gigabyte.
         if kampr_journal::attach::decoded_len(b64) > kampr_journal::attach::MAX_BYTES {
@@ -1676,8 +1685,11 @@ impl Session {
             Some(pane),
             Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
         );
-        self.input(pane, Some(crate::paste::typed(&path)), None, None, false, None)
-            .await;
+        let typed = match session.muffit_link(&local) {
+            Some(tui) if tui.terminal => crate::paste::bracketed(&path),
+            _ => crate::paste::typed(&path),
+        };
+        self.input(pane, Some(typed), None, None, false, None).await;
     }
 
     async fn answer(&mut self, pane: &str, key: &str) {
@@ -1699,9 +1711,9 @@ impl Session {
             );
             return;
         }
-        if let Some(muffit) = session.muffit_of(&local) {
+        if let Some(link) = session.muffit_link(&local) {
             self.audit("answer", Some(pane), Some(json!({ "key": key, "muffit": true })));
-            self.muffit_answer(muffit.clone(), pane, &local, key).await;
+            self.muffit_answer(link.provider, pane, &link.session, key).await;
             return;
         }
         // The node decides whether a submit key follows, per harness — the client sends only the
@@ -1750,7 +1762,7 @@ impl Session {
         &mut self,
         provider: Arc<kampr_muffit::MuffitProvider>,
         pane: &str,
-        local: &str,
+        session: &str,
         key: &str,
     ) {
         let Some(answer) = crate::muffit::answer_for(key) else {
@@ -1761,8 +1773,7 @@ impl Session {
             );
             return;
         };
-        let session = kampr_muffit::session_of(local).unwrap_or_default();
-        let Some(prompt) = crate::muffit::prompt(&provider, local) else {
+        let Some(prompt) = crate::muffit::prompt(&provider, session) else {
             self.wire.send(&crate::muffit::pending(pane, None));
             return;
         };
@@ -1818,7 +1829,7 @@ impl Session {
             self.relay_to_peer(pane, json!({ "t": "answer.submit", "pane": pane }));
             return;
         };
-        if session.muffit_of(&local).is_some() {
+        if session.muffit_link(&local).is_some() {
             self.wire.error(
                 ErrorCode::BadRequest,
                 "a muffit prompt takes one answer",
@@ -2020,6 +2031,7 @@ impl Session {
             // session is still created by the primary's provider and named under its id.
             native: primary.native.as_ref(),
             muffit: primary.muffit.as_ref(),
+            muffit_tui: self.node.config.muffit.tui_command(),
             holder: &kampr_keep::view_holder(&self.device.name),
         };
         match manager.run(&op).await {

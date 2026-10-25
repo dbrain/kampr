@@ -741,16 +741,43 @@ async fn build_model(
         // A herdr restart keeps its workspaces and panes (probe #70), so an outage marks the node
         // offline and leaves the last-known panes standing rather than emptying the herd under a
         // client that is about to get them all back.
-        for info in session.registry.list_panes().await.unwrap_or_default() {
+        let listed: Vec<_> = session
+            .registry
+            .list_panes()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|info| {
+                let processes = match info.muffit {
+                    Some(_) => Vec::new(),
+                    None => session.pane_processes(&info.pane_id),
+                };
+                let tui = session.held_muffit(&processes);
+                (info, processes, tui)
+            })
+            .collect();
+        // A session whose TUI is in a terminal here is that terminal, not a pane beside it.
+        let in_terminals: HashSet<String> = listed
+            .iter()
+            .filter_map(|(_, _, tui)| tui.as_ref().map(|s| s.id.clone()))
+            .collect();
+        for (info, processes, tui) in listed {
+            if info
+                .muffit
+                .as_ref()
+                .is_some_and(|m| in_terminals.contains(&m.session_id))
+            {
+                continue;
+            }
             live_panes.insert(format!("{}/{}", session.node_id, info.pane_id));
             let transcript = conversations.resolves(journals, &session, &info, &mut live);
-            let muffit = info.muffit.is_some();
+            let muffit = info.muffit.is_some() || tui.is_some();
             let has_conversation = transcript.is_some() || muffit;
             let watchers = session.registry.watcher_count(&info.pane_id);
             // The harness's own name for the session, off the marker it writes by pid (#311) —
             // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
             // affordable once per pane per rebuild.
-            let marker = journals.marker(&session.pane_processes(&info.pane_id));
+            let marker = journals.marker(&processes);
             // And the name the session actually goes by, off the transcript the pane is already
             // known to be on — folded from the byte the last rebuild reached rather than read
             // whole. A pane with no transcript yet has only what the marker says.
@@ -761,6 +788,7 @@ async fn build_model(
             let title = read
                 .and_then(|r| r.title)
                 .or_else(|| marker.as_ref().and_then(chosen_name))
+                .or_else(|| tui.as_ref().and_then(|s| s.title.clone()))
                 .or_else(|| muffit.then(|| info.label.clone()).flatten());
             let mut entry = PaneEntry::new(&session.node_id, &info, has_conversation)
                 // The cheap half, and the one that is true from the moment the harness opens: a
@@ -783,7 +811,10 @@ async fn build_model(
             // approval dialog — measured, with `agent explain` returning no rules ([#485](#)).
             // A native harness that reports over `OSC 7501` is a step ahead of its marker (#610),
             // and the only one of the two that tells done and errors from idle (#600).
-            if info.native.as_ref().is_none_or(|n| n.program.is_none()) {
+            if let Some(tui) = &tui {
+                entry.agent = Some(kampr_muffit::AGENT.into());
+                entry.agent_status = kampr_muffit::agent_status(tui);
+            } else if info.native.as_ref().is_none_or(|n| n.program.is_none()) {
                 let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
                 entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
             }

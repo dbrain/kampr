@@ -1,4 +1,4 @@
-use crate::wire::{SessionInfo, TranscriptPage};
+use crate::wire::{Image, SessionInfo, TranscriptPage};
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -85,15 +85,6 @@ impl Client {
         Ok(serde_json::from_value(body["sessions"].clone())?)
     }
 
-    pub async fn stored(&self) -> Result<Vec<crate::wire::StoredSession>> {
-        let mut url = self.url("/sessions");
-        url.query_pairs_mut().append_pair("all", "true");
-        let body = self
-            .ok_json(self.http.get(url), "listing stored sessions")
-            .await?;
-        Ok(serde_json::from_value(body["sessions"].clone())?)
-    }
-
     pub async fn transcript(
         &self,
         id: &str,
@@ -133,8 +124,15 @@ impl Client {
             .context("muffit created a session and named no id")
     }
 
-    pub async fn input(&self, id: &str, text: &str) -> Result<()> {
-        self.control(id, "input", Some(json!({ "text": text }))).await
+    pub async fn input(&self, id: &str, text: &str, images: &[Image], msg_id: Option<&str>) -> Result<()> {
+        let mut body = json!({ "text": text });
+        if !images.is_empty() {
+            body["images"] = json!(images);
+        }
+        if let Some(msg_id) = msg_id {
+            body["msg_id"] = json!(msg_id);
+        }
+        self.control(id, "input", Some(body)).await
     }
 
     pub async fn interrupt(&self, id: &str) -> Result<()> {
@@ -176,8 +174,9 @@ impl Client {
     }
 
     /// A websocket to `path`, said hello to. Built from a bare request so it carries no `Origin`.
-    pub async fn socket(&self, path: &str, capabilities: &[&str]) -> Result<Socket> {
+    pub async fn socket(&self, path: &str, query: Option<&str>, capabilities: &[&str]) -> Result<Socket> {
         let mut url = self.url(path);
+        url.set_query(query);
         let scheme = match url.scheme() {
             "https" => "wss",
             _ => "ws",

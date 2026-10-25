@@ -47,24 +47,23 @@ pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
     }
 }
 
-/// The prompt a muffit pane is waiting on, off the session stream the node already holds.
-pub fn prompt(provider: &MuffitProvider, local: &str) -> Option<PermissionPrompt> {
-    provider.session(local)?.permission
+/// The prompt a muffit session is waiting on, off the session stream the node already holds.
+pub fn prompt(provider: &MuffitProvider, session: &str) -> Option<PermissionPrompt> {
+    provider.info(session)?.permission
 }
 
 /// Follows the session's conversation for one watcher, until the watch ends.
 pub fn follow(
     provider: Arc<MuffitProvider>,
-    local: &str,
+    session: String,
     wire: Arc<Wire>,
     pane: String,
 ) -> (JoinHandle<()>, Commands) {
     let (commands, received) = mpsc::channel(COMMANDS);
-    let session = kampr_muffit::session_of(local).unwrap_or_default().to_string();
-    let local = local.to_string();
     let alive = {
         let provider = provider.clone();
-        Box::new(move || provider.is_live(&local))
+        let session = session.clone();
+        Box::new(move || provider.is_session_live(&session))
     };
     let follow = Follow {
         client: provider.client().clone(),

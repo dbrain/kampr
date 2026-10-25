@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::directory::{Directory, Listed};
+use crate::directory::Directory;
 use crate::wire::{SessionInfo, SessionState};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
@@ -10,6 +10,15 @@ use tokio::sync::watch;
 
 pub const PREFIX: &str = "m:";
 pub const AGENT: &str = "muffit";
+const TUI: &str = "tui";
+
+/// What muffit names a machine by in a client's hello: the kernel's hostname.
+fn this_host() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+}
 
 pub fn pane_id(session: &str) -> String {
     format!("{PREFIX}{session}")
@@ -50,6 +59,28 @@ impl MuffitProvider {
         session_of(local).is_some_and(|id| self.directory.is_live(id))
     }
 
+    pub fn info(&self, id: &str) -> Option<SessionInfo> {
+        self.directory.session(id)
+    }
+
+    pub fn is_session_live(&self, id: &str) -> bool {
+        self.directory.is_live(id)
+    }
+
+    /// The session a TUI among `pids` is showing, on this machine. A watcher (kampr itself) holds
+    /// no session and names no terminal, so only a TUI counts.
+    pub fn held_by(&self, pids: &[u32]) -> Option<SessionInfo> {
+        let host = this_host();
+        self.directory.sessions().into_iter().find(|session| {
+            session.clients.iter().any(|c| {
+                c.kind == TUI
+                    && !c.observing
+                    && c.pid.is_some_and(|pid| pids.contains(&pid))
+                    && (c.host.is_none() || c.host == host)
+            })
+        })
+    }
+
     pub fn shutdown(&self) {
         self.directory.stop();
     }
@@ -87,18 +118,13 @@ pub fn agent_status(info: &SessionInfo) -> AgentStatus {
     }
 }
 
-/// A finished conversation is `idle`: nothing is running in it and nothing is waiting on it.
-pub fn pane_info(listed: &Listed) -> PaneInfo {
-    let info = &listed.info;
+pub fn pane_info(info: &SessionInfo) -> PaneInfo {
     PaneInfo {
         pane_id: pane_id(&info.id),
         cwd: info.cwd.clone(),
         label: info.title.clone(),
         agent: Some(AGENT.into()),
-        agent_status: match listed.live {
-            true => agent_status(info),
-            false => AgentStatus::Idle,
-        },
+        agent_status: agent_status(info),
         cols: None,
         rows: 0,
         muffit: Some(MuffitPane {
@@ -130,7 +156,7 @@ impl Provider for MuffitProvider {
         for step in steps {
             match step {
                 crate::input::Step::Interrupt => self.client.interrupt(session).await?,
-                crate::input::Step::Submit(text) => self.client.input(session, &text).await?,
+                crate::input::Step::Submit(text) => self.client.input(session, &text, &[], None).await?,
             }
         }
         Ok(())
@@ -182,6 +208,7 @@ mod tests {
                 branch: None,
                 model: None,
                 permission,
+                clients: Vec::new(),
             };
             assert_eq!(agent_status(&info), want, "{state:?}");
         }

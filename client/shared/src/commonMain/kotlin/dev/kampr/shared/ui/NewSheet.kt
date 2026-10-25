@@ -110,6 +110,7 @@ fun NewSheet(
     var nativeCommand by remember { mutableStateOf(TextFieldValue()) }
     var nativeDesk by remember { mutableStateOf(true) }
     var muffitPrompt by remember { mutableStateOf(TextFieldValue()) }
+    var muffitTerminal by remember { mutableStateOf(true) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
@@ -268,11 +269,12 @@ fun NewSheet(
             )
         }
 
-        Step.Muffit -> "Start muffit session" to (
-            muffitPrompt.text.trim().ifEmpty { null }?.let { prompt ->
-                { run(ManageOp.MuffitCreate(nodeId, prompt, trimmedCwd)) }
-            }
-            )
+        Step.Muffit -> {
+            val prompt = muffitPrompt.text.trim().ifEmpty { null }
+            val start: () -> Unit = { run(ManageOp.MuffitCreate(nodeId, prompt, trimmedCwd, muffitTerminal)) }
+            // A TUI opens on nothing; a session in the background is only its first message.
+            "Start muffit session" to start.takeIf { prompt != null || muffitTerminal }
+        }
 
         // The rows are the action: picking one is the whole step, and a button under them would
         // be one that is never the thing to press.
@@ -464,7 +466,18 @@ fun NewSheet(
                 Step.Muffit -> Fields {
                     LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
                     LabelledField("first prompt", "tidy the parser", muffitPrompt) { muffitPrompt = it }
-                    Note("A muffit agent on ${node.name}. It has no terminal: it is a conversation, and its questions arrive here to be answered.")
+                    Toggle(
+                        muffitTerminal,
+                        "In a terminal",
+                        "muffit's own TUI in a Kampr session, its conversation beside it",
+                    ) { muffitTerminal = it }
+                    Note(
+                        if (muffitTerminal) {
+                            "A muffit agent on ${node.name}, in a terminal as if you had typed muffit there."
+                        } else {
+                            "A muffit agent on ${node.name} in the background. It has no terminal: it is a conversation, and its questions arrive here to be answered."
+                        },
+                    )
                 }
 
                 Step.Session -> Fields {
