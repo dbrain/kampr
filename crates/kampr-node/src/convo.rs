@@ -1079,6 +1079,29 @@ async fn drain(journal: &Open) -> Result<Vec<Turn>, JournalError> {
     .unwrap_or_else(|e| Err(JournalError::Io(std::io::Error::other(e))))
 }
 
+pub fn found(pane: &str, query: &str, found: kampr_journal::ConvoFound) -> ServerMsg {
+    ServerMsg::ConvoFind {
+        pane: pane.into(),
+        query: query.into(),
+        matches: found
+            .hits
+            .into_iter()
+            .map(|hit| kampr_core::wire::ConvoMatch {
+                turn: hit.turn,
+                role: match hit.role {
+                    kampr_journal::Role::User => "user".into(),
+                    kampr_journal::Role::Assistant => "assistant".into(),
+                },
+                at: hit.at,
+                from_end: hit.from_end,
+                hits: hit.hits,
+                text: hit.text,
+            })
+            .collect(),
+        total: found.total,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

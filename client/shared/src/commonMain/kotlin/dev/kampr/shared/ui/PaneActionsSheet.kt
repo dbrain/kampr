@@ -29,6 +29,7 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.ZoomMode
+import dev.kampr.shared.wire.isMuffit
 import dev.kampr.shared.wire.workspaceIdOf
 import kotlinx.serialization.json.JsonObject
 
@@ -78,7 +79,10 @@ fun PaneActionsSheet(
         SheetHeader("Actions", paneTitle(pane), null, onDismiss)
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                if (pane.isNative) {
+                // The title is muffit's own, and docs/18 gives the node no way to rename a session.
+                if (pane.isMuffit) {
+                    NativeTarget(pane, desk, ::send, null, {}, renamable = false)
+                } else if (pane.isNative) {
                     NativeTarget(pane, desk, ::send, find, tools)
                 } else {
                     Target(
@@ -170,6 +174,7 @@ private fun NativeTarget(
     onManage: (ManageOp) -> Unit,
     onFind: (() -> Unit)?,
     tools: @Composable () -> Unit,
+    renamable: Boolean = true,
 ) {
     val actions = nativeActions(pane, desk)
     Target(
@@ -182,6 +187,7 @@ private fun NativeTarget(
         focusable = false,
         close = actions.firstOrNull { it.confirm }?.let { Closing(it.verb, it.op) },
         onFind = onFind,
+        renamable = renamable,
     ) {
         tools()
         actions.filterNot { it.confirm }.forEach { action ->
@@ -229,6 +235,7 @@ private fun Target(
     // Only a pane has a scrollback to search; a tab and a workspace do not, so they are offered
     // nothing rather than a control that would have to explain itself.
     onFind: (() -> Unit)? = null,
+    renamable: Boolean = true,
     extra: @Composable (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
@@ -286,7 +293,7 @@ private fun Target(
                     Chip("find", false, it, label = "Search this $kind's whole scrollback")
                 }
                 extra?.invoke()
-                Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind")
+                if (renamable) Chip("rename", renaming, { renaming = !renaming }, label = "Rename this $kind")
                 close?.let {
                     Chip(
                         it.verb,

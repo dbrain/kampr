@@ -410,6 +410,8 @@ impl Harness {
         let config_dir = state.path().join("config");
 
         let mut config = Config::bootstrap("testnode");
+
+        config.muffit.enabled = Some(false);
         // Nothing in this suite reaches the internet: the release check is the one thing in a
         // node that would, and a test that phoned GitHub would be one with a rate limit.
         config.update.check = false;
@@ -2283,6 +2285,8 @@ async fn the_node_can_terminate_tls_itself() {
     drop(listener);
 
     let mut config = Config::bootstrap("tlsnode");
+
+    config.muffit.enabled = Some(false);
     // Nothing in this suite reaches the internet: the release check is the one thing in a
     // node that would, and a test that phoned GitHub would be one with a rate limit.
     config.update.check = false;
@@ -2437,6 +2441,7 @@ async fn open(origin: &str, token: &str) -> Socket {
 async fn the_port_is_bound_before_herdr_is_needed() {
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("lonely");
+    config.muffit.enabled = Some(false);
     // Nothing in this suite reaches the internet: the release check is the one thing in a
     // node that would, and a test that phoned GitHub would be one with a rate limit.
     config.update.check = false;
@@ -2655,6 +2660,7 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
 
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("multinode");
+    config.muffit.enabled = Some(false);
     // Nothing in this suite reaches the internet: the release check is the one thing in a
     // node that would, and a test that phoned GitHub would be one with a rate limit.
     config.update.check = false;
@@ -6696,6 +6702,7 @@ async fn a_restarted_node_calls_a_quiet_conversation_as_old_as_its_transcript() 
 
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("restarted");
+    config.muffit.enabled = Some(false);
     config.update.check = false;
     config.herdr.socket = h._session.socket.display().to_string();
     config.native.root = "/nowhere/native".into();
@@ -9993,6 +10000,7 @@ async fn a_named_session_closing_does_not_raise_the_alarm_for_the_machines_own_h
 
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("closingnode");
+    config.muffit.enabled = Some(false);
     config.update.check = false;
     config.herdr.socket = mine.socket.display().to_string();
     config.native.root = "/nowhere/native".into();

@@ -24,6 +24,7 @@ async fn node_at(home: &Path) -> Arc<Node> {
     let state_dir = home.join("state");
     std::fs::create_dir_all(&state_dir).expect("a state dir");
     let mut config = Config::bootstrap("done-read");
+    config.muffit.enabled = Some(false);
     config.update.check = false;
     config.config_dir = home.join("config").display().to_string();
     config.state_dir = state_dir.display().to_string();

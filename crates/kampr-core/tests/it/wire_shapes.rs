@@ -136,6 +136,7 @@ fn node() -> NodeEntry {
         online: true,
         reachable: Some(true),
         native: Some(true),
+        muffit: Some(true),
         rtt_ms: Some(1.5),
         herdr_version: Some("0.9.1".into()),
         build: Some("0.1.0".into()),
@@ -380,6 +381,7 @@ fn client() -> Vec<ClientMsg> {
             b64: Some("dA==".into()),
             keys: Some(vec!["Enter".into()]),
             typed: true,
+            from: Some("01J".into()),
         },
         ClientMsg::Paste {
             pane: pane(),

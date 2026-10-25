@@ -195,6 +195,7 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
         && a.online == b.online
         && a.reachable == b.reachable
         && a.native == b.native
+        && a.muffit == b.muffit
         && a.herdr_version == b.herdr_version
         && a.build == b.build
         && a.update == b.update
@@ -491,6 +492,7 @@ mod tests {
                 online: true,
                 reachable: None,
                 native: None,
+                muffit: None,
                 rtt_ms: None,
                 herdr_version: None,
                 build: Some(build.to_string()),

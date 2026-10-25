@@ -20,8 +20,8 @@ fun nodeOfPane(paneId: String): String = paneId.substringBefore('/')
 // A failure naming neither is the connection itself — auth, a refusal, a revocation — and there is
 // nowhere quieter for those to go.
 //
-// A native session (`<node>/n:<id>`) has no herdr behind it, so its machine's herdr going is not
-// the thing in the operator's hands.
+// A native session (`<node>/n:<id>`) and a muffit one (`<node>/m:<id>`) have no herdr behind them,
+// so their machine's herdr going is not the thing in the operator's hands.
 fun saidOutLoud(failure: ServerMsg.Failure, paneOnScreen: String?): Boolean = when {
     failure.pane != null -> failure.pane == paneOnScreen
     failure.node != null && failure.code == "herdr_unavailable" && paneOnScreen.isNativePane -> false
@@ -29,4 +29,4 @@ fun saidOutLoud(failure: ServerMsg.Failure, paneOnScreen: String?): Boolean = wh
     else -> true
 }
 
-private val String?.isNativePane: Boolean get() = this?.substringAfter('/', "")?.startsWith("n:") == true
+private val String?.isNativePane: Boolean get() = this?.substringAfter('/', "")?.let { it.startsWith("n:") || it.startsWith("m:") } == true

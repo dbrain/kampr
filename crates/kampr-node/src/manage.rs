@@ -82,7 +82,12 @@ pub struct ManageOp {
     /// `native.create` showing the new session on the desk as well, beside `at`.
     #[serde(default)]
     pub desk: Option<bool>,
+    /// `muffit.create`'s first message.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
+
+const MUFFIT_LISTED: Duration = Duration::from_secs(3);
 
 /// The smallest pane `pane.size` will produce.
 ///
@@ -298,6 +303,7 @@ pub struct Manager<'a> {
     /// here resizes through it.
     pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
     pub native: Option<&'a std::sync::Arc<NativeProvider>>,
+    pub muffit: Option<&'a std::sync::Arc<kampr_muffit::MuffitProvider>>,
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
     pub holder: &'a str,
 }
@@ -349,6 +355,10 @@ impl Manager<'_> {
             // opened a terminal on is still a host they can run a command across.
             "fleet.run" | "fleet.stop" | "fleet.forget" => Ok(Managed {
                 reply: self.fleet_op(op).await?,
+                settle: None,
+            }),
+            _ if op.op.starts_with("muffit.") || self.muffit_target(op).is_some() => Ok(Managed {
+                reply: self.muffit_op(op).await?,
                 settle: None,
             }),
             // Native sessions are this machine's, not herdr's, so none of their ops wake it.
@@ -417,6 +427,52 @@ impl Manager<'_> {
             }
             other => Err(ManageError::BadRequest(format!("{other} is not a fleet op"))),
         }
+    }
+
+    fn muffit_target(&self, op: &ManageOp) -> Option<String> {
+        let local = op.at.as_deref()?.strip_prefix(self.node_id)?.strip_prefix('/')?;
+        local.starts_with(kampr_muffit::PREFIX).then(|| local.to_string())
+    }
+
+    async fn muffit_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
+        let muffit = self
+            .muffit
+            .ok_or_else(|| ManageError::BadRequest("this node does not talk to a muffit daemon".into()))?;
+        let failed = |e: anyhow::Error| ManageError::BadRequest(format!("{e:#}"));
+        if op.op == "muffit.create" {
+            let cwd = op
+                .cwd
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| ManageError::BadRequest("muffit.create needs `cwd`".into()))?;
+            let id = muffit
+                .client()
+                .create(cwd, op.prompt.as_deref())
+                .await
+                .map_err(failed)?;
+            // The ack is what a client waits on, so it names a pane the herd already lists.
+            muffit.listed(&id, MUFFIT_LISTED).await;
+            return Ok(json!({ "pane_id": kampr_muffit::pane_id(&id) }));
+        }
+        let pane = self.muffit_target(op).ok_or_else(|| match op.at.as_deref() {
+            Some(at) => ManageError::UnknownTarget(at.to_string()),
+            None => ManageError::BadRequest(format!("{} needs `at`", op.op)),
+        })?;
+        if muffit.session(&pane).is_none() {
+            return Err(ManageError::UnknownTarget(op.at.clone().unwrap_or_default()));
+        }
+        let session = kampr_muffit::session_of(&pane).unwrap_or_default();
+        match op.op.as_str() {
+            "muffit.close" | "native.close" | "close" => {
+                muffit.client().stop(session).await.map_err(failed)?
+            }
+            other => {
+                return Err(ManageError::BadRequest(format!(
+                    "{other} does not apply to a muffit session"
+                )));
+            }
+        }
+        Ok(json!({ "ok": true }))
     }
 
     fn native_target(&self, op: &ManageOp) -> Option<String> {
@@ -1314,7 +1370,7 @@ fn layout_root(layout: Option<&Value>) -> Result<Value, ManageError> {
 /// widening the search, because `pane.size` answers a top-level `pane_id` too and it creates
 /// nothing — an `id` there would tell a client to wait for a herd patch that is never coming.
 pub fn created_id(op: &str, reply: &Value) -> Option<String> {
-    if op == "fleet.run" || op == "native.create" {
+    if op == "fleet.run" || op == "native.create" || op == "muffit.create" {
         return reply["pane_id"].as_str().map(str::to_string);
     }
     for (record, field) in [

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneGone
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
@@ -45,7 +46,14 @@ import dev.kampr.shared.wire.talks
 // the desktop's own Split default all outlive the transcript that justified them, and the pane they
 // name is still live — so the terminal is where that lands, and the request is kept rather than
 // rewritten, which is what brings the operator's choice back when the transcript returns.
-private fun viewOn(info: PaneInfo?, view: PaneView): PaneView = if (info.talks) view else PaneView.Terminal
+private fun viewOn(info: PaneInfo?, view: PaneView): PaneView = when {
+    !info.paints -> PaneView.Conversation
+    info.talks -> view
+    else -> PaneView.Terminal
+}
+
+// A muffit session is a conversation and nothing else, so it has no other view to switch to.
+private val PaneInfo?.switches: Boolean get() = talks && paints
 
 // The room a conversation needs at its foot to be worth opening: one line of reply box, its
 // padding, and the send button beside it — 70 dp, which `aReplyBoxIsNoTallerThanTheRoomReservedForIt`
@@ -71,7 +79,7 @@ private val PHONE_HEADER: Dp = 88.dp
 // node's own refusal about this pane stands in where the herd entry says nothing: a failure the
 // global strip stayed quiet about — because the operator was on another pane when it arrived — is
 // still the answer to why they are looking at an empty one now.
-private fun streamFault(pane: PaneState, info: PaneInfo?): String? = (info?.detail ?: pane.refusal)?.takeUnless { pane.painted }
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? = (info?.detail ?: pane.refusal)?.takeUnless { pane.painted || !info.paints }
 
 // The zoom sheet belongs to the terminal surface, so the control that opens it has nothing to open
 // on a transcript. Withdrawing it outright is what the report is about: every one of these headers
@@ -139,7 +147,7 @@ private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
 private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView) {
     val tokens = Kampr.tokens
     if (gone != null) GoneBadge(gone)
-    if (info?.detail != null) StreamBadge()
+    if (info?.detail != null && info.paints) StreamBadge()
     if (pane.stale) StaleBadge(shown)
     if (pane.quiet) QuietBadge()
     if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
@@ -226,8 +234,8 @@ fun PaneScreenMobile(
                 if (landscape) {
                     PaneMarks(pane, info, readOnly, gone, shown)
                     StatusChip(info)
-                    ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
-                    if (info.talks) ViewSwitch(shown, onView, Modifier, compact = true)
+                    if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
                 } else {
                     StatusChip(info)
                 }
@@ -248,8 +256,8 @@ fun PaneScreenMobile(
                     itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     PaneMarks(pane, info, readOnly, gone, shown)
-                    if (info.talks) ViewSwitch(shown, onView, Modifier, compact = true)
-                    ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
+                    if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                 }
             }
             gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
@@ -416,14 +424,14 @@ fun PaneScreenDesktop(
             ) {
                 KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading(), maxLines = 1)
                 if (gone != null) GoneBadge(gone)
-                if (info?.detail != null) StreamBadge()
+                if (info?.detail != null && info.paints) StreamBadge()
                 if (pane.stale) StaleBadge(shown)
                 if (pane.quiet) QuietBadge()
                 if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
                 StatusChip(info)
                 Box(Modifier.weight(1f))
-                ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
-                if (info.talks) {
+                if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                if (info.switches) {
                     // Terminal first and Split last, in the order a pane is actually opened in: the
                     // switch led with the one view a pane never opens as, so the two that matter sat
                     // where the eye arrives second.

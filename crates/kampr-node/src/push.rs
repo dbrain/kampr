@@ -341,6 +341,9 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 async fn question_for(sessions: &Sessions, global: &str, agent: Option<&str>) -> Option<String> {
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
+    if let Some(muffit) = session.muffit_of(&local) {
+        return crate::muffit::prompt(muffit, &local).map(|p| p.action);
+    }
     let screen = pending::Screen::of(&session, &local);
     if let Some(found) = pending::read(&screen, &local, agent).await {
         return Some(found.question);
@@ -403,6 +406,7 @@ mod tests {
 
     fn sessions() -> Arc<Sessions> {
         let mut config = Config::bootstrap("push");
+        config.muffit.enabled = Some(false);
         config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
         config.native.root = "/nowhere/native".into();
         config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
@@ -412,6 +416,7 @@ mod tests {
     async fn asked_of_native(script: &str) -> Option<String> {
         let root = tempfile::Builder::new().prefix("kp").tempdir_in("/tmp").unwrap();
         let mut config = Config::bootstrap("push");
+        config.muffit.enabled = Some(false);
         config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
         config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
         config.native.root = root.path().display().to_string();

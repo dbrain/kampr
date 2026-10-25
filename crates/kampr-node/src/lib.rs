@@ -19,6 +19,7 @@ pub mod holds;
 pub mod http;
 pub mod manage;
 pub mod mesh;
+pub mod muffit;
 pub mod outbox;
 pub mod paste;
 pub mod pasted;

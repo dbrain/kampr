@@ -8,6 +8,7 @@ mod limits;
 mod live;
 mod manage_wire;
 mod mesh;
+mod muffit;
 mod native;
 mod pasted;
 mod push;

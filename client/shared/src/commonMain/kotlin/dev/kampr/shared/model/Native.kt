@@ -4,6 +4,7 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NativeExit
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.isMuffit
 
 private const val NATIVE = "native"
 
@@ -13,7 +14,7 @@ val PaneInfo.isNative: Boolean get() = provider == NATIVE
 // machine that has ever named its herdr version can host a session as well as one whose herdr is up.
 val NodeInfo.hasDesk: Boolean get() = online || herdrVersion != null
 
-fun NodeInfo.serves(pane: PaneInfo?): Boolean = if (pane?.isNative == true) isReachable else online
+fun NodeInfo.serves(pane: PaneInfo?): Boolean = if (pane?.isNative == true || pane?.isMuffit == true) isReachable else online
 
 fun exitPhrase(exit: NativeExit): String = when {
     exit.signal != null -> "killed by signal ${exit.signal}"
@@ -22,6 +23,7 @@ fun exitPhrase(exit: NativeExit): String = when {
 }
 
 fun nativeFacts(pane: PaneInfo): List<String> {
+    if (pane.isMuffit) return listOf("muffit")
     if (!pane.isNative) return emptyList()
     val exit = pane.exited
     return listOfNotNull(
@@ -32,16 +34,18 @@ fun nativeFacts(pane: PaneInfo): List<String> {
 }
 
 fun nativeSpoken(pane: PaneInfo): String? = nativeFacts(pane).takeIf { it.isNotEmpty() }?.let { facts ->
-    (listOf("Kampr session") + facts.drop(1)).joinToString(", ")
+    (listOf(if (pane.isMuffit) "Muffit session" else "Kampr session") + facts.drop(1)).joinToString(", ")
 }
 
 // `confirm` is whether the press only asks: closing hangs the program up and forgetting deletes its
 // log, and neither can be taken back. Showing it on the desk adds a herdr pane and loses nothing.
 data class NativeAction(val verb: String, val spoken: String, val op: ManageOp, val confirm: Boolean)
 
+// The node maps `native.close` on a muffit session to muffit's own stop.
 fun nativeActions(pane: PaneInfo, desk: Boolean): List<NativeAction> {
-    if (!pane.isNative) return emptyList()
     val title = paneTitle(pane)
+    if (pane.isMuffit) return listOf(NativeAction("close", "Close $title", ManageOp.NativeClose(pane.id), true))
+    if (!pane.isNative) return emptyList()
     if (pane.exited != null) {
         return listOf(NativeAction("forget", "Forget $title and its output", ManageOp.NativeForget(pane.id), true))
     }

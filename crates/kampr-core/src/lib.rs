@@ -26,8 +26,8 @@ pub use backoff::Backoff;
 pub use herdr_provider::{HerdrConfig, HerdrProvider};
 pub use naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
 pub use provider::{
-    Composite, FleetPane, FleetState, Input, NativeExit, NativePane, PaneEvent, PaneInfo, PaneStream,
-    Provider, RawScrollback, Reflow, split_view, view_key,
+    Composite, FleetPane, FleetState, Input, MuffitPane, NativeExit, NativePane, PaneEvent, PaneInfo,
+    PaneStream, Provider, RawScrollback, Reflow, split_view, view_key,
 };
 pub use question::{Question, Shape};
 pub use registry::{PaneRegistry, PaneUpdate, Screen, Watcher};

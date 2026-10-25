@@ -37,6 +37,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.isMuffit
 
 // Herdr's sidebar menu is two items long and both of them are about the row itself (#426). Kampr's
 // rows are panes rather than workspaces, so the verbs are a pane's — and the list stays that short
@@ -78,8 +79,8 @@ fun PaneMenu(
         when (step) {
             MenuStep.Verbs -> {
                 MenuItem("Open", "Open $title", onClick = onOpen)
-                MenuItem("Rename…", "Rename $title") { step = MenuStep.Rename }
-                if (pane.isNative) {
+                if (!pane.isMuffit) MenuItem("Rename…", "Rename $title") { step = MenuStep.Rename }
+                if (pane.isNative || pane.isMuffit) {
                     nativeActions(pane, desk).forEach { action ->
                         MenuItem(action.verb.replaceFirstChar(Char::uppercase), action.spoken, danger = action.confirm) {
                             if (action.confirm) {

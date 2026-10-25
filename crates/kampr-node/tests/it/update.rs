@@ -120,6 +120,8 @@ impl Harness {
         std::fs::create_dir_all(&state_dir).expect("a state dir");
 
         let mut config = Config::bootstrap("front");
+
+        config.muffit.enabled = Some(false);
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();
         config.server.bind = format!("127.0.0.1:{port}");

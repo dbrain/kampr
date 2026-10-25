@@ -12,6 +12,7 @@ import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.newCohortId
+import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.readDone
 import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.net.AttachmentApi
@@ -597,6 +598,11 @@ class AppState(
         // rather than at the next herd update — which is up to a poll interval away, and is a
         // notification for something the operator is looking at.
         reconcileNotifications(store.herd.value)
+        if (!store.paneInfo(paneId).paints) {
+            awaitingRemembered = false
+            go(Screen.Pane(paneId, PaneView.Conversation))
+            return
+        }
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
         awaitingRemembered = prefer == null && remembered == null
         go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId)))

@@ -194,6 +194,8 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 // changed the answer. This asks past it.
                 onRefreshCaps = { state.connection.send(ClientMsg.RequestCaps) },
                 agentArgs = state.agentArgs,
+                // `hello.caps` speaks for the node this device is connected to and no other.
+                muffit = node.muffit ?: (state.store.hello.value?.let { it.caps.muffit && it.nodeId == node.id } == true),
             )
         }
 

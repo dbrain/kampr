@@ -240,6 +240,9 @@ impl Node {
         if let Some(native) = &self.primary().native {
             native.shutdown();
         }
+        if let Some(muffit) = &self.primary().muffit {
+            muffit.shutdown();
+        }
     }
 
     pub fn node_id(&self) -> &str {
@@ -717,6 +720,7 @@ async fn build_model(
             // herdr that is down takes the panes and leaves the node able to run a fleet command.
             reachable: Some(true),
             native: session.native.as_ref().map(|_| true),
+            muffit: session.muffit.as_ref().map(|_| true),
             // **Not a call of its own.** The provider's sweep round-trips this herdr already, so
             // the number is read rather than asked for — one `ping` per session per rebuild was
             // 19/min with four panes busy, for a figure the node was in a position to know
@@ -740,7 +744,8 @@ async fn build_model(
         for info in session.registry.list_panes().await.unwrap_or_default() {
             live_panes.insert(format!("{}/{}", session.node_id, info.pane_id));
             let transcript = conversations.resolves(journals, &session, &info, &mut live);
-            let has_conversation = transcript.is_some();
+            let muffit = info.muffit.is_some();
+            let has_conversation = transcript.is_some() || muffit;
             let watchers = session.registry.watcher_count(&info.pane_id);
             // The harness's own name for the session, off the marker it writes by pid (#311) —
             // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
@@ -755,13 +760,14 @@ async fn build_model(
             let spoken = read.as_ref().and_then(|r| r.said);
             let title = read
                 .and_then(|r| r.title)
-                .or_else(|| marker.as_ref().and_then(chosen_name));
+                .or_else(|| marker.as_ref().and_then(chosen_name))
+                .or_else(|| muffit.then(|| info.label.clone()).flatten());
             let mut entry = PaneEntry::new(&session.node_id, &info, has_conversation)
                 // The cheap half, and the one that is true from the moment the harness opens: a
                 // pane whose transcript has not been written yet is still a pane this node could
                 // serve a conversation for, and a client that waits for the file cannot offer the
                 // view to the session somebody is about to start talking to.
-                .with_converses(journals.serves(info.agent.as_deref()))
+                .with_converses(muffit || journals.serves(info.agent.as_deref()))
                 .with_watchers(watchers)
                 .with_title(title);
             // The harness's own answer beats the screen. Herdr's status comes from regexes over
@@ -918,6 +924,7 @@ mod tests {
     async fn a_session_that_appears_before_the_wait_is_armed_still_wakes_the_herd() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::bootstrap("testnode");
+        config.muffit.enabled = Some(false);
         config.herdr.socket = dir.path().join("herdr.sock").display().to_string();
         config.native.root = dir.path().join("native").display().to_string();
         let sessions = Sessions::open(&config);

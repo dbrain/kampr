@@ -50,6 +50,7 @@ import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.PaneGone
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.WatchPresence
+import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.serves
 import dev.kampr.shared.model.statusOf
@@ -198,7 +199,11 @@ fun MosaicCell(
             LocalPaneChrome provides PaneChrome(header),
             LocalMosaicCell provides true,
         ) {
-            surfaces.Terminal(pane, info, Modifier.fillMaxSize())
+            if (info.paints) {
+                surfaces.Terminal(pane, info, Modifier.fillMaxSize())
+            } else {
+                surfaces.Conversation(pane, info, Modifier.fillMaxSize().padding(top = header))
+            }
         }
 
         // Under the header, not over it: the cell is unreachable, its controls are not.
@@ -293,7 +298,7 @@ private fun CellHeader(
 }
 
 // Why this pane will never paint, when there is no grid on its surface to read instead.
-private fun streamFault(pane: PaneState, info: PaneInfo?): String? = info?.detail?.takeUnless { pane.painted }
+private fun streamFault(pane: PaneState, info: PaneInfo?): String? = info?.detail?.takeUnless { pane.painted || !info.paints }
 
 // The same words the pane screen shows, over the same wash the offline cell uses. One notice, two
 // placements: a cell that phrased this itself would be a second copy of the one thing on this

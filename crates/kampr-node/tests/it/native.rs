@@ -94,6 +94,8 @@ impl Harness {
         std::fs::create_dir_all(&state_dir).expect("a state dir");
 
         let mut config = Config::bootstrap("native");
+
+        config.muffit.enabled = Some(false);
         config.update.check = false;
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();
@@ -536,6 +538,46 @@ async fn a_size_asked_for_reaches_the_pty_and_a_matched_one_is_put_back() {
             (s.iter().any(|r| r == "30 100") && !s.iter().any(|r| r.contains("40 120"))).then_some(())
         })
         .await;
+}
+
+/// A desk's attach that started under a view's hold leaves the size alone, so the size the view
+/// found is the spawn's. Letting go puts the session at the attach's terminal, which is still
+/// showing it, rather than at a size nobody is looking at.
+#[tokio::test]
+async fn a_released_match_goes_to_the_desk_still_showing_the_session() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let id = client.create(&["sh"], json!({})).await;
+    client.watch(&id, false).await;
+    let held = client
+        .manage(json!({ "op": "pane.size", "at": id, "cols": 150, "rows": 45, "mode": "match" }))
+        .await;
+    assert_eq!(held["ok"], json!(true), "{held}");
+    client.pane(&id, |p| p["cols"] == 150 && p["rows"] == 45).await;
+
+    let desk = kampr_keep::register_host(
+        &session_of(&h.root(), &id),
+        kampr_keep::Host {
+            pid: std::process::id(),
+            herdr_pane: None,
+            herdr_socket: None,
+            cols: 119,
+            rows: 40,
+            answers_from: None,
+        },
+    )
+    .expect("a desk");
+    let released = client
+        .manage(json!({ "op": "pane.size", "at": id, "mode": "release", "lease": held["lease"] }))
+        .await;
+    assert_eq!(released["ok"], json!(true), "{released}");
+    let put = client.pane(&id, |p| p["cols"] == 119 && p["rows"] == 40).await;
+    assert_eq!(
+        put["size_holder"],
+        format!("attach:{}", std::process::id()),
+        "{put}"
+    );
+    drop(desk);
 }
 
 #[tokio::test]

@@ -270,6 +270,34 @@ fn new_attaches_claims_its_size_follows_a_resize_and_leaves_with_the_status() {
     assert!(session.hosts().is_empty());
 }
 
+/// A herdr desk's attach starts after the browser that opened the session has matched it, and
+/// taking the size then left the browser's view cropped with nothing to make it ask again
+/// (sizes.jsonl: `phone:hub` 289x74, then `attach:<pid>` 119x40). Its own resize still takes it.
+#[test]
+fn an_attach_starting_leaves_a_view_s_size_and_its_own_resize_takes_it() {
+    let root = Root::new();
+    let session = root.new_detached(ECHO);
+    kampr_keep::claim_size(&session, 150, 45, "phone:desk").expect("a view's claim");
+    let term = Term::open(&root, &["attach", session.id()], 119, 40);
+    term.shows("prior-output");
+    term.type_line("size");
+    term.shows("45 150");
+    assert_eq!(holder(&session), "phone:desk");
+
+    unsafe { libc::kill(term.child.id() as i32, libc::SIGWINCH) };
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        holder(&session),
+        "phone:desk",
+        "a SIGWINCH that changed nothing is not a resize"
+    );
+
+    term.resize(100, 30);
+    assert!(until(|| holder(&session) == format!("attach:{}", term.child.id())));
+    term.type_line("size");
+    term.shows("30 100");
+}
+
 #[test]
 fn a_second_attach_takes_the_size_and_the_first_mirrors_it_under_a_banner() {
     let root = Root::new();
@@ -356,6 +384,7 @@ fn new_ls_and_attach_use_the_root_the_node_is_configured_with() {
     let env = Root::new();
     let configured = Root::new();
     let mut config = kampr_node::Config::bootstrap("cli");
+    config.muffit.enabled = Some(false);
     config.native.root = configured.0.path().display().to_string();
     config.save(env.1.path()).expect("a config");
 

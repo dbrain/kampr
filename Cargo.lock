@@ -2597,6 +2597,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "kampr-muffit"
+version = "0.1.120"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures-util",
+ "kampr-core",
+ "kampr-journal",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "kampr-native"
 version = "0.1.120"
 dependencies = [
@@ -2642,6 +2661,7 @@ dependencies = [
  "kampr-journal",
  "kampr-keep",
  "kampr-mesh",
+ "kampr-muffit",
  "kampr-native",
  "kampr-proc",
  "kampr-push",

@@ -114,6 +114,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "online": true,             // this node's *herdr* answers — see below
                "reachable": true,          // its kampr answers; ABSENT from an older node
                "native": true,             // it keeps native sessions; ABSENT when it does not
+               "muffit": true,             // it lists its muffit daemon's sessions; ABSENT when it does not
                "rtt_ms": 0.4, "herdr_version": "0.8.2",
                "build": "0.1.21",          // this node's kampr build — see "Version skew"
                "update": "0.1.2",          // ABSENT unless a newer release exists — see below
@@ -134,7 +135,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "cmd": "cargo",                       // the foreground job's name — ABSENT far more often than not
                "argv": "cargo test",                 // its whole command line — OFF by default, see below
                "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
-               "provider": "native",                 // ABSENT unless Kampr keeps the session — see "Native sessions"
+               "provider": "native",                 // ABSENT unless Kampr keeps the session ("native") or muffit does ("muffit")
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
 
@@ -162,7 +163,8 @@ When a node comes back the node re-sends the whole `herd`, which is the same rec
 beside it. `reachable` is whether the node's own process answers: a local node always, a peer
 while its link is up. `native: true` says the node keeps native sessions, which need no herdr
 (see "Native sessions"). So what a pane needs is per provider: a herdr pane needs `online`, a
-native pane (`"provider": "native"`) needs only `reachable`. A machine with no herdr at all is
+native pane (`"provider": "native"`) and a muffit pane (`"provider": "muffit"`) need only
+`reachable`. A machine with no herdr at all is
 `online: false, reachable: true, native: true` — serving, with a `detail` saying why herdr is not.
 `online` was not widened to "any provider serves" because every installed client reads it as
 herdr's health, and a herdr outage on a machine that also keeps native sessions would then
@@ -1686,6 +1688,45 @@ whenever the claim was made; `hold` is a plain claim that sticks until the next 
 `grow` remember the size they found and put it back on `release`, exactly as ADR 0013 describes.
 Every other op on an `n:` target is refused. **None of these ops start herdr**, and none of them need
 it: a machine whose herdr is stopped still keeps, creates and serves native sessions.
+
+### Muffit sessions
+
+A conversation a [muffit](./18-muffit.md) daemon on the node's machine is running. It has **no
+terminal**: no `grid.*`, `scrollback` or size op ever applies to it, and everything a reader sees
+arrives on the conversation frames. Its id is `<node_id>/m:<session id>` and it is marked by
+`"provider": "muffit"`, with `session_id` beside it. `agent` is `"muffit"`, `converses` and
+`has_conversation` are always true, `cols` is absent and `rows` is `0`. `label` is the session's
+title. A node that lists muffit sessions says `"muffit": true` on its `nodes[]` entry and
+`caps.muffit` in `hello`.
+
+A stored session (finished, nobody attached) is still a pane for seven days, `idle`. Watching it
+reads its transcript and never restarts it; typing into it does.
+
+- **`convo` / `convo.turn`.** Turn ids are `m<seq>`; `cursor` is the oldest id served. A tool's
+  result is folded into its `tool` block, revising the turn that made the call. The `live` turn
+  comes from muffit's own stream of the turn in progress, not from a screen, and follows the same
+  three rules.
+- **`pending`** is a permission prompt: `source: "transcript"`, the tool as `header`, what it wants
+  to do as `question`, and the options `1` Allow, `2` Always allow, `3` Deny. `answer` posts that
+  answer to muffit; it is never keystrokes. A prompt answered elsewhere clears.
+  `answer.submit` is `bad_request`.
+- **`convo.sub`** takes a worker's session id (`<parent>.s<n>`), from the `sub` block of the
+  `delegate` call that started it.
+- **`input`.** Text is held until `"\r"` and sent as one message. ctrl-c and a lone esc interrupt
+  the turn; any other escape sequence is dropped.
+  A hub relaying `input` stamps an optional `from` naming its own client, so two people typing into
+  one muffit pane through one hub each send their own message; a node trusts `from` only from a hub.
+
+```jsonc
+{ "t":"manage", "op":"muffit.create", "node":"01J…",
+  "cwd":"/home/dbrain/dev/kampr",     // the node's home when absent
+  "prompt":"fix the flaky test" }     // required
+{ "t":"manage", "op":"native.close", "at":"01J…/m:06GQ…" }   // stops the session
+```
+
+`muffit.create` acks the pane it made as `native.create` does, and is routed by `node`. `close`,
+`native.close` and `muffit.close` stop a muffit session; every other management op is
+`bad_request` on one.
 
 ### Fleet runs
 

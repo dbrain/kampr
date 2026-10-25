@@ -1396,6 +1396,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         },
         fleet: None,
         native: None,
+        muffit: None,
         detail: inner.stream_fault(),
     }
 }

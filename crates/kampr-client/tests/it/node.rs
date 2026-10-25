@@ -48,6 +48,7 @@ impl Running {
             .expect("a port");
         let port = listener.local_addr().expect("an address").port();
         let mut config = Config::bootstrap("scripted");
+        config.muffit.enabled = Some(false);
         config.server.bind = format!("127.0.0.1:{port}");
         config.server.origin = format!("http://127.0.0.1:{port}");
         config.config_dir = home.config().display().to_string();
@@ -216,6 +217,7 @@ async fn a_saved_profile_is_the_second_rung_and_a_dead_node_falls_through_to_it(
     let home = Home::new();
     // A config exists and no node answers `/healthz`, which is the laptop case exactly.
     let mut config = Config::bootstrap("absent");
+    config.muffit.enabled = Some(false);
     config.server.bind = "127.0.0.1:1".into();
     config.server.origin = "http://127.0.0.1:1".into();
     // Named explicitly, and it matters: a config that leaves it empty resolves to the XDG

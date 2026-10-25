@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
@@ -630,6 +631,7 @@ fun ConversationView(
                             answering = answering(LocalConnectionStatus.current, pane.undelivered),
                             onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
                             onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id)) },
+                            byKeys = info.paints,
                             modifier = Modifier.onSizeChanged { size -> strip = size.height },
                         )
                     }

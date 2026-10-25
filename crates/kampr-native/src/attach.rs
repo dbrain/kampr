@@ -55,11 +55,15 @@ pub fn attach(session: &SessionDir, opts: &AttachOptions) -> io::Result<Ended> {
     }
     let master = File::from(kampr_keep::borrow(session)?);
     let pid = std::process::id();
-    let me = format!("attach:{pid}");
+    let me = kampr_keep::attach_holder(pid);
     let signals = Signals::install()?;
     let _raw = Raw::enter()?;
     let mine = term::tty_size();
-    if let Some((cols, rows)) = mine {
+    // A desk's attach starts after the view that opened the session has matched it, so taking the
+    // size here crops that view with nothing to make it ask again. This terminal's own resize
+    // still takes it.
+    let viewed = session.size().is_some_and(|size| size.held_by_a_view());
+    if let Some((cols, rows)) = mine.filter(|_| !viewed) {
         kampr_keep::claim_size(session, cols, rows, &me)?;
     }
     let (cols, rows) = mine.or_else(|| term::size(master.as_fd())).unwrap_or((80, 24));
@@ -83,8 +87,12 @@ pub fn attach(session: &SessionDir, opts: &AttachOptions) -> io::Result<Ended> {
             let _waker = waker;
             view.run(stop)
         });
+        let mut last = mine;
         let input = forward(&signals, &master, |claimed| {
-            if let Some((cols, rows)) = claimed {
+            if let Some((cols, rows)) = claimed
+                && claimed != last
+            {
+                last = claimed;
                 kampr_keep::claim_size(session, cols, rows, &me)?;
                 host.update(cols, rows)?;
             }

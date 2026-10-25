@@ -177,6 +177,10 @@ pub struct NodeEntry {
     /// that reads it that way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<bool>,
+    /// Whether this node serves a muffit daemon's sessions (docs/18), so `muffit.create` may be
+    /// addressed at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muffit: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,8 +316,9 @@ pub struct PaneEntry {
     /// used to leave to the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// `"native"` on a session Kampr keeps itself (docs/17), and absent on everything herdr owns.
-    /// The five fields after it are present only beside it.
+    /// `"native"` on a session Kampr keeps itself (docs/17), `"muffit"` on a muffit session
+    /// (docs/18), and absent on everything herdr owns. `session_id` is present beside either; the
+    /// four after it only beside `native`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -422,8 +427,16 @@ impl PaneEntry {
             cmd: p.cmd.clone(),
             argv: p.argv.clone(),
             title: None,
-            provider: p.native.as_ref().map(|_| "native".to_string()),
-            session_id: p.native.as_ref().map(|n| n.session_id.clone()),
+            provider: match (&p.native, &p.muffit) {
+                (Some(_), _) => Some("native".to_string()),
+                (None, Some(_)) => Some("muffit".to_string()),
+                (None, None) => None,
+            },
+            session_id: p
+                .native
+                .as_ref()
+                .map(|n| n.session_id.clone())
+                .or_else(|| p.muffit.as_ref().map(|m| m.session_id.clone())),
             on_desk: p.native.as_ref().and_then(|n| n.on_desk.clone()),
             detached: p.native.as_ref().map(|n| n.detached),
             size_holder: p.native.as_ref().and_then(|n| n.size_holder.clone()),
@@ -463,9 +476,10 @@ impl NodeEntry {
         self.reachable.unwrap_or(self.online)
     }
 
-    /// Whether anything on this node can be served: its herdr's panes, or its native sessions.
+    /// Whether anything on this node can be served: its herdr's panes, its native sessions, or its
+    /// muffit daemon's.
     pub fn is_serving(&self) -> bool {
-        self.is_reachable() && (self.online || self.native == Some(true))
+        self.is_reachable() && (self.online || self.native == Some(true) || self.muffit == Some(true))
     }
 }
 
@@ -851,6 +865,10 @@ pub enum ClientMsg {
         /// predates this, and both keep #535's hold.
         #[serde(default)]
         typed: bool,
+        /// Which of a hub's clients typed this, set by the hub that relays it: a muffit pane holds
+        /// each one's composer text apart until its own carriage return (docs/18).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
     },
     /// Bytes for the pane to work on, written to a file on the pane's own node and typed in as
     /// the path to it.

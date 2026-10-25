@@ -18,6 +18,7 @@ kampr-herdr = { path = "../kampr-herdr" }
 kampr-journal = { path = "../kampr-journal" }
 kampr-push = { path = "../kampr-push" }
 kampr-mesh = { path = "../kampr-mesh" }
+kampr-muffit = { path = "../kampr-muffit" }
 kampr-keep = { path = "../kampr-keep" }
 kampr-native = { path = "../kampr-native" }
 kampr-term = { path = "../kampr-term" }

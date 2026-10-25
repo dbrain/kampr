@@ -750,8 +750,20 @@ async fn warm(
     // still carry something shaped like a question — a numbered list in build output, a cursor
     // beside two aligned lines. The socket path has always gated on `blocked`; this one did not,
     // and it is the same read.
+    let blocked = |pane: &str| {
+        herd.pane(pane).map(|p| p.agent_status) == Some(kampr_core::provider::AgentStatus::Blocked)
+    };
     if let Some(pane) = query.pane.as_deref()
-        && herd.pane(pane).map(|p| p.agent_status) == Some(kampr_core::provider::AgentStatus::Blocked)
+        && blocked(pane)
+        && let Some((session, local)) = node.resolve(pane)
+        && let Some(muffit) = session.muffit_of(&local)
+    {
+        if let Some(prompt) = crate::muffit::prompt(muffit, &local) {
+            body["pending"] =
+                serde_json::to_value(crate::muffit::pending(pane, Some(&prompt))).unwrap_or_default();
+        }
+    } else if let Some(pane) = query.pane.as_deref()
+        && blocked(pane)
         && let Some((session, local)) = node.resolve(pane)
         && let Some(found) = crate::pending::read(
             &crate::pending::Screen::of(&session, &local),

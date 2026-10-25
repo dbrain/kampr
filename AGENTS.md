@@ -24,6 +24,7 @@ first.** Several deliberate conventions here look like defects without it.
 | Build broken? Shipping? | [`docs/09-toolchain.md`](./docs/09-toolchain.md) / [`docs/07-android-release.md`](./docs/07-android-release.md) |
 | Mesh, notifications, passkeys | [`docs/15`](./docs/15-mesh-deployment.md), [`docs/16`](./docs/16-notifications.md), [`docs/10`](./docs/10-passkeys.md) |
 | Terminal client, harness transcripts, fleet runs, agent status | [`docs/11`](./docs/11-cli-briefs.md), [`docs/12`](./docs/12-harness-briefs.md), [`docs/13`](./docs/13-fleet-runs.md), [`docs/14`](./docs/14-agent-status.md) |
+| Native sessions, muffit sessions | [`docs/17`](./docs/17-native-sessions.md), [`docs/18`](./docs/18-muffit.md) |
 
 `docs/01`, `02`, `05` and `06` are history, not status.
 

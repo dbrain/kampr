@@ -5,6 +5,7 @@ use kampr_core::registry::RegistryConfig;
 use kampr_core::{Composite, HerdrConfig, HerdrProvider, PaneRegistry};
 use kampr_fleet::FleetProvider;
 use kampr_herdr::Herdr;
+use kampr_muffit::MuffitProvider;
 use kampr_native::NativeProvider;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,8 @@ pub struct SessionNode {
     pub fleet: Arc<FleetProvider>,
     /// Only on the primary: a native session belongs to the machine, not to a herdr server.
     pub native: Option<Arc<NativeProvider>>,
+    /// Only on the primary, for the same reason: the muffit daemon is the machine's (docs/18).
+    pub muffit: Option<Arc<MuffitProvider>>,
     pub registry: Arc<PaneRegistry>,
 }
 
@@ -49,6 +52,7 @@ impl SessionNode {
     ) -> Arc<Self> {
         let herdr = Herdr::new(&socket);
         let native = primary.then(|| native_provider(config)).flatten();
+        let muffit = primary.then(|| muffit_provider(config)).flatten();
         let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
             herdr.clone(),
@@ -71,6 +75,9 @@ impl SessionNode {
         let mut providers: Vec<Arc<dyn kampr_core::Provider>> = Vec::new();
         if let Some(native) = &native {
             providers.push(native.clone());
+        }
+        if let Some(muffit) = &muffit {
+            providers.push(muffit.clone());
         }
         providers.push(fleet.clone());
         providers.push(provider.clone());
@@ -97,6 +104,7 @@ impl SessionNode {
             provider,
             fleet,
             native,
+            muffit,
             registry,
         })
     }
@@ -119,6 +127,12 @@ impl SessionNode {
         self.native
             .as_deref()
             .filter(|_| local.starts_with(kampr_native::PREFIX))
+    }
+
+    pub fn muffit_of(&self, local: &str) -> Option<&Arc<MuffitProvider>> {
+        self.muffit
+            .as_ref()
+            .filter(|_| local.starts_with(kampr_muffit::PREFIX))
     }
 
     pub fn online(&self) -> bool {
@@ -163,6 +177,20 @@ fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
         }
         Err(e) => {
             warn!(error = %format!("{e:#}"), "native sessions are unavailable on this node");
+            None
+        }
+    }
+}
+
+fn muffit_provider(config: &Config) -> Option<Arc<MuffitProvider>> {
+    let endpoint = config.muffit.resolve(&config.journal_home())?;
+    match kampr_muffit::Client::new(&endpoint.url, &endpoint.token) {
+        Ok(client) => {
+            info!(url = %endpoint.url, "serving the muffit daemon's sessions");
+            Some(Arc::new(MuffitProvider::new(client)))
+        }
+        Err(e) => {
+            warn!(error = %format!("{e:#}"), "muffit sessions are unavailable on this node");
             None
         }
     }
@@ -402,6 +430,7 @@ mod tests {
 
     fn node(id: &str) -> Arc<SessionNode> {
         let mut config = Config::bootstrap("host");
+        config.muffit.enabled = Some(false);
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/herdr.sock".into();
         config.native.root = "/nowhere/native".into();
@@ -440,6 +469,7 @@ mod tests {
 
     fn sessions() -> Arc<Sessions> {
         let mut config = Config::bootstrap("host");
+        config.muffit.enabled = Some(false);
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/default/herdr.sock".into();
         config.native.root = "/nowhere/native".into();

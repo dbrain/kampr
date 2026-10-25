@@ -67,6 +67,7 @@ fn a_pane_entry_carries_the_node_qualified_id() {
             online: true,
             reachable: None,
             native: None,
+            muffit: None,
             rtt_ms: Some(0.4),
             herdr_version: Some("0.9.0".into()),
             build: None,
@@ -366,6 +367,7 @@ fn a_node_names_the_release_that_supersedes_it_and_says_nothing_otherwise() {
         online: true,
         reachable: None,
         native: None,
+        muffit: None,
         rtt_ms: None,
         herdr_version: None,
         build: Some("0.1.0".into()),
@@ -500,4 +502,33 @@ fn a_desk_line_clears_with_a_null_text_and_omits_a_clear_nobody_measured() {
         emptied.get("clear").is_none(),
         "an unmeasured clearing key is absent, and absent is not the same as null",
     );
+}
+
+#[test]
+fn a_node_serves_while_herdr_or_its_native_or_muffit_sessions_can() {
+    let node = |online, reachable, native, muffit| NodeEntry {
+        id: "01J".into(),
+        name: "front".into(),
+        kind: "local".into(),
+        online,
+        reachable,
+        native,
+        muffit,
+        rtt_ms: None,
+        herdr_version: None,
+        build: None,
+        update: None,
+        detail: None,
+    };
+    let cases = [
+        (node(true, Some(true), None, None), true),
+        (node(false, Some(true), None, None), false),
+        (node(false, Some(true), Some(true), None), true),
+        (node(false, Some(true), None, Some(true)), true),
+        (node(false, Some(false), None, Some(true)), false),
+        (node(false, None, None, Some(true)), false),
+    ];
+    for (entry, serving) in cases {
+        assert_eq!(entry.is_serving(), serving, "{entry:?}");
+    }
 }

@@ -40,7 +40,7 @@ import dev.kampr.shared.wire.SessionInfo
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.workspaceIdOf
 
-private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Node }
+private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Muffit, Node }
 
 private enum class Pick { Workspace, Split, Agent }
 
@@ -56,7 +56,7 @@ private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 // already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
 // `layout.export` answers with the caller's own container.
 private const val PANE_SPLIT = "pane.split"
-private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", ManageOp.NativeCreate.OP)
+private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", ManageOp.NativeCreate.OP, ManageOp.MuffitCreate.OP)
 
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
@@ -93,6 +93,7 @@ fun NewSheet(
     onSplit: ((source: String, created: String, direction: SplitDirection) -> Unit)? = null,
     onRefreshCaps: () -> Unit = {},
     agentArgs: AgentArgs = NoAgentArgs,
+    muffit: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     var step by remember { mutableStateOf(Step.Menu) }
@@ -108,6 +109,7 @@ fun NewSheet(
     var sessionName by remember { mutableStateOf(TextFieldValue()) }
     var nativeCommand by remember { mutableStateOf(TextFieldValue()) }
     var nativeDesk by remember { mutableStateOf(true) }
+    var muffitPrompt by remember { mutableStateOf(TextFieldValue()) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
@@ -266,6 +268,12 @@ fun NewSheet(
             )
         }
 
+        Step.Muffit -> "Start muffit session" to (
+            muffitPrompt.text.trim().ifEmpty { null }?.let { prompt ->
+                { run(ManageOp.MuffitCreate(nodeId, prompt, trimmedCwd)) }
+            }
+            )
+
         // The rows are the action: picking one is the whole step, and a button under them would
         // be one that is never the thing to press.
         Step.Node -> "" to null
@@ -288,6 +296,7 @@ fun NewSheet(
                 Step.Worktree -> "Worktree"
                 Step.Session -> "Named session"
                 Step.Native -> "Kampr session"
+                Step.Muffit -> "Muffit session"
                 Step.Node -> "Machine"
             },
             subtitle = listOfNotNull("on ${node.name}", pane?.workspace).joinToString(" · "),
@@ -310,6 +319,7 @@ fun NewSheet(
                     direction = direction,
                     ratio = ratio,
                     sessions = caps?.sessions.orEmpty(),
+                    muffit = muffit,
                     onStep = {
                         step = it
                         refusal = null
@@ -451,6 +461,12 @@ fun NewSheet(
                     beside = pane?.takeUnless { it.isNative }?.let(::paneTitle),
                 )
 
+                Step.Muffit -> Fields {
+                    LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
+                    LabelledField("first prompt", "tidy the parser", muffitPrompt) { muffitPrompt = it }
+                    Note("A muffit agent on ${node.name}. It has no terminal: it is a conversation, and its questions arrive here to be answered.")
+                }
+
                 Step.Session -> Fields {
                     LabelledField("name", "agents", sessionName) { sessionName = it }
                     if (sessionName.text.isNotEmpty() && !SESSION_NAME.matches(sessionName.text.trim())) {
@@ -531,6 +547,7 @@ private fun Menu(
     direction: SplitDirection,
     ratio: Double,
     sessions: List<SessionInfo>,
+    muffit: Boolean,
     onStep: (Step) -> Unit,
     onPick: (Pick) -> Unit,
     onDirection: (SplitDirection) -> Unit,
@@ -557,7 +574,7 @@ private fun Menu(
     if (breakpoint == Breakpoint.Portrait) {
         Column {
             Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
-            Elsewhere(compact, node, pane, peers, pick, sessions, onStep, agent, onNodePicker)
+            Elsewhere(compact, node, pane, peers, pick, sessions, muffit, onStep, agent, onNodePicker)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
@@ -565,7 +582,7 @@ private fun Menu(
                 Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
             }
             Column(Modifier.weight(1f)) {
-                Elsewhere(compact, node, pane, peers, pick, sessions, onStep, agent, onNodePicker)
+                Elsewhere(compact, node, pane, peers, pick, sessions, muffit, onStep, agent, onNodePicker)
             }
         }
     }
@@ -697,6 +714,7 @@ private fun Elsewhere(
     peers: List<NodeInfo>,
     pick: Pick,
     sessions: List<SessionInfo>,
+    muffit: Boolean,
     onStep: (Step) -> Unit,
     agent: AgentPick,
     onNodePicker: () -> Unit,
@@ -778,6 +796,16 @@ private fun Elsewhere(
             compact = compact,
             onClick = if (node.native == true) ({ onStep(Step.Native) }) else null,
         )
+        if (muffit) {
+            SheetCard(
+                icon = null,
+                iconTint = null,
+                title = "Muffit session",
+                subtitle = "an agent that is a conversation, not a terminal",
+                compact = compact,
+                onClick = { onStep(Step.Muffit) },
+            )
+        }
         SheetCard(
             icon = null,
             iconTint = null,

@@ -282,6 +282,7 @@ impl Harness {
         let journals_home = home.path().join("journals");
         std::fs::create_dir_all(&journals_home).expect("a journals home");
         let mut config = Config::bootstrap("attachment");
+        config.muffit.enabled = Some(false);
         config.update.check = false;
         config.journals.home = journals_home.display().to_string();
         config.config_dir = config_dir.display().to_string();

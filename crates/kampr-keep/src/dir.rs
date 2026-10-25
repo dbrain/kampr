@@ -169,6 +169,22 @@ pub struct Size {
     pub holder: String,
 }
 
+const VIEW: &str = "phone:";
+
+pub fn view_holder(device: &str) -> String {
+    format!("{VIEW}{device}")
+}
+
+pub fn attach_holder(pid: u32) -> String {
+    format!("attach:{pid}")
+}
+
+impl Size {
+    pub fn held_by_a_view(&self) -> bool {
+        self.holder.starts_with(VIEW)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     pub pid: u32,

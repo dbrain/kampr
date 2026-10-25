@@ -90,6 +90,8 @@ impl Harness {
         std::fs::create_dir_all(&state_dir).expect("a state dir");
 
         let mut config = Config::bootstrap("book");
+
+        config.muffit.enabled = Some(false);
         config.update.check = false;
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();

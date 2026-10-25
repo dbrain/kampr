@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.serves
 import dev.kampr.shared.model.statusOf
@@ -94,9 +95,13 @@ fun MosaicSwitcher(
             val node = herd.nodes.firstOrNull { it.id == (info?.nodeId ?: paneId.substringBefore('/')) }
             val pane = store.pane(paneId)
             CompositionLocalProvider(LocalPaneChrome provides PaneChrome(chrome)) {
-                surfaces.Terminal(pane, info, Modifier.fillMaxSize())
-                Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
-                    surfaces.KeyRow(pane, compact = landscape, Modifier.fillMaxWidth())
+                if (info.paints) {
+                    surfaces.Terminal(pane, info, Modifier.fillMaxSize())
+                    Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+                        surfaces.KeyRow(pane, compact = landscape, Modifier.fillMaxWidth())
+                    }
+                } else {
+                    surfaces.Conversation(pane, info, Modifier.fillMaxSize().padding(top = chrome))
                 }
             }
             if (node != null && !node.serves(info)) {

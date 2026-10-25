@@ -41,6 +41,68 @@ pub struct Config {
     pub fleet: Fleet,
     #[serde(default)]
     pub native: Native,
+    #[serde(default)]
+    pub muffit: Muffit,
+}
+
+/// The muffit daemon on this machine (docs/18).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Muffit {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub token: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub token_file: String,
+    /// Absent is on exactly when a token is found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+pub const MUFFIT_URL: &str = "http://127.0.0.1:7891";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MuffitEndpoint {
+    pub url: String,
+    pub token: String,
+}
+
+impl Muffit {
+    /// Where the daemon is and the token it takes, or `None` when this node does not talk to one.
+    pub fn resolve(&self, home: &Path) -> Option<MuffitEndpoint> {
+        if self.enabled == Some(false) {
+            return None;
+        }
+        let read = |path: PathBuf| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+        };
+        let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+        let token = Some(self.token.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                Some(&self.token_file)
+                    .filter(|f| !f.is_empty())
+                    .and_then(|f| read(PathBuf::from(f)))
+            })
+            .or_else(|| env("MUFFIT_SERVER_TOKEN").map(|t| t.trim().to_string()))
+            .or_else(|| env("MUFFIT_HOME").and_then(|h| read(PathBuf::from(h).join("server.token"))))
+            .or_else(|| read(home.join(".local/share/muffit/server.token")));
+        let Some(token) = token else {
+            if self.enabled == Some(true) {
+                tracing::warn!("muffit is enabled but no token was found; set [muffit] token or token_file");
+            }
+            return None;
+        };
+        let url = match self.url.trim() {
+            "" => MUFFIT_URL.to_string(),
+            url => url.to_string(),
+        };
+        Some(MuffitEndpoint { url, token })
+    }
 }
 
 /// Sessions Kampr keeps itself (docs/17). Both empty is the default and the right answer outside
@@ -424,6 +486,7 @@ impl Config {
             naming: Naming::default(),
             fleet: Fleet::default(),
             native: Native::default(),
+            muffit: Muffit::default(),
         }
     }
 
@@ -541,6 +604,38 @@ impl Config {
 mod tests {
     use super::*;
     use kampr_core::local_node::{DEFAULT_PORT, LocalNode, default_state_dir};
+
+    #[test]
+    fn muffit_is_reached_with_the_first_token_found_and_only_then() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("token");
+        std::fs::write(&file, "from-file\n").unwrap();
+        let config = |token: &str, token_file: &str, enabled: Option<bool>| Muffit {
+            url: String::new(),
+            token: token.into(),
+            token_file: token_file.into(),
+            enabled,
+        };
+        let file = file.display().to_string();
+        let found = |m: Muffit| m.resolve(home.path()).map(|e| (e.url, e.token));
+        let default = |token: &str| Some((MUFFIT_URL.to_string(), token.to_string()));
+        assert_eq!(found(config("given", &file, None)), default("given"));
+        assert_eq!(found(config("", &file, None)), default("from-file"));
+        assert_eq!(found(config("given", "", Some(false))), None);
+        let elsewhere = Muffit {
+            url: "http://10.0.0.2:7891".into(),
+            ..config("given", "", None)
+        };
+        assert_eq!(found(elsewhere).unwrap().0, "http://10.0.0.2:7891");
+        if std::env::var_os("MUFFIT_SERVER_TOKEN").is_none() && std::env::var_os("MUFFIT_HOME").is_none() {
+            assert_eq!(found(config("", "", None)), None, "no token is no muffit");
+            assert_eq!(found(config("", "", Some(true))), None);
+            let share = home.path().join(".local/share/muffit");
+            std::fs::create_dir_all(&share).unwrap();
+            std::fs::write(share.join("server.token"), "from-home").unwrap();
+            assert_eq!(found(config("", "", None)), default("from-home"));
+        }
+    }
 
     /// The two halves of writing into somebody else's herdr are separately consented to, and the
     /// smaller one cannot turn the larger one on for them. Sorting a desk needs a token reported,

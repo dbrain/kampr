@@ -240,6 +240,8 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
         matched: HashMap::new(),
         sending: HashMap::new(),
         boot_holds: HashMap::new(),
+        lines: HashMap::new(),
+        origin: ulid::Ulid::generate().to_string(),
         unreadable: 0,
     };
     // **Subscribed before the herd is read, and the read is the subscription's own.** `greet`
@@ -322,6 +324,8 @@ struct PaneHandle {
     warmth: Arc<crate::warm::ConvoWarmth>,
     /// The launched conversation this client has open on the pane, followed while it has it.
     followed: convo::Followed,
+    /// A muffit pane's conversation follower, which also carries its composer's messages.
+    muffit: Option<crate::muffit::Commands>,
     _hold: Option<Hold>,
 }
 
@@ -516,6 +520,10 @@ struct Session {
     /// The pane's boot episode, by global id: the inputs it is holding and the task flushing
     /// them. Dropped with the session, which is what aborts the task.
     boot_holds: HashMap<String, BootHoldEntry>,
+    /// What this socket has typed into each muffit pane since its last carriage return.
+    lines: HashMap<(String, Option<String>), kampr_muffit::input::Line>,
+    /// Names this socket's typing to a peer, when a pane it relays keeps a line per typist.
+    origin: String,
     unreadable: u32,
 }
 
@@ -745,7 +753,8 @@ impl Session {
                 b64,
                 keys,
                 typed,
-            } => self.input(&pane, text, b64, keys, typed).await,
+                from,
+            } => self.input(&pane, text, b64, keys, typed, from).await,
             ClientMsg::Paste { pane, b64, name } => self.paste(&pane, &b64, name.as_deref()).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
             ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
@@ -781,6 +790,10 @@ impl Session {
         if self.node.herd().pane(target).is_none() {
             self.wire
                 .error(ErrorCode::UnknownPane, "no such pane", Some(pane));
+            return;
+        }
+        if let Some(muffit) = session.muffit_of(&local) {
+            self.watch_muffit(muffit.clone(), pane, &local, scrollback, conversation);
             return;
         }
         if !session.online() && !local.starts_with(kampr_native::PREFIX) {
@@ -859,9 +872,78 @@ impl Session {
                 warm,
                 warmth: self.node.convo_warmth.clone(),
                 followed,
+                muffit: None,
                 _hold: hold,
             },
         );
+    }
+
+    /// A muffit session has no terminal, so nothing streams it through the registry: its
+    /// conversation is followed whether or not the watch asked for one, because it is all there is.
+    fn watch_muffit(
+        &mut self,
+        provider: Arc<kampr_muffit::MuffitProvider>,
+        pane: &str,
+        local: &str,
+        scrollback: bool,
+        conversation: bool,
+    ) {
+        self.audit(
+            "watch",
+            Some(pane),
+            Some(json!({ "scrollback": scrollback, "conversation": conversation, "muffit": true })),
+        );
+        if let Some(old) = self.panes.remove(pane) {
+            old.stop();
+        }
+        self.wire.outbox().resume_pane(pane);
+        let (task, commands) = crate::muffit::follow(provider, local, self.wire.clone(), pane.to_string());
+        self.panes.insert(
+            pane.to_string(),
+            PaneHandle {
+                pane: pane.to_string(),
+                outbox: self.wire.outbox().clone(),
+                tasks: vec![task],
+                scrollback,
+                conversation,
+                reflow: None,
+                convo: convo::open(),
+                warm: convo::warmth(),
+                warmth: self.node.convo_warmth.clone(),
+                followed: convo::followed(),
+                muffit: Some(commands),
+                _hold: None,
+            },
+        );
+    }
+
+    /// The follower a verb about a muffit pane's conversation goes to, or the refusal every
+    /// unwatched pane gets.
+    fn muffit_command(&self, pane: &str, command: kampr_muffit::follow::Command) {
+        match self.panes.get(pane).and_then(|h| h.muffit.as_ref()) {
+            Some(commands) => {
+                if commands.try_send(command).is_err() {
+                    self.wire.error(
+                        ErrorCode::SessionUnavailable,
+                        "this conversation is busy",
+                        Some(pane),
+                    );
+                }
+            }
+            None => {
+                self.wire.error(
+                    ErrorCode::NotFound,
+                    "no conversation open for this pane",
+                    Some(pane),
+                );
+            }
+        }
+    }
+
+    fn is_muffit(&self, pane: &str) -> bool {
+        self.node
+            .resolve(pane)
+            .is_some_and(|(session, local)| session.muffit_of(&local).is_some())
     }
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
@@ -912,6 +994,7 @@ impl Session {
                 warm: convo::warmth(),
                 warmth: self.node.convo_warmth.clone(),
                 followed: convo::followed(),
+                muffit: None,
                 _hold: hold,
             },
         );
@@ -950,6 +1033,12 @@ impl Session {
                 pane,
                 json!({ "t": "convo.sub", "pane": via, "id": id, "before": before }),
             );
+            return;
+        }
+        if self.is_muffit(pane) {
+            let id = id.to_string();
+            let before = before.map(str::to_string);
+            self.muffit_command(pane, kampr_muffit::follow::Command::Sub { id, before });
             return;
         }
         // The same gate `convo_load` takes, because this is the same `Arc` and here it is the
@@ -1086,6 +1175,12 @@ impl Session {
             self.relay_to_peer(pane, json!({ "t": "convo.find", "pane": via, "query": query }));
             return;
         }
+        if self.is_muffit(pane) {
+            let query = query.to_string();
+            let cap = crate::muffit::MATCHES;
+            self.muffit_command(pane, kampr_muffit::follow::Command::Find { query, cap });
+            return;
+        }
         // The same `confirmed` gate `convo.load` takes, and for the same reason: the handle a
         // re-watch inherits is the previous pump's parse, so a search run across that window would
         // answer about the transcript the pane was on rather than the one it is on now (#233).
@@ -1099,26 +1194,7 @@ impl Session {
             });
         match found {
             Some(found) => {
-                self.wire.send(&ServerMsg::ConvoFind {
-                    pane: pane.into(),
-                    query: query.into(),
-                    matches: found
-                        .hits
-                        .into_iter()
-                        .map(|hit| kampr_core::wire::ConvoMatch {
-                            turn: hit.turn,
-                            role: match hit.role {
-                                kampr_journal::Role::User => "user".into(),
-                                kampr_journal::Role::Assistant => "assistant".into(),
-                            },
-                            at: hit.at,
-                            from_end: hit.from_end,
-                            hits: hit.hits,
-                            text: hit.text,
-                        })
-                        .collect(),
-                    total: found.total,
-                });
+                self.wire.send(&convo::found(pane, query, found));
             }
             // Said rather than left silent, because this verb owes an answer: a pane with no
             // transcript open is the one case a client cannot tell from a search still in flight.
@@ -1138,6 +1214,11 @@ impl Session {
         if self.node.resolve(pane).is_none() {
             let via = self.relayed_as(pane);
             self.relay_to_peer(pane, json!({ "t": "convo.load", "pane": via, "before": before }));
+            return;
+        }
+        if self.is_muffit(pane) {
+            let before = before.map(str::to_string);
+            self.muffit_command(pane, kampr_muffit::follow::Command::Older { before });
             return;
         }
         let page = self
@@ -1280,17 +1361,19 @@ impl Session {
         b64: Option<String>,
         keys: Option<Vec<String>>,
         typed: bool,
+        from: Option<String>,
     ) {
         if !self.may_write("input", Some(pane)) {
             return;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
             self.audit("input", Some(pane), Some(json!({ "peer": true })));
+            let from = from.unwrap_or_else(|| self.origin.clone());
             self.relay_to_peer(
                 pane,
                 json!({
                     "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys,
-                    "typed": typed,
+                    "typed": typed, "from": from,
                 }),
             );
             return;
@@ -1340,6 +1423,12 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
+        if let Some(muffit) = session.muffit_of(&local) {
+            let typist = from.filter(|_| self.caller == Caller::Hub);
+            self.muffit_input(muffit.clone(), pane, &local, input, typist)
+                .await;
+            return;
+        }
         let reader = (!typed).then(|| self.boot_hold_reader(pane)).flatten();
         match reader {
             Some((listening, agent)) => self.park_input(pane, local, &session, input, listening, agent),
@@ -1357,6 +1446,45 @@ impl Session {
                     self.wire
                         .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 }
+            }
+        }
+    }
+
+    /// The composer's text is held per socket until its carriage return and sent as one message,
+    /// over the follower's socket with a `msg_id` when this socket is watching the pane.
+    async fn muffit_input(
+        &mut self,
+        provider: Arc<kampr_muffit::MuffitProvider>,
+        pane: &str,
+        local: &str,
+        input: Input,
+        typist: Option<String>,
+    ) {
+        use kampr_muffit::input::Step;
+        let line = self.lines.entry((pane.to_string(), typist)).or_default();
+        let steps = match input {
+            Input::Bytes(bytes) => line.feed(&String::from_utf8_lossy(&bytes)),
+            Input::Keys(keys) => line.keys(&keys),
+        };
+        let session = kampr_muffit::session_of(local).unwrap_or_default();
+        for step in steps {
+            let sent = match step {
+                Step::Interrupt => provider.client().interrupt(session).await,
+                Step::Submit(text) => {
+                    let msg_id = ulid::Ulid::generate().to_string();
+                    match self.panes.get(pane).and_then(|h| h.muffit.as_ref()) {
+                        Some(commands) => commands
+                            .send(kampr_muffit::follow::Command::Input { text, msg_id })
+                            .await
+                            .map_err(|_| anyhow::anyhow!("the conversation closed")),
+                        None => provider.client().input(session, &text).await,
+                    }
+                }
+            };
+            if let Err(e) = sent {
+                self.wire
+                    .error(ErrorCode::SessionUnavailable, &format!("{e:#}"), Some(pane));
+                return;
             }
         }
     }
@@ -1548,7 +1676,7 @@ impl Session {
             Some(pane),
             Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
         );
-        self.input(pane, Some(crate::paste::typed(&path)), None, None, false)
+        self.input(pane, Some(crate::paste::typed(&path)), None, None, false, None)
             .await;
     }
 
@@ -1569,6 +1697,11 @@ impl Session {
                 "an answer key is one or two characters",
                 Some(pane),
             );
+            return;
+        }
+        if let Some(muffit) = session.muffit_of(&local) {
+            self.audit("answer", Some(pane), Some(json!({ "key": key, "muffit": true })));
+            self.muffit_answer(muffit.clone(), pane, &local, key).await;
             return;
         }
         // The node decides whether a submit key follows, per harness — the client sends only the
@@ -1607,6 +1740,40 @@ impl Session {
                 self.wire
                     .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 return;
+            }
+        }
+    }
+
+    /// A permission prompt is answered over muffit's REST, never with keystrokes; a prompt that
+    /// is already gone clears the strip.
+    async fn muffit_answer(
+        &mut self,
+        provider: Arc<kampr_muffit::MuffitProvider>,
+        pane: &str,
+        local: &str,
+        key: &str,
+    ) {
+        let Some(answer) = crate::muffit::answer_for(key) else {
+            self.wire.error(
+                ErrorCode::BadRequest,
+                "a muffit prompt is answered 1, 2 or 3",
+                Some(pane),
+            );
+            return;
+        };
+        let session = kampr_muffit::session_of(local).unwrap_or_default();
+        let Some(prompt) = crate::muffit::prompt(&provider, local) else {
+            self.wire.send(&crate::muffit::pending(pane, None));
+            return;
+        };
+        match provider.client().answer(session, prompt.id, answer).await {
+            Ok(kampr_muffit::Answered::Taken) => {}
+            Ok(kampr_muffit::Answered::NoLongerWaiting) => {
+                self.wire.send(&crate::muffit::pending(pane, None));
+            }
+            Err(e) => {
+                self.wire
+                    .error(ErrorCode::SessionUnavailable, &format!("{e:#}"), Some(pane));
             }
         }
     }
@@ -1651,6 +1818,14 @@ impl Session {
             self.relay_to_peer(pane, json!({ "t": "answer.submit", "pane": pane }));
             return;
         };
+        if session.muffit_of(&local).is_some() {
+            self.wire.error(
+                ErrorCode::BadRequest,
+                "a muffit prompt takes one answer",
+                Some(pane),
+            );
+            return;
+        }
         let agent = self.node.herd().pane(pane).and_then(|p| p.agent.clone());
         let Some(keys) = commit_keys(agent.as_deref()) else {
             self.wire.error(
@@ -1830,6 +2005,10 @@ impl Session {
                 return;
             }
         };
+        // On the node that runs it, so a session made through a hub starts in that machine's home.
+        if op.op == "muffit.create" && op.cwd.as_deref().is_none_or(str::is_empty) {
+            op.cwd = Some(self.node.config.journal_home().display().to_string());
+        }
         let manager = Manager {
             herdr: &session.herdr,
             node_id: &session.node_id,
@@ -1840,12 +2019,13 @@ impl Session {
             // A native session is the machine's, so one shown beside a pane of a named herdr
             // session is still created by the primary's provider and named under its id.
             native: primary.native.as_ref(),
-            holder: &format!("phone:{}", self.device.name),
+            muffit: primary.muffit.as_ref(),
+            holder: &kampr_keep::view_holder(&self.device.name),
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {
                 let owner = match op.op.as_str() {
-                    "native.create" => &primary,
+                    "native.create" | "muffit.create" => &primary,
                     _ => &session,
                 };
                 // A session is named rather than addressed, so its name is the id; everything
@@ -2274,6 +2454,9 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // A hub reads this to decide whether it may relay a reflowed watch as a view of its own
     // (`<pane>~<cols>`), which an older node would answer as an unknown pane.
     value["caps"]["reflow"] = json!(true);
+    if node.primary().muffit.is_some() {
+        value["caps"]["muffit"] = json!(true);
+    }
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,
     // and the point of that route is that bytes never share a queue with terminal frames.
@@ -2359,7 +2542,7 @@ fn offline_code(session: &crate::sessions::SessionNode, local: &str) -> ErrorCod
 
 /// A native pane has no herdr behind it, only its keeper.
 fn failure_code(local: &str) -> ErrorCode {
-    match local.starts_with(kampr_native::PREFIX) {
+    match local.starts_with(kampr_native::PREFIX) || local.starts_with(kampr_muffit::PREFIX) {
         true => ErrorCode::SessionUnavailable,
         false => ErrorCode::HerdrUnavailable,
     }
@@ -3215,6 +3398,7 @@ mod tests {
                     warm: convo::warmth(),
                     warmth: Arc::new(crate::warm::ConvoWarmth::default()),
                     followed: convo::followed(),
+                    muffit: None,
                     _hold: hold,
                 },
             );

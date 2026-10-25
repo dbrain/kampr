@@ -231,6 +231,16 @@ sealed interface ManageOp {
     data class NativeDesk(val at: String) : ManageOp {
         override val op: String get() = "native.desk"
     }
+
+    // docs/18. `node` routes it as it routes `native.create`; the node turns it into muffit's own
+    // `POST /sessions` and answers with the new pane's id.
+    data class MuffitCreate(val node: String, val prompt: String, val cwd: String? = null) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "muffit.create"
+        }
+    }
 }
 
 fun ManageOp.fields(): JsonObject = buildJsonObject {
@@ -358,6 +368,12 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.NativeForget -> put("at", at)
 
         is ManageOp.NativeDesk -> put("at", at)
+
+        is ManageOp.MuffitCreate -> {
+            put("node", node)
+            opt("cwd", cwd)
+            put("prompt", prompt)
+        }
 
         is ManageOp.SessionStop -> {
             put("node", node)

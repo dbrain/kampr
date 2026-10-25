@@ -147,6 +147,7 @@ impl Peer {
     async fn start_as(fixture: &Fixture, caller: Caller, bytes_per_second: usize, role: Role) -> Self {
         let state = tempfile::tempdir().expect("a state dir");
         let mut config = Config::bootstrap("laptop");
+        config.muffit.enabled = Some(false);
         config.update.check = false;
         config.journals.home = fixture.home.display().to_string();
         // Nothing here reaches herdr: the pane is published rather than discovered, which is all

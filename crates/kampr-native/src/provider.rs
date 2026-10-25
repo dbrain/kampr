@@ -258,9 +258,23 @@ impl NativeProvider {
         let Some(hold) = hold else {
             return Ok(false);
         };
-        if self.require(pane)?.alive() {
-            self.resize(pane, hold.found.0, hold.found.1, &hold.holder)
-                .await?;
+        let session = self.require(pane)?;
+        if session.alive() {
+            // An attach that started under the hold left the size alone (attach.rs), so the size
+            // found can be from before it; a live attach's terminal is what is showing it now.
+            let mut desks = session.hosts();
+            let found_by = desks
+                .iter()
+                .position(|h| kampr_keep::attach_holder(h.pid) == hold.holder);
+            let desk = match found_by {
+                Some(at) => Some(desks.swap_remove(at)),
+                None => desks.pop(),
+            };
+            let (cols, rows, holder) = match desk {
+                Some(desk) => (desk.cols, desk.rows, kampr_keep::attach_holder(desk.pid)),
+                None => (hold.found.0, hold.found.1, hold.holder),
+            };
+            self.resize(pane, cols, rows, &holder).await?;
         }
         Ok(true)
     }

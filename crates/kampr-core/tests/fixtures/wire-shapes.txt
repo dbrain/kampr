@@ -29,6 +29,7 @@ client find .query: string
 client find .t: string
 client find : object
 client input .b64: string
+client input .from: string
 client input .keys: array
 client input .keys[]: string
 client input .pane: string
@@ -278,6 +279,7 @@ server herd .nodes[].detail: string
 server herd .nodes[].herdr_version: string
 server herd .nodes[].id: string
 server herd .nodes[].kind: string
+server herd .nodes[].muffit: bool
 server herd .nodes[].name: string
 server herd .nodes[].native: bool
 server herd .nodes[].online: bool
@@ -347,6 +349,7 @@ server herd.patch .added.nodes[].detail: string
 server herd.patch .added.nodes[].herdr_version: string
 server herd.patch .added.nodes[].id: string
 server herd.patch .added.nodes[].kind: string
+server herd.patch .added.nodes[].muffit: bool
 server herd.patch .added.nodes[].name: string
 server herd.patch .added.nodes[].native: bool
 server herd.patch .added.nodes[].online: bool
@@ -415,6 +418,7 @@ server herd.patch .changed.nodes[].detail: string
 server herd.patch .changed.nodes[].herdr_version: string
 server herd.patch .changed.nodes[].id: string
 server herd.patch .changed.nodes[].kind: string
+server herd.patch .changed.nodes[].muffit: bool
 server herd.patch .changed.nodes[].name: string
 server herd.patch .changed.nodes[].native: bool
 server herd.patch .changed.nodes[].online: bool

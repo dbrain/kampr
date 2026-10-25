@@ -140,6 +140,12 @@ pub enum ProgramState {
     Error,
 }
 
+/// A session of the muffit daemon on this machine (docs/18): a conversation with no terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MuffitPane {
+    pub session_id: String,
+}
+
 /// A keeper that died without recording how its child ended has both halves `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeExit {
@@ -187,6 +193,7 @@ pub struct PaneInfo {
     /// than by parsing the pane id.
     pub fleet: Option<FleetPane>,
     pub native: Option<NativePane>,
+    pub muffit: Option<MuffitPane>,
     /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.

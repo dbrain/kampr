@@ -53,6 +53,7 @@ fun PendingStrip(
     onAnswer: (String) -> Unit,
     modifier: Modifier = Modifier,
     onSubmit: (() -> Unit)? = null,
+    byKeys: Boolean = true,
 ) {
     val tokens = Kampr.tokens
     val question = pending.question ?: return
@@ -169,7 +170,7 @@ fun PendingStrip(
         }
 
         KText(
-            answering.note ?: note(pending),
+            answering.note ?: note(pending, byKeys),
             tokens.type.micro,
             if (answering.note == null) tokens.color.mute else tokens.color.blocked,
             maxLines = 2,
@@ -179,8 +180,9 @@ fun PendingStrip(
 
 // The one line under the card. On a multiple-answer question it has to say what a press does,
 // because it does not do what a press on the other kind does.
-private fun note(pending: ServerMsg.Pending): String = when {
+private fun note(pending: ServerMsg.Pending, byKeys: Boolean): String = when {
     pending.multi -> "Takes several answers — tick what you want, then send."
+    !byKeys -> "Asked by muffit, and answered to it directly."
     pending.source == "transcript" -> "Read from the transcript, answered by keys into the pane."
     else -> "Read from the pane, answered by keys into the pane."
 }

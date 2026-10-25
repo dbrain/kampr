@@ -93,6 +93,7 @@ data class Caps(
     // arrives. Absent means this client searches the turns it holds and says that is what it did.
     @SerialName("convo.find") val convoFind: Boolean = false,
     @SerialName("pane.grow") val paneGrow: Boolean = false,
+    val muffit: Boolean = false,
 )
 
 // What the client may offer is decided here, never by inspecting the URL: an affordance that
@@ -133,6 +134,9 @@ data class NodeInfo(
     val reachable: Boolean? = null,
     // Native sessions need no herdr, so `online: false` with this set is a machine still serving.
     val native: Boolean? = null,
+    // Whether this node can make muffit sessions (docs/18). Null is a node too old to say, for
+    // which only the connected node's `hello.caps.muffit` can answer.
+    val muffit: Boolean? = null,
 ) {
     // The fallback is not `online`. A local node is answering by construction — it is the socket
     // this device is talking over, and a node that could not answer would not be in this frame —
@@ -141,7 +145,7 @@ data class NodeInfo(
     // #324/#325 exist for.
     val isReachable: Boolean get() = reachable ?: (kind == "local" || online)
 
-    val isServing: Boolean get() = isReachable && (online || native == true)
+    val isServing: Boolean get() = isReachable && (online || native == true || muffit == true)
 
     // A named session is its own herdr server and joins the herd as its own node, named
     // `<host>/<session>`; the primary session carries the bare host name.
@@ -215,7 +219,11 @@ data class NativeExit(val code: Int? = null, val signal: Int? = null)
 // the grid tells a screen reader — asks this one question, because they had drifted apart: a
 // harness that had opened and not yet been prompted was given a tab by one of them and told by
 // another that this node could not read it.
-val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation)
+val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation || isMuffit)
+
+val PaneInfo.isMuffit: Boolean get() = provider == MUFFIT
+
+const val MUFFIT = "muffit"
 
 // One option a prompt declared for itself.
 @Serializable
