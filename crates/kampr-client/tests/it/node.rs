@@ -120,7 +120,10 @@ async fn a_bare_kampr_finds_the_node_on_this_machine_and_mints_itself_a_device()
     let home = Home::new();
     let running = Running::start(&home).await;
 
-    let session = resolve(&home.config(), None).await.expect("a herd");
+    let session = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
     let Via::LocalNode { device, .. } = &session.via else {
         panic!("a running node on this machine is the first rung");
     };
@@ -187,8 +190,14 @@ async fn a_second_run_reuses_the_device_the_first_one_minted() {
     let home = Home::new();
     let running = Running::start(&home).await;
 
-    let first = resolve(&home.config(), None).await.expect("a herd");
-    let second = resolve(&home.config(), None).await.expect("a herd");
+    let first = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
+    let second = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
     assert_eq!(first.token, second.token);
     assert_eq!(
         store(&home).await.devices().await.expect("devices").len(),
@@ -206,7 +215,10 @@ async fn a_second_run_reuses_the_device_the_first_one_minted() {
             .await
             .expect("revoked")
     );
-    let third = resolve(&home.config(), None).await.expect("a herd");
+    let third = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
     assert_ne!(third.token, first.token);
     assert_eq!(store(&home).await.devices().await.expect("devices").len(), 2);
     running.stop();
@@ -237,7 +249,10 @@ async fn a_saved_profile_is_the_second_rung_and_a_dead_node_falls_through_to_it(
     );
     client_config.save(&home.config()).expect("client.toml");
 
-    let session = resolve(&home.config(), None).await.expect("a herd");
+    let session = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
     assert_eq!(session.origin, "https://kampr.example.com");
     assert_eq!(session.token, "from-a-previous-pair");
     assert_eq!(session.via, Via::Profile { name: "front".into() });
@@ -255,7 +270,7 @@ fn store_missing(home: &Home) -> bool {
 async fn neither_rung_says_how_to_pair_rather_than_prompting() {
     let home = Home::new();
     std::fs::create_dir_all(home.config()).expect("a config dir");
-    let refusal = resolve(&home.config(), None)
+    let refusal = resolve(&home.config(), None, false)
         .await
         .expect_err("there is no herd here");
     let said = refusal.to_string();
@@ -271,9 +286,32 @@ async fn a_socket_that_spells_its_token_any_other_way_is_refused() {
 
     let refused = kampr_client::dial::connect(&origin, "not-a-token", Duration::from_secs(2)).await;
     assert!(
-        refused.is_err(),
-        "there is no code path that authenticates without a token"
+        matches!(refused, Err(kampr_client::DialError::Refused(_))),
+        "there is no code path that authenticates without a token, and the refusal says so: {:?}",
+        refused.err()
     );
+    running.stop();
+}
+
+#[tokio::test]
+async fn a_signed_in_client_mints_a_code_another_device_redeems_with_no_keypress_at_the_node() {
+    let home = Home::new();
+    let running = Running::start(&home).await;
+    let signed_in = resolve(&home.config(), None, true).await.expect("a herd").session;
+
+    let minted = kampr_client::mint(&signed_in).await.expect("a code");
+    assert!(minted.expires_in > 0);
+    let elsewhere = tempfile::tempdir().expect("another machine's config");
+    let paired = kampr_client::pair(
+        elsewhere.path(),
+        &signed_in.origin,
+        &minted.code,
+        Some("desk"),
+        Some("laptop"),
+    )
+    .await
+    .expect("the code is armed as handed back");
+    assert_eq!(paired.name, "desk");
     running.stop();
 }
 
@@ -281,7 +319,10 @@ async fn a_socket_that_spells_its_token_any_other_way_is_refused() {
 async fn a_demotion_lands_on_the_socket_that_is_already_open() {
     let home = Home::new();
     let running = Running::start(&home).await;
-    let session = resolve(&home.config(), None).await.expect("a herd");
+    let session = resolve(&home.config(), None, false)
+        .await
+        .expect("a herd")
+        .session;
     let client = Client::with_policy(session, policy());
     let mut events = client.events();
     until(&mut events, |e| matches!(e, Event::Connected(_)).then_some(())).await;
@@ -307,5 +348,64 @@ async fn a_demotion_lands_on_the_socket_that_is_already_open() {
     assert!(state.herd.known, "a demotion is not a second greeting");
     drop(state);
     drop(client);
+    running.stop();
+}
+
+/// **A peer's own herd is one machine; its hub's is all of them.** The node on this machine
+/// answering used to win outright, so a peer that had paired with its hub still opened on itself
+/// and the saved hub profile was never read. The hub's herd contains this machine's, so a device on
+/// it wins — and until there is one, the hub is offered rather than silently missing.
+#[tokio::test]
+async fn a_peer_opens_its_hubs_herd_once_paired_and_offers_the_hub_until_then() {
+    let home = Home::new();
+    let running = Running::start(&home).await;
+    store(&home)
+        .await
+        .mesh()
+        .enrol(
+            &"ab".repeat(32),
+            "01JHUB",
+            "giftofthemagi2",
+            kampr_auth::MeshRole::Hub,
+            Some("wss://kampr.example.com/mesh"),
+            kampr_auth::now(),
+        )
+        .await
+        .expect("a hub");
+
+    let unpaired = resolve(&home.config(), None, false).await.expect("a herd");
+    assert!(matches!(unpaired.session.via, Via::LocalNode { .. }));
+    let hub = unpaired.hub.expect("the hub this node dials is offered");
+    assert_eq!(hub.name, "giftofthemagi2");
+    assert_eq!(hub.origin, "https://kampr.example.com");
+
+    let mut client = ClientConfig::load(&home.config()).expect("the client config");
+    client.profiles.insert(
+        "giftofthemagi2".into(),
+        Profile {
+            origin: "https://kampr.example.com".into(),
+            token: "hub-token".into(),
+        },
+    );
+    client.default = Some("giftofthemagi2".into());
+    client.save(&home.config()).expect("saved");
+
+    let paired = resolve(&home.config(), None, false).await.expect("a herd");
+    assert_eq!(paired.session.origin, "https://kampr.example.com");
+    assert!(matches!(paired.session.via, Via::Profile { .. }));
+    assert!(paired.hub.is_none(), "nothing left to offer");
+    let fallback = paired
+        .local
+        .expect("this machine's own node stands behind the hub");
+    assert!(matches!(fallback.via, Via::LocalNode { .. }));
+    assert_eq!(paired.config_dir, home.config());
+
+    let local = resolve(&home.config(), None, true).await.expect("a herd");
+    assert!(
+        matches!(local.session.via, Via::LocalNode { .. }),
+        "`kampr --local` is still this machine"
+    );
+    assert!(local.hub.is_none());
+    assert!(local.local.is_none(), "already on it");
     running.stop();
 }

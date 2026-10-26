@@ -126,6 +126,16 @@ pub struct Layout {
     pub area: Rect,
     #[serde(default)]
     pub panes: Vec<LayoutPane>,
+    #[serde(default)]
+    pub splits: Vec<LayoutSplit>,
+}
+
+/// One split of a tab's tree, flattened (#616): the box it divides and how.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LayoutSplit {
+    pub direction: String,
+    pub ratio: f64,
+    pub rect: Rect,
 }
 
 #[derive(Debug, Clone, Deserialize)]

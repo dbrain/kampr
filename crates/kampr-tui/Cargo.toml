@@ -21,9 +21,11 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+toml.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 kampr-testkit = { path = "../kampr-testkit" }
 futures-util.workspace = true
 kampr-mesh = { path = "../kampr-mesh" }

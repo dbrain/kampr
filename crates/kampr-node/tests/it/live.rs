@@ -11567,3 +11567,59 @@ async fn a_line_half_typed_into_claudes_own_box_reaches_the_conversation() {
     assert_eq!(composer["text"], "push the branch when", "{composer}");
     assert_eq!(composer["clear"], "\u{3}", "{composer}");
 }
+
+/// A tab's tree reaches the wire as each pane's path through it (#616), and a divider dragged at
+/// the desk moves it — the one geometry change herdr does announce.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_pane_carries_its_place_in_its_tabs_split_tree() {
+    let h = harness!("tiles");
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    h._session
+        .call(
+            "pane.split",
+            json!({ "target_pane_id": local, "direction": "right", "ratio": 0.6, "focus": false }),
+        )
+        .await;
+    let paths = |root: u16| {
+        let herd = h.node.herd();
+        let tiles: Vec<_> = herd
+            .panes
+            .iter()
+            .filter(|p| p.tab_id == herd.pane(&pane).and_then(|p| p.tab_id.clone()))
+            .filter_map(|p| p.tile.clone())
+            .collect();
+        tiles.len() == 2
+            && tiles.iter().all(|t| {
+                Some(t.group.as_str()) == herd.pane(&pane).and_then(|p| p.tab_id.as_deref())
+                    && t.path.len() == 1
+                    && t.path[0].ratio == root
+                    && t.path[0].split == kampr_core::tile::Split::Right
+            })
+            && tiles.iter().filter(|t| t.path[0].second).count() == 1
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !paths(600) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:#?}",
+            h.node.herd().panes
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    h._session
+        .call(
+            "pane.resize",
+            json!({ "pane_id": local, "direction": "right", "amount": 0.1 }),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !paths(700) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:#?}",
+            h.node.herd().panes
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

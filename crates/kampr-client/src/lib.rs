@@ -32,7 +32,7 @@ pub use frames::{
     SessionCaps,
 };
 pub use herd::{Gone, Herd, NodeGroup};
-pub use pair::{PairError, Paired, pair};
+pub use pair::{Minted, PairError, Paired, mint, pair};
 pub use pane::PaneState;
 pub use profile::{ClientConfig, Profile};
-pub use resolve::{ResolveError, Session, Via, hostname, resolve};
+pub use resolve::{HubOffer, ResolveError, Resolved, Session, Via, hostname, resolve};

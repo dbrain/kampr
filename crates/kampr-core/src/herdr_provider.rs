@@ -1352,6 +1352,27 @@ fn as_a_name(line: &str) -> String {
     folded.trim_end().to_string()
 }
 
+fn tile(snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Option<crate::tile::Tile> {
+    use crate::tile::{Box4, Split, path_of, ratio};
+    let as_box = |r: &kampr_herdr::model::Rect| Box4 {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+    };
+    let layout = snapshot.layouts.iter().find(|l| l.tab_id == pane.tab_id)?;
+    let at = layout.panes.iter().find(|p| p.pane_id == pane.pane_id)?;
+    let splits: Vec<_> = layout
+        .splits
+        .iter()
+        .filter_map(|s| Some((Split::parse(&s.direction)?, ratio(s.ratio), as_box(&s.rect))))
+        .collect();
+    Some(crate::tile::Tile {
+        group: pane.tab_id.clone(),
+        path: path_of(&splits, as_box(&at.rect)),
+    })
+}
+
 fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> PaneInfo {
     let (_, rect_rows) = snapshot.geometry(&pane.pane_id).unwrap_or((0, 0));
     // The rect is the desk's idea of the pane; the PTY is what the program inside it writes to,
@@ -1397,6 +1418,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         fleet: None,
         native: None,
         muffit: None,
+        tile: tile(snapshot, pane),
         detail: inner.stream_fault(),
     }
 }

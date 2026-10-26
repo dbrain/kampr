@@ -304,8 +304,12 @@ scrapes even Claude).
 **Kampr must not show it twice.** `HerdrProvider` will list the host pane too, with a foreground
 process of `kampr`. The registry uses the session's `hosts` file to fold a hosting herdr pane into
 its session: one entry on the phone, carrying an additive `on_desk: "w1:p3"` fact. Ops that are
-about the desk (`focus`, layout) route to the herdr pane and keep every ADR 0015 restriction; ops
-that are about the program (input, size, scrollback, close) route to the session.
+about the desk (`focus`, zoom) route to the herdr pane and keep every ADR 0015 restriction; ops
+that are about the program (input, size, scrollback, close) route to the session. A `pane.split` is
+neither: it starts another session in the first one's directory and keeps the two side by side in
+the node's own tree (`layouts.json` in the root), which every pane in it carries as its `tile`
+(docs/04 "Tiles"), so clients lay them out the way they lay out a herdr tab. A session that goes
+closes its half up behind it, and a tree down to one session is no tree.
 
 **Lifecycle, and the second thing herdr cannot give us.** Closing the herdr pane kills
 `kampr attach`, not the agent: the session becomes *detached*, as it would in tmux, and stays on the

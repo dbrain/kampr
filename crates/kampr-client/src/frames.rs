@@ -215,6 +215,11 @@ pub enum Event {
     Disconnected {
         reason: String,
     },
+    /// The node turned this device's token away. Follows the `Disconnected` it caused, on every
+    /// attempt, because the token will not get better by itself.
+    Refused {
+        origin: String,
+    },
     Herd,
     /// A mid-connection permission change. Not a second greeting: the herd and the preferences
     /// are untouched, and only the write affordances move.

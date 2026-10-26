@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.gone
+import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.saidOutLoud
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.withoutReadDone
@@ -260,7 +261,6 @@ internal fun AppScaffold(
     // The triage list, at last wired: `KamprStore.blocked()` had no callers, and this is what the
     // roadmap called the one Collie product idea worth stealing wholesale.
     val triage = state.store.triage()
-    val blocked = triage.firstOrNull()?.pane
     // Two independent answers, both required: this origin can carry a WebAuthn RP ID, and this
     // platform has an authenticator at all. Absent rather than present-and-failing.
     val offersPasskeys = (security.passkeys || auth.setup?.passkeys == true) && state.passkeysUsable
@@ -291,10 +291,12 @@ internal fun AppScaffold(
             "split" -> PaneView.Split
             else -> null
         }
+        // The sidebar's own order, never the node's: that lists panes as it holds them, and a
+        // fleet run's pty, which is on nobody's desk, is often the newest thing it holds.
         val chosen = deepLink?.pane
             ?.let { needle -> herd.panes.firstOrNull { it.id.contains(needle) || (it.workspace ?: "") == needle } }
-            ?: blocked
-            ?: herd.panes.firstOrNull()
+            ?: triage.firstOrNull { it.pane.fleet == null }?.pane
+            ?: herd.groups().firstNotNullOfOrNull { it.panes.firstOrNull() }
         when {
             target != null -> state.go(target)
 
@@ -305,7 +307,7 @@ internal fun AppScaffold(
             // terminal when it has chosen nothing. Opening every pane in Split made the choice
             // unkeepable — the next open overwrote it — and is the wrong answer for most panes.
             breakpoint == Breakpoint.Desktop && state.screen is Screen.Herd && chosen != null ->
-                state.openPane(chosen.id)
+                state.land(chosen.id)
         }
     }
 

@@ -194,6 +194,7 @@ pub struct PaneInfo {
     pub fleet: Option<FleetPane>,
     pub native: Option<NativePane>,
     pub muffit: Option<MuffitPane>,
+    pub tile: Option<crate::tile::Tile>,
     /// Why this pane cannot be streamed, in the words an operator has to act on. `None` is the
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.

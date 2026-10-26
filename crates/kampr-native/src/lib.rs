@@ -2,6 +2,7 @@ mod answer;
 mod attach;
 mod frame;
 mod history;
+mod layout;
 mod live;
 mod palette;
 mod procs;

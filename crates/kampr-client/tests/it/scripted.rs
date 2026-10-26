@@ -553,3 +553,49 @@ async fn caps_names_the_agent_kinds_the_node_has_rather_than_a_list_a_client_com
          not offer to open a pane on one"
     );
 }
+
+/// A node that turns every token away at the handshake, as one does for a revoked or expired
+/// device.
+async fn refusing() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let origin = format!("http://{}", listener.local_addr().expect("an address"));
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(tokio_tungstenite::accept_hdr_async(
+                stream,
+                #[allow(clippy::result_large_err)]
+                |_: &Request, _: Response| {
+                    let mut no = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(Some(
+                        "this device is not authorised".into(),
+                    ));
+                    *no.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
+                    Err(no)
+                },
+            ));
+        }
+    });
+    origin
+}
+
+#[tokio::test]
+async fn a_token_the_node_turns_away_is_told_apart_from_a_node_that_is_not_there() {
+    let dead = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let gone = format!("http://{}", dead.local_addr().expect("an address"));
+    drop(dead);
+    for (origin, refused) in [(refusing().await, true), (gone, false)] {
+        let mut fake = Fake::start().await;
+        fake.origin = origin.clone();
+        let client = fake.client();
+        let mut events = client.events();
+        let mut said = Vec::new();
+        for _ in 0..4 {
+            said.push(next(&mut events).await);
+        }
+        assert_eq!(
+            said.iter()
+                .any(|e| matches!(e, Event::Refused { origin: o } if *o == origin)),
+            refused,
+            "{origin}: {said:?}"
+        );
+    }
+}

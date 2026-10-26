@@ -125,6 +125,14 @@ fn pane(question: Question) -> PaneEntry {
             code: Some(0),
             signal: Some(9),
         }),
+        tile: Some(kampr_core::tile::Tile {
+            group: "n/w1:t1".into(),
+            path: vec![kampr_core::tile::Cut {
+                split: kampr_core::tile::Split::Right,
+                ratio: 600,
+                second: true,
+            }],
+        }),
     }
 }
 

@@ -16,6 +16,10 @@ pub enum DialError {
     Connect(String, String),
     #[error("{0} is not a URL this client can dial: {1}")]
     Url(String, String),
+    /// The node answered and said no to the token: revoked, expired, or minted by a node that has
+    /// since been reset. Retrying the same token cannot fix it.
+    #[error("{0} no longer accepts this device")]
+    Refused(String),
 }
 
 /// `ws://host:port/ws` from the origin the node published. A `wss` or `ws` origin is taken as
@@ -57,7 +61,12 @@ pub async fn connect(origin: &str, token: &str, timeout: Duration) -> Result<Soc
     let (socket, _) = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(request))
         .await
         .map_err(|_| DialError::Timeout(url.clone()))?
-        .map_err(|e| DialError::Connect(url.clone(), e.to_string()))?;
+        .map_err(|e| match e {
+            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
+                DialError::Refused(origin.trim_end_matches('/').to_string())
+            }
+            e => DialError::Connect(url.clone(), e.to_string()),
+        })?;
     Ok(socket)
 }
 

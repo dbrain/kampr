@@ -417,7 +417,8 @@ installed the app.
 | `kampr mesh invite / join / list / revoke / forget` | Join hosts into one herd |
 | `kampr service install / uninstall / status` | The user service that keeps the node running |
 | `kampr` | **No subcommand: open this machine's herd in the terminal.** Exactly as bare `herdr` opens a session |
-| `kampr connect <url> --code <code>` | Save a herd on another machine, so a bare `kampr` opens that one |
+| `kampr connect <url> --code <code>` | Save a herd on another machine, so a bare `kampr` opens that one. On a mesh peer the URL defaults to its hub |
+| `kampr --local` | Open this machine's own herd even when it is paired with its hub |
 | `kampr url` | Print the node's URL |
 | `kampr update [--check] [--version vX.Y.Z]` | Replace this binary with the latest release, verifying it first |
 
@@ -443,7 +444,37 @@ agent is waiting on.
 
 It finds a herd by itself, in this order: a node on this machine (it mints itself a device, named
 `cli@<hostname>`, listed by `kampr setup` and revocable like any other), then a herd saved by
-`kampr connect`, then it says how to pair and exits. It never prompts.
+`kampr connect`, then it says how to pair and exits. It never prompts. **On a mesh peer, the hub
+wins once it is paired**, because the hub's herd contains this machine's. Until it is, the sidebar
+shows `⇄ pair with <hub>`: click it (or select it in `prefix w`) and type a code — from `kampr pair`
+on the hub, from the app's **Settings → Pair a device**, or from `ctrl+b shift+A` in any kampr
+already signed in to the hub. `kampr --local` opens just this machine. If the hub stops answering
+for ten seconds, this machine's herd stands in (`⇄ <hub> unreachable`) and the hub takes back over
+the moment a dial to it lands; if the hub turns the device away, the pair row comes back instead.
+A hub on an https domain never expires a device, as a browser's never does; only a node reached by
+bare IP puts one on `auth.token_days`.
+
+`prefix g` jumps to any pane on any node by a few letters of its title, workspace or machine; with
+nothing typed it lists the panes last visited first, and `1`–`9` (or `alt+1`–`9` once something is
+typed) or a click opens one. `kampr` reopens on the pane it was last showing, and remembers the
+sidebar's order, in `tui.toml` beside `client.toml`. The sidebar's header switches between `grouped`
+(node, workspace, pane) and `priority` (blocked first), by click or `o` in the navigator. The wheel
+scrolls kampr's own scrollback, and over a full-screen program with none, such as Claude Code,
+`less` or `vim`, it scrolls the program.
+
+An agent off screen that starts needing you, or finishes, raises a desktop notification the way
+herdr's `[ui.toast]` does. kampr's own `[toast]` in `tui.toml` (`delivery = "off" | "terminal" |
+"system"`, `delay_seconds`) says how; on a desk with herdr and no such section, herdr's `[ui.toast]`
+is followed; with neither it is a terminal notification after a second. `KAMPR_TUI_TOAST` overrides
+the delivery. `ctrl+v` sends the clipboard's picture to
+the pane's agent, as `herdr --remote` does; pasting or dropping a picture file's path sends that
+file. Either lands as a file on the pane's own machine.
+
+A herdr tab is laid out the way herdr has it — every pane, at herdr's ratios, following a divider
+moved at the desk — and a kampr session split with `ctrl+b -` or `ctrl+b v` starts another session
+beside it, kept in one tree by its node so every client lays the two out alike. Resize mode
+(`ctrl+b r`) and dragging a divider move this screen's boxes only, until the tree's keeper moves that
+divider itself; a pinned mosaic, or a tab from a node too old to send a tree, is tiled by count.
 
 The keymap is herdr's — `ctrl+b` prefix, `ctrl+b ctrl+b` for a literal, `ctrl+b [` for copy mode —
 and it is the **client's**, not the node's, for the reason herdr gives for `--remote`: local muscle

@@ -4,9 +4,10 @@ use kampr_native::NativeProvider;
 use std::path::Path;
 
 /// Ops about where a native session sits at the desk, as opposed to the program in it. They go to
-/// the herdr pane showing it, under every restriction a herdr pane has (ADR 0015).
+/// the herdr pane showing it, under every restriction a herdr pane has (ADR 0015). A split is not
+/// one: native sessions split in the node's own tree.
 pub fn about_the_desk(op: &str) -> bool {
-    matches!(op, "focus" | "pane.zoom" | "pane.split")
+    matches!(op, "focus" | "pane.zoom")
 }
 
 /// The global id of the herdr pane showing `local`, in whichever served herdr session holds it.

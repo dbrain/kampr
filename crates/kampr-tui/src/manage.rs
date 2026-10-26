@@ -342,8 +342,8 @@ impl Manage {
                 )
             }),
             CloseWorkspace => workspace.map(|at| close(at, "workspace")),
-            SplitVertical => pane.map(|at| split(at, "right")),
-            SplitHorizontal => pane.map(|at| split(at, "down")),
+            SplitVertical => entry.map(|at| split(at, "right")),
+            SplitHorizontal => entry.map(|at| split(at, "down")),
             ClosePane => pane.map(|at| close(at, "pane")),
             RenamePane => pane.map(|at| rename(at, "pane", entry.and_then(|e| e.label.clone()), Empty::Null)),
             NewWorktree => self.worktrees(herd),
@@ -407,11 +407,11 @@ impl Manage {
                 }),
             });
         }
-        if let Some(at) = entry.map(|e| e.id.as_str()) {
+        if let Some(at) = entry {
             rows.push(Row {
                 key: Some('s'),
                 label: "split".into(),
-                note: "divide this pane at the desk".into(),
+                note: "divide this pane in two".into(),
                 next: Next::Pick {
                     title: "split".into(),
                     rows: vec![
@@ -943,13 +943,13 @@ fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
             key: Some('s'),
             label: "split right".into(),
             note: "side by side".into(),
-            next: split(at, "right"),
+            next: split(entry, "right"),
         },
         Row {
             key: Some('d'),
             label: "split down".into(),
             note: "one above the other".into(),
-            next: split(at, "down"),
+            next: split(entry, "down"),
         },
         Row {
             key: Some('f'),
@@ -1283,7 +1283,13 @@ fn close(at: &str, kind: &str) -> Next {
 /// invariant is about the side effects of *viewing* — but a pane's geometry moving under somebody
 /// else is announced nowhere, and #298 is what that costs: a desk drew a 50-column box around a
 /// 70-column PTY and cropped a line mid-word, with no error at either end.
-fn split(at: &str, direction: &str) -> Next {
+/// A native session splits by starting another beside it in the node's own tree, which reshapes
+/// nobody's desk, so only herdr's split is asked about first.
+fn split(entry: &PaneEntry, direction: &str) -> Next {
+    let at = entry.id.as_str();
+    if entry.provider.as_deref() == Some("native") {
+        return Next::Send(json!({ "op": "pane.split", "at": at, "direction": direction, "cwd": entry.cwd }));
+    }
     Next::Confirm {
         lines: vec![
             format!("Split {at} {direction}?"),

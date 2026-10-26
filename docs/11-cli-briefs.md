@@ -117,30 +117,30 @@ and no prompt, and `kampr setup` lists the device it minted.
 
 **Owns** the chrome, the input router, the two views. Reads W0's keymap rows (#289, #290).
 
-**The layout is herdr's, with one structural change.** Left sidebar of two stacked sections —
-`spaces` over `agents` — then a tab strip, then bordered panes with inset titles and an accent
-border on the focused one. The change is that `spaces` is **grouped by node**: a node header line
-carrying its name, status dot and rtt, with that node's workspaces indented under it and the git
-branch as the dim subtitle herdr already puts there.
+**The layout is herdr's, with one structural change.** A left sidebar, then a tab strip, then
+bordered panes with inset titles and an accent border on the focused one. The change is that the
+sidebar is **grouped by node**: a node header band carrying its name, status dot and rtt, with that
+node's workspaces a step in under it and their panes a step further.
 
 ```
- spaces                      │   opencode │ ❰ herdr ❱ │ +
- comingclean      ● local    │ ┌─ claude ─────────────┐┌─ bun ──────────────┐
-   ▸ herdr                   │ │ Claude Code v2.1.198 ││ ~/Projects/herdr   │
-     master                  │ │                      ││ master             │
-   ▸ web-dashboard           │ │ ❯ make the hero mock ││ ❯ bun run dev      │
-     feat/usage-charts       │ │                      ││ astro v5.18.1 ready│
- workbox           ● 41ms    │ │ ⠴ Baking… 14m · esc  ││ ❯ watching for     │
-   ▸ data-pipeline           │ │ ❯ █                  ││   file changes…    │
-     backfill/events-v2      │ ├──────────────────────┤│                    │
- laptop          ○ offline   │ │ ~/…/website master   ││                    │
-     4 panes · seen 13:44    │ └──────────────────────┘└────────────────────┘
- agents           grouped    │
- ◐ herdr                     │
-   working · claude          │
- ⚑ web-dashboard             │
-   blocked · claude          │
+ spaces    grouped  priority │   opencode │ ❰ herdr ❱ │ +
+ comingclean          ● local│ ┌─ claude ─────────────┐┌─ bun ──────────────┐
+  herdr                herdr │ │ Claude Code v2.1.198 ││ ~/Projects/herdr   │
+▌   ◐ make the hero mock     │ │                      ││ master             │
+    · bun run dev            │ │ ❯ make the hero mock ││ ❯ bun run dev      │
+  web-dashboard      website │ │                      ││ astro v5.18.1 ready│
+    ⚑ usage charts           │ │ ⠴ Baking… 14m · esc  ││ ❯ watching for     │
+                             │ │ ❯ █                  ││   file changes…    │
+ workbox              ● 41ms │ ├──────────────────────┤│                    │
+  data-pipeline     pipeline │ │ ~/…/website master   ││                    │
+    ○ backfill events-v2     │ └──────────────────────┘└────────────────────┘
 ```
+
+**One list, not two.** There used to be an `agents` section under `spaces` that listed every agent
+pane a second time, under a `priority` label nothing could press. The header's `grouped`/`priority`
+is now the switch, by click or by `o` in the navigator, and priority is herdr's rollup order over
+the same rows. An agent's row is its title alone: the glyph already says it is an agent, and thirty
+columns are better spent on the title than on `· claude`.
 
 **Nothing is reserved at the bottom, and there is no hint bar.** This is measured, not taste: at a
 100x30 client herdr's pane reports `tput lines` **29** — every row below the tab strip — with the
@@ -162,14 +162,13 @@ tab strip's empty right half, which costs no row and answers the question herdr 
 does. A `pane.rename` on a flush pane lands on the strip's identity line, which is why that line
 leads with the pane's own name.
 
-**Both sidebar sections already exist as models — render them, do not design them.**
+**The sidebar's two orders already exist as models — render them, do not design them.**
 
-- `spaces` is `Herd.groups()` (`model/Herd.kt:48`): panes grouped by node, local node first. It is
-  the data model for this section already.
-- `agents` is `TriageItem` / `TriageList`, which [`02-roadmap.md`](./02-roadmap.md) P6.9 calls the
+- `grouped` is `Herd.groups()` (`model/Herd.kt:48`): panes grouped by node, local node first.
+- `priority` is `TriageItem` / `TriageList`, which [`02-roadmap.md`](./02-roadmap.md) P6.9 calls the
   one Collie idea worth stealing wholesale. Status is `idle · working · blocked · done · unknown`
   straight off `herd.panes[].agent_status`.
-- **That section is sorted by priority, not grouped** — working and blocked at the top, done and
+- **Priority is a sort, not a grouping** — working and blocked at the top, done and
   idle below. The word in herdr's own header is a sort mode, and herdr has an API for it:
   `agent.view.set {source, filter, sort[], label}`, where a sort field is a builtin **or**
   `{token: "..."}` and the filter is a full boolean tree. Sort locally to start with. Driving
@@ -190,7 +189,12 @@ with `⚑ blocked` first. It is the triage screen you cannot get at a desk.
 **Two panes side by side is Kampr's own mosaic, not a herdr split.** It is a client-side arrangement
 of independent `observe` streams that may come from different sessions on different hosts, and it
 *"needs no protocol support beyond watching several panes at once"*. Do not confuse it with
-`manage`'s `pane.split`, which changes herdr's layout for everyone at the desk.
+`manage`'s `pane.split`, which changes herdr's layout for everyone at the desk. It is tiled by
+count — one full, two side by side, one beside two stacked, two by two — rather than mirroring the
+tab, because the herd frame carries no pane position: the node reads herdr's rects (#33) and
+`layout.export` has the split tree (#47), but neither reaches the wire. Resize mode's `h/j/k/l`,
+its `space` (tiled, side by side, stacked) and a drag on a border all move kampr's boxes and send
+nothing.
 
 **`prefs` arrives unasked as the third greeting frame**, after `hello` and `herd`, on every
 connection and even when nothing is stored. The CLI stores its per-pane view choice there so it

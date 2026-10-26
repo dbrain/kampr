@@ -1298,3 +1298,34 @@ async fn a_node_starting_after_the_keeper_binary_was_replaced_re_execs_its_keepe
     assert_eq!((upgraded.keeper, upgraded.child), (first.keeper, first.child));
     assert!(!kampr_keep::stale(&session));
 }
+
+/// A native session splits the way a herdr pane does, by starting another beside it, and the two
+/// carry their places in one tree for every client to lay out; the tree closes up when one goes.
+#[tokio::test]
+async fn a_split_native_session_starts_another_beside_it_in_one_tree() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let first = client.create(&["cat", "/dev/stdin"], json!({})).await;
+
+    let split = client
+        .manage(
+            json!({ "op": "pane.split", "at": first, "direction": "down", "args": ["cat", "/dev/stdin"] }),
+        )
+        .await;
+    assert_eq!(split["ok"], json!(true), "{split}");
+    let second = split["id"].as_str().expect("the new session").to_string();
+    let tile = |pane: &Value| pane["tile"].clone();
+    let top = client.pane(&first, |p| !p["tile"].is_null()).await;
+    let bottom = client.pane(&second, |p| !p["tile"].is_null()).await;
+    assert_eq!(tile(&top)["group"], tile(&bottom)["group"], "{top}\n{bottom}");
+    assert_eq!(tile(&top)["path"], json!([{ "split": "down", "ratio": 500 }]));
+    assert_eq!(
+        tile(&bottom)["path"],
+        json!([{ "split": "down", "ratio": 500, "second": true }])
+    );
+
+    let closed = client.manage(json!({ "op": "native.close", "at": second })).await;
+    assert_eq!(closed["ok"], json!(true), "{closed}");
+    client.gone(&second).await;
+    client.pane(&first, |p| p["tile"].is_null()).await;
+}

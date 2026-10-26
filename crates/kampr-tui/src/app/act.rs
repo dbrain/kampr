@@ -5,6 +5,7 @@ use super::{Acked, App, Claim, Screen, View, navigable, open_url};
 use crate::input::Outcome;
 use crate::keymap::{Action, Dir, Mode};
 use crate::manage::{MATCH_MIN_COLS, MATCH_MIN_ROWS, Progress};
+use crate::mosaic::Axis;
 use crate::mouse::Link;
 use crate::render::fit;
 use crate::sidebar::{self, Row};
@@ -32,6 +33,29 @@ impl App {
             self.help_key(key);
             return;
         }
+        if self.pairing.as_mut().is_some_and(|pairing| pairing.key(key)) {
+            return;
+        }
+        if let Some(invite) = self.invite.as_mut() {
+            match invite.key(key) {
+                crate::invite::Done::Closed => self.invite = None,
+                crate::invite::Done::Copy(code) => {
+                    crate::osc52(&code);
+                    self.note(format!("copied {code}"));
+                    self.invite = None;
+                }
+            }
+            return;
+        }
+        if self.switcher.active() {
+            let items = self.switch_items();
+            if let crate::switcher::Went::To(pane) = self.switcher.key(key, &items) {
+                self.focus(pane);
+                self.open(Screen::Panes);
+            }
+            return;
+        }
+
         // The modal has the keyboard while it is open, and it has it **first**: a digit typed
         // into a manage prompt, on a pane in conversation view with an outstanding question,
         // would otherwise be eaten as the answer to that question.
@@ -66,18 +90,29 @@ impl App {
             }
         }
         if self.router.mode() == Mode::Pane
+            && key.code == crossterm::event::KeyCode::Char('v')
+            && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+            && self.paste_picture()
+        {
+            return;
+        }
+        if self.router.mode() == Mode::Pane
             && !crate::keymap::same(key, self.router.prefix())
             && self.conversation_key(key)
         {
             return;
         }
         let before = self.router.mode();
+        if before == Mode::Copy && self.copy_key(key) {
+            return;
+        }
         match self.router.key(key) {
             Outcome::Nothing => {}
             Outcome::Redrew => {}
             Outcome::Do(action) => self.act(action),
             Outcome::ToPane(text) => self.send(&text),
         }
+        self.copy_follows(before);
         if before != Mode::Navigate && self.router.mode() == Mode::Navigate {
             self.show_what_is_being_navigated();
         }
@@ -211,7 +246,32 @@ impl App {
     }
 
     pub fn paste(&mut self, data: &str) {
+        if let Some((bytes, name)) = crate::picture::dropped(data) {
+            self.send_picture(&bytes, &name);
+            return;
+        }
         self.send(&crate::input::bracketed(data));
+    }
+
+    /// Whether the clipboard held a picture to send; a `ctrl+v` with none is the pane's own key.
+    fn paste_picture(&mut self) -> bool {
+        let Some(bytes) = (self.pictures)() else {
+            return false;
+        };
+        self.send_picture(&bytes, "clipboard");
+        true
+    }
+
+    fn send_picture(&mut self, bytes: &[u8], name: &str) {
+        let Some(pane) = self.focus.clone() else { return };
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        match self.client.paste(&pane, bytes, name) {
+            true => self.note(format!("sent a picture · {} KB", bytes.len().div_ceil(1024))),
+            false => self.note("not delivered — the socket is down"),
+        }
     }
 
     fn send(&mut self, text: &str) {
@@ -462,12 +522,15 @@ impl App {
             }
             CyclePaneNext => self.cycle(1),
             CyclePanePrevious => self.cycle(-1),
-            FocusPane(Dir::Left) | FocusPane(Dir::Up) => self.cycle(-1),
-            FocusPane(_) => self.cycle(1),
+            FocusPane(dir) => self.focus_toward(dir),
             NextTab => self.tab(1),
             PreviousTab => self.tab(-1),
             SwitchTab(n) => self.switch_tab(n),
-            Scroll(dir) => self.scroll(dir),
+            Scroll(dir) => {
+                if !self.walk(action) {
+                    self.scroll(dir);
+                }
+            }
             // Vertical movement scrolls the surface rather than panning a second axis: history
             // and the live grid are one window, not two panels.
             Pan(Dir::Up) => self.scroll(Dir::Up),
@@ -480,16 +543,26 @@ impl App {
                     self.scrolls.insert(pane, 0);
                 }
             }
-            // The navigator's `Move` walks the sidebar; copy mode's walks the surface. Without
-            // a selection cursor — W5's — moving the view is the honest half of herdr's h/j/k/l.
+            // The navigator's `Move` walks the sidebar; copy mode's walks its cursor over the
+            // surface. A conversation has no cursor, and there moving the view is what is left.
             Move(dir) => match self.router.mode() {
                 Mode::Navigate => self.move_pick(dir),
+                _ if self.walk(action) => {}
                 _ => match dir {
                     Dir::Up | Dir::Down => self.scroll(dir),
                     Dir::Left | Dir::Right => self.pan(dir, 1),
                 },
             },
+            WordNext | WordBack | WordEnd | ParagraphNext | ParagraphBack | LineStart | FirstNonBlank
+            | LineEnd | HistoryTop | HistoryBottom | HalfPageUp | HalfPageDown => {
+                if !self.walk(action) {
+                    self.note("copy mode walks a terminal, not a conversation");
+                }
+            }
             OpenWorkspace => self.open_pick(),
+            ToggleOrder => self.flip_order(),
+            Switcher => self.switcher.open(),
+            PairDevice => self.invite = Some(crate::invite::Invite::mint(self.client.session())),
             PinPane => self.pin(),
             ClearMosaic => {
                 self.pinned.clear();
@@ -500,15 +573,25 @@ impl App {
                 self.pick = n as usize;
                 self.open_pick();
             }
-            Wider => self.resplit(5),
-            Narrower => self.resplit(-5),
-            Taller | Shorter => self.note("the mosaic is one row — there is no height to give"),
+            Wider => self.resize(Axis::Across, true),
+            Narrower => self.resize(Axis::Across, false),
+            Taller => self.resize(Axis::Down, true),
+            Shorter => self.resize(Axis::Down, false),
+            Arrange => self.arrange(),
             OpenLaunched => self.open_launched(),
             TakeDeskLine => self.take_desk_line(),
             ToggleView => self.toggle_view(),
             ToggleMouse => self.toggle_mouse(),
             Copy => self.copy(),
-            Select => self.note("drag over the grid — there is no keyboard cursor yet"),
+            Select | SelectLine => {
+                let kind = match action {
+                    SelectLine => crate::copy::Kind::Lines,
+                    _ => crate::copy::Kind::Chars,
+                };
+                if !self.copy_select(kind) {
+                    self.note("copy mode selects on a terminal — y copies the code block here");
+                }
+            }
             // The one gesture that navigates a URL a pane's output offered, and it is the
             // operator's rather than the pane's.
             OpenNotificationTarget => match self.offered.take() {
@@ -586,7 +669,7 @@ impl App {
         if self.view(&pane) == View::Conversation {
             match self.convo.code(&pane) {
                 Some(text) => {
-                    crate::osc52(&text);
+                    self.clip(&text);
                     self.note(format!("copied {} lines of code", text.lines().count()));
                 }
                 None => self.note("no code block above the fold to copy"),
@@ -606,11 +689,17 @@ impl App {
             self.mouse.selected_text(&surface, cols)
         };
         let Some(text) = text else {
-            self.note("nothing is selected — drag over the grid first");
+            self.note("nothing is selected — v selects, or drag over the grid");
             return;
         };
-        crate::osc52(&text);
-        self.note(format!("copied {} characters", text.chars().count()));
+        self.clip(&text);
+        match text.lines().count() {
+            0 | 1 => self.note(format!("copied {} characters", text.chars().count())),
+            lines => self.note(format!("copied {lines} lines")),
+        }
+        if self.router.mode() == Mode::Copy {
+            self.router.leave();
+        }
     }
 
     /// Takes what is half-typed at the pane's own keyboard, because `input` **appends** to it: a
@@ -692,7 +781,7 @@ impl App {
     /// reason: a harness declares the URI, but so can anything else writing to that PTY.
     pub(super) fn pointed(&mut self, copied: Option<String>, link: Option<Link>) {
         if let Some(text) = copied {
-            crate::osc52(&text);
+            self.clip(&text);
             self.note(format!("copied {} characters", text.chars().count()));
         }
         // **Declared is offered, not followed.** A harness declares an OSC 8 URI and so does
@@ -710,16 +799,6 @@ impl App {
                 self.offered = Some(url);
             }
             None => {}
-        }
-    }
-
-    /// **Kampr's own split, never the pane's** (ADR 0002). herdr's resize mode moves a PTY;
-    /// this moves the boundary between two `observe` streams the client is arranging.
-    fn resplit(&mut self, by: i32) {
-        self.split = (self.split as i32 + by).clamp(20, 80) as u16;
-        match self.mosaic().len() {
-            2 => self.note(format!("split {}/{}", self.split, 100 - self.split)),
-            _ => self.note("there is one pane on screen — nothing to split"),
         }
     }
 
@@ -937,12 +1016,9 @@ impl App {
 
     pub(super) fn rows(&self) -> Vec<Row> {
         let state = self.client.state();
-        let mut rows = sidebar::spaces(&state.herd);
-        rows.push(Row::Blank);
-        rows.extend(sidebar::agents(&state.herd, |pane| {
+        sidebar::rows(&state.herd, self.prefs.order, self.hub_row(), |pane| {
             self.convo.pending(pane).and_then(|p| p.question.clone())
-        }));
-        rows
+        })
     }
 
     fn move_pick(&mut self, dir: Dir) {
@@ -951,7 +1027,7 @@ impl App {
             let mut at = from as i32;
             for _ in 0..rows.len() {
                 at = (at + by).rem_euclid(rows.len() as i32);
-                if rows[at as usize].pane().is_some() {
+                if rows[at as usize].selectable() {
                     break;
                 }
             }
@@ -983,6 +1059,11 @@ impl App {
 
     fn open_pick(&mut self) {
         let rows = self.rows();
+        if matches!(rows.get(self.pick), Some(Row::Pair(_))) {
+            self.router.leave();
+            self.open_pairing();
+            return;
+        }
         if let Some(pane) = rows.get(self.pick).and_then(|r| r.pane()).map(str::to_string) {
             self.focus(pane);
             self.router.leave();

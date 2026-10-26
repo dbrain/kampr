@@ -223,6 +223,7 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.detached == b.detached
         && a.size_holder == b.size_holder
         && a.exited == b.exited
+        && a.tile == b.tile
 }
 
 #[cfg(test)]

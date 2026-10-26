@@ -39,8 +39,8 @@ impl fit::Display for Headless {
 #[ignore = "needs a kampr node on this machine"]
 async fn the_shell_draws_this_machines_own_herd() {
     let config = kampr_core::local_node::default_config_dir();
-    let session = match kampr_client::resolve(&config, None).await {
-        Ok(session) => session,
+    let (session, hub) = match kampr_client::resolve(&config, None, false).await {
+        Ok(resolved) => (resolved.session, resolved.hub),
         Err(e) => panic!("no herd to open — this test needs a node on this machine: {e}"),
     };
     println!("session: {}", session.describe());
@@ -58,6 +58,9 @@ async fn the_shell_draws_this_machines_own_herd() {
 
     let (width, height) = (120u16, 34u16);
     let mut app = App::new(client.clone(), Options::default(), Images::default());
+    if let Some(hub) = hub {
+        app.offer_hub(hub);
+    }
     app.adopt_prefs();
     app.refocus();
     if let Ok(pane) = std::env::var("KAMPR_PANE") {

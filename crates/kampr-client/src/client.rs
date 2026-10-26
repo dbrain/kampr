@@ -260,6 +260,14 @@ impl Client {
         self.send(json!({ "t": "input", "pane": pane, "text": text, "typed": true }))
     }
 
+    /// Bytes for the pane's agent: the node writes them to a file on the pane's own machine and
+    /// types the path in.
+    pub fn paste(&self, pane: &str, bytes: &[u8], name: &str) -> bool {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        self.send(json!({ "t": "paste", "pane": pane, "b64": b64, "name": name }))
+    }
+
     /// Search this pane's whole scrollback. The answer arrives as an [`Event::Found`], not as a
     /// return value: a search of history that is not held here is a question for the node.
     pub fn find(&self, pane: &str, query: &str, backward: bool, from: Option<u32>) -> bool {
@@ -800,6 +808,10 @@ async fn supervise(inner: Arc<Inner>) {
                 if at.elapsed() >= SETTLED_AFTER {
                     backoff.reset();
                 }
+            }
+            Err(dial::DialError::Refused(origin)) => {
+                inner.closed(&format!("{origin} no longer accepts this device"));
+                inner.emit(Event::Refused { origin });
             }
             Err(e) => inner.closed(&e.to_string()),
         }

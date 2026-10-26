@@ -554,6 +554,7 @@ impl Manager<'_> {
             "native.forget" => native.forget(&pane).map_err(failed)?,
             "rename" => native.rename(&pane, op.label.as_deref()).map_err(failed)?,
             "pane.size" => return self.size_native(op, &pane, native).await,
+            "pane.split" => return self.split_native(op, &pane, native).await,
             "native.desk" => {
                 let desk = self.show_on_desk(native, &pane, Place::Beside(None), op).await?;
                 return Ok(json!({ "pane_id": pane, "desk": desk }));
@@ -565,6 +566,50 @@ impl Manager<'_> {
             }
         }
         Ok(json!({ "ok": true }))
+    }
+
+    /// A native session is split by starting another where it is and keeping the two side by side
+    /// in the node's own tree; no PTY is touched, since nothing here is herdr's to reshape.
+    async fn split_native(
+        &self,
+        op: &ManageOp,
+        pane: &str,
+        native: &NativeProvider,
+    ) -> Result<Value, ManageError> {
+        let split = op
+            .direction
+            .as_deref()
+            .and_then(kampr_core::tile::Split::parse)
+            .ok_or_else(|| {
+                ManageError::BadRequest(format!("direction must be right or down, not {:?}", op.direction))
+            })?;
+        let cwd = op.cwd.clone().or_else(|| {
+            native
+                .session(pane)
+                .and_then(|s| s.spec().ok())
+                .and_then(|spec| spec.cwd)
+        });
+        let (cols, rows) = native_geometry(op)?;
+        let failed = |e: anyhow::Error| ManageError::BadRequest(format!("{e:#}"));
+        let made = native
+            .create(NewSession {
+                argv: native_argv(op),
+                cwd,
+                cols,
+                rows,
+                ..NewSession::default()
+            })
+            .await
+            .map_err(failed)?;
+        native
+            .split(
+                pane,
+                &made,
+                split,
+                kampr_core::tile::ratio(op.ratio.unwrap_or(0.5)),
+            )
+            .map_err(failed)?;
+        Ok(json!({ "pane": { "pane_id": made } }))
     }
 
     /// The one native op that wakes herdr. With nothing to stand beside, herdr splits its focused

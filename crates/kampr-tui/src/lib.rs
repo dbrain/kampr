@@ -5,31 +5,40 @@
 //! everything else is a module it dispatches into: [`manage`], [`mouse`], [`image`] and
 //! [`convo`], all of them reached through [`app::App`].
 
+pub mod alert;
 pub mod app;
 
 pub mod convo;
+pub mod copy;
 pub mod find;
 pub mod image;
 pub mod input;
+pub mod invite;
 pub mod keymap;
 pub mod manage;
+pub mod mosaic;
 pub mod mouse;
+pub mod pairing;
+pub mod picture;
+pub mod prefs;
 pub mod render;
+pub mod route;
 pub mod sidebar;
+pub mod switcher;
 pub mod theme;
 
 use app::{App, Options};
 use crossterm::event::{EnableBracketedPaste, Event as Term, EventStream, KeyEventKind};
 use futures_util::StreamExt;
-use kampr_client::{Client, Session};
+use kampr_client::{Client, Resolved, Session};
 use render::fit::{Chrome, Tty};
 use std::sync::Arc;
 use std::time::Duration;
 
 const TICK: Duration = Duration::from_millis(250);
 
-pub async fn run(session: Session) -> anyhow::Result<()> {
-    run_with(session, Options::from_env()).await
+pub async fn run(resolved: Resolved) -> anyhow::Result<()> {
+    run_with(resolved, Options::from_env()).await
 }
 
 /// The modes this client turned on, and therefore the only ones it may turn off.
@@ -124,7 +133,7 @@ fn arm_hook() {
     });
 }
 
-pub async fn run_with(session: Session, options: Options) -> anyhow::Result<()> {
+pub async fn run_with(resolved: Resolved, options: Options) -> anyhow::Result<()> {
     arm_hook();
     let mut restore = Restore::new();
     let mut terminal = ratatui::init();
@@ -134,9 +143,28 @@ pub async fn run_with(session: Session, options: Options) -> anyhow::Result<()> 
     // same tty would race it for the answer, and the cell size is an answer both the fit ladder
     // and the image renderer wanted (#291, #299).
     let mut tty = Tty::probe();
-    let images = image::Images::with(&session, tty.named(), image::caps_in(tty.answers()), tty.cell());
-    let client = Arc::new(Client::start(session));
-    let result = drive(&mut terminal, client, options, images, &mut tty, &mut restore).await;
+    let config_dir = resolved.config_dir.clone();
+    let mut route = resolved
+        .local
+        .map(|local| route::Route::new(resolved.session.clone(), local, config_dir.clone()));
+    let (mut session, mut hub) = (resolved.session, resolved.hub);
+    let result = loop {
+        let images = image::Images::with(&session, tty.named(), image::caps_in(tty.answers()), tty.cell());
+        let client = Arc::new(Client::start(session));
+        let mut app = App::new(client.clone(), options, images);
+        app.remember_in(config_dir.clone());
+        if let Some(hub) = hub.take() {
+            app.offer_hub(hub);
+        }
+        app.route(route.take());
+        match drive(&mut terminal, client, app, &mut tty, &mut restore).await {
+            Ok(Some((next, kept))) => {
+                session = next;
+                route = kept;
+            }
+            done => break done.map(|_| ()),
+        }
+    };
     drop(restore);
     ratatui::restore();
     result
@@ -145,12 +173,10 @@ pub async fn run_with(session: Session, options: Options) -> anyhow::Result<()> 
 async fn drive(
     terminal: &mut ratatui::DefaultTerminal,
     client: Arc<Client>,
-    options: Options,
-    images: image::Images,
+    mut app: App,
     tty: &mut Tty,
     restore: &mut Restore,
-) -> anyhow::Result<()> {
-    let mut app = App::new(client.clone(), options, images);
+) -> anyhow::Result<Option<(Session, Option<route::Route>)>> {
     // Unconditional, and it has to be: the tabs, the sidebar rows, the herd view and a prompt's
     // option chips are kampr's own chrome and are clickable whatever any pane is doing. Whether
     // a *pane* sees a report is a separate gate the operator holds, because #292 measured that
@@ -175,10 +201,13 @@ async fn drive(
             terminal.clear()?;
         }
         terminal.draw(|frame| app.draw(frame))?;
+        for toast in app.toasts() {
+            app.raise(&toast);
+        }
         app.reflow_views();
         fit(&mut app, tty);
         if app.quitting() {
-            return Ok(());
+            return Ok(app.switching());
         }
         tokio::select! {
             key = keys.next() => match key {
@@ -191,14 +220,14 @@ async fn drive(
                     app.clicked(click);
                 }
                 Some(Err(e)) => return Err(e.into()),
-                None => return Ok(()),
+                None => return Ok(None),
                 _ => {}
             },
             event = events.recv() => match event {
                 Ok(event) => app.absorb(&event),
                 // A consumer that lagged redraws from the state, which is authoritative.
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => app.refocus(),
-                Err(_) => return Ok(()),
+                Err(_) => return Ok(None),
             },
             _ = tick.tick() => {}
         }
@@ -272,7 +301,7 @@ pub struct Section {
 ///
 /// **Every row here is a bind this build actually routes**, apart from the last section, which is
 /// labelled as commands rather than keys. It is grouped rather than flat because the flat version
-/// was thirty rows of `prefix w / g · herd navigator (modal)` — true, and no use at all to somebody
+/// was thirty rows of `prefix w · herd navigator (modal)` — true, and no use at all to somebody
 /// who does not yet know that is how you walk the sidebar.
 pub fn help(manage: bool) -> impl Iterator<Item = &'static Section> {
     SECTIONS.iter().filter(move |section| manage || !section.manage)
@@ -284,9 +313,11 @@ static SECTIONS: &[Section] = &[
         manage: false,
         rows: &[
             (
-                "prefix w / g",
-                "walk the sidebar — up/down, enter opens, esc leaves",
+                "prefix g",
+                "go to any pane: type a few letters, enter · empty is the last visited · 1-9 / alt+1-9 · click",
             ),
+            ("prefix w", "walk the sidebar — up/down, enter opens, esc leaves"),
+            ("click grouped/priority", "the sidebar's order; o in the sidebar"),
             (
                 "prefix shift+h",
                 "the herd: every node, every pane, blocked first",
@@ -296,10 +327,18 @@ static SECTIONS: &[Section] = &[
             ("prefix b", "show or hide the sidebar"),
             ("prefix tab", "cycle the panes on screen"),
             ("prefix space", "back to the last pane"),
-            ("prefix h/j/k/l", "focus a pane"),
+            ("prefix h/j/k/l", "focus the pane on that side"),
             ("prefix p / n", "previous / next tab"),
             ("prefix 1..9", "switch to a tab by number"),
             ("prefix q", "detach"),
+            (
+                "prefix shift+a",
+                "a code to pair another device with the herd you are in",
+            ),
+            (
+                "a toast",
+                "an agent off screen needs you or finished — [toast] in tui.toml, else herdr's [ui.toast]",
+            ),
         ],
     },
     Section {
@@ -311,11 +350,18 @@ static SECTIONS: &[Section] = &[
             ("prefix left/right", "pan a grid wider than the window"),
             ("prefix home/end", "pan to the row's edges"),
             ("prefix 0", "reset the pan and the scroll"),
-            ("prefix y", "copy what a drag selected"),
+            ("prefix y", "copy what a drag or copy mode selected"),
             ("prefix /", "search this pane's scrollback"),
             ("prefix z", "zoom this pane to fill the mosaic"),
             ("prefix shift+v", "terminal ⇄ conversation"),
-            ("wheel", "scrolls whatever is under the pointer"),
+            (
+                "ctrl+v",
+                "send the clipboard's picture to the pane's agent; dropping a picture file does too",
+            ),
+            (
+                "wheel",
+                "scrolls what is under the pointer; a full-screen program gets it",
+            ),
         ],
     },
     Section {
@@ -346,14 +392,19 @@ static SECTIONS: &[Section] = &[
         rows: &[
             ("in the sidebar: space", "put that pane beside this one"),
             ("prefix shift+m", "drop the mosaic back to this tab"),
-            ("prefix r", "resize mode — kampr's own split, never the pane"),
+            ("prefix r", "resize mode — this screen's boxes, never the pane"),
+            (
+                "drag a border",
+                "resize the boxes either side; the sidebar's edge too",
+            ),
         ],
     },
     Section {
         title: "copying, and links",
         manage: false,
         rows: &[
-            ("prefix [", "copy mode"),
+            ("prefix [", "copy mode: a cursor, scrollback included"),
+            ("v / V, then y", "select characters / lines, and copy"),
             ("drag", "select; the copy is the logical text, not the grid"),
             ("prefix o", "open the link a click offered"),
             ("prefix m", "let this pane have the mouse (off by default)"),
@@ -365,7 +416,10 @@ static SECTIONS: &[Section] = &[
         rows: &[
             ("prefix c", "new tab"),
             ("prefix , / shift+t", "rename tab"),
-            ("prefix v / -", "split vertical / horizontal"),
+            (
+                "prefix v / -",
+                "split right / down — a kampr session starts another beside it",
+            ),
             ("prefix x", "close pane"),
             ("prefix shift+p", "rename pane"),
             ("prefix shift+x", "close tab"),
@@ -379,11 +433,17 @@ static SECTIONS: &[Section] = &[
         title: "the modal keymaps — no prefix while they are open",
         manage: false,
         rows: &[
-            ("copy", "h/j/k/l w/b/e { } move · / ? search · v select · y copy"),
-            ("resize", "h/l width · j/k height · esc done"),
+            (
+                "copy",
+                "h/j/k/l w/b/e { } 0 ^ $ move · g/G top/bottom · ctrl+u/d half page · / ? search · v/space V select · y/enter copy · esc/q drop it, then leave",
+            ),
+            (
+                "resize",
+                "h/l width · j/k height · space tiled/side by side/stacked · esc done",
+            ),
             (
                 "sidebar",
-                "up/down row · enter open · space beside · 1-9 workspace",
+                "up/down row · enter open · space beside · o order · 1-9 workspace",
             ),
         ],
     },
@@ -395,6 +455,14 @@ static SECTIONS: &[Section] = &[
             (
                 "kampr connect URL --code C",
                 "open another machine's herd from here",
+            ),
+            (
+                "kampr connect --code C",
+                "pair with this machine's hub; kampr then opens the whole herd",
+            ),
+            (
+                "kampr --local",
+                "open only this machine's herd; it also stands in while the hub is unreachable",
             ),
             (
                 "kampr doctor",

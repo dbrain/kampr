@@ -136,8 +136,20 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "argv": "cargo test",                 // its whole command line — OFF by default, see below
                "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
                "provider": "native",                 // ABSENT unless Kampr keeps the session ("native") or muffit does ("muffit")
+               "tile": { "group": "01J.../w3:t1",    // ABSENT on a pane in no tree — see "Tiles"
+                         "path": [ { "split": "right", "ratio": 600, "second": true },
+                                   { "split": "down",  "ratio": 300 } ] },
                "updated_at": "2026-08-20T13:44:02Z" } ] }   // stamped by the node; Herdr's snapshot carries no time
 ```
+
+**Tiles.** `tile` places a pane in its group's split tree: herdr's tab, or native sessions split
+from one another (group `<node>/k:<session>`), node-qualified either way. `path` is the splits from
+the root down to the pane — `right` puts the second half beside the first, `down` below it,
+`ratio` is the first half's share in thousandths, and `second` (ABSENT when false) says which half
+the pane is in. Every pane carries its own path, so a client rebuilds the tree from a group's panes
+and a patch that moves one divider carries only the panes it moved. herdr's tree is read off
+`session.snapshot` (#616) and a divider moved at the desk is a `layout.updated`, so it arrives as a
+patch. A lone native session, and a pane from an older node, carry none.
 
 `herd.patch` carries the same shapes under `added` / `changed` / `removed_ids`, **for nodes as
 well as panes**. A herd going away is a node flipping to `online: false`, so a patch that only
@@ -1927,7 +1939,12 @@ pane on a session that will never appear in the herd.
 
 ### A note on splits
 
-A `pane.split` changes the Herdr layout, so it changes pane geometry **for everyone**. That is
+A `pane.split` at a native session (docs/17) starts another session in the first one's `cwd` —
+`command` or `args` as `native.create` takes them, a login shell otherwise — and keeps the two side
+by side in the node's own tree; it answers `{ "pane": { "pane_id" } }` as herdr's split does, and
+nothing is asked first because no desk changes shape.
+
+A `pane.split` at a herdr pane changes the Herdr layout, so it changes pane geometry **for everyone**. That is
 correct for an explicit action and does not conflict with "looking at a pane never reshapes it" — that
 invariant is about side effects of *viewing*, not about refusing to act. Say what it will do before
 doing it.

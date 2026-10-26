@@ -290,11 +290,11 @@ class DesktopPaneMemoryTest {
 
     @Test
     fun theDesktopOpensAPaneOnTheViewThisDeviceChoseAndNotSplit() = runComposeUiTest {
-        val (app, scope) = state(HERD, remembering(CLAUDE to PaneView.Conversation))
+        val (app, scope) = state(HERD, remembering(CODEX to PaneView.Conversation))
         try {
             show(app)
             assertEquals(
-                CLAUDE to PaneView.Conversation,
+                CODEX to PaneView.Conversation,
                 opened(app),
                 "the desktop opened the first pane in a view nobody asked for",
             )
@@ -308,7 +308,7 @@ class DesktopPaneMemoryTest {
         val (app, scope) = state(HERD, NO_PREFS)
         try {
             show(app)
-            assertEquals(CLAUDE to PaneView.Terminal, opened(app))
+            assertEquals(CODEX to PaneView.Terminal, opened(app))
         } finally {
             scope.cancel()
         }
@@ -316,13 +316,13 @@ class DesktopPaneMemoryTest {
 
     @Test
     fun theSidebarOpensAPaneOnTheViewThisDeviceChoseAndNotSplit() = runComposeUiTest {
-        val (app, scope) = state(HERD, remembering(CODEX to PaneView.Terminal))
+        val (app, scope) = state(HERD, remembering(CLAUDE to PaneView.Terminal))
         try {
             show(app)
-            onNodeWithContentDescription("Open herdr · codex", substring = true).performClick()
+            onNodeWithContentDescription("Open kampr · claude", substring = true).performClick()
             waitForIdle()
             assertEquals(
-                CODEX to PaneView.Terminal,
+                CLAUDE to PaneView.Terminal,
                 opened(app),
                 "the sidebar overrode the operator's choice with Split",
             )
@@ -339,12 +339,12 @@ class DesktopPaneMemoryTest {
         val (app, scope) = state(HERD)
         try {
             show(app)
-            assertEquals(CLAUDE to PaneView.Terminal, opened(app), "nothing is known yet")
+            assertEquals(CODEX to PaneView.Terminal, opened(app), "nothing is known yet")
 
-            app.store.feed(remembering(CLAUDE to PaneView.Conversation))
+            app.store.feed(remembering(CODEX to PaneView.Conversation))
             waitForIdle()
             assertEquals(
-                CLAUDE to PaneView.Conversation,
+                CODEX to PaneView.Conversation,
                 opened(app),
                 "the pane was opened before its prefs landed and never caught up",
             )

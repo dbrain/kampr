@@ -22,18 +22,21 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 
+mod mosaic;
+mod tree;
+
 const BEAT: Duration = Duration::from_secs(2);
 /// Long enough for a frame the client wrote to reach the scripted node over a loopback socket,
 /// and the window a "nothing was sent" assertion waits out.
 const SETTLE: Duration = Duration::from_millis(250);
 
-struct Conn {
+pub(crate) struct Conn {
     to_client: mpsc::UnboundedSender<Message>,
     from_client: mpsc::UnboundedReceiver<Value>,
 }
 
 impl Conn {
-    fn send(&self, frame: Value) {
+    pub(crate) fn send(&self, frame: Value) {
         self.to_client
             .send(Message::text(frame.to_string()))
             .expect("the scripted node still has a client");
@@ -41,7 +44,7 @@ impl Conn {
 
     /// Everything the client wrote in the window a loopback socket needs, so "nothing was sent"
     /// is an assertion about frames rather than about timing.
-    async fn heard(&mut self) -> Vec<Value> {
+    pub(crate) async fn heard(&mut self) -> Vec<Value> {
         let mut frames = Vec::new();
         let deadline = tokio::time::Instant::now() + SETTLE;
         while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, self.from_client.recv()).await {
@@ -50,7 +53,7 @@ impl Conn {
         frames
     }
 
-    fn greet(&self, nodes: Value, panes: Value, role: &str) {
+    pub(crate) fn greet(&self, nodes: Value, panes: Value, role: &str) {
         self.send(json!({
             "t": "hello", "protocol": 1, "node_id": "01JNODE", "node_name": "comingclean",
             "build": "0.1.29", "role": role,
@@ -61,13 +64,13 @@ impl Conn {
     }
 }
 
-struct Fake {
+pub(crate) struct Fake {
     origin: String,
     conns: mpsc::UnboundedReceiver<Conn>,
 }
 
 impl Fake {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
         let origin = format!("http://{}", listener.local_addr().expect("an address"));
         let (conns, incoming) = mpsc::unbounded_channel();
@@ -125,14 +128,14 @@ impl Fake {
         }
     }
 
-    async fn accept(&mut self) -> Conn {
+    pub(crate) async fn accept(&mut self) -> Conn {
         tokio::time::timeout(BEAT, self.conns.recv())
             .await
             .expect("no client dialled")
             .expect("the listener died")
     }
 
-    fn client(&self) -> Client {
+    pub(crate) fn client(&self) -> Client {
         Client::with_policy(
             Session {
                 origin: self.origin.clone(),
@@ -154,7 +157,7 @@ impl Fake {
     }
 }
 
-async fn until<T>(
+pub(crate) async fn until<T>(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     want: impl Fn(Event) -> Option<T>,
 ) -> T {
@@ -170,11 +173,11 @@ async fn until<T>(
     panic!("the event never arrived");
 }
 
-fn node(id: &str, name: &str, online: bool) -> Value {
+pub(crate) fn node(id: &str, name: &str, online: bool) -> Value {
     json!({ "id": id, "name": name, "kind": "local", "online": online })
 }
 
-fn pane(id: &str, workspace: &str, agent: Option<&str>, status: &str) -> Value {
+pub(crate) fn pane(id: &str, workspace: &str, agent: Option<&str>, status: &str) -> Value {
     json!({
         "id": id, "node_id": id.split('/').next().unwrap(),
         "workspace_id": "01JNODE/w1", "tab_id": "01JNODE/w1:t1",
@@ -183,7 +186,7 @@ fn pane(id: &str, workspace: &str, agent: Option<&str>, status: &str) -> Value {
     })
 }
 
-fn painted(app: &mut App, width: u16, height: u16) -> String {
+pub(crate) fn painted(app: &mut App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
     terminal.draw(|frame| app.draw(frame)).expect("a frame");
     let buffer = terminal.backend().buffer().clone();
@@ -197,7 +200,7 @@ fn painted(app: &mut App, width: u16, height: u16) -> String {
         .join("\n")
 }
 
-fn app(client: &Arc<Client>) -> App {
+pub(crate) fn app(client: &Arc<Client>) -> App {
     let mut app = App::new(client.clone(), Options::default(), Images::default());
     app.refocus();
     app
@@ -288,7 +291,6 @@ async fn the_sidebar_groups_spaces_by_node_and_keeps_an_offline_nodes_row() {
     let screen = painted(&mut app, 110, 22);
     assert!(screen.contains("spaces"), "{screen}");
     assert!(screen.contains("comingclean"), "{screen}");
-    assert!(screen.contains("agents"), "{screen}");
     // Panes are not dropped for an outage (#70): the row stays, with the count and the last-seen.
     assert!(
         screen.contains("laptop"),
@@ -296,9 +298,6 @@ async fn the_sidebar_groups_spaces_by_node_and_keeps_an_offline_nodes_row() {
     );
     assert!(screen.contains("offline"), "{screen}");
     assert!(screen.contains("1 pane · seen 13:44"), "{screen}");
-    // Blocked sorts above idle in the triage list, which is sorted locally (#296).
-    let agents = screen.split("agents").nth(1).expect("an agents section");
-    assert!(agents.contains("herdr"), "{screen}");
 }
 
 /// A machine with no herdr still serves the sessions Kampr keeps, and drawing it offline hid the
@@ -324,10 +323,10 @@ async fn a_machine_with_no_herdr_serving_native_sessions_is_not_drawn_offline() 
     let mut app = app(&client);
 
     let screen = painted(&mut app, 110, 22);
-    let spaces = screen.split("agents").next().expect("a spaces section");
+    let spaces = sidebar_of(&screen);
     assert!(!spaces.contains("offline"), "{screen}");
     assert!(spaces.contains("no herdr"), "{screen}");
-    assert!(spaces.contains("▸ kept"), "{screen}");
+    assert!(spaces.contains("  kept"), "{screen}");
 }
 
 #[tokio::test]
@@ -626,18 +625,19 @@ async fn the_sidebar_says_which_pane_the_frame_is_showing() {
             .collect()
     };
 
-    // A pane sits in `spaces` and, when it has an agent, in `agents` too — so the mark is on
-    // every row that names it rather than on one row.
     let opened = marked(&painted(&mut app, 120, 20));
-    assert!(
-        !opened.is_empty() && opened.iter().all(|row| row.contains("claude")),
-        "the marked rows are the agent pane the client opened on: {opened:?}"
+    assert_eq!(
+        opened.len(),
+        1,
+        "one row names the pane the client opened on: {opened:?}"
     );
+    assert!(opened[0].contains('\u{25cb}'), "the idle agent: {opened:?}");
 
     app.clicked(Click::Focus("01JNODE/w1:p2".into()));
     let moved = marked(&painted(&mut app, 120, 20));
+    assert_eq!(moved.len(), 1, "{moved:?}");
     assert!(
-        !moved.is_empty() && moved.iter().all(|row| !row.contains("claude")),
+        !moved[0].contains('\u{25cb}'),
         "the mark follows the focus rather than staying where it was: {moved:?}"
     );
 }
@@ -1034,7 +1034,7 @@ async fn the_fit_ladders_explanation_is_raised_when_it_climbs_and_does_not_camp_
 }
 
 /// A ring of `rows` history lines, each naming its own index, above the pane's live grid.
-fn history(pane: &str, rows: u16) -> Value {
+pub(crate) fn history(pane: &str, rows: u16) -> Value {
     json!({
         "t": "scrollback", "pane": pane,
         "rows": (0..rows).map(|r| json!({ "row": r, "runs": [{ "s": 0, "x": format!("hist{r}") }] }))
@@ -1045,7 +1045,7 @@ fn history(pane: &str, rows: u16) -> Value {
 
 /// The runtime's own loop: every frame the node says goes to the app, and the loop stops at the
 /// one it was waiting for.
-async fn absorb_until(
+pub(crate) async fn absorb_until(
     app: &mut App,
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     want: impl Fn(&Event) -> bool,
@@ -1295,4 +1295,183 @@ async fn an_agent_a_herdr_pane_a_pane_that_fits_and_a_matched_pane_are_never_re_
         let asked = reflows(&conn.heard().await, &at);
         assert_eq!(asked, vec![None], "{at} at {width} with {options:?}");
     }
+}
+
+fn sidebar_of(screen: &str) -> String {
+    screen
+        .lines()
+        .map(|l| l.chars().take(sidebar::WIDTH as usize).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// **One list, two orders, and the order is a control.** The sidebar drew `spaces` and then an
+/// `agents` section that listed every agent pane a second time, under a `priority` label nothing
+/// could press. Now each pane is one row; the header's `grouped`/`priority` is the switch, by click
+/// or by `o` in the navigator, and priority is herdr's own rollup order.
+#[tokio::test]
+async fn the_sidebar_lists_each_pane_once_and_its_order_is_a_control() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let mut quiet = pane("01JNODE/w1:p1", "alpha", Some("claude"), "idle");
+    quiet["title"] = json!("tidy the docs");
+    let mut stuck = pane("01JNODE/w2:p2", "beta", Some("claude"), "blocked");
+    stuck["workspace_id"] = json!("01JNODE/w2");
+    stuck["tab_id"] = json!("01JNODE/w2:t1");
+    stuck["title"] = json!("fix the wheel");
+    let mut shell = pane("01JNODE/w2:p3", "beta", None, "unknown");
+    shell["workspace_id"] = json!("01JNODE/w2");
+    shell["tab_id"] = json!("01JNODE/w2:t1");
+    shell["cmd"] = json!("cargo");
+    shell["argv"] = json!("cargo test");
+    conn.greet(
+        json!([node("01JNODE", "comingclean", true)]),
+        json!([quiet, stuck, shell]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let grouped = sidebar_of(&painted(&mut app, 120, 24));
+    assert!(!grouped.contains("agents"), "{grouped}");
+    assert_eq!(grouped.matches("fix the wheel").count(), 1, "{grouped}");
+    assert!(
+        !grouped.contains("· claude"),
+        "an agent's row is its title; the glyph says it is an agent:\n{grouped}"
+    );
+    assert!(
+        grouped.contains("cargo test"),
+        "a shell's row still says what it is running:\n{grouped}"
+    );
+    assert!(
+        !grouped.contains("beta · cargo"),
+        "and not the workspace its header already names:\n{grouped}"
+    );
+    let line = |screen: &str, text: &str| -> String {
+        screen
+            .lines()
+            .find(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("no row with {text}:\n{screen}"))
+            .to_string()
+    };
+    let indent = |row: String| row.chars().take_while(|c| [' ', '\u{258c}'].contains(c)).count();
+    let (node_at, space_at, pane_at) = (
+        line(&grouped, "comingclean"),
+        line(&grouped, "beta"),
+        line(&grouped, "fix the wheel"),
+    );
+    assert!(
+        node_at.starts_with(" comingclean"),
+        "a node sits flush under the header:\n{grouped}"
+    );
+    assert!(
+        indent(node_at.clone()) < indent(space_at.clone()) && indent(space_at) < indent(pane_at),
+        "and each level below it steps in:\n{grouped}"
+    );
+    let order = |screen: &str| -> (usize, usize) {
+        let at = |t: &str| screen.lines().position(|l| l.contains(t)).unwrap_or(usize::MAX);
+        (at("tidy the docs"), at("fix the wheel"))
+    };
+    let (quiet_at, stuck_at) = order(&grouped);
+    assert!(quiet_at < stuck_at, "grouped keeps the herd's order:\n{grouped}");
+
+    let toggle = app.layout.order.expect("the order switch is drawn");
+    let click = app.mouse.hit(
+        crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: toggle.x,
+            row: toggle.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        &app.layout,
+        kampr_client::Role::Full,
+    );
+    app.clicked(click);
+    let priority = sidebar_of(&painted(&mut app, 120, 24));
+    let (quiet_at, stuck_at) = order(&priority);
+    assert!(
+        stuck_at < quiet_at,
+        "priority puts the blocked pane first:\n{priority}"
+    );
+    assert_eq!(priority.matches("fix the wheel").count(), 1, "{priority}");
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    let back = sidebar_of(&painted(&mut app, 120, 24));
+    let (quiet_at, stuck_at) = order(&back);
+    assert!(
+        quiet_at < stuck_at,
+        "`o` in the navigator switches it back:\n{back}"
+    );
+}
+
+/// **No way to a session without the mouse but walking the sidebar row by row.** `prefix g` is
+/// herdr's own `goto`; here it is a filter over every pane on every node — a few letters of the
+/// title, the workspace or the machine, enter, and the frame is that pane.
+#[tokio::test]
+async fn prefix_g_finds_a_pane_on_any_node_by_a_few_letters() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let mut here = pane("01JNODE/w1:p1", "alpha", Some("claude"), "idle");
+    here["title"] = json!("tidy the docs");
+    let mut away = pane("01JWORKBOX/w7:p2", "data-pipeline", Some("codex"), "working");
+    away["node_id"] = json!("01JWORKBOX");
+    away["workspace_id"] = json!("01JWORKBOX/w7");
+    away["tab_id"] = json!("01JWORKBOX/w7:t1");
+    away["title"] = json!("backfill the events");
+    let mut other = pane("01JWORKBOX/w7:p3", "data-pipeline", None, "unknown");
+    other["node_id"] = json!("01JWORKBOX");
+    other["workspace_id"] = json!("01JWORKBOX/w7");
+    other["tab_id"] = json!("01JWORKBOX/w7:t2");
+    other["cmd"] = json!("htop");
+    conn.greet(
+        json!([
+            node("01JNODE", "comingclean", true),
+            { "id": "01JWORKBOX", "name": "workbox", "kind": "peer", "online": true, "rtt_ms": 41.0 }
+        ]),
+        json!([here, away, other]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    let start = app.focused().map(str::to_string);
+    let typed = |app: &mut App, text: &str| {
+        for c in text.chars() {
+            app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    };
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    typed(&mut app, "backfl");
+    let screen = painted(&mut app, 120, 24);
+    assert!(screen.contains("backfl"), "the query is on screen:\n{screen}");
+    assert!(screen.contains("backfill the events"), "{screen}");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.focused(), Some("01JWORKBOX/w7:p2"));
+    let after = painted(&mut app, 120, 24);
+    assert!(!after.contains("backfl▏"), "enter closes it:\n{after}");
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    typed(&mut app, "workbox");
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.focused(),
+        Some("01JWORKBOX/w7:p3"),
+        "the machine's name matches too, and down picks the next match"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    typed(&mut app, "tidy");
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.focused(), Some("01JWORKBOX/w7:p3"), "esc goes nowhere");
+    assert_ne!(start.as_deref(), Some("01JWORKBOX/w7:p3"));
 }

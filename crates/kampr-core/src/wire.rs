@@ -331,6 +331,11 @@ pub struct PaneEntry {
     pub size_holder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exited: Option<ExitEntry>,
+    /// Where the pane sits among its group's (#616): a client lays a tab out the way herdr does,
+    /// and native sessions split from one another the way their node keeps them. The group is
+    /// node-qualified like `tab_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile: Option<crate::tile::Tile>,
 }
 
 /// **A signal is reported as a signal**, as on a fleet run, and a keeper that died without
@@ -443,6 +448,10 @@ impl PaneEntry {
             exited: p.native.as_ref().and_then(|n| n.exited).map(|e| ExitEntry {
                 code: e.code,
                 signal: e.signal,
+            }),
+            tile: p.tile.as_ref().map(|t| crate::tile::Tile {
+                group: format!("{node_id}/{}", t.group),
+                path: t.path.clone(),
             }),
         }
     }

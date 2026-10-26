@@ -1,5 +1,7 @@
 mod act;
 mod chrome;
+mod copy;
+mod tiles;
 
 pub use chrome::{Chips, Layout, Placed};
 
@@ -43,6 +45,10 @@ pub struct Options {
     /// it is open (ADR 0013). On, because this client is a desk; the operator turns it off per
     /// pane from the size menu, or for the process with `KAMPR_TUI_MATCH=0`.
     pub match_view: bool,
+    /// herdr's `[ui.toast]`: how an agent off screen that needs the operator is said, and after
+    /// how long.
+    pub toast: crate::alert::Delivery,
+    pub toast_delay: std::time::Duration,
 }
 
 impl Default for Options {
@@ -52,6 +58,8 @@ impl Default for Options {
             prefix: crate::keymap::HERDR_PREFIX,
             resize: true,
             match_view: true,
+            toast: crate::alert::Delivery::Terminal,
+            toast_delay: std::time::Duration::from_secs(1),
         }
     }
 }
@@ -66,6 +74,7 @@ impl Options {
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
                 .unwrap_or(default)
         };
+        let alerts = crate::alert::Alerts::from_env();
         Self {
             theme: crate::theme::PHOSPHOR.skinned(on("KAMPR_TUI_SKIN", false)),
             prefix: std::env::var("KAMPR_TUI_PREFIX")
@@ -74,6 +83,8 @@ impl Options {
                 .unwrap_or(crate::keymap::HERDR_PREFIX),
             resize: on("KAMPR_TUI_RESIZE", true),
             match_view: on("KAMPR_TUI_MATCH", true),
+            toast: alerts.delivery,
+            toast_delay: alerts.delay,
         }
     }
 }
@@ -122,6 +133,10 @@ pub struct App {
     pub router: Router,
     pub manage: Manage,
     pub find: crate::find::Find,
+    switcher: crate::switcher::Switcher,
+    invite: Option<crate::invite::Invite>,
+    pictures: crate::picture::Reader,
+    alerts: crate::alert::Alerts,
     /// The transcript's own search, which is a different history from the one `find` asks about.
     search: crate::convo::Search,
     pub mouse: Mouse,
@@ -143,6 +158,16 @@ pub struct App {
     rings: HashMap<String, Vec<Vec<kampr_term::Cell>>>,
     views: HashMap<String, View>,
     sidebar_open: bool,
+    prefs: crate::prefs::Prefs,
+    /// Where [`Self::prefs`] is kept, once this client has been told: a test's `App` writes
+    /// nothing.
+    remembered: Option<std::path::PathBuf>,
+    /// The hub this machine's node is a peer of, while this client has no device on it.
+    pairing: Option<crate::pairing::Pairing>,
+    /// The herd to open instead of this one, once this loop has ended.
+    switch: Option<kampr_client::Session>,
+    route: Option<crate::route::Route>,
+    watch: crate::route::Watch,
     /// The operator's own scroll of the sidebar, which the navigator's cursor clamps rather than
     /// owns — a list taller than its box is unreachable otherwise, and it routinely is.
     sidebar_top: usize,
@@ -153,7 +178,7 @@ pub struct App {
     /// that may come from different sessions on different hosts. Empty means the focused pane's
     /// tab, which is the herdr-shaped default.
     pinned: Vec<String>,
-    split: u16,
+    tiling: crate::mosaic::Tiling,
     rung: Option<Rung>,
     fitted: Option<(Need, (u16, u16))>,
     note: String,
@@ -161,6 +186,8 @@ pub struct App {
     /// A **detected** URL, waiting for the operator to say so. Pane output is
     /// attacker-influenceable, so nothing here is navigated on a click.
     offered: Option<String>,
+    copying: Option<crate::copy::Cursor>,
+    clipboard: Option<String>,
     watching: HashSet<String>,
     /// Finishes told to the node on this connection, so a node too old for `done.read` is not told
     /// again on every herd frame.
@@ -207,6 +234,10 @@ impl App {
             router: Router::with_prefix(options.prefix),
             manage: Manage::new(),
             find: crate::find::Find::default(),
+            switcher: crate::switcher::Switcher::default(),
+            invite: None,
+            pictures: crate::picture::system(),
+            alerts: crate::alert::Alerts::new(options.toast, options.toast_delay),
             search: crate::convo::Search::default(),
             mouse: Mouse::new(),
             images,
@@ -221,17 +252,25 @@ impl App {
             rings: HashMap::new(),
             views: HashMap::new(),
             sidebar_open: true,
+            prefs: crate::prefs::Prefs::default(),
+            remembered: None,
+            pairing: None,
+            switch: None,
+            route: None,
+            watch: crate::route::Watch::default(),
             sidebar_top: 0,
             pick: 1,
             screen: Screen::Panes,
             zoomed: false,
             pinned: Vec::new(),
-            split: 50,
+            tiling: crate::mosaic::Tiling::default(),
             rung: None,
             fitted: None,
             note: String::new(),
             noted: std::time::Instant::now(),
             offered: None,
+            copying: None,
+            clipboard: None,
             watching: HashSet::new(),
             told: HashSet::new(),
             matching: None,
@@ -248,8 +287,191 @@ impl App {
         }
     }
 
+    pub fn read_pictures_with(&mut self, reader: crate::picture::Reader) {
+        self.pictures = reader;
+    }
+
+    pub fn client(&self) -> &Arc<Client> {
+        &self.client
+    }
+
     pub fn quitting(&self) -> bool {
         self.quit
+    }
+
+    pub fn remember_in(&mut self, config_dir: std::path::PathBuf) {
+        self.prefs = crate::prefs::Prefs::load(&config_dir);
+        if let Some(mine) = self.prefs.toast {
+            self.alerts.adopt(mine);
+        }
+        self.remembered = Some(config_dir);
+    }
+
+    fn keep_prefs(&mut self) {
+        if let Some(dir) = &self.remembered
+            && let Err(e) = self.prefs.save(dir)
+        {
+            self.note(format!("could not remember that · {e}"));
+        }
+    }
+
+    pub(super) fn flip_order(&mut self) {
+        self.prefs.order = self.prefs.order.flip();
+        self.keep_prefs();
+    }
+
+    fn origin(&self) -> String {
+        self.client.session().origin.clone()
+    }
+
+    pub fn recent(&self) -> Vec<String> {
+        self.prefs.recent(&self.origin()).to_vec()
+    }
+
+    pub fn offer_hub(&mut self, hub: kampr_client::HubOffer) {
+        self.pairing = Some(crate::pairing::Pairing::new(hub));
+    }
+
+    /// The herd to open next, once this loop is over, and the route it is on.
+    pub fn switching(&mut self) -> Option<(kampr_client::Session, Option<crate::route::Route>)> {
+        self.switch.take().map(|next| (next, self.route.take()))
+    }
+
+    pub fn route(&mut self, route: Option<crate::route::Route>) {
+        if let Some(route) = route.as_ref().filter(|route| route.refused) {
+            self.offer_hub(route.offer());
+            self.note(format!(
+                "{} no longer accepts this device — pair again",
+                route.hub_name()
+            ));
+        } else if let Some(route) = route.as_ref().filter(|route| !route.on_hub()) {
+            self.note(format!(
+                "{} is unreachable — showing this machine",
+                route.hub_name()
+            ));
+        }
+        self.route = route;
+    }
+
+    fn go(&mut self, next: kampr_client::Session) {
+        self.switch = Some(next);
+        self.quit = true;
+    }
+
+    pub(super) fn follow_route(&mut self) {
+        let connected = self.client.connected();
+        let Some(route) = self.route.as_mut() else {
+            return;
+        };
+        if let crate::route::Step::Go(next) = self.watch.step(route, connected) {
+            self.go(next);
+        }
+    }
+
+    /// A token the node turned away. Behind a hub, this machine's herd is what is left, and the
+    /// hub is offered for pairing again; anywhere else the offer is made where the operator is.
+    fn refused(&mut self, origin: &str) {
+        if let Some(route) = self.route.as_mut().filter(|route| route.on_hub()) {
+            route.refused = true;
+            let local = route.fall_back();
+            self.go(local);
+            return;
+        }
+        if self.pairing.is_some() {
+            return;
+        }
+        let session = self.client.session().clone();
+        match (&session.via, &self.remembered) {
+            (kampr_client::Via::Profile { name }, Some(config_dir)) => {
+                self.offer_hub(kampr_client::HubOffer {
+                    name: name.clone(),
+                    origin: origin.to_string(),
+                    config_dir: config_dir.clone(),
+                });
+                self.note(format!("{name} no longer accepts this device — pair again"));
+            }
+            _ => self.note(format!(
+                "{origin} no longer accepts this device — run kampr again"
+            )),
+        }
+    }
+
+    pub(super) fn hub_row(&self) -> Option<sidebar::Hub<'_>> {
+        if let Some(pairing) = &self.pairing {
+            return Some(sidebar::Hub::Pair(pairing.hub().name.as_str()));
+        }
+        let route = self.route.as_ref().filter(|route| !route.on_hub())?;
+        Some(sidebar::Hub::Away(match &route.hub.via {
+            kampr_client::Via::Profile { name } => name.as_str(),
+            kampr_client::Via::LocalNode { node_name, .. } => node_name.as_str(),
+        }))
+    }
+
+    /// Every pane a click could open: the ones last visited first, the way tmux's last-session is
+    /// one key, then the triage order so the rest of an empty query is the queue.
+    pub(super) fn switch_items(&self) -> Vec<crate::switcher::Item> {
+        let recent = self.recent();
+        let state = self.client.state();
+        let herd = &state.herd;
+        let mut panes: Vec<&kampr_core::wire::PaneEntry> = recent
+            .iter()
+            .filter(|pane| self.focus.as_deref() != Some(pane.as_str()))
+            .filter_map(|pane| herd.pane(pane))
+            .collect();
+        panes.extend(sidebar::triage(herd));
+        panes.extend(
+            herd.panes
+                .iter()
+                .filter(|p| p.agent.is_none() && p.fleet.is_none()),
+        );
+        let mut seen = HashSet::new();
+        panes.retain(|p| seen.insert(p.id.as_str()));
+        panes
+            .into_iter()
+            .filter(|p| herd.node(&p.node_id).is_none_or(|n| n.is_serving()))
+            .map(|p| crate::switcher::Item {
+                pane: p.id.clone(),
+                name: sidebar::row_name(p, false),
+                place: {
+                    let node = herd.node(&p.node_id).map(|n| n.name.as_str()).unwrap_or("");
+                    match p.workspace.as_deref() {
+                        Some(space) => format!("{space} · {node}"),
+                        None => node.to_string(),
+                    }
+                },
+                status: p.agent_status,
+            })
+            .collect()
+    }
+
+    pub(super) fn open_pairing(&mut self) {
+        if let Some(pairing) = self.pairing.as_mut() {
+            pairing.open();
+        }
+    }
+
+    pub(super) fn settle_pairing(&mut self) {
+        let Some(pairing) = self.pairing.as_mut() else {
+            return;
+        };
+        let config_dir = pairing.hub().config_dir.clone();
+        match pairing.poll() {
+            crate::pairing::Paired::Waiting => {}
+            crate::pairing::Paired::Failed(why) => self.note(why),
+            crate::pairing::Paired::Ready(hub) => {
+                let here = self.client.session().clone();
+                let next = match self.route.as_mut() {
+                    Some(route) => route.paired(hub),
+                    None if matches!(here.via, kampr_client::Via::LocalNode { .. }) => {
+                        self.route = Some(crate::route::Route::new(hub.clone(), here, config_dir));
+                        hub
+                    }
+                    None => hub,
+                };
+                self.pairing = None;
+                self.go(next);
+            }
+        }
     }
 
     /// Everything the node said, routed to the surface that owns it.
@@ -266,11 +488,14 @@ impl App {
                 self.adopt_prefs();
                 self.refocus();
                 self.sync_watches();
+                self.watch_alerts();
             }
             Event::Herd => {
                 self.refocus();
                 self.sync_watches();
+                self.watch_alerts();
             }
+            Event::Refused { origin } => self.refused(origin),
             Event::Connected(_) => {
                 let node = self.client.state().node_name().to_string();
                 self.note(format!("connected to {node}"));
@@ -348,6 +573,30 @@ impl App {
         }
     }
 
+    fn on_screen(&self) -> Vec<String> {
+        match self.screen {
+            Screen::Panes => self.mosaic(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn watch_alerts(&mut self) {
+        let on_screen = self.on_screen();
+        let state = self.client.state();
+        self.alerts.herd(&state.herd, &on_screen);
+    }
+
+    /// The toasts that are due, said by the caller: the loop owns the terminal's output, and a test
+    /// reads them here instead.
+    pub fn toasts(&mut self) -> Vec<crate::alert::Toast> {
+        let on_screen = self.on_screen();
+        self.alerts.due(&on_screen)
+    }
+
+    pub fn raise(&self, toast: &crate::alert::Toast) {
+        self.alerts.raise(toast);
+    }
+
     /// Whether the terminal has to be wiped before the next frame.
     pub fn wiping(&mut self) -> bool {
         std::mem::take(&mut self.wipe)
@@ -395,6 +644,14 @@ impl App {
                 self.open(Screen::Panes);
             }
             Click::Tab(tab) => self.open_tab(&tab),
+            Click::Order => self.flip_order(),
+            Click::Go(pane) => {
+                self.switcher.close();
+                self.focus(pane);
+                self.open(Screen::Panes);
+            }
+            Click::Dismiss => self.switcher.close(),
+            Click::Pair => self.open_pairing(),
             Click::OpenHerd => self.open(Screen::Herd),
             Click::Answer { pane, key } => {
                 self.client.answer(&pane, &key);
@@ -403,8 +660,10 @@ impl App {
             Click::Passthrough { pane, text } => {
                 self.client.typed(&pane, &text);
             }
-            Click::Wheel { pane, up } => self.wheel(pane, up),
+            Click::Wheel { pane, up, cell } => self.wheel(pane, up, cell),
             Click::Menu(menu) => self.context_menu(menu),
+            Click::Divide { divider, to } => self.divide(divider, to),
+            Click::Edge { width, done } => self.edge(width, done),
         }
     }
 
@@ -437,7 +696,7 @@ impl App {
 
     /// The wheel over kampr's own surfaces. Whichever of the two a pane is showing moves; the
     /// other one does not, which is the same rule the keyboard already follows.
-    fn wheel(&mut self, pane: Option<String>, up: bool) {
+    fn wheel(&mut self, pane: Option<String>, up: bool, cell: Option<(u16, u16)>) {
         let Some(pane) = pane else {
             self.sidebar_top = match up {
                 true => self.sidebar_top.saturating_sub(WHEEL as usize),
@@ -450,6 +709,29 @@ impl App {
             && self.convo.wheel(&pane, up, WHEEL as usize)
         {
             self.teardown();
+            return;
+        }
+        // Nothing above the viewport for kampr to move into: the program has the alternate screen
+        // and herdr keeps no ring behind one (#387), so the notch is the program's.
+        if self.rings.get(&pane).is_none_or(Vec::is_empty) {
+            let sent = {
+                let state = self.client.state();
+                let entry = state.herd.pane(&pane);
+                cell.and_then(|cell| {
+                    crate::mouse::handoff(
+                        entry.and_then(|e| e.agent.as_deref()),
+                        entry.and_then(|e| e.cmd.as_deref()),
+                        up,
+                        cell,
+                        WHEEL,
+                    )
+                })
+            };
+            if let Some(text) = sent
+                && self.writes()
+            {
+                self.client.typed(&pane, &text);
+            }
             return;
         }
         let at = self.scrolls.entry(pane).or_default();
@@ -572,6 +854,15 @@ impl App {
         let Some(entry) = state.herd.pane(&focus) else {
             return vec![focus];
         };
+        if let Some(group) = entry.tile.as_ref().map(|t| t.group.clone()) {
+            return state
+                .herd
+                .panes
+                .iter()
+                .filter(|p| p.tile.as_ref().is_some_and(|t| t.group == group))
+                .map(|p| p.id.clone())
+                .collect();
+        }
         let tab = entry.tab_id.clone();
         match tab {
             Some(tab) => state
@@ -585,6 +876,31 @@ impl App {
         }
     }
 
+    /// The panes drawn and how: a tree that holds every one of them is laid out as its keeper
+    /// has it, and anything else — a pinned mosaic, a zoom, a tab from a node that sends no tree —
+    /// is tiled by count, four at most.
+    pub(super) fn shape(&self) -> (Vec<String>, crate::mosaic::Shape) {
+        use crate::mosaic::Shape;
+        let mut mosaic = self.mosaic();
+        let tiles: Option<Vec<_>> = {
+            let state = self.client.state();
+            mosaic
+                .iter()
+                .map(|pane| state.herd.pane(pane).and_then(|p| p.tile.clone()))
+                .collect()
+        };
+        if let Some(tiles) = tiles.filter(|t| t.len() > 1 && !self.zoomed && self.pinned.is_empty())
+            && tiles.iter().all(|t| t.group == tiles[0].group)
+        {
+            let group = tiles[0].group.clone();
+            let paths = tiles.into_iter().map(|t| t.path).collect();
+            return (mosaic, Shape::Tree { group, paths });
+        }
+        mosaic.truncate(4);
+        let count = mosaic.len();
+        (mosaic, Shape::Count(count))
+    }
+
     pub fn refocus(&mut self) {
         let alive = self
             .focus
@@ -593,12 +909,20 @@ impl App {
         if alive {
             return;
         }
+        let recent = self.recent();
         let pick = {
             let state = self.client.state();
-            sidebar::triage(&state.herd)
-                .first()
-                .map(|p| p.id.clone())
-                .or_else(|| state.herd.panes.first().map(|p| p.id.clone()))
+            let herd = &state.herd;
+            recent
+                .into_iter()
+                .find(|pane| herd.pane(pane).is_some())
+                .or_else(|| sidebar::triage(herd).first().map(|p| p.id.clone()))
+                .or_else(|| {
+                    herd.panes
+                        .iter()
+                        .find(|p| p.fleet.is_none())
+                        .map(|p| p.id.clone())
+                })
         };
         if let Some(pick) = pick {
             self.focus(pick);
@@ -617,6 +941,10 @@ impl App {
         if self.focus.as_deref() != Some(pane.as_str()) {
             self.teardown();
             self.last = self.focus.take();
+            let origin = self.origin();
+            if self.prefs.viewed(&origin, &pane) {
+                self.keep_prefs();
+            }
             self.focus = Some(pane);
             self.zoomed = false;
         }

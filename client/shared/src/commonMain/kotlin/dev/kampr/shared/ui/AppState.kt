@@ -131,6 +131,7 @@ private const val KEY_RECENT = "endpoints"
 private const val KEY_AGENT_ARGS = "agent.args."
 private const val KEY_RAIL = "sidebar.collapsed"
 private const val KEY_CONFIRM = "confirm.risky"
+private const val KEY_LAST_PANE = "pane.last"
 
 private const val RECENT_ADDRESSES = 5
 
@@ -593,6 +594,14 @@ class AppState(
     val seenDone = SeenDone(prefs)
 
     fun openPane(paneId: String, prefer: PaneView? = null) {
+        prefs.set(KEY_LAST_PANE, paneId)
+        land(paneId, prefer)
+    }
+
+    // Opening a pane the operator did not pick this time: the one they were last on, or a default.
+    // Not remembered, so a pane missing from the first herd (a peer still joining) is tried again
+    // on the next launch rather than overwritten by whatever stood in for it.
+    fun land(paneId: String, prefer: PaneView? = null) {
         seenDone.saw(store.paneInfo(paneId))
         // Opening the pane *is* the read, so the notification standing for it comes down now
         // rather than at the next herd update — which is up to a poll interval away, and is a
@@ -628,6 +637,19 @@ class AppState(
         // Not `go`: the pane is the one already being watched, and re-entering it would churn the
         // watch. Not `setPaneView` either — this is the node's own memory arriving, not a write.
         screen = current.copy(view = view)
+    }
+
+    private var reattached = false
+
+    // Once per launch, on the first herd that is known: a rotation or a resize re-runs the
+    // scaffold's launch effect, and an operator who went back to the list did not ask to be sent
+    // back into the pane. Reattaching is a watch like any other open, never a focus (ADR 0015).
+    private fun reattach(herd: Herd) {
+        if (reattached || !herd.known) return
+        reattached = true
+        if (screen != Screen.Herd) return
+        val last = prefs.get(KEY_LAST_PANE) ?: return
+        if (herd.panes.any { it.id == last }) land(last)
     }
 
     fun setPaneView(view: PaneView) {
@@ -769,6 +791,7 @@ class AppState(
         scope.launch { store.prefs.collect { adoptRememberedView() } }
         scope.launch {
             store.herd.collect {
+                reattach(it)
                 openWhenItArrives(it)
                 reconcileNotifications(it)
             }

@@ -51,6 +51,10 @@ pub struct Layout {
     pub sidebar: Rect,
     /// Every sidebar line in the order it was drawn, and the pane it opens when it opens one.
     pub rows: Vec<(Option<String>, Rect)>,
+    pub order: Option<Rect>,
+    pub pair: Option<Rect>,
+    /// The `prefix g` box while it is up, and the row each of its panes is on.
+    pub switcher: Option<(Rect, Vec<(Rect, String)>)>,
     pub tabs: Vec<(String, Rect)>,
     pub panes: Vec<Placed>,
     /// The herd view's pane rows — the triage screen a desk cannot draw.
@@ -60,6 +64,10 @@ pub struct Layout {
     pub attachments: Vec<(String, String, Rect)>,
     pub status: Rect,
     pub footer: Rect,
+    /// The boundaries between mosaic boxes a press may take hold of, before the pane under it.
+    pub dividers: Vec<crate::mosaic::Divider>,
+    /// The sidebar's last column, which a drag resizes it by.
+    pub edge: Option<Rect>,
 }
 
 impl Layout {
@@ -82,13 +90,21 @@ fn rows_of(area: Rect, from: usize, count: usize) -> Vec<Rect> {
 impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.settle_manage();
+        self.settle_pairing();
+        self.follow_route();
         let area = frame.area();
         let t = self.options.theme;
         let mut layout = Layout::default();
         let body = if self.sidebar_open && area.width > sidebar::WIDTH * 2 {
+            let width = self.sidebar_width().min(area.width / 2);
             let [left, right] =
-                Split::horizontal([Constraint::Length(sidebar::WIDTH), Constraint::Min(10)]).areas(area);
+                Split::horizontal([Constraint::Length(width), Constraint::Min(10)]).areas(area);
             layout.sidebar = left;
+            layout.edge = Some(Rect {
+                x: left.right().saturating_sub(1),
+                width: left.width.min(1),
+                ..left
+            });
             let rows = self.rows();
             let selected = matches!(self.router.mode(), Mode::Navigate).then_some(self.pick);
             let top = self.sidebar_view(rows.len(), left.height as usize, selected);
@@ -100,13 +116,26 @@ impl App {
                 top,
             }
             .render(left, frame.buffer_mut());
-            layout.rows = rows
-                .iter()
-                .skip(top)
-                .take(left.height as usize)
-                .zip(rows_of(left, 0, left.height as usize))
-                .map(|(row, rect)| (row.pane().map(str::to_string), rect))
-                .collect();
+            for (row, rect) in
+                rows.iter()
+                    .skip(top)
+                    .take(left.height as usize)
+                    .zip(rows_of(left, 0, left.height as usize))
+            {
+                match row {
+                    sidebar::Row::Header(_) => {
+                        let at = sidebar::switch(rect.width);
+                        layout.order = Some(Rect {
+                            x: rect.x + at.start,
+                            width: at.end - at.start,
+                            ..rect
+                        });
+                    }
+                    sidebar::Row::Pair(_) => layout.pair = Some(rect),
+                    _ => {}
+                }
+                layout.rows.push((row.pane().map(str::to_string), rect));
+            }
             right
         } else {
             area
@@ -130,7 +159,7 @@ impl App {
             Screen::Herd => self.draw_herd(frame, panes, &mut layout),
             Screen::Fleet => self.draw_fleet(frame, panes, &mut layout),
         }
-        self.draw_borrowed(frame, borrowed);
+        self.draw_borrowed(frame, self.copy_dodge(borrowed, panes));
         if self.keybinds {
             self.draw_keybinds(frame, area);
         }
@@ -143,6 +172,16 @@ impl App {
                 .render(frame.buffer_mut(), panes, self.focus.as_deref(), &t);
             self.search
                 .render(frame.buffer_mut(), panes, self.focus.as_deref(), &t);
+            if let Some(pairing) = &self.pairing {
+                pairing.render(frame.buffer_mut(), panes, &t);
+            }
+        }
+        if self.switcher.active() {
+            let items = self.switch_items();
+            layout.switcher = self.switcher.render(frame.buffer_mut(), area, &items, &t);
+        }
+        if let Some(invite) = self.invite.as_mut() {
+            invite.render(frame.buffer_mut(), area, &t);
         }
         self.layout = layout;
     }
@@ -233,7 +272,7 @@ impl App {
     }
 
     fn draw_panes(&mut self, frame: &mut Frame, area: Rect, layout: &mut Layout) {
-        let mosaic = self.mosaic();
+        let (mosaic, shape) = self.shape();
         if mosaic.is_empty() {
             let t = self.options.theme;
             let state = self.client.state();
@@ -246,27 +285,13 @@ impl App {
                 .render(area, frame.buffer_mut());
             return;
         }
-        let shown = mosaic.len().min(4);
-        let focused_at = mosaic
-            .iter()
-            .position(|p| Some(p.as_str()) == self.focus.as_deref())
-            .unwrap_or(0);
-        // Resize mode's `h`/`l` move this, and it is kampr's own split — the pane is untouched.
-        let widths: Vec<Constraint> = match shown {
-            2 => (0..2)
-                .map(|i| match i == focused_at {
-                    true => Constraint::Percentage(self.split),
-                    false => Constraint::Percentage(100 - self.split),
-                })
-                .collect(),
-            n => (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect(),
-        };
-        let boxes = Split::horizontal(widths).split(area);
+        let tiles = self.tiling.lay(area, &shape);
         // #375: herdr's box appears only once there are two panes to separate. A lone pane is
         // flush, and the 2 rows and 2 columns the border was costing go to the fit ladder.
-        let bordered = shown > 1;
+        let bordered = mosaic.len() > 1;
+        layout.dividers = tiles.dividers;
         let mut caret = None;
-        for (pane, rect) in mosaic.iter().zip(boxes.iter()) {
+        for (pane, rect) in mosaic.iter().zip(tiles.boxes.iter()) {
             if let Some(at) = self.draw_pane(frame, *rect, pane, bordered, layout) {
                 caret = Some(at);
             }
@@ -480,7 +505,10 @@ impl App {
         }
         // The caret belongs to the live viewport; scrolled into the ring there is nothing for it
         // to sit on, and a caret drawn over history is a lie about where typing lands.
-        let caret = (focused && placement.scroll == 0)
+        if let Some(cursor) = self.copying.as_mut() {
+            cursor.paint(frame.buffer_mut(), pane, &placement, placed.ring);
+        }
+        let caret = (focused && placement.scroll == 0 && self.copying.is_none())
             .then(|| grid::caret(held.cursor(), placement.grid, placement.pan))
             .flatten();
         // Assembling the surface costs a fat pointer per line of scrollback, so it is built for
@@ -629,14 +657,6 @@ impl App {
             let state = self.client.state();
             if let Some(watchers) = state.herd.pane(pane).and_then(|e| e.watchers).filter(|w| *w > 1) {
                 parts.push(format!("{watchers} watching"));
-            }
-            // **Said out loud, always.** The hold is the one thing this client does to a pane
-            // without being asked each time (ADR 0013), and while it stands the desk at that
-            // machine renders wrong and is told nothing (#298). An operator who did not want it
-            // has to be able to see it before they can find the switch — which is `size` in the
-            // manage menu, one row down from where this sentence sends them.
-            if let Some((cols, rows)) = self.matched(pane) {
-                parts.push(format!("holding {cols}x{rows}"));
             }
             if let Some(held) = state.pane(pane) {
                 let (cols, _) = held.geometry();

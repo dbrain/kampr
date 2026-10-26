@@ -5,6 +5,7 @@
 //! mean the operator asked.
 
 use crate::app::{Layout, Placed};
+use crate::mosaic::{Axis, Divider};
 use crate::render::grid;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use kampr_client::{PendingOption, Role};
@@ -27,6 +28,14 @@ pub enum Click {
     None,
     Focus(String),
     Tab(String),
+    /// The sidebar header's grouped/priority switch.
+    Order,
+    /// The sidebar's offer to pair with this machine's hub.
+    Pair,
+    /// A row of the `prefix g` box.
+    Go(String),
+    /// A press outside the `prefix g` box, which closes it and does nothing else.
+    Dismiss,
     OpenHerd,
     Answer {
         pane: String,
@@ -56,7 +65,27 @@ pub enum Click {
     Wheel {
         pane: Option<String>,
         up: bool,
+        /// The live cell under the pointer, which a program that takes the wheel is told.
+        cell: Option<(u16, u16)>,
     },
+    /// A divider between two mosaic boxes, dragged so its second half starts at `to`.
+    Divide {
+        divider: Divider,
+        to: u16,
+    },
+    /// The sidebar's edge, dragged to `width`; `done` once the button is up.
+    Edge {
+        width: u16,
+        done: bool,
+    },
+}
+
+/// What a press on a boundary took hold of, and how far from the boundary itself it landed, so
+/// the boundary moves with the pointer rather than jumping to it.
+#[derive(Debug, Clone, Copy)]
+enum Grip {
+    Divider(Divider, i32),
+    Edge(i32),
 }
 
 /// What a right-click was over, named as the thing rather than as the place: a pane, the tab
@@ -101,6 +130,7 @@ pub struct Mouse {
     copied: bool,
     at: Option<(String, u16, u16)>,
     reported: Option<(u16, u16)>,
+    grip: Option<Grip>,
 }
 
 impl Mouse {
@@ -136,8 +166,28 @@ impl Mouse {
         self.done = None;
         self.reported = None;
         self.at = None;
+        self.grip = None;
+        if let Some((popup, rows)) = &layout.switcher {
+            return match rows.iter().find(|(rect, _)| inside(*rect, at)) {
+                Some((_, pane)) => Click::Go(pane.clone()),
+                None if inside(*popup, at) => Click::None,
+                None => Click::Dismiss,
+            };
+        }
         if let Some(tab) = pick(&layout.tabs, at) {
             return Click::Tab(tab);
+        }
+        // A border is part of the pane's rect, so a boundary is asked before the pane is.
+        if let Some(divider) = layout.dividers.iter().find(|d| inside(d.grip, at)) {
+            self.grip = Some(Grip::Divider(
+                *divider,
+                along(divider.axis, at) as i32 - divider.at as i32,
+            ));
+            return Click::None;
+        }
+        if let Some(edge) = layout.edge.filter(|edge| inside(*edge, at)) {
+            self.grip = Some(Grip::Edge(at.0 as i32 - edge.right() as i32));
+            return Click::None;
         }
         // The chips sit inside a pane's own rectangle, so they are asked before it is.
         for chips in &layout.chips {
@@ -186,6 +236,12 @@ impl Mouse {
         if let Some(pane) = pick(&layout.herd, at) {
             return Click::Focus(pane);
         }
+        if layout.order.is_some_and(|rect| inside(rect, at)) {
+            return Click::Order;
+        }
+        if layout.pair.is_some_and(|rect| inside(rect, at)) {
+            return Click::Pair;
+        }
         if let Some(pane) = pick_row(&layout.rows, at) {
             return Click::Focus(pane);
         }
@@ -196,6 +252,9 @@ impl Mouse {
     }
 
     fn extend(&mut self, at: (u16, u16), layout: &Layout, role: Role) -> Click {
+        if let Some(grip) = self.grip {
+            return held(grip, at, layout, false);
+        }
         if let Some(drag) = self.drag.as_mut() {
             if let Some(placed) = layout.panes.iter().find(|p| inside(p.rect, at))
                 && placed.pane == drag.pane
@@ -211,6 +270,9 @@ impl Mouse {
     }
 
     fn release(&mut self, at: (u16, u16), layout: &Layout, role: Role) -> Click {
+        if let Some(grip) = self.grip.take() {
+            return held(grip, at, layout, true);
+        }
         if let Some(mut drag) = self.drag.take() {
             if let Some(placed) = layout.panes.iter().find(|p| inside(p.rect, at))
                 && placed.pane == drag.pane
@@ -243,10 +305,15 @@ impl Mouse {
             return Click::Wheel {
                 pane: Some(placed.pane.clone()),
                 up,
+                cell: live_cell(placed, at),
             };
         }
         match inside(layout.sidebar, at) {
-            true => Click::Wheel { pane: None, up },
+            true => Click::Wheel {
+                pane: None,
+                up,
+                cell: None,
+            },
             false => Click::None,
         }
     }
@@ -351,6 +418,19 @@ impl Mouse {
         self.drag.as_ref().or(self.done.as_ref())
     }
 
+    /// A selection copy mode's cursor made. It replaces a drag's the way a second drag would, and
+    /// it is not copied by being finished: `y` is what copies it.
+    pub fn select(&mut self, selection: Selection) {
+        self.drag = None;
+        self.done = Some(selection);
+        self.copied = true;
+    }
+
+    pub fn deselect(&mut self) {
+        self.drag = None;
+        self.done = None;
+    }
+
     /// Whether anything is waiting on this pane's surface. Assembling one costs a row of fat
     /// pointers per line of scrollback, so the draw path asks this before it builds one.
     pub fn wants(&self, pane: &str) -> bool {
@@ -420,6 +500,58 @@ fn focus(arriving: bool, pane: String) -> Click {
     match arriving {
         true => Click::Focus(pane),
         false => Click::None,
+    }
+}
+
+/// Harnesses measured to take a real wheel report: Claude Code sets `?1000h` and `?1006h` and
+/// scrolls its transcript on one (#388). Anything nobody has probed gets alternate scroll.
+const TAKES_THE_WHEEL: &[&str] = &["claude"];
+
+/// What a wheel notch over a pane with no ring is sent to the pane's program as, the gate the
+/// phone's `PaneScroll.kt` writes down.
+///
+/// **`cmd` is the gate and it fails closed**: it is null at a prompt and wherever the node could
+/// not name the job, and a cursor key into a shell's line editor recalls its history (#391).
+/// Otherwise alternate scroll in the *application* form, which is what moves `less`, `man` and
+/// `vim` (#390), `rows` keys a notch.
+pub fn handoff(
+    agent: Option<&str>,
+    cmd: Option<&str>,
+    up: bool,
+    cell: (u16, u16),
+    rows: u16,
+) -> Option<String> {
+    cmd?;
+    if agent.is_some_and(|agent| TAKES_THE_WHEEL.contains(&agent)) {
+        return Some(sgr(if up { 64 } else { 65 }, cell, true));
+    }
+    Some(
+        match up {
+            true => "\u{1b}OA",
+            false => "\u{1b}OB",
+        }
+        .repeat(rows as usize),
+    )
+}
+
+fn along(axis: Axis, at: (u16, u16)) -> u16 {
+    match axis {
+        Axis::Across => at.0,
+        Axis::Down => at.1,
+    }
+}
+
+fn held(grip: Grip, at: (u16, u16), layout: &Layout, done: bool) -> Click {
+    let moved = |from: u16, by: i32| (from as i32 - by).max(0) as u16;
+    match grip {
+        Grip::Divider(divider, by) => Click::Divide {
+            divider,
+            to: moved(along(divider.axis, at), by),
+        },
+        Grip::Edge(by) => Click::Edge {
+            width: moved(at.0, by).saturating_sub(layout.sidebar.x),
+            done,
+        },
     }
 }
 

@@ -218,7 +218,8 @@ fn the_wheel_scrolls_kamprs_own_surface_until_a_pane_is_armed_to_hear_it() {
         mouse.hit(at(MouseEventKind::ScrollUp, 5, 4), &layout, Role::Full),
         Click::Wheel {
             pane: Some("01JNODE/w1:p1".into()),
-            up: true
+            up: true,
+            cell: Some((4, 3)),
         },
         "kampr scrolls it and the pane hears nothing"
     );
@@ -1362,4 +1363,66 @@ async fn a_drag_that_leaves_its_pane_takes_nothing_from_whatever_it_landed_on() 
         screen.contains("copied 4 characters"),
         "the four cells inside the pane, and not one past its edge:\n{screen}"
     );
+}
+
+/// **A pane with no ring is scrolled by its program, or the wheel does nothing at all.** Claude
+/// Code takes the alternate screen, so herdr keeps no ring for it (#387, #438) and there is nothing
+/// above the viewport for kampr to move into. The phone hands the wheel to the program by the gate
+/// `PaneScroll.kt` writes down: Claude takes a real SGR report (#388), everything else alternate
+/// scroll in the *application* cursor form (#390), and a pane whose foreground job nobody named is
+/// the shell's line editor, where a cursor key recalls history — so it gets nothing (#391).
+#[tokio::test]
+async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
+    type Case<'a> = (Option<&'a str>, Option<&'a str>, bool, Option<&'a str>);
+    let cases: [Case; 5] = [
+        (Some("claude"), Some("claude"), true, Some("\u{1b}[<64;")),
+        (Some("claude"), Some("claude"), false, Some("\u{1b}[<65;")),
+        (None, Some("less"), true, Some("\u{1b}OA\u{1b}OA\u{1b}OA")),
+        (None, Some("less"), false, Some("\u{1b}OB\u{1b}OB\u{1b}OB")),
+        (Some("claude"), None, true, None),
+    ];
+    for (agent, cmd, up, sent) in cases {
+        let mut fake = Fake::start().await;
+        let client = Arc::new(fake.client());
+        let mut events = client.events();
+        let mut conn = fake.accept().await;
+        let mut entry = pane("01JNODE/w1:p1", "t1");
+        entry["agent"] = json!(agent);
+        entry["cmd"] = json!(cmd);
+        conn.greet(json!([entry]), json!({}));
+        until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+        let mut app = App::new(client.clone(), Options::default(), Images::default());
+        app.adopt_prefs();
+        app.refocus();
+        conn.send(json!({
+            "t": "grid.reset", "pane": "01JNODE/w1:p1", "cols": 12, "rows": 4,
+            "rows_data": [{ "row": 0, "runs": [{ "s": 0, "x": "live" }] }],
+            "cursor": { "col": 0, "row": 0, "visible": true }, "links": []
+        }));
+        until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+        painted(&mut app, 100, 20);
+        let _ = conn.heard().await;
+
+        let grid = app.layout.panes[0].placement.expect("a placed grid").grid;
+        wheel(&mut app, &client, up, grid.x + 2, grid.y + 1);
+        let frames = conn.heard().await;
+        let typed = inputs(&frames);
+        let case = format!("{agent:?} running {cmd:?}, up {up}");
+        match sent {
+            None => assert!(typed.is_empty(), "{case}: a shell's prompt heard {typed:?}"),
+            Some(lead) => {
+                assert_eq!(typed.len(), 1, "{case}: {frames:?}");
+                let text = typed[0]["text"].as_str().expect("text");
+                assert!(text.starts_with(lead), "{case}: sent {text:?}");
+                if lead.starts_with("\u{1b}[<") {
+                    assert!(
+                        text.ends_with(";3;2M"),
+                        "{case}: the cell under the pointer, {text:?}"
+                    );
+                } else {
+                    assert_eq!(text, lead, "{case}");
+                }
+            }
+        }
+    }
 }

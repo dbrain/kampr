@@ -81,13 +81,27 @@ pub enum Action {
     WordEnd,
     ParagraphNext,
     ParagraphBack,
+    LineStart,
+    FirstNonBlank,
+    LineEnd,
+    HistoryTop,
+    HistoryBottom,
+    HalfPageUp,
+    HalfPageDown,
     SearchForward,
     SearchBack,
     RepeatSearch,
     RepeatSearchBack,
     Select,
+    SelectLine,
     Copy,
     OpenWorkspace,
+    /// The sidebar's grouped/priority switch, from the navigator.
+    ToggleOrder,
+    /// herdr's `goto`: type a few letters of any pane on any node and go there.
+    Switcher,
+    /// A code for another device, from the herd this client is signed in to.
+    PairDevice,
     SwitchWorkspace(u8),
     /// Kampr's own mosaic: put the pane the navigator is on beside the one already on screen.
     /// It may come from a different session on a different host, which is the whole reason this
@@ -98,6 +112,8 @@ pub enum Action {
     Narrower,
     Taller,
     Shorter,
+    /// Tiled, side by side, stacked: kampr's own arrangement, for a mosaic with no tree to mirror.
+    Arrange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +211,8 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(OpenLaunched)
     } else if shifted(key, 'v') {
         Bind::Do(ToggleView)
+    } else if shifted(key, 'a') {
+        Bind::Do(PairDevice)
     } else if plain(key, '?') {
         Bind::Do(Keybinds)
     } else if plain(key, 's') {
@@ -203,8 +221,10 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
         Bind::Do(Detach)
     } else if plain(key, 'o') {
         Bind::Do(OpenNotificationTarget)
-    } else if plain(key, 'w') || plain(key, 'g') {
+    } else if plain(key, 'w') {
         Bind::Enter(Mode::Navigate)
+    } else if plain(key, 'g') {
+        Bind::Do(Switcher)
     } else if plain(key, 'c') {
         Bind::Do(NewTab)
     } else if plain(key, ',') {
@@ -256,9 +276,17 @@ pub fn prefix(key: KeyEvent) -> Option<Bind> {
 }
 
 /// #290's footer is the whole grammar: `h/j/k/l w/b/e { } move - / ? search - n/N repeat -
-/// v/space select - y/enter copy - q/esc exit`.
+/// v/space select - y/enter copy - q/esc exit`. The rest are vi's, which herdr's footer does not
+/// list and #289 does not contradict.
 pub fn copy(key: KeyEvent) -> Option<Bind> {
     use Action::*;
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('u') => Some(Bind::Do(HalfPageUp)),
+            KeyCode::Char('d') => Some(Bind::Do(HalfPageDown)),
+            _ => None,
+        };
+    }
     let bind = match key.code {
         KeyCode::Esc => Bind::Leave,
         KeyCode::Enter => Bind::Do(Copy),
@@ -268,6 +296,8 @@ pub fn copy(key: KeyEvent) -> Option<Bind> {
         KeyCode::Right => Bind::Do(Move(Dir::Right)),
         KeyCode::PageUp => Bind::Do(Scroll(Dir::Up)),
         KeyCode::PageDown => Bind::Do(Scroll(Dir::Down)),
+        KeyCode::Home => Bind::Do(LineStart),
+        KeyCode::End => Bind::Do(LineEnd),
         KeyCode::Char(c) => match c {
             'q' => Bind::Leave,
             'h' => Bind::Do(Move(Dir::Left)),
@@ -279,6 +309,12 @@ pub fn copy(key: KeyEvent) -> Option<Bind> {
             'e' => Bind::Do(WordEnd),
             '{' => Bind::Do(ParagraphBack),
             '}' => Bind::Do(ParagraphNext),
+            '0' => Bind::Do(LineStart),
+            '^' => Bind::Do(FirstNonBlank),
+            '$' => Bind::Do(LineEnd),
+            'g' => Bind::Do(HistoryTop),
+            'G' => Bind::Do(HistoryBottom),
+            'V' => Bind::Do(SelectLine),
             '/' => Bind::Do(SearchForward),
             '?' => Bind::Do(SearchBack),
             'n' => Bind::Do(RepeatSearch),
@@ -292,7 +328,7 @@ pub fn copy(key: KeyEvent) -> Option<Bind> {
     Some(bind)
 }
 
-/// #290's footer: `h/l width - j/k height - esc done`. **What it resizes is kampr's own mosaic
+/// #290's footer: `h/l width - j/k height - esc done`, and `space` for the arrangement. **What it resizes is kampr's own mosaic
 /// split, never the pane** — ADR 0002 — so a herdr user's fingers land somewhere honest instead
 /// of on a code path that does not exist.
 pub fn resize(key: KeyEvent) -> Option<Bind> {
@@ -307,6 +343,7 @@ pub fn resize(key: KeyEvent) -> Option<Bind> {
         KeyCode::Char('l') => Bind::Do(Wider),
         KeyCode::Char('j') => Bind::Do(Shorter),
         KeyCode::Char('k') => Bind::Do(Taller),
+        KeyCode::Char(' ') => Bind::Do(Arrange),
         KeyCode::Char('q') => Bind::Leave,
         _ => return None,
     };
@@ -333,6 +370,7 @@ pub fn navigate(key: KeyEvent) -> Option<Bind> {
         KeyCode::Left => Bind::Do(Move(Dir::Left)),
         KeyCode::Right => Bind::Do(Move(Dir::Right)),
         KeyCode::Char('q') => Bind::Leave,
+        KeyCode::Char('o') => Bind::Do(ToggleOrder),
         KeyCode::Char(' ') => Bind::Do(PinPane),
         KeyCode::Char('h') => Bind::Do(Move(Dir::Left)),
         KeyCode::Char('j') => Bind::Do(Move(Dir::Down)),
@@ -369,19 +407,21 @@ pub fn results(key: KeyEvent) -> Option<Bind> {
 }
 
 /// The footers herdr draws, word for word (#290), so the strip under a Kampr pane says what the
-/// strip under a herdr pane says.
+/// strip under a herdr pane says — copy mode's with the vi motions herdr's does not list added.
 pub fn footer(mode: Mode) -> Option<&'static str> {
     match mode {
         Mode::Pane => None,
         Mode::Prefix => Some(
-            "PREFIX  esc cancel · ctrl+b send prefix · w sidebar · shift+h herd · shift+f fleet · ? help",
+            "PREFIX  esc cancel · ctrl+b send prefix · g go to · w sidebar · shift+h herd · shift+f fleet · ? help",
         ),
         Mode::Copy => Some(
-            "COPY  h/j/k/l w/b/e { } move · / ? search · n/N repeat · v/space select · y/enter copy · q/esc exit",
+            "COPY  h/j/k/l w/b/e { } 0 ^ $ g G ^u ^d move · / ? search · n/N repeat · v/space V select · y/enter copy · q/esc exit",
         ),
-        Mode::Resize => Some("RESIZE  h/l width · j/k height · esc done · kampr's own split, never the pane"),
+        Mode::Resize => Some(
+            "RESIZE  h/l width · j/k height · space tiled/side by side/stacked · esc done · this screen's boxes, never the pane",
+        ),
         Mode::Navigate => Some(
-            "NAVIGATE the sidebar  esc back · up/down row · enter open · space beside · tab cycle · 1-9 workspace",
+            "NAVIGATE the sidebar  esc back · up/down row · enter open · space beside · o order · tab cycle · 1-9 workspace",
         ),
         // None: this mode's own row is the result line, which says both what was found and which
         // keys step it. A footer over the top of that would cover the answer with the question.

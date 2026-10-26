@@ -26,6 +26,9 @@ struct Cli {
     command: Option<Command>,
     #[command(flatten)]
     dirs: Dirs,
+    /// Open this machine's own herd even when it is paired with its hub
+    #[arg(long)]
+    local: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -57,8 +60,8 @@ enum Command {
     Connect {
         #[command(flatten)]
         dirs: Dirs,
-        /// The node's URL, as its `kampr setup` printed it
-        url: String,
+        /// The node's URL, as its `kampr setup` printed it. Defaults to this machine's mesh hub
+        url: Option<String>,
         /// A pairing code from that node's `kampr setup`
         #[arg(long)]
         code: String,
@@ -260,7 +263,7 @@ fn main() -> Result<()> {
 #[tokio::main]
 async fn run(cli: Cli) -> Result<()> {
     let Some(command) = cli.command else {
-        return open(&cli.dirs).await;
+        return open(&cli.dirs, cli.local).await;
     };
     match command {
         Command::Init {
@@ -291,6 +294,14 @@ async fn run(cli: Cli) -> Result<()> {
             name,
             device,
         } => {
+            let hub = kampr_client::resolve::local_hub(&dirs.config(), dirs.state_override()).await;
+            let (url, name) = match (url, hub) {
+                (Some(url), _) => (url, name),
+                (None, Some(hub)) => (hub.origin, name.or(Some(hub.name))),
+                (None, None) => anyhow::bail!(
+                    "no URL given, and this machine's node is not a mesh peer with a hub to default to"
+                ),
+            };
             let paired =
                 kampr_client::pair(&dirs.config(), &url, &code, name.as_deref(), device.as_deref()).await?;
             println!("paired with {} as {}", paired.origin, paired.device);
@@ -421,15 +432,15 @@ async fn run(cli: Cli) -> Result<()> {
 /// The resolution ladder is [`kampr_client::resolve`]'s and the refusal at the bottom of it
 /// prints how to pair rather than asking a question — a command that blocks on a prompt cannot be
 /// run from a script, and there is nothing here for a person to type that a flag could not carry.
-async fn open(dirs: &Dirs) -> Result<()> {
-    let session = match kampr_client::resolve(&dirs.config(), dirs.state_override()).await {
-        Ok(session) => session,
+async fn open(dirs: &Dirs, local: bool) -> Result<()> {
+    let resolved = match kampr_client::resolve(&dirs.config(), dirs.state_override(), local).await {
+        Ok(resolved) => resolved,
         Err(e) => {
             eprintln!("kampr: {e}");
             std::process::exit(1);
         }
     };
-    kampr_tui::run(session).await
+    kampr_tui::run(resolved).await
 }
 
 async fn serve(dirs: &Dirs) -> Result<()> {

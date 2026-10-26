@@ -186,6 +186,11 @@ own header says while it is on that the pane is being held at this view's size â
 reads `held`, and it is the control that opens the panel the switch is on â€” which is the answer to
 *"a geometry change they did not ask for and cannot find the switch for"*.
 
+**The terminal client is the exception.** A desk always matches the pane it shows, so the hold is
+its steady state, and a standing `holding 120x40` over the pane's last row was chrome covering the
+shell prompt for as long as kampr was open. It says so in the size menu (`prefix shift+n`, `r`),
+which is also where the switch is.
+
 ## Consequences
 
 - **The wire is additive.** A new `mode` value (`"match"`), one new optional request field

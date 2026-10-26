@@ -1,3 +1,4 @@
+use crate::layout::Layouts;
 use crate::live::{self, Live};
 use crate::procs;
 use crate::reflow::{self, Views};
@@ -10,6 +11,7 @@ use kampr_core::provider::{
     AgentStatus, Found, Input, NativeExit, NativePane, PaneInfo, PaneStream, ProgramStatus, Provider,
     RawScrollback, Reflow, split_view,
 };
+use kampr_core::tile::Split;
 use kampr_journal::process::{Harness, PaneProcess};
 use kampr_keep::{Ending, Launch, SessionDir, Spec};
 use std::collections::{BTreeSet, HashMap};
@@ -93,6 +95,7 @@ struct Inner {
     lease: AtomicU64,
     topology: watch::Sender<u64>,
     views: Views,
+    layouts: Mutex<Layouts>,
 }
 
 struct Hold {
@@ -106,12 +109,13 @@ impl NativeProvider {
         kampr_keep::make_private_dir(&config.root)
             .with_context(|| format!("creating {}", config.root.display()))?;
         let inner = Arc::new(Inner {
-            config,
             lives: Mutex::new(HashMap::new()),
             holds: Mutex::new(HashMap::new()),
             lease: AtomicU64::new(1),
             topology: watch::channel(0).0,
             views: Views::default(),
+            layouts: Mutex::new(Layouts::load(&config.root)),
+            config,
         });
         inner.rescan();
         let weak: Weak<Inner> = Arc::downgrade(&inner);
@@ -178,6 +182,14 @@ impl NativeProvider {
         self.inner.adopt(session);
         self.inner.bump();
         Ok(pane)
+    }
+
+    /// `new` beside `at`, in the tree their clients lay them out by. A session split from one in
+    /// no tree starts one.
+    pub fn split(&self, at: &str, new: &str, split: Split, ratio: u16) -> Result<()> {
+        self.inner.layouts.lock().unwrap().split(at, new, split, ratio)?;
+        self.inner.bump();
+        Ok(())
     }
 
     pub fn close(&self, pane: &str) -> Result<()> {
@@ -562,10 +574,20 @@ impl Provider for NativeProvider {
         Ok(tokio::task::spawn_blocking(move || {
             let sessions = kampr_keep::list(&inner.config.root).unwrap_or_default();
             let lives = inner.lives.lock().unwrap().clone();
-            sessions
+            let mut panes: Vec<PaneInfo> = sessions
                 .iter()
                 .filter_map(|session| inner.pane_info(session, lives.get(session.id()).map(Arc::as_ref)))
-                .collect()
+                .collect();
+            let mut layouts = inner.layouts.lock().unwrap();
+            let present = sessions.iter().map(|s| format!("{PREFIX}{}", s.id())).collect();
+            if let Err(e) = layouts.keep(&present) {
+                tracing::warn!(error = %format!("{e:#}"), "cannot keep the native layouts");
+            }
+            let mut tiles = layouts.tiles();
+            for pane in &mut panes {
+                pane.tile = tiles.remove(&pane.pane_id);
+            }
+            panes
         })
         .await?)
     }

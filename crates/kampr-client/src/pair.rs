@@ -76,6 +76,40 @@ pub async fn pair(
     Ok(Paired { name, origin, device })
 }
 
+/// A code another device redeems against this session's herd. Asked for over an authenticated
+/// request, so the node hands it back armed: no keypress at its console.
+pub struct Minted {
+    pub code: String,
+    pub expires_in: u64,
+}
+
+pub async fn mint(session: &crate::Session) -> Result<Minted, PairError> {
+    let origin = session.origin.trim().trim_end_matches('/').to_string();
+    let client = reqwest::Client::builder()
+        .timeout(PAIR_TIMEOUT)
+        .build()
+        .map_err(|e| PairError::Unreachable(origin.clone(), e.to_string()))?;
+    let response = client
+        .post(format!("{origin}/api/pair"))
+        .bearer_auth(&session.token)
+        .send()
+        .await
+        .map_err(|e| PairError::Unreachable(origin.clone(), e.to_string()))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let said = body["error"].as_str().unwrap_or("no reason given").to_string();
+        return Err(PairError::Refused(origin, said));
+    }
+    Ok(Minted {
+        code: body["code"]
+            .as_str()
+            .ok_or_else(|| PairError::NoToken(origin.clone()))?
+            .to_string(),
+        expires_in: body["expires_in"].as_u64().unwrap_or_default(),
+    })
+}
+
 fn host_of(origin: &str) -> String {
     origin
         .split_once("://")

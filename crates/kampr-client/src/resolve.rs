@@ -39,6 +39,28 @@ impl Session {
     }
 }
 
+/// The hub this machine's node is a mesh peer of. Its herd contains this machine's, so it is the
+/// one worth opening — once this client has a device on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HubOffer {
+    pub name: String,
+    pub origin: String,
+    /// Where a pairing with it is saved.
+    pub config_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub session: Session,
+    /// Set when the session is this machine's own node and that node has a hub this client has
+    /// not paired with.
+    pub hub: Option<HubOffer>,
+    /// This machine's own node, when the session is its hub: what is still reachable while the
+    /// hub is not.
+    pub local: Option<Session>,
+    pub config_dir: PathBuf,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
     /// Neither rung landed. The message is the whole of what a person needs to do next, and this
@@ -62,31 +84,98 @@ pub enum ResolveError {
 
 /// **Resolution order, first hit wins.**
 ///
-/// 1. A node on this machine, if its config resolves and it answers `/healthz`. The CLI runs as
-///    that node's own user with **write** access to its state, so it mints itself a device and
-///    connects to the local origin.
+/// 1. A node on this machine, if its config resolves and it answers `/healthz` — **unless** that
+///    node is a mesh peer and a saved profile reaches its hub, because the hub's herd contains
+///    this one. The CLI runs as the node's own user with **write** access to its state, so it mints
+///    itself a device and connects to the local origin. `local` skips the hub.
 /// 2. A saved client profile — a token from a previous pair. This is the ordinary remote case,
 ///    and it is how a laptop drives the herd.
 /// 3. Neither, which prints how to pair and exits non-zero. It never prompts.
-///
-/// A hub shows its peers because the herd already contains them; there is no second code path
-/// for "remote".
-pub async fn resolve(config_dir: &Path, state_dir: Option<&Path>) -> Result<Session, ResolveError> {
+pub async fn resolve(
+    config_dir: &Path,
+    state_dir: Option<&Path>,
+    local: bool,
+) -> Result<Resolved, ResolveError> {
+    let client = ClientConfig::load(config_dir)?;
     if let Ok(config) = LocalNode::load(config_dir) {
         let origin = config.origin();
         if answers_healthz(&origin).await {
-            return local_session(&config, config_dir, state_dir, origin).await;
+            let hub = hub_of(&config, state_dir, config_dir).await;
+            let saved = hub.as_ref().and_then(|hub| {
+                client
+                    .profiles
+                    .iter()
+                    .find(|(_, profile)| same_origin(&profile.origin, &hub.origin))
+            });
+            let session = local_session(&config, config_dir, state_dir, origin).await?;
+            if !local && let Some((name, profile)) = saved {
+                return Ok(Resolved {
+                    session: Session {
+                        origin: profile.origin.clone(),
+                        token: profile.token.clone(),
+                        via: Via::Profile { name: name.clone() },
+                    },
+                    hub: None,
+                    local: Some(session),
+                    config_dir: config_dir.to_path_buf(),
+                });
+            }
+            return Ok(Resolved {
+                session,
+                hub: hub.filter(|_| !local && saved.is_none()),
+                local: None,
+                config_dir: config_dir.to_path_buf(),
+            });
         }
     }
-    let client = ClientConfig::load(config_dir)?;
     if let Some((name, profile)) = client.chosen() {
-        return Ok(Session {
-            origin: profile.origin.clone(),
-            token: profile.token.clone(),
-            via: Via::Profile { name: name.clone() },
+        return Ok(Resolved {
+            session: Session {
+                origin: profile.origin.clone(),
+                token: profile.token.clone(),
+                via: Via::Profile { name: name.clone() },
+            },
+            hub: None,
+            local: None,
+            config_dir: config_dir.to_path_buf(),
         });
     }
     Err(ResolveError::NoHerd)
+}
+
+/// The hub row `kampr mesh join` wrote, as the origin a browser would open. A store that will not
+/// open is no hub rather than no herd: the local node is still there to show.
+async fn hub_of(config: &LocalNode, state_dir: Option<&Path>, config_dir: &Path) -> Option<HubOffer> {
+    let db = local_node::state_db(&config.resolve_state_dir(state_dir));
+    let store = Store::open(&db).await.ok()?;
+    let hubs = store.mesh().nodes(kampr_auth::MeshRole::Hub).await.ok()?;
+    let hub = hubs.into_iter().find(|hub| hub.active() && hub.url.is_some())?;
+    Some(HubOffer {
+        origin: web_origin(hub.url.as_deref()?),
+        name: hub.name,
+        config_dir: config_dir.to_path_buf(),
+    })
+}
+
+/// The hub of the node configured in `config_dir`, if it is a mesh peer.
+pub async fn local_hub(config_dir: &Path, state_dir: Option<&Path>) -> Option<HubOffer> {
+    hub_of(&LocalNode::load(config_dir).ok()?, state_dir, config_dir).await
+}
+
+/// `wss://kampr.example.com/mesh` → `https://kampr.example.com`: the mesh and the client protocol
+/// are served from the one origin.
+pub fn web_origin(mesh: &str) -> String {
+    let trimmed = mesh.trim().trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix("/mesh").unwrap_or(trimmed);
+    match trimmed.split_once("://") {
+        Some(("wss", rest)) => format!("https://{rest}"),
+        Some(("ws", rest)) => format!("http://{rest}"),
+        _ => trimmed.to_string(),
+    }
+}
+
+fn same_origin(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
 }
 
 /// Whether the node this config describes is actually up.

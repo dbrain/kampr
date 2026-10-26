@@ -20,6 +20,7 @@ pub mod question;
 pub mod registry;
 pub mod reporter;
 pub mod scrollback;
+pub mod tile;
 pub mod wire;
 
 pub use backoff::Backoff;

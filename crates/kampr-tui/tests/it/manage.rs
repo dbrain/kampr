@@ -1289,12 +1289,13 @@ async fn a_desk_holds_the_pane_it_is_looking_at_and_says_how_to_stop() {
     );
     tokio::time::sleep(HUSH).await;
 
-    // Said on the screen while it is happening, not only inside a menu somebody has to open. The
-    // desk at the other machine is rendering wrong for as long as this stands (#298).
+    // **The hold is the steady state of a desk, so it takes no row.** A terminal client always
+    // matches the pane it shows; a standing "holding 120x40" over the pane's last line was chrome
+    // covering the shell prompt for as long as kampr was open. The menu is where it is said.
     let screen = painted(&mut app, 110, 24);
     assert!(
-        screen.contains("holding 120x40"),
-        "the pane is being held and nothing on the screen says so:\n{screen}"
+        !screen.contains("holding"),
+        "the hold camps on the pane's last row:\n{screen}"
     );
 
     // The draw loop's own next pass, which is what carries the answer to the menu.
