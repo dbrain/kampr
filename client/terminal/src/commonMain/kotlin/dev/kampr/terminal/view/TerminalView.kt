@@ -1112,9 +1112,9 @@ fun TerminalView(
         }
 
         // Stood down while a sheet is up, and the web is why. The wasm actual reclaims DOM focus
-        // every animation frame and stands down only for an `INPUT`, a `TEXTAREA` or something
+        // whenever anything loses it and stands down only for an `INPUT`, a `TEXTAREA` or something
         // contenteditable — and Compose renders into a `<canvas>`, which is none of those. So the
-        // offscreen div took the focus straight back off the sheet each frame and `preventDefault`ed
+        // offscreen div took the focus straight back off the sheet every time and `preventDefault`ed
         // Escape and every ctrl chord into the shell, and no key ever reached the sheet at all.
         // `Modifier.modal`'s Escape-to-dismiss could not work in a browser while this was ungated.
         ImeDismissal(session)

@@ -9,6 +9,10 @@ import dev.kampr.terminal.input.focusInput
 import dev.kampr.terminal.input.holdsInput
 import dev.kampr.terminal.input.installInput
 import dev.kampr.terminal.input.reclaimInputFocus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -118,6 +122,8 @@ private fun showTheTab() {
 
 @OptIn(ExperimentalWasmJsInterop::class)
 private fun framesAskedFor(): Int = js("globalThis.__kamprFramesAsked || 0")
+
+private const val TURN_MS = 20L
 
 // A rival for the one focus slot the page has. A `textarea` is the shape Compose's own text input
 // takes in this DOM, so it is what the conversation composer looks like from here; a `button` is
@@ -271,6 +277,22 @@ class BrowserInputTest {
         focusInput(false)
     }
 
+    // The same composer with nobody renewing the claim by hand: the blur it hands the focus back
+    // with is the cue, so the pane is holding the keys again a turn later and no frame was spent.
+    @Test
+    fun aComposerThatClosesHandsTheKeyboardBackWithNobodyAsking() = runTest {
+        installInput()
+        focusInput(true)
+        putRival("textarea")
+        withContext(Dispatchers.Default) { delay(TURN_MS) }
+        assertFalse(inputFocused(), "the pane stole the keyboard back from a live text field")
+
+        dismissRival()
+        withContext(Dispatchers.Default) { delay(TURN_MS) }
+        assertTrue(inputFocused(), "the pane never heard the composer hand the keyboard back")
+        focusInput(false)
+    }
+
     // Not every rival for the focus gives it up again. A button keeps it until something else asks,
     // and nothing was asking — so a single tap on the pane chrome cost the pane its keyboard with
     // no way back that did not involve touching the grid.
@@ -287,7 +309,7 @@ class BrowserInputTest {
     }
 
     // The guard on the renewal: it renews a claim, it never makes one. A phone browser is left
-    // alone until the operator asks for a keyboard, and a per-frame reclaim that ignored that
+    // alone until the operator asks for a keyboard, and a renewal that ignored that
     // would raise the soft keyboard over every pane the moment it opened.
     @Test
     fun aReclaimRenewsAClaimAndNeverMakesOne() {

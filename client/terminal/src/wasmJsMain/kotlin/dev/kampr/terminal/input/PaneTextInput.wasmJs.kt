@@ -5,10 +5,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import dev.kampr.shared.platform.touchBrowser
 import dev.kampr.terminal.PaneSession
+import kotlinx.coroutines.delay
 import kotlin.js.ExperimentalWasmJsInterop
 
 // Android soft keyboards report keyCode 229 for every printable key, so keydown is unusable as
@@ -16,13 +16,14 @@ import kotlin.js.ExperimentalWasmJsInterop
 // beforeinput / input / composition*, diffed against what it last held. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
 @OptIn(ExperimentalWasmJsInterop::class)
-private fun installDom(notify: () -> Unit, chord: (String) -> String) {
+private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: () -> Unit) {
     js(
         """
         (function () {
             if (globalThis.__kamprInput) {
                 globalThis.__kamprInput.notify = notify;
                 globalThis.__kamprInput.chord = chord;
+                globalThis.__kamprInput.reclaim = reclaim;
                 return;
             }
             var el = document.createElement('div');
@@ -39,7 +40,8 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String) {
                 'background:transparent;overflow:hidden;z-index:-1;';
             document.body.appendChild(el);
 
-            var state = { el: el, queue: [], hold: false, notify: notify, chord: chord };
+            var state = { el: el, queue: [], hold: false, notify: notify, chord: chord, reclaim: reclaim };
+            document.addEventListener('focusout', function () { setTimeout(function () { state.reclaim(); }, 0); }, true);
             globalThis.__kamprInput = state;
 
             var composed = '';
@@ -236,7 +238,7 @@ private fun answerChord(descriptor: String): String {
     return if (chordSendsControl(ctrl = flags.contains('c'), meta = flags.contains('m'))) "control" else "pass"
 }
 
-internal fun installInput() = installDom(::flushInput, ::answerChord)
+internal fun installInput() = installDom(::flushInput, ::answerChord, ::reclaimInputFocus)
 
 // `touchBrowser` and not the key row's reading, because these are two questions off one browser
 // and they want different thresholds. Here the question is whether focusing would raise a soft
@@ -298,15 +300,19 @@ internal fun focusInput(open: Boolean) {
 // A pane that shows output and takes no keys, with nothing complaining, is the shape this exists
 // to stop.
 //
-// Renewed per frame rather than on `focusout`, because the strand is usually the *second* move.
-// The composer takes the focus legitimately, and then hands it back to the body when it closes —
-// and no event fires on an element that lost the focus some time ago, so there is nothing to hang
-// a listener on. A standing claim has to be re-checked to be worth anything.
+// Renewed on every `focusout` anywhere in the document, a turn later so the slot has landed. The
+// strand is usually the *second* move: the composer takes the focus legitimately and hands it back
+// to the body when it closes, and that blur is the one heard here. A focused element that is
+// simply removed fires nothing at all (measured in Chrome), so a slow timer backs the event up.
+// Never a frame: awaiting one is a `requestAnimationFrame` and a repaint of the whole scene, and a
+// per-frame renewal held every desk tab with a pane open at the display's refresh rate.
 //
 // Standing down for a live text field is what keeps the composer usable: Compose's own text input
 // is a real `<textarea>` in this DOM, so an editable element holding the focus is always someone
 // who needs the keys more than the pane does. Everything else — a button, the body, nothing at
 // all — is not typing, and the pane takes the slot back.
+private const val RECLAIM_BACKSTOP_MS = 250L
+
 @OptIn(ExperimentalWasmJsInterop::class)
 internal fun reclaimInputFocus() {
     js(
@@ -349,13 +355,10 @@ actual fun PaneTextInput(
         deliverChordsTo(onChord)
         onDispose { deliverChordsTo(null) }
     }
-    // A frame is the wrong clock for delivering a keystroke and the only one there is for renewing
-    // a focus claim: nothing fires when the slot is lost to something that took it a while ago, so
-    // the claim has to be re-checked, and a hidden tab has no focus to lose.
     LaunchedEffect(enabled) {
         if (!enabled) return@LaunchedEffect
         while (true) {
-            withFrameNanos { }
+            delay(RECLAIM_BACKSTOP_MS)
             reclaimInputFocus()
         }
     }

@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 
 // The desk report: ctrl+K put the palette up over a terminal, and what was typed next went to the
 // greyed-out pane underneath. The terminal's offscreen input holds the page's one focus slot and
-// renews the claim every frame, so a Compose field asking for focus never got the keys.
+// renews the claim whenever the slot moves, so a Compose field asking for focus never got the keys.
 @OptIn(ExperimentalTestApi::class)
 class BrowserPaletteTest {
     @Test

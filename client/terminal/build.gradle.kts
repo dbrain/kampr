@@ -44,6 +44,7 @@ kotlin {
         }
         wasmJsTest.dependencies {
             implementation(libs.compose.ui.test)
+            implementation(libs.kotlinx.coroutines.test)
         }
         wasmJsMain.dependencies {
             implementation(libs.kotlinx.browser)
