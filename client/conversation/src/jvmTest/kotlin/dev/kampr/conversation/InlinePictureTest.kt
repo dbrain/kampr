@@ -119,14 +119,43 @@ class InlinePictureTest {
     }
 
     // The agent naming a path is not the operator handing one over, and an agent that mentions
-    // forty screenshots must not turn the transcript into forty fetches.
+    // forty screenshots must not turn the transcript into forty fetches: each is a row, fetched
+    // when it is pressed and shown in the same viewer.
     @Test
-    fun only_the_operators_own_turns_pull_a_picture_in() = runComposeUiTest {
+    fun an_agents_picture_is_a_row_that_fetches_only_when_pressed() = runComposeUiTest {
         val io = withPicture()
         setContent { Screen(paneNaming(SAID, role = "assistant"), io) }
         waitForIdle()
         assertTrue(io.asked.isEmpty(), "a path inside an agent's reply was fetched unasked")
         onNodeWithText(SAID, substring = true).assertExists()
+        onAllNodesWithContentDescription("Open kampr-3f2.png")[0].performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithContentDescription("kampr-3f2.png, pinch to zoom", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(listOf(PANE_ID to fileAttachmentId(SHOT_PATH)), io.asked)
+    }
+
+    // "Show me the files in this reply": every path the reply named, folded until asked for, and
+    // its pictures as a gallery of tiles.
+    @Test
+    fun a_replys_files_are_listed_under_it_and_its_pictures_open_as_tiles() = runComposeUiTest {
+        val other = "/home/u/shots/b.png"
+        val io = Machine(
+            mapOf(
+                fileAttachmentId(SHOT_PATH) to AttachmentBytes.Ok(pngBytes(320, 200), "image/png"),
+                fileAttachmentId(other) to AttachmentBytes.Ok(pngBytes(320, 200), "image/png"),
+            ),
+        )
+        val reply = "| shot | path |\n|---|---|\n| a | $SHOT_PATH |\n| b | $other |\n\nnotes in $NOTES_PATH"
+        setContent { Screen(paneNaming(reply, role = "assistant"), io) }
+        waitForIdle()
+        onNodeWithContentDescription("Show the 3 files this reply names").performClick()
+        waitForIdle()
+        onNodeWithContentDescription("Open notes.md").assertExists()
+        assertTrue(io.asked.isEmpty(), "listing the files fetched them")
+        onNodeWithContentDescription("Show the 2 pictures as tiles").performClick()
+        waitUntil(timeoutMillis = 5_000) { io.asked.size == 2 }
     }
 
     // The whole security argument for a path-shaped id: a device that may type into a terminal can

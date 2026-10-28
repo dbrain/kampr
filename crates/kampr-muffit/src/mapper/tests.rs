@@ -125,7 +125,9 @@ fn a_transcript_maps_to_turns_the_way_docs_18_says() {
                     { "type": "text", "text": "look" }, { "type": "image", "mime": "image/png", "bytes": 120 } ] },
                 { "seq": 12, "role": "assistant", "blocks": [{ "type": "thinking", "text": "hmm" }] },
                 { "seq": 13, "role": "assistant", "blocks": [{ "type": "recalled", "tokens": 4, "sources": [] },
-                                                              { "type": "notice", "text": "model changed" }] }
+                                                              { "type": "notice", "text": "model changed" }] },
+                { "seq": 14, "role": "user", "blocks": [{ "type": "recalled", "tokens": 4100, "sources": ["s1#40"] }] },
+                { "seq": 15, "role": "user", "blocks": [{ "type": "notice", "text": "note: a.jpg changed since #225" }] }
             ]),
             Workers::default(),
             json!([

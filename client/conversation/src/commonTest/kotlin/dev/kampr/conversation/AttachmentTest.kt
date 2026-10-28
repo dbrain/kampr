@@ -174,6 +174,44 @@ class AttachmentTest {
         assertEquals(emptyList(), soundsIn("see /home/u/demo/notes.md"))
     }
 
+    // Agents write the paths they made into tables, bold and links as often as into a sentence, and
+    // the reader taps the same path whichever way it was dressed.
+    @Test
+    fun aPathIsFoundHoweverTheReplyDressedIt() {
+        for ((written, path) in listOf(
+            "| 1 |/tmp/k/a.jpg| done |" to "/tmp/k/a.jpg",
+            "| 1 | `/tmp/k/a.jpg` | done |" to "/tmp/k/a.jpg",
+            "**/tmp/k/a.jpg**" to "/tmp/k/a.jpg",
+            "[the shot](/tmp/k/a.jpg)" to "/tmp/k/a.jpg",
+            "saved to /tmp/k/a.jpg." to "/tmp/k/a.jpg",
+            "see <~/shots/a.jpg>" to "~/shots/a.jpg",
+        )) {
+            assertEquals(listOf(path), pathsIn(written), written)
+        }
+        assertEquals(emptyList(), pathsIn("[the shot](shots/a.jpg) and /tmp/k/"))
+    }
+
+    // An agent's reply offers a picture as a row to press and never fetches it on sight, so a reply
+    // naming forty screenshots is forty rows, each one a fetch only when somebody asks for it.
+    @Test
+    fun anAgentsPicturesAndRecordingsAreRowsAndTheOperatorsPicturesAreNot() {
+        val said = "made /tmp/k/a.jpg, /tmp/k/clip.wav and /tmp/k/notes.md"
+        assertEquals(listOf("/tmp/k/a.jpg", "/tmp/k/clip.wav"), rowsIn(said, pictures = true))
+        assertEquals(listOf("/tmp/k/clip.wav"), rowsIn(said, pictures = false))
+        val rows = groupBlocks(listOf(Block.Md(said))).filterIsInstance<Piece.Row>().map { it.path }
+        assertEquals(listOf("/tmp/k/a.jpg", "/tmp/k/clip.wav"), rows)
+    }
+
+    @Test
+    fun aRepliesFilesAreEveryPathItsProseNamesOnce() {
+        val blocks = listOf(
+            Block.Md("| shot | /tmp/k/a.jpg |\n| notes | /tmp/k/notes.md |"),
+            Block.Tool(name = "read", summary = "/tmp/k/never.rs", lines = null, state = "done"),
+            Block.Md("again /tmp/k/a.jpg, and /tmp/k/b.png"),
+        )
+        assertEquals(listOf("/tmp/k/a.jpg", "/tmp/k/notes.md", "/tmp/k/b.png"), filesIn(blocks))
+    }
+
     @Test
     fun aNamedHeaderLeadsWithItsName() {
         val att = assertNotNull(
