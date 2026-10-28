@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 /// often as it is this pane's — the operator's own desktop session, the run that was quit a
 /// minute ago, the pane next door. The process is the identity, and this is what a node manages
 /// to learn about one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct PaneProcess {
     pub pid: u32,
     /// What Claude records verbatim as `procStart` ([`kampr_proc::Start::token`]). Comparing it
@@ -19,6 +19,17 @@ pub struct PaneProcess {
     /// process existed cannot be that process's.
     pub started: Started,
 }
+
+/// `started` is left out: it is re-derived from `uptime` and the wall clock on every look, so the
+/// same process never reads the same instant twice, and a pane compared on it changed identity on
+/// every tick. The kernel's start token already says the same thing exactly.
+impl PartialEq for PaneProcess {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid == other.pid && self.start == other.start
+    }
+}
+
+impl Eq for PaneProcess {}
 
 /// When a process started, and the answer that is neither an instant nor "it has gone".
 ///

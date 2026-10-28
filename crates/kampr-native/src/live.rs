@@ -17,8 +17,9 @@ const CLAIMED: Duration = Duration::from_secs(2);
 /// Claude's and codex's spinners repaint several times a second, so a working harness never goes
 /// this long without output; a prompt that is only blinking its cursor writes nothing at all.
 pub(crate) const WORKING: Duration = Duration::from_millis(1500);
-/// Output this soon after a keystroke is the terminal echoing it, not the program working.
 const READ: &str = "read";
+/// Output this soon after a keystroke is the terminal echoing it, and this soon after a resize is
+/// the program redrawing for the new size; neither is the program working.
 const ECHO: Duration = Duration::from_millis(300);
 
 pub(crate) struct Live {
@@ -44,6 +45,7 @@ struct State {
 #[derive(Default)]
 struct Activity {
     input: Option<Instant>,
+    resized: Option<Instant>,
     output: Option<Instant>,
     working: bool,
     done: bool,
@@ -130,6 +132,8 @@ impl Live {
         if let Some(bytes) = state.screen.frame_diff() {
             let _ = self.events.send(PaneEvent::Bytes { full: true, bytes });
         }
+        drop(state);
+        self.activity.lock().unwrap().resized = Some(Instant::now());
         true
     }
 
@@ -421,9 +425,10 @@ impl Live {
         {
             let mut activity = self.activity.lock().unwrap();
             let now = Instant::now();
-            if activity
-                .input
-                .is_none_or(|at| now.saturating_duration_since(at) > ECHO)
+            if [activity.input, activity.resized]
+                .into_iter()
+                .flatten()
+                .all(|at| now.saturating_duration_since(at) > ECHO)
             {
                 activity.output = Some(now);
             }

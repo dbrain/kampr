@@ -721,6 +721,48 @@ async fn output_is_working_and_its_end_is_done_until_somebody_types() {
     client.pane(&id, |p| p["agent_status"] == "idle").await;
 }
 
+/// A shell redraws its prompt for every new size, and two screens of different sizes taking turns
+/// at a session resize it every time either is looked at: an idle shell read as working, then
+/// done, over and over.
+#[tokio::test]
+async fn a_redraw_for_a_new_size_is_not_work() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let id = client
+        .create(
+            &[
+                "sh",
+                "-c",
+                "trap 'printf \"\\r$ REDRAWN \"' WINCH; printf '$ '; while :; do sleep 0.05; done",
+            ],
+            json!({}),
+        )
+        .await;
+    client.watch(&id, false).await;
+    client.pane(&id, |p| p["agent_status"] == "done").await;
+    client.type_text(&id, "x").await;
+    client.pane(&id, |p| p["agent_status"] == "idle").await;
+    for (cols, rows) in [(100, 30), (90, 28), (110, 32)] {
+        let ack = client
+            .manage(json!({ "op": "pane.size", "at": id, "cols": cols, "rows": rows }))
+            .await;
+        assert_eq!(ack["ok"], json!(true), "{ack}");
+        let quiet = tokio::time::Instant::now() + Duration::from_millis(700);
+        while let left = quiet.saturating_duration_since(tokio::time::Instant::now())
+            && !left.is_zero()
+        {
+            client.pump(left).await;
+            let status = &client.panes[&id]["agent_status"];
+            assert_eq!(status, "idle", "resized to {cols}x{rows}");
+        }
+    }
+    assert!(
+        client.screen(&id).iter().any(|r| r.contains("REDRAWN")),
+        "the shell never redrew: {:?}",
+        client.screen(&id)
+    );
+}
+
 /// **Answered live, never from the replay, and never over a host.** The query in the log was asked
 /// of whoever was there when it was written; a node restarting and answering it again types the
 /// answer into the program that is reading the terminal today, which here is a `cat` that would
@@ -1103,6 +1145,25 @@ async fn a_claude_under_a_shell_has_its_conversation_title_and_marker_served() {
     assert!(
         text.contains("NATIVE TURN") && !text.contains("SOMEBODY ELSE"),
         "{convo}"
+    );
+
+    // A process's start instant is re-derived from `uptime` on every look, so it never reads the
+    // same twice; comparing it tore the conversation down and re-paged it on every tick, ten
+    // times a second for as long as anybody watched.
+    let quiet = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while let left = quiet.saturating_duration_since(tokio::time::Instant::now())
+        && !left.is_zero()
+    {
+        client.pump(left).await;
+    }
+    let again: Vec<_> = client
+        .others
+        .iter()
+        .filter(|v| v["t"] == "convo" || v["t"] == "convo.turn")
+        .collect();
+    assert!(
+        again.is_empty(),
+        "the conversation was sent again with nothing changed: {again:?}"
     );
 }
 
