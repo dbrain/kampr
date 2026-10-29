@@ -146,6 +146,29 @@ private fun putRival(tag: String) {
 }
 
 @OptIn(ExperimentalWasmJsInterop::class)
+private fun putShadowRival() {
+    js(
+        """
+        (function () {
+            var old = globalThis.__kamprRival;
+            if (old && old.parentNode) old.parentNode.removeChild(old);
+            var host = document.createElement('div');
+            var field = document.createElement('textarea');
+            host.attachShadow({ mode: 'open' }).appendChild(field);
+            document.body.appendChild(host);
+            globalThis.__kamprRival = host;
+            field.focus();
+        })()
+        """,
+    )
+}
+
+@OptIn(ExperimentalWasmJsInterop::class)
+private fun shadowRivalFocused(): Boolean = js(
+    "(function () { var h = globalThis.__kamprRival; return !!h && h.shadowRoot.activeElement !== null; })()",
+)
+
+@OptIn(ExperimentalWasmJsInterop::class)
 private fun dismissRival() {
     js(
         """
@@ -290,6 +313,47 @@ class BrowserInputTest {
         dismissRival()
         withContext(Dispatchers.Default) { delay(TURN_MS) }
         assertTrue(inputFocused(), "the pane never heard the composer hand the keyboard back")
+        focusInput(false)
+    }
+
+    // Compose's text input is a `textarea` inside the shadow root `ComposeViewport` builds, and
+    // `document.activeElement` stops at the shadow host: a reclaim that trusted it saw a `DIV`,
+    // called the composer "not typing" and took the keyboard, so the operator's words reached the
+    // terminal. Measured against a rival that does not fight back, as Compose's does.
+    @Test
+    fun aTextFieldInsideAShadowRootKeepsTheKeyboardThroughAReclaim() {
+        installInput()
+        focusInput(true)
+        putShadowRival()
+        assertTrue(shadowRivalFocused(), "the shadow rival never took the focus, so this proves nothing")
+
+        reclaimInputFocus()
+
+        assertTrue(shadowRivalFocused(), "the pane stole the keyboard from a text field in a shadow root")
+        assertFalse(inputFocused())
+        dismissRival()
+        focusInput(false)
+    }
+
+    // `enabled` flips back on when a sheet, a prompt or a cover closes, and the pane claims the
+    // keyboard for it. That flip has nothing to do with where the operator is typing, so it must
+    // not take the slot from a text field that has it; a gesture on the grid still does.
+    @Test
+    fun aPaneComingBackOnYieldsToATextFieldButAGestureDoesNot() {
+        installInput()
+        focusInput(true)
+        putShadowRival()
+        assertTrue(shadowRivalFocused(), "the shadow rival never took the focus, so this proves nothing")
+
+        focusInput(true, yieldToText = true)
+
+        assertTrue(shadowRivalFocused(), "the pane took the keyboard from a text field when it came back on")
+        assertFalse(inputFocused())
+
+        focusInput(true)
+
+        assertTrue(inputFocused(), "a gesture on the grid no longer takes the keyboard")
+        dismissRival()
         focusInput(false)
     }
 

@@ -41,6 +41,14 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: (
             document.body.appendChild(el);
 
             var state = { el: el, queue: [], hold: false, notify: notify, chord: chord, reclaim: reclaim };
+            state.typing = function () {
+                var active = document.activeElement;
+                while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                    active = active.shadowRoot.activeElement;
+                }
+                return !!active && active !== el && (active.tagName === 'INPUT' ||
+                    active.tagName === 'TEXTAREA' || active.isContentEditable);
+            };
             document.addEventListener('focusout', function () { setTimeout(function () { state.reclaim(); }, 0); }, true);
             globalThis.__kamprInput = state;
 
@@ -263,15 +271,24 @@ internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean
 // point made both work immediately, which is what this does. The canvas already carries
 // `tabindex="0"`; it lives inside the shadow root `ComposeViewport` builds, so it is found by
 // walking those rather than by a plain `querySelector`.
+//
+// `yieldToText` is for a claim nobody gestured for — `enabled` coming back on — which must not
+// take the slot from a text field that has it. The hold is still set, so the reclaim hands the
+// keys to the pane when that field lets go.
 @OptIn(ExperimentalWasmJsInterop::class)
-internal fun focusInput(open: Boolean) {
+internal fun focusInput(open: Boolean, yieldToText: Boolean = false) {
     js(
         """
         (function () {
             var s = globalThis.__kamprInput;
             if (!s) return;
             s.hold = open;
-            if (open) { s.el.textContent = ''; s.el.focus({ preventScroll: true }); return; }
+            if (open) {
+                if (yieldToText && s.typing()) return;
+                s.el.textContent = '';
+                s.el.focus({ preventScroll: true });
+                return;
+            }
             s.el.blur();
             var find = function (root) {
                 var c = root.querySelector ? root.querySelector('canvas') : null;
@@ -308,7 +325,9 @@ internal fun focusInput(open: Boolean) {
 // per-frame renewal held every desk tab with a pane open at the display's refresh rate.
 //
 // Standing down for a live text field is what keeps the composer usable: Compose's own text input
-// is a real `<textarea>` in this DOM, so an editable element holding the focus is always someone
+// is a real `<textarea>` in this DOM, inside the shadow root `ComposeViewport` builds, where
+// `document.activeElement` names only the host — so the walk goes down through shadow roots to
+// the element that really holds the focus. An editable element holding the focus is always someone
 // who needs the keys more than the pane does. Everything else — a button, the body, nothing at
 // all — is not typing, and the pane takes the slot back.
 private const val RECLAIM_BACKSTOP_MS = 250L
@@ -320,10 +339,7 @@ internal fun reclaimInputFocus() {
         (function () {
             var s = globalThis.__kamprInput;
             if (!s || !s.hold) return;
-            var active = document.activeElement;
-            if (active === s.el) return;
-            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
-                           active.isContentEditable)) return;
+            if (document.activeElement === s.el || s.typing()) return;
             s.el.focus({ preventScroll: true });
         })()
         """,
@@ -340,8 +356,11 @@ actual fun PaneTextInput(
 ) {
     LaunchedEffect(Unit) { installInput() }
     val touch = remember { touchBrowser() }
-    LaunchedEffect(session.keyboardOpen, session.focusRequests, session.surfaceSettled, enabled) {
+    LaunchedEffect(session.keyboardOpen, session.focusRequests, session.surfaceSettled) {
         focusInput(holdsInput(enabled, session.keyboardOpen, touch))
+    }
+    LaunchedEffect(enabled) {
+        focusInput(holdsInput(enabled, session.keyboardOpen, touch), yieldToText = true)
     }
     DisposableEffect(sink, enabled) {
         deliverInputTo(if (enabled) sink::type else null)
