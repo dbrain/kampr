@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::body::Body;
+use axum::body::{Body, BodyDataStream};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -56,50 +56,76 @@ pub async fn upload(
     Query(target): Query<Target>,
     body: Body,
 ) -> Response {
+    let mut body = body.into_data_stream();
     if let Some(response) = auth.refused(&node, "api.upload") {
+        drain(&node, &mut body).await;
         return response;
     }
-    let Some((node_id, _)) = locator
-        .split_once('/')
-        .filter(|(id, local)| !id.is_empty() && !local.is_empty())
-    else {
-        return status("not_found");
-    };
-    let name = target.name.unwrap_or_default();
-    if !valid_name(&name) {
-        return status("bad_name");
-    }
-    let Some(dir) = target.dir.filter(|d| !d.is_empty()) else {
-        return status("not_found");
-    };
-    let written = match node.route(node_id) {
-        Some(_) => local(&node, &dir, &name, body).await,
-        None => relayed(&node, node_id, &dir, &name, body).await,
-    };
-    match written {
+    match accept(&node, &locator, target, &mut body).await {
         Ok(written) => {
             audit(&node, &auth.device, &auth.peer, &written);
             created(&written.path.display().to_string(), written.bytes)
         }
-        Err(code) => status(&code),
+        Err(code) => {
+            if code != IDLE && code != UNFINISHED {
+                drain(&node, &mut body).await;
+            }
+            status(&code)
+        }
     }
 }
 
-async fn local(node: &Node, dir: &str, name: &str, body: Body) -> Result<Written, String> {
+async fn accept(
+    node: &Node,
+    locator: &str,
+    target: Target,
+    body: &mut BodyDataStream,
+) -> Result<Written, String> {
+    let Some((node_id, _)) = locator
+        .split_once('/')
+        .filter(|(id, local)| !id.is_empty() && !local.is_empty())
+    else {
+        return Err("not_found".into());
+    };
+    let name = target.name.unwrap_or_default();
+    if !valid_name(&name) {
+        return Err("bad_name".into());
+    }
+    let Some(dir) = target.dir.filter(|d| !d.is_empty()) else {
+        return Err("not_found".into());
+    };
+    match node.route(node_id) {
+        Some(_) => local(node, &dir, &name, body).await,
+        None => relayed(node, node_id, &dir, &name, body).await,
+    }
+}
+
+/// A refusal sent with the body still arriving closes a socket that has unread bytes in it, and the
+/// reset that follows can reach the client before the answer does: a browser shows a network error
+/// rather than the reason. Bounded, so a huge upload to a bad target is cut off rather than taken
+/// in whole just to be refused.
+async fn drain(node: &Node, body: &mut BodyDataStream) {
+    let mut left = DRAINED;
+    while left > 0
+        && let Ok(Some(chunk)) = next(node, body).await
+    {
+        left = left.saturating_sub(chunk.len());
+    }
+}
+
+const DRAINED: usize = 16 * 1024 * 1024;
+
+async fn local(node: &Node, dir: &str, name: &str, body: &mut BodyDataStream) -> Result<Written, String> {
     let mut staged = Staged::open(node, dir, name)
         .await
         .map_err(|e: UploadError| e.code().to_string())?;
-    let mut body = body.into_data_stream();
-    while let Some(chunk) = next(node, &mut body).await? {
+    while let Some(chunk) = next(node, body).await? {
         staged.write(&chunk).await.map_err(|e| failed(&e))?;
     }
     staged.commit().await.map_err(|e| failed(&e))
 }
 
-async fn next(
-    node: &Node,
-    body: &mut axum::body::BodyDataStream,
-) -> Result<Option<axum::body::Bytes>, String> {
+async fn next(node: &Node, body: &mut BodyDataStream) -> Result<Option<axum::body::Bytes>, String> {
     match tokio::time::timeout(idle(node), body.next()).await {
         Ok(Some(Ok(chunk))) => Ok(Some(chunk)),
         Ok(Some(Err(_))) => Err(UNFINISHED.to_string()),
@@ -115,7 +141,13 @@ fn failed(e: &dyn std::fmt::Display) -> String {
 
 /// Streams the body to the peer a window at a time, so the hub holds a chunk and never the file.
 /// A client that walks away drops the upload, which tells the peer to throw away what it has.
-async fn relayed(node: &Node, node_id: &str, dir: &str, name: &str, body: Body) -> Result<Written, String> {
+async fn relayed(
+    node: &Node,
+    node_id: &str,
+    dir: &str,
+    name: &str,
+    body: &mut BodyDataStream,
+) -> Result<Written, String> {
     let refused = |e: FetchError| match e {
         FetchError::Refused(code) => code,
         e => {
@@ -124,8 +156,7 @@ async fn relayed(node: &Node, node_id: &str, dir: &str, name: &str, body: Body) 
         }
     };
     let mut upload = node.peers.upload(node_id, dir, name).await.map_err(refused)?;
-    let mut body = body.into_data_stream();
-    while let Some(chunk) = next(node, &mut body).await? {
+    while let Some(chunk) = next(node, body).await? {
         upload.send(&chunk).await.map_err(refused)?;
     }
     let written: Value = upload.finish().await.map_err(refused)?;

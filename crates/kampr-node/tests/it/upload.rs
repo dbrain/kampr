@@ -145,6 +145,32 @@ async fn an_upload_into_a_directory_this_node_cannot_write_is_the_same_404() {
     std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o700)).expect("chmod");
 }
 
+/// A refusal that answers before reading the body closes a socket with the body still in it, and
+/// the kernel resets it, which can throw the answer away before the client reads it: macOS did,
+/// on CI, and a browser shows that as a network error rather than the reason. Each kind of early
+/// refusal, with a body big enough to be in flight when it is sent, a few times over.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_upload_reaches_the_client_as_its_answer_rather_than_a_reset() {
+    let c = Client::start().await;
+    let dir = tempfile::tempdir().expect("a dir");
+    let root = dir.path().canonicalize().expect("a root");
+    let body = pattern(8 * MIB);
+    let node = c.h.node.node_id();
+    let missing = root.join("missing").display().to_string();
+    let here = root.display().to_string();
+    let readonly = format!("Bearer {}", c.h.token_for(Role::Readonly).await);
+    for _ in 0..5 {
+        for (token, dir, name, want) in [
+            (&c.full, here.as_str(), "a/b", 400),
+            (&c.full, missing.as_str(), "x.txt", 404),
+            (&readonly, here.as_str(), "x.txt", 403),
+        ] {
+            let refused = upload_as(&c, token, node, dir, name, &body).await;
+            assert_eq!(refused.status, want, "{dir} {name}: {}", refused.text());
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tilde_directory_is_the_nodes_own_home() {
     let c = Client::start().await;

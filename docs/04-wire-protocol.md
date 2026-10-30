@@ -851,6 +851,11 @@ POST /api/upload/01JNODE/_?dir=~/Downloads&name=shot.png
   answered `408`. Each open upload is recorded under `<state>/uploads/` until it ends, so a node
   killed mid-upload removes those temp files when it next starts. There is no size cap: the body is never buffered (axum's 2 MB body limit lives
   in its buffering extractors and does not apply to a raw body).
+- **A refusal reads the body first**, up to 16 MiB, and then answers. Answering with the body
+  still arriving closes a socket with unread bytes in it, and the reset can reach the client
+  before the answer: a browser shows a network error instead of the reason. A body past that is
+  cut off rather than taken whole just to be refused. A body that stopped moving is not waited for
+  a second time.
 - A node this one does not serve is relayed over the mesh with `up.*`, below, at the rate the peer
   writes.
 
