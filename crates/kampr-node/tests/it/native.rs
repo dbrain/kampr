@@ -733,7 +733,7 @@ async fn a_redraw_for_a_new_size_is_not_work() {
             &[
                 "sh",
                 "-c",
-                "trap 'printf \"\\r$ REDRAWN \"' WINCH; printf '$ '; while :; do sleep 0.05; done",
+                "trap 'printf \"\\r$ REDRAWN \"' WINCH; sleep 1; printf '$ '; while :; do sleep 0.05; done",
             ],
             json!({}),
         )
