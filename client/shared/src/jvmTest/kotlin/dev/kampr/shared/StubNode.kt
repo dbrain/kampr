@@ -10,6 +10,7 @@ import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import kotlin.random.Random
 
 // A ktor client talking to a real socket, because the defect is what survives the socket dying:
 // a fake transport that never dies agrees with the code about a case neither of them has.
@@ -28,16 +29,15 @@ internal class StubNode(private val greeting: String = HELLO) {
     private var server: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<Socket>()
 
-    // Bound before it is known, never chosen and then bound. Asking the kernel for a free port and
-    // binding it in a second step leaves a window for anything else on the machine to take it, and
-    // on a loaded runner something does. Zero on the first start, and the port it was given on
-    // every restart after that, because a test that stops the node and brings it back has to bring
-    // it back to the address its client is still dialling.
+    // Below every OS's ephemeral range, because a test that stops the node and brings it back has to
+    // bring it back to the address its client is still dialling, and an ephemeral port freed by the
+    // stop is handed to the next server anywhere on the machine that binds port 0 (a parallel test
+    // JVM did, on CI). Nothing is given these unasked, so a clash is only another explicit choice.
     var port: Int = 0
         private set
 
     fun start() {
-        val socket = ServerSocket(port)
+        val socket = if (port == 0) unclaimed() else ServerSocket(port)
         port = socket.localPort
         server = socket
         thread(isDaemon = true) {
@@ -47,6 +47,11 @@ internal class StubNode(private val greeting: String = HELLO) {
                 thread(isDaemon = true) { serve(client) }
             }
         }
+    }
+
+    private fun unclaimed(): ServerSocket {
+        repeat(100) { runCatching { return ServerSocket(Random.nextInt(20_000, 32_768)) } }
+        error("no free port below the ephemeral range")
     }
 
     // Pushes one server frame to every connected client. `hello` goes out on accept; anything
