@@ -592,6 +592,9 @@ sealed interface ServerMsg {
         val held: Boolean? = null,
     ) : ServerMsg
 
+    // Somebody else took a pane this session was holding at a view's size (ADR 0013).
+    data class HoldLost(val pane: String) : ServerMsg
+
     data class NodeCaps(
         val node: String,
         val agentKinds: List<String>,

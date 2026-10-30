@@ -175,7 +175,7 @@ pub(crate) struct Client {
     grids: HashMap<String, (Value, BTreeMap<u64, Value>)>,
     pub(crate) resets: HashMap<String, Value>,
     pub(crate) history: HashMap<String, Vec<String>>,
-    others: Vec<Value>,
+    pub(crate) others: Vec<Value>,
 }
 
 impl Client {
@@ -199,7 +199,7 @@ impl Client {
             .expect("a send");
     }
 
-    async fn pump(&mut self, within: Duration) -> bool {
+    pub(crate) async fn pump(&mut self, within: Duration) -> bool {
         let Ok(Some(Ok(tungstenite::Message::Text(text)))) =
             tokio::time::timeout(within, self.socket.next()).await
         else {
@@ -578,6 +578,148 @@ async fn a_released_match_goes_to_the_desk_still_showing_the_session() {
         "{put}"
     );
     drop(desk);
+}
+
+/// A viewer whose hold somebody else took is told, so its client stops believing it holds the
+/// pane, and the release it sends on its way out lands on nothing rather than on the hold that
+/// replaced it. A view re-claiming its own pane at a new size has lost nothing.
+#[tokio::test]
+async fn a_viewer_whose_hold_is_taken_is_told_and_its_release_leaves_the_new_one() {
+    let h = Harness::start().await;
+    let mut desk = h.client().await;
+    let mut phone = h.client().await;
+    let match_ = json!({ "cols": 90, "rows": 60, "mode": "match" });
+    let plain = json!({ "cols": 90, "rows": 60 });
+    let panel_release = json!({ "mode": "release" });
+    for (taking, left) in [(match_, (90, 60)), (plain, (90, 60)), (panel_release, (80, 24))] {
+        let id = desk.create(&["sh"], json!({})).await;
+        let mut lease = Value::Null;
+        for rows in [45, 48] {
+            let held = desk
+                .manage(json!({ "op": "pane.size", "at": id, "cols": 150, "rows": rows, "mode": "match" }))
+                .await;
+            assert_eq!(held["ok"], json!(true), "{held}");
+            lease = held["lease"].clone();
+        }
+        let mut take = taking.clone();
+        take["op"] = json!("pane.size");
+        take["at"] = json!(id);
+        let taken = phone.manage(take).await;
+        assert_eq!(taken["ok"], json!(true), "{taking}: {taken}");
+
+        let lost = desk.reply("hold.lost").await;
+        assert_eq!(lost["pane"], json!(id), "{taking}: {lost}");
+        assert_eq!(
+            lost["lease"], lease,
+            "{taking}: a re-claim of its own was reported lost: {lost}"
+        );
+
+        let released = desk
+            .manage(json!({ "op": "pane.size", "at": id, "mode": "release" }))
+            .await;
+        assert_eq!(released["ok"], json!(true), "{taking}: {released}");
+        desk.pump(Duration::from_millis(700)).await;
+        let pane = desk.pane(&id, |_| true).await;
+        assert_eq!(
+            (pane["cols"].clone(), pane["rows"].clone()),
+            (json!(left.0), json!(left.1)),
+            "{taking}: the release of a lost hold let go of the one that took it: {pane}",
+        );
+        assert!(
+            desk.others.iter().all(|v| v["t"] != "hold.lost"),
+            "{:?}",
+            desk.others
+        );
+    }
+}
+
+/// On a peer every viewer behind the hub shares one session, so the session cannot keep the news
+/// to itself: a hold taken from one of them, by another viewer through the same link or by
+/// somebody on this machine, goes back up the link with the lease it ended, for the hub to hand
+/// to whichever of its viewers held that lease.
+#[tokio::test]
+async fn a_hold_taken_from_a_viewer_behind_the_hub_goes_back_up_the_link() {
+    let h = Harness::start().await;
+    let mut local = h.client().await;
+    let id = local.create(&["sh"], json!({})).await;
+    let device = h
+        .node
+        .auth
+        .store()
+        .create_device("hub", Role::Full, kampr_auth::now(), None, None, None)
+        .await
+        .expect("a device");
+    let (hub_side, peer_side) = kampr_mesh::transport::pair();
+    let (out, incoming) = peer_side.split();
+    let session = tokio::spawn(kampr_node::session::run_on(
+        out,
+        incoming,
+        h.node.clone(),
+        device,
+        "mesh:test".into(),
+        kampr_node::session::Caller::Hub,
+    ));
+    use kampr_mesh::Outgoing;
+    let (mut hub, mut heard) = hub_side.split();
+    let mut seen = Vec::new();
+    let claim = |rid: &str, cols: u16| {
+        json!({ "t": "manage", "op": "pane.size", "at": id, "rid": rid,
+                "cols": cols, "rows": 40, "mode": "match" })
+        .to_string()
+    };
+
+    assert!(hub.send(claim("a", 150)).await);
+    let first = from_the_peer(&mut heard, &mut seen, |v| v["rid"] == "a").await;
+    assert!(hub.send(claim("b", 120)).await);
+    let second = from_the_peer(&mut heard, &mut seen, |v| v["rid"] == "b").await;
+    let lost = from_the_peer(&mut heard, &mut seen, |v| v["t"] == "hold.lost").await;
+    assert_eq!(
+        (&lost["pane"], &lost["lease"]),
+        (&json!(id), &first["lease"]),
+        "{lost}"
+    );
+
+    let taken = local
+        .manage(json!({ "op": "pane.size", "at": id, "cols": 90, "rows": 60, "mode": "match" }))
+        .await;
+    assert_eq!(taken["ok"], json!(true), "{taken}");
+    let lost = from_the_peer(&mut heard, &mut seen, |v| v["t"] == "hold.lost").await;
+    assert_eq!(
+        (&lost["pane"], &lost["lease"]),
+        (&json!(id), &second["lease"]),
+        "{lost}"
+    );
+
+    // A hub names the lease on every release it sends for a view, so a bare one is an operator's
+    // at the panel, and it lets go of whatever stands.
+    let panel = json!({ "t": "manage", "op": "pane.size", "at": id, "mode": "release", "rid": "c" });
+    assert!(hub.send(panel.to_string()).await);
+    let released = from_the_peer(&mut heard, &mut seen, |v| v["rid"] == "c").await;
+    assert_eq!(
+        released["was_held"],
+        json!(true),
+        "the panel's release was dropped: {released}"
+    );
+    session.abort();
+}
+
+async fn from_the_peer(
+    heard: &mut impl kampr_mesh::Incoming,
+    seen: &mut Vec<Value>,
+    want: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = tokio::time::Instant::now() + SOON;
+    loop {
+        if let Some(at) = seen.iter().position(&want) {
+            return seen.remove(at);
+        }
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let text = tokio::time::timeout(left, heard.recv())
+            .await
+            .unwrap_or_else(|_| panic!("never heard it; heard {seen:?}"))
+            .expect("the session ended");
+        seen.push(serde_json::from_str(&text).expect("a frame"));
+    }
 }
 
 #[tokio::test]

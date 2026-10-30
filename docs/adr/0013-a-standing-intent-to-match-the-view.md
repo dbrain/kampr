@@ -171,6 +171,28 @@ its own is Kampr's: `kampr-fleet` gives it a geometry when the run starts and th
 desk to trample. It is also not a herdr pane, so `parse_target` refuses `pane.size` on one outright
 and always has. The client does not offer matching on one.
 
+### A taken hold is told, and a view nobody can see holds nothing (amended 2026-10-30)
+
+The operator, on 0.1.128: a pane open on a phone left in the background for a long time, and the
+wasm desktop showing that pane *"tiny ... until bringing pane to foreground then background then
+foreground again"*. The hub's audit log had the phone claiming `grow` on reconnects while it was
+put away, and nothing from the browser after it. Two defects, one on each side of point 2.
+
+- **The loser never knew it had lost.** The node displaced the browser's lease and said nothing, so
+  the browser went on believing it held the pane at its window's size, and a pane believed held is
+  not asked for again. Only being away longer than the linger made it forget. The node now sends
+  `hold.lost` to the socket whose lease ended, naming the lease, and the client drops its belief.
+  It still does not fight back: it asks again on its own next edge, which now includes **somebody
+  coming back to the window** — a phone brought to the front, a tab shown, a browser window focused.
+  Those are the operator's own acts, so two viewers still have nothing to alternate over.
+- **A phone in a pocket is nobody looking.** The view's claim re-ran on every reconnect, and a
+  backgrounded phone reconnects. A view nobody can see now holds nothing: it lets go when the app or
+  tab goes out of sight, claims nothing while it is away, and asks again when it is seen.
+
+A lease the client is told it lost leaves a release already on its way, naming no lease. Run, it
+would be the panel's release of whatever stands, which is the hold that took the pane, so the node
+acks it and drops it.
+
 ### Consent, and not nagging
 
 The panel's confirmation names the consequence before anything is claimed, and it fires on the

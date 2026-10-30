@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
 mod upload;
@@ -24,6 +24,7 @@ pub use upload::Upload;
 /// hub's own shadow — never a stall, and never a round trip to the peer. Only grid frames are
 /// spent that way; see [`crate::fanout`].
 const PANE_FANOUT: usize = 64;
+const LOST_DEPTH: usize = 64;
 
 /// Requests the hub may have outstanding towards one peer. These are `watch`, `input` and
 /// `manage` — keystrokes and structure, never frames — so the bound is generous and reaching it
@@ -204,6 +205,7 @@ pub struct Peers {
     links: Mutex<Vec<Arc<PeerLink>>>,
     remembered: Mutex<HashMap<String, Remembered>>,
     herd: watch::Sender<Arc<PeerHerd>>,
+    lost: broadcast::Sender<(String, u64)>,
 }
 
 impl Peers {
@@ -214,7 +216,24 @@ impl Peers {
             links: Mutex::new(Vec::new()),
             remembered: Mutex::new(HashMap::new()),
             herd,
+            lost: broadcast::channel(LOST_DEPTH).0,
         })
+    }
+
+    /// Every hold a peer says was taken from one of this hub's viewers, as the global pane id and
+    /// the peer's lease.
+    pub fn subscribe_lost(&self) -> broadcast::Receiver<(String, u64)> {
+        self.lost.subscribe()
+    }
+
+    /// Only about a pane of the node this link is, since nothing else checks what a peer names.
+    fn hold_lost(&self, link: &Arc<PeerLink>, message: &Value) {
+        let (Some(pane), Some(lease)) = (message["pane"].as_str(), message["lease"].as_u64()) else {
+            return;
+        };
+        if self.link_for(pane).is_some_and(|owner| Arc::ptr_eq(&owner, link)) {
+            let _ = self.lost.send((pane.to_string(), lease));
+        }
     }
 
     pub fn herd(&self) -> Arc<PeerHerd> {
@@ -597,6 +616,7 @@ impl Peers {
             "managed" => link.managed(message),
             "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),
             "up.more" | "up.ok" | "up.error" => link.upload_event(&message),
+            "hold.lost" => self.hold_lost(link, &message),
             // The one thing in `hello` the handshake did not already establish: whether this
             // peer's build answers `att.fetch`. A hub that guessed would advertise an attachment
             // button an older peer cannot serve, which is the bug this whole path exists to fix.

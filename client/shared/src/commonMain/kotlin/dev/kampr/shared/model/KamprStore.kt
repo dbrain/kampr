@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 sealed interface ConnectionStatus {
     data object Idle : ConnectionStatus
@@ -92,6 +93,14 @@ class KamprStore {
     // leave a slot holding only the second.
     private val _acks = MutableSharedFlow<ServerMsg.Managed>(extraBufferCapacity = ACK_BACKLOG)
     val acks: SharedFlow<ServerMsg.Managed> = _acks.asSharedFlow()
+
+    private val _holdsLost = MutableSharedFlow<String>(extraBufferCapacity = ACK_BACKLOG)
+    val holdsLost: SharedFlow<String> = _holdsLost.asSharedFlow()
+
+    private val _looking = MutableStateFlow(Looking())
+    val looking: StateFlow<Looking> = _looking.asStateFlow()
+
+    fun looked(shown: Boolean) = _looking.update { it.turned(shown) }
 
     private val paneStates = mutableStateMapOf<String, PaneState>()
     val styles = StyleTable()
@@ -352,6 +361,8 @@ class KamprStore {
                 _managed.value = msg
                 _acks.tryEmit(msg)
             }
+
+            is ServerMsg.HoldLost -> _holdsLost.tryEmit(msg.pane)
 
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
 

@@ -50,6 +50,7 @@ import dev.kampr.shared.wire.Wire
 import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 
 enum class PaneView(val key: String) {
@@ -170,6 +171,8 @@ class AppState(
     suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean = false) = matches.claim(paneId, cols, rows, grow)
 
     fun releaseMatch(paneId: String, linger: Boolean) = matches.release(paneId, linger)
+
+    val holdsLost: SharedFlow<String> get() = matches.lost
 
     var theme: ThemeSpec by mutableStateOf(themeOf(prefs.get(KEY_THEME)))
         private set
@@ -807,6 +810,8 @@ class AppState(
         }
         // A claim is believed when the node answers it and not before — see `MatchHolds`.
         scope.launch { store.acks.collect(matches::acked) }
+        scope.launch { store.holdsLost.collect(matches::lost) }
+        scope.launch { store.looking.collect { if (!it.shown) matches.hidden() } }
         scope.launch { store.prefs.collect { adoptRememberedView() } }
         scope.launch {
             store.herd.collect {

@@ -170,6 +170,7 @@ fun KamprApp(
                 LocalHardKeyboard provides hardKeyboardAttached(),
                 LocalPaneIo provides remember(state) { AppPaneIo(state) },
                 LocalConnectionStatus provides connectionStatus,
+                LocalLooking provides state.store.looking.collectAsState().value,
                 LocalManage provides remember(state) { AppManage(state) },
                 LocalMosaic provides remember(state, mosaic) {
                     if (mosaic.available) ({ state.go(Screen.Mosaic) }) else null
@@ -230,6 +231,7 @@ internal class AppPaneIo(private val state: AppState) : PaneIo {
     override suspend fun claimMatch(paneId: String, cols: Int, rows: Int, grow: Boolean) = state.claimMatch(paneId, cols, rows, grow)
     override val growsPanes: Boolean get() = state.store.hello.value?.caps?.paneGrow == true
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
+    override fun holdsLost() = state.holdsLost
     override fun reflow(paneId: String, cols: Int?) = state.connection.reflow(paneId, cols)
     override suspend fun attachment(paneId: String, id: String) = state.attachments(AttachmentBytes.Failed(UNCONNECTED)) { fetch(paneId, id) }
 

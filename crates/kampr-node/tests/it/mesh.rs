@@ -1703,6 +1703,60 @@ async fn a_hub_that_reclaims_a_pane_releases_the_lease_it_displaced_and_not_the_
     hub.stop();
 }
 
+/// A peer says when a hold it gave one of this hub's viewers was taken, naming the lease. The hub
+/// tells the viewer whose lease it was and only for that lease, and that viewer's release on the
+/// way out reaches the peer only as a release of the lost lease: without one it would let go of
+/// whatever hold stands, which is the one that took the pane.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hold_a_peer_took_from_a_viewer_reaches_that_viewer_and_its_release_names_the_lost_lease() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JLOST", "laptop").await;
+    let pane = "01JLOST/w1:p1";
+    peer.advertise(&[("01JLOST", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    watch_relayed(&mut client, &mut peer, pane).await;
+    claim_through(&mut client, &mut peer, pane, 120, 40, 7).await;
+
+    peer.say(json!({ "t": "hold.lost", "pane": pane, "lease": 6 }))
+        .await;
+    peer.say(json!({ "t": "hold.lost", "pane": pane, "lease": 7 }))
+        .await;
+    let lost = until(&mut client, "hold.lost", 10).await;
+    assert_eq!(
+        (&lost["pane"], &lost["lease"]),
+        (&json!(pane), &json!(7)),
+        "{lost}"
+    );
+
+    send(
+        &mut client,
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "mode": "release" }),
+    )
+    .await;
+    let released = until(&mut client, "managed", 10).await;
+    assert_eq!(released["ok"], json!(true), "{released}");
+    send(&mut client, json!({ "t": "input", "pane": pane, "text": "x" })).await;
+    loop {
+        let next = peer.next_but_ping().await;
+        if next["t"] == "input" {
+            break;
+        }
+        assert_eq!(
+            next["lease"],
+            json!(7),
+            "a release reached the peer naming no lease, which lets go of the hold that took the \
+             pane: {next}",
+        );
+    }
+
+    hub.stop();
+}
+
 /// One `match` claim through the hub, answered by the scripted peer with `lease`, and the ack the
 /// client is handed back.
 async fn claim_through(

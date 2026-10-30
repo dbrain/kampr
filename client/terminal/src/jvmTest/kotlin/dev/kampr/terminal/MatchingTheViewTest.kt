@@ -21,10 +21,12 @@ import androidx.compose.ui.test.runDesktopComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.Looking
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.LocalConnectionStatus
+import dev.kampr.shared.ui.LocalLooking
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalPaneIo
@@ -45,6 +47,7 @@ import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.terminal.view.TerminalView
 import dev.kampr.terminal.view.ZoomButton
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -88,10 +91,13 @@ private class SessionIo(
     val claims = mutableListOf<Triple<String, Int, Int>>()
     val grows = mutableListOf<Boolean>()
     val releases = mutableListOf<Pair<String, Boolean>>()
+    val lost = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
     override fun send(msg: ClientMsg) {
         sent += msg
     }
+
+    override fun holdsLost() = lost
 
     override fun prefs(paneId: String) = stored
 
@@ -162,6 +168,7 @@ private fun ComposeUiTest.terminal(
     status: () -> ConnectionStatus = { ConnectionStatus.Live("full") },
     header: Boolean = false,
     safe: () -> SafeArea = { Phone.BARS },
+    looking: () -> Looking = { Looking() },
     shown: () -> Boolean = { true },
 ) {
     setContent {
@@ -171,6 +178,7 @@ private fun ComposeUiTest.terminal(
             LocalSafeArea provides safe(),
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
             LocalConnectionStatus provides status(),
+            LocalLooking provides looking(),
         ) {
             Box(Modifier.size(size.first, size.second).keyboardInset()) {
                 if (shown()) {
@@ -259,6 +267,71 @@ class MatchingTheViewTest {
             "the pane was never claimed again after the socket came back, so a desk-sized window " +
                 "shows a pane at its own geometry while the strip says it is held: ${io.claims}",
         )
+    }
+
+    // The operator, on 0.1.128: a phone left in the background took the pane, and the desk went on
+    // showing it at the phone's size, because the view still believed it held it. Told the hold
+    // was taken, the view says so and asks again the next time somebody looks at the window, and
+    // not before: asking at once is two viewers taking the pane from each other (ADR 0013 point 2).
+    @Test
+    fun aHoldSomebodyElseTookIsAskedForAgainTheNextTimeTheWindowIsLookedAt() = runComposeUiTest {
+        val io = SessionIo()
+        var looking by mutableStateOf(Looking())
+        terminal(grid(cols = 40), io, DESK, PaneSession(Phone.PANE), header = true, looking = { looking })
+        quiet(1_000)
+        assertEquals(1, io.claims.size, "a desk did not claim the pane at all: ${io.claims}")
+
+        io.lost.tryEmit(Phone.PANE)
+        quiet(1_000)
+        assertFalse(saysHeld(), "the header says held over a pane somebody else took")
+        assertEquals(1, io.claims.size, "the view took the pane straight back: ${io.claims}")
+
+        looking = Looking(shown = true, at = 1)
+        quiet(1_000)
+        assertEquals(2, io.claims.size, "the window was looked at again and nothing asked: ${io.claims}")
+        assertTrue(saysHeld(), "the pane it took back is not said to be held")
+    }
+
+    // Nothing is composed while the app is out of sight, so a view may never see it go: it sees
+    // only that somebody is back. It asks the session then whatever it believes, because the
+    // session let go of the pane while it was away and the session is what answers from memory.
+    @Test
+    fun aViewSeenAgainAsksTheSessionEvenWhereItBelievesItHoldsThePane() = runComposeUiTest {
+        val io = SessionIo()
+        var looking by mutableStateOf(Looking())
+        terminal(grid(cols = 40), io, DESK, looking = { looking })
+        quiet(1_000)
+        assertEquals(1, io.claims.size, "${io.claims}")
+
+        looking = Looking(shown = true, at = 1)
+        quiet(1_000)
+        assertEquals(2, io.claims.size, "a view seen again asked nothing: ${io.claims}")
+    }
+
+    // A view nobody can see is not somebody looking at the pane, whatever its size: a phone in a
+    // pocket reconnecting is the write rule 3 forbids. It lets go, claims nothing while it is
+    // away, a reconnect included, and asks again when it is seen.
+    @Test
+    fun aViewNobodyCanSeeLetsThePaneGoAndClaimsNothingUntilItIsSeen() = runComposeUiTest {
+        val io = SessionIo()
+        var looking by mutableStateOf(Looking())
+        var status: ConnectionStatus by mutableStateOf(ConnectionStatus.Live("full"))
+        terminal(grid(cols = 40), io, DESK, status = { status }, looking = { looking })
+        quiet(1_000)
+        assertEquals(1, io.claims.size, "${io.claims}")
+
+        looking = Looking(shown = false)
+        quiet(400)
+        assertEquals(listOf(Phone.PANE to true), io.releases, "a hidden view kept the pane")
+        status = ConnectionStatus.Offline("the phone slept", 1_000)
+        quiet(400)
+        status = ConnectionStatus.Live("full")
+        quiet(1_000)
+        assertEquals(1, io.claims.size, "a view nobody can see claimed the pane: ${io.claims}")
+
+        looking = Looking(shown = true, at = 1)
+        quiet(1_000)
+        assertEquals(2, io.claims.size, "the view was seen again and asked nothing: ${io.claims}")
     }
 
     // **A claim the node refused is asked again**, because the view that asked is still open and

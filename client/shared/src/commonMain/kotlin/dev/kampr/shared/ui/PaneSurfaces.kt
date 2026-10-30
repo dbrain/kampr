@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.Looking
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.AttachmentSlice
@@ -19,6 +20,8 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.SizeMode
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 interface PaneSurfaces {
     @Composable
@@ -102,6 +105,9 @@ interface PaneIo {
 
     fun releaseMatch(paneId: String, linger: Boolean = true) = send(ClientMsg.Manage(ManageOp.PaneSize(paneId, mode = SizeMode.Release)))
 
+    // The panes whose hold somebody else took, as the node reports them.
+    fun holdsLost(): Flow<String> = emptyFlow()
+
     // The bytes behind a transcript attachment, on demand and over HTTP rather than over the
     // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines
     // every pane for seconds on a phone link.
@@ -148,3 +154,5 @@ val LocalPaneChrome: ProvidableCompositionLocal<PaneChrome?> = staticComposition
 // transcript drawn from memory looks exactly like a transcript that is current.
 val LocalConnectionStatus: ProvidableCompositionLocal<ConnectionStatus> =
     staticCompositionLocalOf { ConnectionStatus.Idle }
+
+val LocalLooking: ProvidableCompositionLocal<Looking> = staticCompositionLocalOf { Looking() }

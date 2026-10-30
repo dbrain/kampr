@@ -1369,6 +1369,71 @@ async fn a_claim_the_node_refused_is_asked_again_rather_than_remembered_as_a_hol
     assert_eq!((&again["cols"], &again["rows"]), (&json!(120), &json!(40)));
 }
 
+/// **The node says when somebody else took a pane this window was holding** (ADR 0013, amended
+/// 2026-10-30): a phone in a pocket reconnected and claimed it. This window stops saying it holds
+/// the pane and does not take it straight back, which is two viewers alternating over it; it asks
+/// again when the window or the pane moves.
+///
+/// The mutation that must fail: ignore `hold.lost`, and the size menu goes on offering to stop a
+/// hold somebody else has replaced.
+#[tokio::test]
+async fn a_hold_somebody_else_took_is_not_taken_straight_back_and_is_asked_for_on_the_next_move() {
+    let mut fake = Fake::start().await;
+    let (_client, mut events, mut conn, mut app) = desk(&mut fake).await;
+    let at = "01JNODE/w1:p1";
+
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    let claimed = conn.op().await;
+    conn.send(
+        json!({ "t": "managed", "rid": claimed["rid"], "op": "pane.size", "ok": true,
+                      "held": true, "lease": 7 }),
+    );
+    tokio::time::sleep(HUSH).await;
+    painted(&mut app, 110, 24);
+    app.match_view(Some(at), 120, 40);
+
+    conn.send(json!({ "t": "hold.lost", "pane": at, "lease": 7 }));
+    pump(&mut app, &mut events, |e| matches!(e, Event::HoldLost { .. })).await;
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    conn.sent_nothing().await;
+    shifted(&mut app, 'n');
+    ch(&mut app, 'r');
+    let menu = painted(&mut app, 110, 24);
+    assert!(
+        !menu.contains("stop matching"),
+        "a hold somebody else took is still offered to be stopped:\n{menu}"
+    );
+    tap(&mut app, KeyCode::Esc);
+
+    app.match_view(Some(at), 130, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 130, 40);
+    let again = conn.op().await;
+    assert_eq!(
+        again["mode"], "match",
+        "the window moved and asked nothing: {again}"
+    );
+    assert_eq!(again["cols"], json!(130), "{again}");
+
+    // And back to the size it lost, which is a move like any other.
+    app.match_view(Some(at), 120, 40);
+    tokio::time::sleep(HUSH).await;
+    app.match_view(Some(at), 120, 40);
+    let mut back = conn.op().await;
+    if back["mode"] == "release" {
+        back = conn.op().await;
+    }
+    assert_eq!(
+        (&back["mode"], &back["cols"]),
+        (&json!("match"), &json!(120)),
+        "{back}"
+    );
+}
+
 /// **The ladder does not climb into the gap a claim leaves.**
 ///
 /// Rung 2 asks the *terminal* to grow to the pane, and a matched pane is already the size of the

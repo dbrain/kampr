@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, warn};
 
 /// A release is a child exiting, which `Controller::release` already bounds at three seconds and
@@ -13,6 +13,7 @@ use tracing::{debug, warn};
 /// which is why this is twice the grace rather than equal to it.
 const FREE_TIMEOUT: Duration = Duration::from_secs(12);
 const FREE_POLL: Duration = Duration::from_millis(25);
+const LOST_DEPTH: usize = 64;
 
 /// Names one hold, so that letting go can be *scoped*: a viewer that hands a pane on to a newer
 /// one must not later release the hold that replaced its own.
@@ -59,13 +60,32 @@ type Held = HashMap<String, Entry>;
 /// that froze rather than closing (#284), or the whole task being cancelled — so a wall-clock
 /// ceiling would only ever fire on a client that was still there and still looking. See
 /// [`ADR 0013`](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
-#[derive(Default)]
 pub struct PaneHolds {
     inner: Arc<Mutex<Held>>,
     next: AtomicU64,
+    lost: broadcast::Sender<(String, HoldToken)>,
+}
+
+impl Default for PaneHolds {
+    fn default() -> Self {
+        Self {
+            inner: Arc::default(),
+            next: AtomicU64::default(),
+            lost: broadcast::channel(LOST_DEPTH).0,
+        }
+    }
 }
 
 impl PaneHolds {
+    /// Every hold ended by somebody other than its holder, as the pane and the token it ended.
+    pub fn subscribe_lost(&self) -> broadcast::Receiver<(String, HoldToken)> {
+        self.lost.subscribe()
+    }
+
+    fn taken(&self, pane: &str, token: HoldToken) {
+        let _ = self.lost.send((pane.to_string(), token));
+    }
+
     /// Parks a claimed controller against `pane`, and answers the token that names it.
     ///
     /// The caller is what makes sure the pane was free first — herdr allows one controller at a
@@ -162,6 +182,7 @@ impl PaneHolds {
                 entry.restore = None;
                 if let Some(tx) = entry.stop.take() {
                     let _ = tx.send(End::Superseded);
+                    self.taken(pane, entry.token);
                 }
                 true
             }
@@ -198,6 +219,7 @@ impl PaneHolds {
         let carried = entry.restore.take().map(|r| r.found);
         if let Some(tx) = entry.stop.take() {
             let _ = tx.send(End::Superseded);
+            self.taken(pane, entry.token);
         }
         carried
     }
@@ -297,6 +319,27 @@ mod tests {
         holds.wait_until_free("w1:p1").await;
         assert!(started.elapsed() >= FREE_TIMEOUT, "it gave up early");
         assert!(started.elapsed() < FREE_TIMEOUT * 2, "it waited far too long");
+    }
+
+    /// A hold ended by anyone but its own holder is announced with the token it ended, so the
+    /// session holding that token can tell its client; one its holder let go of is not.
+    #[tokio::test]
+    async fn a_hold_taken_from_its_holder_is_announced_and_one_let_go_of_is_not() {
+        let holds = PaneHolds::default();
+        let mut lost = holds.subscribe_lost();
+        let (released, _rx) = park_bare(&holds, "w1:p1");
+        assert!(holds.release("w1:p1"));
+        let (carried, _rx) = park_bare(&holds, "w1:p2");
+        holds.carry_for_match("w1:p2");
+        let (kept, _rx) = park_bare(&holds, "w1:p3");
+        assert!(holds.let_go("w1:p3", kept));
+
+        assert_eq!(lost.try_recv().ok(), Some(("w1:p1".to_string(), released)));
+        assert_eq!(lost.try_recv().ok(), Some(("w1:p2".to_string(), carried)));
+        assert!(
+            lost.try_recv().is_err(),
+            "a hold its own holder let go of was announced"
+        );
     }
 
     /// Newest holder wins, and the earlier one does not take the later one down with it. A viewer

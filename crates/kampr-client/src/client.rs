@@ -483,6 +483,13 @@ impl Inner {
                     self.emit(Event::Pong { n });
                 }
             }
+            "hold.lost" => {
+                if let Some(pane) = message["pane"].as_str() {
+                    self.emit(Event::HoldLost {
+                        pane: pane.to_string(),
+                    });
+                }
+            }
             _ => {}
         }
         None

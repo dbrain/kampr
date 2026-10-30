@@ -206,6 +206,9 @@ pub struct App {
     /// because a claim that is being refused is a pane something else is holding, and asking every
     /// [`MATCH_SETTLE`] for ever is a hot loop against herdr rather than a recovery.
     declined: Option<(Claim, u8)>,
+    /// A hold the node said somebody else took. Not asked for again until the window or the pane
+    /// moves, because asking at once is two viewers taking the pane from each other for ever.
+    lost: Option<Claim>,
     /// What the window most recently measured, and when it settled there. A drag is hundreds of
     /// sizes and each claim is a `herdr terminal session control` child, so the size has to hold
     /// still before it is asked for.
@@ -276,6 +279,7 @@ impl App {
             matching: None,
             asking: None,
             declined: None,
+            lost: None,
             settling: None,
             unmatched: HashSet::new(),
             wipe: false,
@@ -496,6 +500,11 @@ impl App {
                 self.watch_alerts();
             }
             Event::Refused { origin } => self.refused(origin),
+            Event::HoldLost { pane } => {
+                if self.matching.as_ref().is_some_and(|(held, _, _)| held == pane) {
+                    self.lost = self.matching.take();
+                }
+            }
             Event::Connected(_) => {
                 let node = self.client.state().node_name().to_string();
                 self.note(format!("connected to {node}"));

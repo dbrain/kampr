@@ -287,4 +287,8 @@ pub enum Event {
     Pong {
         n: u64,
     },
+    /// Somebody else took a pane this client was holding at its window's size.
+    HoldLost {
+        pane: String,
+    },
 }

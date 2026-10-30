@@ -66,6 +66,7 @@ import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalCovered
+import dev.kampr.shared.ui.LocalLooking
 import dev.kampr.shared.ui.LocalMosaicCell
 import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPalette
@@ -118,6 +119,7 @@ import dev.kampr.terminal.review.historyWarning
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -236,10 +238,17 @@ private fun MatchTheView(
     // claim was therefore never re-issued and the header went on saying the desk sees this pane at
     // this shape, over a pane already given back.
     val live = LocalConnectionStatus.current is ConnectionStatus.Live
+    // A view nobody can see holds nothing, so a phone in a pocket that reconnects claims nothing;
+    // and coming back to it is the one moment a view whose hold somebody else took asks again.
+    val looking = LocalLooking.current
     var claimed by remember(paneId) { mutableStateOf(false) }
     var claimedAt by remember(paneId) { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(paneId, on, grow, cols, rows, live, grow && painted) {
-        if (!live || !on) {
+    var askedAt by remember(paneId) { mutableStateOf(looking.at) }
+    LaunchedEffect(paneId, io) {
+        io.holdsLost().filter { it == paneId }.collect { claimed = false }
+    }
+    LaunchedEffect(paneId, on, grow, cols, rows, live, grow && painted, looking) {
+        if (!live || !on || !looking.shown) {
             claimed = false
             return@LaunchedEffect
         }
@@ -247,7 +256,11 @@ private fun MatchTheView(
         // A size that went away and came back inside the settle is a hold already at this view:
         // the keyboard's inset and the height it takes land a frame apart, and that frame alone
         // re-asked for the pane on every keyboard.
-        if (claimed && claimedAt == (cols to rows)) return@LaunchedEffect
+        //
+        // Except on a return: the session may have let go of the pane while nobody could see it,
+        // and it is the one that knows whether it still holds it.
+        if (claimed && claimedAt == (cols to rows) && askedAt == looking.at) return@LaunchedEffect
+        askedAt = looking.at
         if (grow && !claimed && !short()) return@LaunchedEffect
         repeat(MATCH_TRIES) { attempt ->
             if (attempt > 0) delay(MATCH_RETRY_MS)

@@ -18,6 +18,7 @@ pub mod git;
 pub mod herd;
 pub mod holds;
 pub mod http;
+pub mod lost;
 pub mod manage;
 pub mod mesh;
 pub mod muffit;

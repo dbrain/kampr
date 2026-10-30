@@ -1770,6 +1770,16 @@ replies `error{code:"unsupported"}`, and a client hides what a node's `hello.cap
 // A `release` with no `lease` lets go of whatever is standing, which is the panel's meaning of it.
 // A node scopes its own clients' releases for them: a socket that is matching a pane has its bare
 // `release` narrowed to that socket's hold before it runs.
+//
+// Server → client: somebody else took a pane this socket was holding — another socket's `match`,
+// `grow` or plain claim, or the panel's bare `release` — and `lease` is the one it ended. A client
+// stops saying the pane is held and asks again the next time somebody comes back to the window,
+// never at once (ADR 0013 point 2). The socket's next bare `release` for that pane is acked and
+// dropped: it was sent for the lease that is gone, and run it would let go of the hold that took
+// it. A peer's link to its hub is every viewer behind the hub, so the peer sends this up the link
+// for each of the link's leases it ends, including one another viewer through the same link
+// replaced, and the hub hands it to whichever of its sockets holds that lease on that pane.
+{ "t": "hold.lost", "pane": "01J.../w3:p2", "lease": 7 }
 { "t": "manage", "op": "rename",           "at": "01J.../w3:p2", "label": "build" }   // null clears, panes only
 { "t": "manage", "op": "close",            "at": "01J.../w3:p2" }                     // pane | tab | workspace
 { "t": "manage", "op": "focus",            "at": "01J.../w3:p2" }

@@ -389,10 +389,16 @@ impl App {
         {
             self.send_manage(json!({ "op": "pane.size", "at": held, "mode": "release" }));
         }
+        if self.lost.is_some() && self.lost != target {
+            self.lost = None;
+        }
         let Some(target) = target else {
             self.settling = None;
             return;
         };
+        if self.lost.as_ref() == Some(&target) {
+            return;
+        }
         // An ask already out, or one the node has refused often enough to stop asking about, is
         // not asked again by the next redraw.
         if standing.as_ref() == Some(&target)

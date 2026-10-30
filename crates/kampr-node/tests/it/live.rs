@@ -3445,6 +3445,29 @@ async fn a_release_naming_a_superseded_lease_leaves_the_hold_that_replaced_it_st
     );
 }
 
+/// A viewer whose matched hold another viewer took is told which lease it lost, so its client
+/// stops believing it holds the pane and asks again the next time it is looked at.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_whose_pane_another_viewer_matched_is_told_it_lost_the_hold() {
+    let h = harness!("matchtaken");
+    let token = h.token(Role::Full).await;
+    let mut desk = h.connect(&token).await;
+    until(&mut desk, "hello", 10).await;
+    let mut phone = h.connect(&token).await;
+    until(&mut phone, "hello", 10).await;
+    let pane = h.pane_id();
+
+    let claim = |rid: &str, cols: u16, rows: u16| {
+        json!({ "t": "manage", "op": "pane.size", "at": pane, "rid": rid,
+                "cols": cols, "rows": rows, "mode": "match" })
+    };
+    let held = ok(&mut desk, claim("desk", 120, 40), 30).await;
+    ok(&mut phone, claim("phone", 100, 30), 30).await;
+    let lost = until(&mut desk, "hold.lost", 15).await;
+    assert_eq!(lost["pane"], json!(pane), "{lost}");
+    assert_eq!(lost["lease"], held["lease"], "{lost}");
+}
+
 /// **A phone enlarges the dimension the pane is short of, and nothing else.**
 ///
 /// The operator, on a phone: a Claude pane *"counts the terminal as half the size of the screen,

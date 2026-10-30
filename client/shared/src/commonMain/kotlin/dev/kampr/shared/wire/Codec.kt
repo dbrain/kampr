@@ -146,6 +146,8 @@ object Wire {
                 held = obj.bool("held"),
             )
 
+            "hold.lost" -> ServerMsg.HoldLost(obj.str("pane") ?: return null)
+
             "caps" -> ServerMsg.NodeCaps(
                 node = obj.str("node").orEmpty(),
                 agentKinds = obj.strings("agent_kinds"),

@@ -25,6 +25,7 @@ pub const PREFIX: &str = "n:";
 /// herdr's own `pane.read recent` cap (#51), so a ring stitches native reads exactly as it does
 /// herdr's.
 const READ_CAP: u32 = 1000;
+const LOST_DEPTH: usize = 64;
 /// The herdr provider's cap on listed hits, for the same reason: `total` still counts them all.
 const LISTED: usize = 32;
 /// Left in a session by `close`, so its end is one somebody asked for and not one to read about.
@@ -93,6 +94,7 @@ struct Inner {
     lives: Mutex<HashMap<String, Arc<Live>>>,
     holds: Mutex<HashMap<String, Hold>>,
     lease: AtomicU64,
+    lost: broadcast::Sender<(String, u64)>,
     topology: watch::Sender<u64>,
     views: Views,
     layouts: Mutex<Layouts>,
@@ -112,6 +114,7 @@ impl NativeProvider {
             lives: Mutex::new(HashMap::new()),
             holds: Mutex::new(HashMap::new()),
             lease: AtomicU64::new(1),
+            lost: broadcast::channel(LOST_DEPTH).0,
             topology: watch::channel(0).0,
             views: Views::default(),
             layouts: Mutex::new(Layouts::load(&config.root)),
@@ -226,6 +229,9 @@ impl NativeProvider {
     pub async fn hold(&self, pane: &str, cols: u16, rows: u16, holder: &str) -> Result<(u64, (u16, u16))> {
         let session = self.require(pane)?;
         let carried = self.inner.holds.lock().unwrap().remove(pane);
+        if let Some(hold) = &carried {
+            self.taken(pane, hold.token);
+        }
         let (found, found_holder) = match carried {
             Some(hold) => (hold.found, hold.holder),
             None => (
@@ -249,7 +255,19 @@ impl NativeProvider {
     /// A plain claim supersedes a standing match without putting anything back: the operator
     /// asked for this size by name.
     pub fn unhold(&self, pane: &str) {
-        self.inner.holds.lock().unwrap().remove(pane);
+        let removed = self.inner.holds.lock().unwrap().remove(pane);
+        if let Some(hold) = removed {
+            self.taken(pane, hold.token);
+        }
+    }
+
+    /// Every hold ended by somebody other than its holder, as the pane and the token it ended.
+    pub fn subscribe_lost(&self) -> broadcast::Receiver<(String, u64)> {
+        self.inner.lost.subscribe()
+    }
+
+    fn taken(&self, pane: &str, token: u64) {
+        let _ = self.inner.lost.send((pane.to_string(), token));
     }
 
     pub fn found_under(&self, pane: &str, token: u64) -> Option<(u16, u16)> {
@@ -270,6 +288,9 @@ impl NativeProvider {
         let Some(hold) = hold else {
             return Ok(false);
         };
+        if token.is_none() {
+            self.taken(pane, hold.token);
+        }
         let session = self.require(pane)?;
         if session.alive() {
             // An attach that started under the hold left the size alone (attach.rs), so the size

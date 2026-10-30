@@ -98,7 +98,12 @@ class KamprConnection(
             loop?.cancelAndJoin()
             endpoint = target
             outbox = Channel(Channel.BUFFERED)
-            if (foreground == null) foreground = watchForeground(::onForeground)
+            if (foreground == null) {
+                foreground = watchForeground { shown ->
+                    store.looked(shown)
+                    if (shown) onForeground()
+                }
+            }
             loop = scope.launch { run(target) }
         }
     }

@@ -1,5 +1,6 @@
 use crate::convo::{self, ConvoCtx};
 use crate::herd::Reach;
+use crate::lost::Lost;
 use crate::manage::{self, ManageOp, Managed, Manager, Settle};
 use crate::outbox::{Frame, Outbox};
 use crate::pending;
@@ -16,7 +17,7 @@ use kampr_journal::ListeningReader;
 use kampr_mesh::peers::PeerHold;
 use kampr_mesh::{Incoming, Outgoing, Peers};
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
@@ -238,6 +239,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
         panes: HashMap::new(),
         held: HashMap::new(),
         matched: HashMap::new(),
+        taken: HashSet::new(),
         sending: HashMap::new(),
         receiving: HashMap::new(),
         boot_holds: HashMap::new(),
@@ -261,6 +263,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     let mut book_rx = node.subscribe_book();
     book_rx.borrow_and_update();
 
+    let mut lost = crate::lost::LostFeed::subscribe(&node);
     let mut changes = node.auth.device_changes();
     let mut recheck = tokio::time::interval(DEVICE_RECHECK);
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -296,6 +299,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
                 }
                 session.publish_book().await;
             }
+            lost = lost.recv() => session.lost(&lost),
         }
         if outbox.is_closed() {
             break;
@@ -449,6 +453,20 @@ impl MatchLease {
             Self::Local { token, .. } | Self::Peer { token, .. } | Self::Native { token, .. } => *token,
         }
     }
+
+    fn ended_by(&self, lost: &Lost) -> bool {
+        match (self, lost) {
+            (Self::Local { local, token, .. }, Lost::Herdr { local: l, token: t })
+            | (Self::Native { local, token, .. }, Lost::Native { local: l, token: t })
+            | (
+                Self::Peer {
+                    global: local, token, ..
+                },
+                Lost::Peer { global: l, token: t },
+            ) => local == l && token == t,
+            _ => false,
+        }
+    }
 }
 
 impl Drop for MatchLease {
@@ -517,6 +535,9 @@ struct Session {
     /// answering, and that is what ends the hold rather than anything the client remembered to
     /// send. See [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
     matched: HashMap<String, MatchLease>,
+    /// Panes whose lease somebody else took. The client's release for one is already on its way
+    /// and names no lease, which the node reads as the panel's release of whatever hold stands.
+    taken: HashSet<String>,
     sending: HashMap<u64, Sending>,
     /// Uploads a hub is pushing into this node, by rid. Dropping one is the cancellation: its task
     /// sees the channel close and removes what it had written.
@@ -2023,6 +2044,20 @@ impl Session {
             }
             return;
         }
+        if op.op == "pane.size"
+            && op.mode.as_deref() == Some("release")
+            && op.lease.is_none()
+            && let Some(at) = op.at.as_deref()
+            && !self.matched.contains_key(at)
+            && self.taken.remove(at)
+        {
+            let mut ack = json!({ "t": "managed", "op": op.op, "ok": true, "was_held": false });
+            if let Some(rid) = &rid {
+                ack["rid"] = rid.clone();
+            }
+            self.wire.send_json(&ack);
+            return;
+        }
         // **A release is scoped to this view's own hold, and only this view's.** The panel's
         // release still lets go of whatever is standing — that is an operator asking by name —
         // but a terminal view turning matching off is answering for its own claim, and a viewer
@@ -2288,24 +2323,20 @@ impl Session {
                 if local.starts_with(kampr_native::PREFIX)
                     && let Some(native) = self.node.primary().native.clone() =>
             {
-                self.matched.insert(
-                    at,
-                    MatchLease::Native {
-                        native,
-                        local: local.to_string(),
-                        token,
-                    },
-                );
+                let lease = MatchLease::Native {
+                    native,
+                    local: local.to_string(),
+                    token,
+                };
+                self.lease(at, lease);
             }
             (Some(token), Some(local)) => {
-                self.matched.insert(
-                    at,
-                    MatchLease::Local {
-                        node: self.node.clone(),
-                        local: local.to_string(),
-                        token,
-                    },
-                );
+                let lease = MatchLease::Local {
+                    node: self.node.clone(),
+                    local: local.to_string(),
+                    token,
+                };
+                self.lease(at, lease);
             }
             // A `release` this session's own lease answered for. Dropping it here rather than
             // before the op is what lets the ack say `was_held: true` honestly.
@@ -2321,6 +2352,43 @@ impl Session {
         }
     }
 
+    /// A hub's link is every viewer behind that hub, so a lease it replaces may be another
+    /// viewer's, and only the hub knows whose.
+    fn lease(&mut self, at: String, lease: MatchLease) {
+        self.taken.remove(&at);
+        let token = lease.token();
+        let replaced = self.matched.insert(at.clone(), lease);
+        if self.caller == Caller::Hub
+            && let Some(old) = replaced.filter(|old| old.token() != token)
+        {
+            self.tell_lost(&at, old.token());
+        }
+    }
+
+    fn lost(&mut self, lost: &Lost) {
+        let Some(at) = self
+            .matched
+            .iter()
+            .find(|(_, lease)| lease.ended_by(lost))
+            .map(|(at, _)| at.clone())
+        else {
+            return;
+        };
+        if let Some(lease) = self.matched.remove(&at) {
+            // A hub scopes every release it sends for a view, so the bare one it may still send
+            // is an operator's at the panel, and that is meant.
+            if self.caller == Caller::Client {
+                self.taken.insert(at.clone());
+            }
+            self.tell_lost(&at, lease.token());
+        }
+    }
+
+    fn tell_lost(&self, at: &str, lease: u64) {
+        self.wire
+            .send_json(&json!({ "t": "hold.lost", "pane": at, "lease": lease }));
+    }
+
     fn named_our_lease(&self, at: &str, op: &ManageOp) -> bool {
         op.lease == self.matched.get(at).map(MatchLease::token)
     }
@@ -2332,15 +2400,13 @@ impl Session {
         let Some(at) = op.at.clone() else { return };
         match reply["lease"].as_u64() {
             Some(token) => {
-                self.matched.insert(
-                    at.clone(),
-                    MatchLease::Peer {
-                        node: self.node.clone(),
-                        target: target.to_string(),
-                        global: at,
-                        token,
-                    },
-                );
+                let lease = MatchLease::Peer {
+                    node: self.node.clone(),
+                    target: target.to_string(),
+                    global: at.clone(),
+                    token,
+                };
+                self.lease(at, lease);
             }
             None if let_go_by(op, reply) && self.named_our_lease(&at, op) => {
                 self.matched.remove(&at);

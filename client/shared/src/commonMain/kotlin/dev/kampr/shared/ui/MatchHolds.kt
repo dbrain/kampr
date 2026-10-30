@@ -8,6 +8,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
 // How long a matched hold outlives the view that asked for it.
@@ -24,6 +27,8 @@ import kotlinx.coroutines.launch
 // ceiling is the socket and stays the socket — it is a ceiling on how long an *ended* view goes on
 // holding one.
 const val MATCH_LINGER_MS = 20_000L
+
+private const val LOST_BACKLOG = 16
 
 // The `match` holds this client session is carrying, across the views that come and go asking for
 // them. ADR 0013's lease is owned by the websocket session at the node; this is the same ownership
@@ -51,6 +56,9 @@ class MatchHolds(
     private val asking = mutableMapOf<String, Asking>()
     private val letting = mutableMapOf<String, Job>()
     private var asks = 0L
+    private val taken = MutableSharedFlow<String>(extraBufferCapacity = LOST_BACKLOG)
+
+    val lost: SharedFlow<String> = taken.asSharedFlow()
 
     private data class Claim(val cols: Int, val rows: Int, val grow: Boolean)
 
@@ -115,6 +123,23 @@ class MatchHolds(
         val holds = ack.ok && ack.held != false
         if (holds) held[asked.paneId] = asked.claim else held.remove(asked.paneId)
         asked.answer.complete(holds)
+    }
+
+    // The node's word that somebody else took a pane this session held. The view is told so it
+    // stops saying the pane is held and asks again the next time somebody looks; nothing asks
+    // here, or two viewers would take the pane from each other for ever (ADR 0013 point 2). A
+    // claim in flight is left alone: the node acks a claim before it can report the lease it got
+    // as lost, so a loss heard now is about the lease that claim replaces.
+    fun lost(paneId: String) {
+        if (asking.values.any { it.paneId == paneId }) return
+        if (held.remove(paneId) == null) return
+        taken.tryEmit(paneId)
+    }
+
+    // Nobody can see the app. Its views cannot say so, since nothing is composed while a phone is
+    // in the background or a tab is hidden, so what they hold is let go of here, after the linger.
+    fun hidden() {
+        (held.keys + asking.values.map { it.paneId }).forEach { release(it) }
     }
 
     // The socket went, and the node let go of every lease on it as it did — including restoring
